@@ -298,8 +298,13 @@ internal sealed class TuiDriver : IDisposable
             _capturedPanel = panel;
             App.LayoutAndDraw(true);
             var screen = App.Driver!.ToString() ?? string.Empty;
-            screen.Should().Contain("Stop roof (F9)", "every actual product prompt keeps the permanent Stop dock");
+            screen.Contains("Stop roof (F9)", StringComparison.Ordinal).Should().BeTrue("every actual product prompt keeps the permanent Stop dock");
             panel.FrameToScreen().Bottom.Should().BeLessThanOrEqualTo(Ui.StopButton.FrameToScreen().Y);
+            foreach (var button in panel.Buttons)
+            {
+                button.FrameToScreen().Y.Should().BeLessThan(panel.FrameToScreen().Bottom - 1, "every prompt action stays inside the visible footer");
+                screen.Contains(button.Text, StringComparison.Ordinal).Should().BeTrue("every actual prompt action is drawn; credential reveal screens are never printed");
+            }
             var name = $"176-catalogue-{profile.Mode.Replace(',', '-')}-{profile.Width}x{profile.Height}-{Interlocked.Increment(ref _captureSequence):D4}";
             // The one-time key reveal is drawn and behavior-tested, but no usable generated key enters an artifact.
             if (panel.Prompt.Title is not ("New API key" or "Rotated API key")) Render(profile.Context, name);

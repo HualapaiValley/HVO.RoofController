@@ -57,6 +57,16 @@ public sealed class TerminalDesignTests
     }
 
     [TestMethod]
+    public void ButtonGeometry_RetainsCompleteBracketedCaption()
+    {
+        using var rig = new CliRig((RoofApiTestHost?)null);
+        using var tui = new TuiDriver(rig, 80, 24);
+        var button = tui.Ui.StopButton;
+        var screen = tui.Screen;
+        screen.Should().Contain("[ Stop roof (F9) ]", $"frame={button.Frame}; viewport={button.Viewport}; content={button.GetContentSize()}; margin={button.Margin?.Thickness}; border={button.Border?.Thickness}; padding={button.Padding?.Thickness}");
+    }
+
+    [TestMethod]
     public void PlainTables_AlignWideAndCombiningValues_WithoutAnsi()
     {
         using var output = new StringWriter();
@@ -118,6 +128,7 @@ public sealed class TerminalDesignTests
                 Enumerable.Range(0, 8).Select(n => new RoofUiField($"Private entry {n + 1}", Secret: true)).ToArray(),
                 [new RoofUiAction("Review", _ => "Correct the value; nothing was sent.")]));
             var panel = tui.Ui.Panel!;
+            tui.Screen.Should().Contain("[ Review ]").And.Contain("[ Cancel ]");
             foreach (var field in panel.Fields) field.Text = "masked-fixture-value";
             panel.Fields[^1].SetFocus();
             tui.Screen.Should().NotContain("masked-fixture-value");
@@ -130,6 +141,7 @@ public sealed class TerminalDesignTests
             tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
             tui.Screen.Should().Contain("Stop acknowledged.").And.Contain("Relay register verified de-energized.");
             tui.Ui.StopButton.SetFocus();
+            tui.Ui.StopButton.HasFocus.Should().BeTrue();
             var colours = tui.Ui.StopButton.GetScheme();
             if (mode.StartsWith("ansi16", StringComparison.Ordinal))
             {
@@ -191,6 +203,144 @@ public sealed class TerminalDesignTests
             workflows.F10_WhileItsOpenIsOnItsWay_WithNoAnswerInTime_AndTheStopUnconfirmed_SaysBoth_ThenF10StopsTheRoofAgainIfTheOpenArrivedLate();
         }
         finally { TuiDriver.WorkflowProfile = null; }
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("nocolor,ascii", 120, 32)]
+    public void RemainingIdentityAndHandEditPrompts_KeepActionsAndStopVisible(string mode, int width, int height)
+    {
+        using var directory = new HVO.RoofControllerV4.RPi.Tests.Security.TemporaryDirectory();
+        var roof = new SettingsApiTests.RoofDouble();
+        var settingsPath = directory.File("settings.json");
+        using var host = new RoofApiTestHost(roof.Mock, settingsFilePath: settingsPath,
+            secretsFilePath: directory.File("secrets.json"));
+        roof.StartFrom(host);
+        RoofClientApiTests.AddUserAsync(host, "fixture-person", "RoofOperator", HVO.RoofControllerV4.RPi.Tests.Security.TestSecrets.Pin).GetAwaiter().GetResult();
+        using var api = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        _ = api.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = "fixture-managed", Role = "RoofViewer" }).GetAwaiter().GetResult();
+        _ = api.Auth.SignInAsync("fixture-person", HVO.RoofControllerV4.RPi.Tests.Security.TestSecrets.Password).GetAwaiter().GetResult();
+        var session = api.Identity.GetSessionsAsync().GetAwaiter().GetResult().Single(s => s.Name == "fixture-person");
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("caller and status", () => tui.Ui.Caller is not null && tui.Ui.Status is not null);
+        tui.Press(Key.F3);
+        tui.WaitIdle("identity lists");
+        var people = (RoofUiPeoplePage)tui.Ui.CurrentPage;
+        people.Select("fixture-person");
+        foreach (var action in new[] { "PIN", "Remove PIN", "Remove" }) CheckPrompt(action);
+        people.Switch(RoofUiPeoplePage.Mode.Keys);
+        people.Select("fixture-managed");
+        foreach (var action in new[] { "Change", "Rotate", "Remove" }) CheckPrompt(action);
+        people.Switch(RoofUiPeoplePage.Mode.Sessions);
+        people.Select(session.Id);
+        CheckPrompt("End");
+
+        File.WriteAllText(settingsPath, "{ \"RoofControllerUi\": { \"DefaultCamera\": \"Yard\" } }");
+        tui.Press(Key.F2);
+        tui.WaitIdle("pending hand edit", () => ((RoofUiSettingsPage)tui.Ui.CurrentPage).Form?.PendingHandEdit is not null);
+        Click("Hand edit");
+        AssertPrompt("hand-edit");
+        tui.Ui.Panel!.Press("Discard");
+        tui.Ui.Panel!.Prompt.Title.Should().Be("Discard the hand edit");
+        AssertPrompt("nested-discard");
+        tui.Press(Key.Esc);
+        File.ReadAllText(settingsPath).Should().Contain("Yard", "Esc does not apply or discard the pending edit");
+
+        void CheckPrompt(string action)
+        {
+            Click(action);
+            AssertPrompt(action);
+            tui.Press(Key.Esc);
+            tui.Ui.Panel.Should().BeNull();
+        }
+        void Click(string action)
+        {
+            Descendants(tui.Ui.CurrentPage).OfType<Button>().Single(b => b.Visible && b.Text == action).InvokeCommand(Command.Accept);
+            tui.WaitIdle(action);
+        }
+        void AssertPrompt(string name)
+        {
+            var panel = tui.Ui.Panel!;
+            panel.Should().NotBeNull();
+            var screen = tui.Screen;
+            screen.Contains("Stop roof (F9)", StringComparison.Ordinal).Should().BeTrue();
+            foreach (var button in panel.Buttons) screen.Contains(button.Text, StringComparison.Ordinal).Should().BeTrue();
+            tui.Press(Key.F9);
+            tui.WaitIdle("Stop over identity/review prompt", () => tui.Ui.StopResult != RoofStopText.Sending);
+            tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
+            tui.Render(TestContext, $"176-identities-{mode.Replace(',', '-')}-{width}x{height}-{name}");
+        }
+        static IEnumerable<View> Descendants(View view)
+            => view.SubViews.SelectMany(child => new[] { child }.Concat(Descendants(child)));
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    public void ExceptionallyLongStopDetails_AreBoundedReadableAndResetForTheNewestResult(string mode, int width, int height)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        var detail = "Controlled refusal: " + string.Concat(Enumerable.Repeat("屋根 é Long controller detail. ", 60)) + "END-OF-DETAIL";
+        using var rig = new CliRig(host)
+        {
+            WrapHandler = inner => new StubAnswerHandler(inner, "/RoofControl/Stop", System.Net.HttpStatusCode.BadGateway, "text/plain", string.Empty,
+                answering: () => throw new RoofCertificateRefusedException(RoofCertificateRefusal.NameMismatch, detail))
+        };
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("initial reads");
+        tui.Press(Key.F9);
+        tui.WaitIdle("long Stop refusal", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Ui.StopResult.Should().Contain("END-OF-DETAIL");
+        var result = Descendants(tui.Ui.Window).OfType<TerminalTextView>().Single(view => view.Text == tui.Ui.StopResult);
+        _ = tui.Screen;
+        result.CanFocus.Should().BeTrue();
+        result.FrameToScreen().Y.Should().BeGreaterThan(1);
+        tui.Screen.Should().Contain("Stop failed:").And.Contain("Stop roof (F9)").And.Contain("F10 Quit");
+        result.SetFocus();
+        result.HasFocus.Should().BeTrue();
+        tui.Press(Key.End);
+        tui.Screen.Should().Contain("END-OF-DETAIL");
+        tui.Press(Key.F9);
+        tui.WaitIdle("newest refusal", () => tui.Ui.StopResult != RoofStopText.Sending);
+        result.Viewport.Y.Should().Be(0, "a new outcome starts at its own first line");
+        tui.Screen.Should().Contain("Stop failed:").And.Contain("Stop roof (F9)");
+        tui.Render(TestContext, $"176-long-stop-{mode.Replace(',', '-')}-{width}x{height}");
+        static IEnumerable<View> Descendants(View view)
+            => view.SubViews.SelectMany(child => new[] { child }.Concat(Descendants(child)));
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    public void LongCallerName_PreservesRoleAndFeedInTheHeader(string mode, int width, int height)
+    {
+        var name = new string('n', 64);
+        using var host = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:ApiKeys:2:Name"] = name
+        });
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("caller and live feed", () => tui.Ui.Caller is not null && tui.Ui.Status is not null && !tui.Ui.IsStale);
+        tui.Ui.Caller!.Name.Should().Be(name);
+        tui.Screen.Split('\n')[1].Should().Contain("(admin, API key)").And.Contain("status live");
     }
 
     [TestMethod]

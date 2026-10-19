@@ -11,6 +11,7 @@ Both real applications consume `RoofUiTheme`, `TerminalCapabilities`, `TerminalC
 `TerminalReadingView`, `TerminalTextView` and `TerminalButton`. The roof shell reserves content-measured rows for
 critical status and the newest Stop outcome before laying out the page or a prompt. Its five pages use titled work
 panels. All existing editors, private inputs, provider choices, confirmations and quit paths keep their handlers.
+Exceptionally long Stop details use a bounded scrollable result area; a new result starts at its first line.
 The installer uses the same form/reading controls and keeps Back, cancellation and validation outside the work area.
 Plan, lifecycle, backup/restore, resource, state-contract and bootstrap behavior is unchanged; plain output gains cell
 alignment and optional emphasis only on real interactive consoles.
@@ -30,7 +31,9 @@ would not satisfy these modes. Field context menus also use the shared scheme.
   Stop result remains visible, private values remain masked, and focused Stop retains Red in ANSI16.
   Its actual workflow catalogue also reruns the existing provider/sign-in, first-admin, connection/trust, people,
   password/role/Linux access, settings/safety/private input, restart/confirmation and quit/lost-answer assertions at
-  every mode and size. The one-time generated API-key reveal is drawn and asserted but never saved to artifacts.
+  every mode and size. Separate catalogue cases open PIN/removal/key-change/rotation/session-end and nested pending-edit
+  review/discard prompts and send F9 above each. The one-time generated API-key reveal is drawn and asserted but never
+  saved to artifacts.
 - `InstallerWizardTests`, `InstallerWizardControllerTests` and `InstallerWizardClientTests` preserve existing field-fit,
   choice, CA trust, private-input, review/save, fake apply, progress, failure and recovery assertions.
   `InstallerDesignTests` adds both-size/all-mode conditional forms for controller+kiosk, rig and Mac+CLI profiles,
@@ -40,6 +43,13 @@ would not satisfy these modes. Field context menus also use the shared scheme.
 
 The focused candidate run and final validation counts are recorded in the PR. No hardware, real install/deploy,
 service changes or Docker operations are used for this evidence.
+
+The retired-client production guard and test-host bootstrap solve different problems. The controlled
+`Reconnect_RetiredOrdinaryReadCannotReplaceTheNewConnectionMessage` regression releases a failed ordinary read only
+after reconnect and checks that the new connection message survives. Motion failures and lost answers remain on their
+existing path. Separately, `CliRig(host)` creates its lazy WebApplicationFactory server on the test thread before
+feed/caller/provider reads begin; this prevents competing fixture startups. Neither change is the separate #179
+numeric-fixture/session-ID correction.
 
 ## Reproduce captures
 

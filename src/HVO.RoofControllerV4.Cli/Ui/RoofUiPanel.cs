@@ -65,6 +65,17 @@ internal sealed class RoofUiPanel : FrameView
 
         AddButton(prompt.CloseLabel, left, () => _close(this));
 
+        SubViewLayout += (_, _) =>
+        {
+            // Pin controls to the viewport. AnchorEnd can follow an automatically expanded content size when
+            // a long form is first focused in the real loop, putting actions below the visible prompt.
+            SetContentSize(null);
+            var height = Viewport.Height;
+            form.Height = Math.Max(1, height - 4);
+            _error.Y = Math.Max(0, height - 3);
+            foreach (var button in _buttons) button.Y = Math.Max(0, height - 1);
+        };
+
         // Enter in a field runs the first action, as it would in a form.
         foreach (var input in fields.Where(input => !input.ReadOnly))
         {

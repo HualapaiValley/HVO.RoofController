@@ -1,4 +1,5 @@
 using Terminal.Gui.Drawing;
+using Terminal.Gui.App;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -14,7 +15,14 @@ public sealed class TerminalButton : Button
         NoPadding = true;
         ShadowStyle = ShadowStyles.None;
         Width = Dim.Func(_ => TerminalCells.Width(Text) + 4);
-        DrawComplete += (_, _) => DrawButton();
+    }
+
+    /// <inheritdoc/>
+    protected override void OnInitializingShadowStyle(ValueChangingEventArgs<ShadowStyles?> args)
+    {
+        // Suppress allocation in Button's base constructor: setting ShadowStyle=None later leaves its
+        // right/bottom margin allocated, which clips the final bracket and consumes a second row.
+        args.Handled = true;
     }
 
     /// <summary>Whether default-action indicators must also be ASCII.</summary>
@@ -30,23 +38,27 @@ public sealed class TerminalButton : Button
     }
 
     /// <inheritdoc/>
+    protected override void OnSubViewsLaidOut(LayoutEventArgs args)
+    {
+        base.OnSubViewsLaidOut(args);
+        // Button's undecorated Text content is narrower than our bracketed caption. Keep its draw clip at
+        // the actual viewport width without replacing the toolkit's occlusion clip during painting.
+        if (GetContentSize() != Viewport.Size) SetContentSize(Viewport.Size);
+    }
+
+    /// <inheritdoc/>
     protected override bool OnDrawingText(DrawContext? context) => true;
 
     /// <inheritdoc/>
-    protected override bool OnDrawingContent(DrawContext? context) => true;
-
-    private void DrawButton()
+    protected override bool OnDrawingContent(DrawContext? context)
     {
-        if (GetDriver() is not { } driver) return;
-        var saved = driver.Clip;
+        if (GetDriver() is not { } driver) return true;
         var frame = FrameToScreen();
-        try
-        {
-            driver.Clip = TerminalDrawing.Clip(this, frame);
-            driver.SetAttribute(GetAttributeForRole(!Enabled ? VisualRole.Disabled : HasFocus ? VisualRole.Focus : VisualRole.Normal));
-            driver.Move(frame.X, frame.Y);
-            driver.AddStr($"[ {Caption} ]");
-        }
-        finally { driver.Clip = saved; }
+        // Use the existing clip: replacing it lets an underlying page paint over a prompt. Driver cells avoid
+        // Button's text formatter clipping the trailing bracket to the undecorated Text width.
+        driver.SetAttribute(GetAttributeForRole(!Enabled ? VisualRole.Disabled : HasFocus ? VisualRole.Focus : VisualRole.Normal));
+        driver.Move(frame.X, frame.Y);
+        driver.AddStr($"[ {Caption} ]");
+        return true;
     }
 }

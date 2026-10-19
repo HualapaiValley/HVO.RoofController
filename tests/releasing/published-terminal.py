@@ -48,8 +48,8 @@ def pty_start(program, args, env, cwd, columns, rows, installer, output, workflo
     os.close(slave)
     captured=bytearray(); deadline=time.monotonic()+TIMEOUT; sent=False; status=None
     steps = ([(b'\r', ('What to install',)), (b'\x1b', ('This machine',))] if installer else
-             [(b'\x1bOP', ('ROOF STATE',)), (b'\x1bOQ', ('SETTING / VALUE',)),
-              (b'\x1bOR', ('PEOPLE / ACCOUNTS',)), (b'\x1bOS', ('CONTROLLER / HEALTH',)),
+             [(b'\x1b[11~', ('ROOF STATE',)), (b'\x1b[12~', ('SETTING / VALUE',)),
+              (b'\x1b[13~', ('PEOPLE / ACCOUNTS',)), (b'\x1b[14~', ('CONTROLLER / HEALTH',)),
               (b'\x1b[15~', ('CONNECTION / TRUST',)), (b'\t\r', ('Save and check',)),
               (b'\x1b[20~', ('Stop failed:',)), (b'\x1b', ('CONNECTION / TRUST',))]) if workflow else []
     step = -1; since = 0
@@ -78,7 +78,7 @@ def pty_start(program, args, env, cwd, columns, rows, installer, output, workflo
             done,status_now=os.waitpid(pid,os.WNOHANG)
             if done:
                 status=status_now; break
-        require(status is not None,'PTY child timed out (including after F10)')
+        require(status is not None,f'PTY child timed out at workflow step {step} (including after F10)')
         code=os.waitstatus_to_exitcode(status)
         require(sent and code==(130 if installer else 9 if workflow else 0),f'PTY startup/F10 at {columns}x{rows}: exit {code}; output={screen[-1500:]}')
     finally:
@@ -155,5 +155,11 @@ def main():
     print('PASS final installer and CLI: offline help/version/notices, no-TTY, all-mode PTY workflows at both sizes; no install/answers/extraction')
 
 
+def terminate(signum, _frame):
+    # Let pty_start's finally reap its app when an outer bounded timeout sends TERM.
+    raise SystemExit(128 + signum)
+
+
 if __name__=='__main__':
+    signal.signal(signal.SIGTERM, terminate)
     main()

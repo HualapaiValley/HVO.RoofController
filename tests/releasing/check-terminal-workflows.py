@@ -24,11 +24,11 @@ from terminal_payload import RIDS, check
 OWNED = {'hvo-roof.dll', 'hvo-roof-install.dll',
          'HVO.RoofControllerV4.TerminalUi.dll', 'HVO.RoofControllerV4.Client.dll',
          'HVO.RoofControllerV4.Common.dll', 'Terminal.Gui.dll'}
-FILTER = ('FullyQualifiedName~TerminalDesignTests|FullyQualifiedName~RoofTerminalUiTests|'
-          'FullyQualifiedName~InstallerWizard|FullyQualifiedName~InstallerDesignTests|FullyQualifiedName~TerminalInstalledNoticeTests|'
-          'FullyQualifiedName~InstallerPlanTests|FullyQualifiedName~InstallerLifecycleTests|'
-          'FullyQualifiedName~InstallerBackupTests|FullyQualifiedName~InstallerCommandTests|'
-          'FullyQualifiedName~InstallerResourceLimitsTests|FullyQualifiedName~InstallerStateContractTests')
+# Every installer test in this filter uses FakeMachine/redirected files. The two opt-in real-host
+# installation suites are explicitly excluded, irrespective of the runner's environment.
+FILTER = ('(FullyQualifiedName~.Cli.|FullyQualifiedName~.Installer.)&FullyQualifiedName!~InstallerKioskSystemTests&'
+          'FullyQualifiedName!~InstallerMacSystemTests&TestCategory!=Scenario&'
+          'TestCategory!=Browser&TestCategory!=Soak')
 
 
 def extract_owned(program, rid):
@@ -56,7 +56,10 @@ def main():
             combined[path] = data
     if set(combined) != OWNED:
         raise RuntimeError('Final bundle misses owned assembly: ' + str(OWNED - set(combined)))
-    with tempfile.TemporaryDirectory(prefix='hvo-terminal-workflows-') as temporary:
+    # Repository-relative fixture lookups still resolve, while the staged host remains private and disposable.
+    staging_parent = Path(__file__).resolve().parents[2] / 'tests/HVO.RoofControllerV4.RPi.Tests/TestResults'
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.final-terminal-workflows-', dir=staging_parent) as temporary:
         staged = Path(temporary) / 'tests'
         shutil.copytree(args.tests, staged)
         for path, data in combined.items():

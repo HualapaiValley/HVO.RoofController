@@ -26,7 +26,7 @@ internal sealed class RoofTerminalUi : IDisposable
     private readonly IApplication _app;
     private readonly RoofUiPage[] _pages;
     private readonly Label _header;
-    private readonly Label _stopResult;
+    private readonly TerminalTextView _stopResult;
     private readonly Label _banner;
     private readonly FrameView _content;
     private readonly TerminalTextView _message;
@@ -92,8 +92,8 @@ internal sealed class RoofTerminalUi : IDisposable
         // Permanent bottom control/result area, outside pages and prompts. Its height follows the newest result.
         StopButton = Theme.Styled(new TerminalButton { Text = $"{RoofStopText.ButtonLabel} (F9)", X = 0, Y = 0 }, Theme.Stop);
         StopButton.Accepting += (_, e) => { e.Handled = true; Stop(); };
-        _stopResult = Wrapping(new Label { Text = RoofStopText.AlwaysAvailable, X = Pos.Right(StopButton) + 2, Y = 0 });
-        var stopDock = new View { X = 0, Y = Pos.AnchorEnd() - 2, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Content) };
+        _stopResult = new TerminalTextView { Text = RoofStopText.AlwaysAvailable, X = Pos.Right(StopButton) + 2, Y = 0, CanFocus = false };
+        var stopDock = new View { CanFocus = true, X = 0, Y = Pos.AnchorEnd() - 2, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Content) };
         stopDock.Add(StopButton, _stopResult);
 
         _header = new Label { Text = "HVO ROOF CONTROLLER", X = 0, Y = 0, Width = Dim.Fill() };
@@ -113,7 +113,9 @@ internal sealed class RoofTerminalUi : IDisposable
             var width = Math.Max(24, Window.Viewport.Width);
             var height = Window.Viewport.Height;
             var stopWidth = Math.Max(1, width - 20);
-            var stopRows = CellRows(_stopResult.Text, stopWidth);
+            var fullStopRows = CellRows(_stopResult.Text, stopWidth);
+            var stopRows = Math.Min(fullStopRows, Math.Max(2, height / 3));
+            _stopResult.CanFocus = fullStopRows > stopRows;
             StopButton.Width = 18;
             _stopResult.X = 20;
             _stopResult.Width = stopWidth;
@@ -131,7 +133,14 @@ internal sealed class RoofTerminalUi : IDisposable
             if (_identity is not null)
             {
                 var feed = $"{(Theme.Capabilities.Ascii ? " |" : " ·")} status {DescribeFeed()}";
-                _header.Text = "HVO ROOF  |  " + TerminalCells.Take(_identity, Math.Max(0, width - 13 - TerminalCells.Width(feed))) + feed;
+                var room = Math.Max(0, width - 13 - TerminalCells.Width(feed));
+                var identity = TerminalCells.Take(_identity, room);
+                if (Caller is { } caller)
+                {
+                    var role = $" ({RoofCliFormat.Role(caller.Role)}{(caller.Kind == RoofCredentialKind.ApiKey ? ", API key" : string.Empty)})";
+                    identity = TerminalCells.Take(caller.Name, Math.Max(0, room - TerminalCells.Width(role))) + role;
+                }
+                _header.Text = "HVO ROOF  |  " + identity + feed;
             }
         };
 

@@ -266,10 +266,10 @@ for terminal_mode in truecolor,unicode ansi16,unicode nocolor,unicode ansi16,asc
         t new-session -d -s "${session}" -x "${columns}" -y "${rows}" \
             "'${cli}' ui; echo \"hvo-roof exited \$?\"; sleep 600"
         wait_screen "matrix live status" 30 "status live"
-        for page in F1:Roof F2:Settings F3:People F4:System F5:Setup; do
-            IFS=: read -r key title <<<"${page}"
+        for page in "F1:Roof:ROOF STATE" "F2:Settings:SETTING / VALUE" "F3:People:PEOPLE / ACCOUNTS" "F4:System:CONTROLLER / HEALTH" "F5:Setup:CONNECTION / TRUST"; do
+            IFS=: read -r key title body <<<"${page}"
             t send-keys -t "${session}" "${key}"
-            wait_screen "matrix ${key} ${title}" 15 "${key} ${title}"
+            wait_screen "matrix ${key} ${title}" 15 "${body}"
             wait_screen "matrix Stop remains visible" 5 "Stop roof (F9)"
             save "matrix-${terminal_mode//,/-}-${columns}x${rows}-${key}"
         done

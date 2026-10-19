@@ -160,26 +160,25 @@ public sealed class RoofUiTheme
                 _frames.Add(view, new object());
                 view.BorderStyle = LineStyle.None;
                 view.Border!.Thickness = new Thickness(1);
-                view.DrawComplete += (_, _) =>
+                var top = new Label { X = 0, Y = 0, Height = 1 };
+                var bottom = new Label { X = 0, Height = 1 };
+                var left = new Label { X = 0, Y = 1, Width = 1 };
+                var right = new Label { Y = 1, Width = 1 };
+                foreach (var line in new[] { top, bottom, left, right }) { line.SetScheme(scheme ?? Frame); border.Add(line); }
+                border.SubViewLayout += (_, _) =>
                 {
-                    if (view.App?.Driver is not { } driver) return;
                     var frame = view.Border!.FrameToScreen();
                     var width = frame.Width;
                     var height = frame.Height;
                     if (width < 2 || height < 2) return;
-                    var saved = driver.Clip;
-                    try
-                    {
-                        driver.Clip = TerminalDrawing.Clip(view, frame);
-                        driver.SetAttribute(border.GetAttributeForRole(VisualRole.Normal));
-                        void Write(int x, int y, string text) { driver.Move(frame.X + x, frame.Y + y); driver.AddStr(text); }
-                        var title = TerminalCells.Take(view.Title, Math.Max(0, width - 4));
-                        var top = "+-" + title;
-                        Write(0, 0, top + new string('-', Math.Max(0, width - TerminalCells.Width(top) - 1)) + "+");
-                        Write(0, height - 1, "+" + new string('-', width - 2) + "+");
-                        for (var row = 1; row < height - 1; row++) { Write(0, row, "|"); Write(width - 1, row, "|"); }
-                    }
-                    finally { driver.Clip = saved; }
+                    var title = "+-" + TerminalCells.Take(view.Title, Math.Max(0, width - 4));
+                    top.Text = title + new string('-', Math.Max(0, width - TerminalCells.Width(title) - 1)) + "+";
+                    bottom.Text = "+" + new string('-', width - 2) + "+";
+                    top.Width = bottom.Width = width;
+                    bottom.Y = height - 1;
+                    left.Text = right.Text = string.Join('\n', Enumerable.Repeat("|", height - 2));
+                    left.Height = right.Height = height - 2;
+                    right.X = width - 1;
                 };
             }
         }

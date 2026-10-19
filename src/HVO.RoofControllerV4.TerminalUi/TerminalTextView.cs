@@ -13,6 +13,7 @@ public sealed class TerminalTextView : TerminalReadingView
         {
             _text = value;
             Show(value.Split('\n'));
+            Reveal(0);
         }
     }
 }

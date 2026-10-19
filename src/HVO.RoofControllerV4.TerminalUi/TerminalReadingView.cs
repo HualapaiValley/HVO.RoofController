@@ -26,6 +26,8 @@ public class TerminalReadingView : ListView
         ViewportSettings |= ViewportSettingsFlags.HasVerticalScrollBar;
         KeyBindings.ReplaceCommands(Key.CursorUp, Command.ScrollUp);
         KeyBindings.ReplaceCommands(Key.CursorDown, Command.ScrollDown);
+        KeyBindings.ReplaceCommands(Key.Home, Command.Start);
+        KeyBindings.ReplaceCommands(Key.End, Command.End);
         AddCommand(Command.PageUp, () => ScrollVertical(-Math.Max(1, Viewport.Height)));
         AddCommand(Command.PageDown, () => ScrollVertical(Math.Max(1, Viewport.Height)));
         AddCommand(Command.Start, () => ScrollTo(0));
