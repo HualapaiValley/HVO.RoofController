@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Redesign the roof terminal interface and installer with bounded work panels, a permanent red Stop/result area in
   the roof UI, shared scrollable forms, exact ANSI16 and terminal-default/ASCII fallbacks, and grapheme-aware tables.
   Installer Back, cancellation, private inputs and plan/apply boundaries retain their existing behavior (#176, #158).
+- Redesign the kiosk and Mac screens with the approved HVO hierarchy, permanent red Stop, bounded kiosk readings/notices/people
+  pages, private PIN steps, clearer password administration and startup recovery. Preserve 12 mm targets, consumed wake input,
+  Operator-only PIN policy and all shared Stop messages, including acknowledgement without register-verification evidence.
+  Keep complete long-token/multiline messages reachable across pages, and qualify cached or never-read compact input values.
+  Align the shared palette and existing terminal RGB schemes with the 20 final Sky roles; terminal capability/layout work remains
+  separate (#175, refs #158).
 
 - Compose starts verify the supervisor's own cgroup v2 CPU quota, memory, zero swap and PID limits against the
   configured expectations. Missing, unlimited, unreadable, malformed or different limits, cgroup v1 and unverifiable

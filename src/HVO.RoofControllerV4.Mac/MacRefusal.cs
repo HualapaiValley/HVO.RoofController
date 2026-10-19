@@ -42,27 +42,34 @@ public static class MacRefusal
         quitButton.IsDefault = true;
         quitButton.IsCancel = true;
         var reasonText = KioskTheme.Banner(reason, KioskNoticeLevel.Danger, metrics, "refusal-reason");
-        return new ScrollViewer
+        var document = new ScrollViewer
         {
-            Background = KioskTheme.Background,
-            Content = new StackPanel
+            Name = "refusal-document",
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+            Content = KioskTheme.Card(new StackPanel
             {
-                Margin = new Thickness(metrics.Gap * 4),
                 Spacing = metrics.Gap * 2,
                 Children =
                 {
-                    KioskTheme.Label("HVO Roof did not start", metrics.Large, weight: FontWeight.SemiBold),
                     reasonText,
-                    KioskTheme.Label(File.Exists(settingsFile) ? "Its settings file is:" : "Its settings file, which does not exist yet, is:", metrics.Font, KioskTheme.Muted),
+                    KioskTheme.Label(File.Exists(settingsFile) ? "Settings file" : "Create this settings file", metrics.Font, KioskTheme.Accent, FontWeight.SemiBold),
                     file,
-                    KioskTheme.Label(
-                        "The Mac app's page in the roof controller's docs (docs/mac.md) says what goes in it, and how to make the device key. Change it, then open the app again.",
-                        metrics.Font,
-                        KioskTheme.Muted),
-                    quitButton
+                    KioskTheme.Label("Correct the connection, device key or certificate setting shown above, then open the app again. The Mac app guide (docs/mac.md) describes each setting and recovery step.", metrics.Font, KioskTheme.Muted)
                 }
-            }
+            }, metrics)
         };
+        var header = new StackPanel { Spacing = metrics.Gap, Children =
+        {
+            KioskTheme.Label("HVO Roof did not start", metrics.Large, weight: FontWeight.SemiBold),
+            KioskTheme.Label("Connection setup needs attention", metrics.Font, KioskTheme.Muted)
+        }};
+        var page = new Grid { Background = KioskTheme.Background, Margin = new Thickness(metrics.Gap * 4), RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = metrics.Gap * 2 };
+        page.Children.Add(header);
+        Grid.SetRow(document, 1);
+        page.Children.Add(document);
+        Grid.SetRow(quitButton, 2);
+        page.Children.Add(quitButton);
+        return page;
     }
 
     /// <summary>Shows the page in a window until it is closed.</summary>

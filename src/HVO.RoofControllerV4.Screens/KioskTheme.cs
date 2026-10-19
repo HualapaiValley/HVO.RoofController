@@ -25,6 +25,9 @@ public static class KioskTheme
 
     public static IBrush Surface { get; } = Brush(RoofUiPalette.Surface);
 
+    /// <summary>Raised actions and text fields.</summary>
+    public static IBrush SurfaceRaised { get; } = Brush(RoofUiPalette.SurfaceRaised);
+
     /// <summary>Frame lines.</summary>
     public static IBrush Frame { get; } = Brush(RoofUiPalette.Border);
 
@@ -51,7 +54,7 @@ public static class KioskTheme
         // as the web UI's inputs do, and shows it has the keyboard by its accent edge.
         foreach (var state in new[] { "", "PointerOver", "Focused" })
         {
-            resources[$"TextControlBackground{state}"] = Surface;
+            resources[$"TextControlBackground{state}"] = SurfaceRaised;
             resources[$"TextControlForeground{state}"] = Text;
         }
 
@@ -75,6 +78,14 @@ public static class KioskTheme
         KioskNoticeLevel.Warning => (Brush(RoofUiPalette.WarningText), Brush(RoofUiPalette.WarningBackground), Brush(RoofUiPalette.Warning)),
         _ => (Brush(RoofUiPalette.InfoText), Brush(RoofUiPalette.InfoBackground), Brush(RoofUiPalette.Info))
     };
+
+    /// <summary>A standalone status tone on the page; notice text is reserved for its matching notice band.</summary>
+    public static IBrush Tone(KioskNoticeLevel level) => Brush(level switch
+    {
+        KioskNoticeLevel.Danger => RoofUiPalette.Danger,
+        KioskNoticeLevel.Warning => RoofUiPalette.Warning,
+        _ => RoofUiPalette.Info
+    });
 
     /// <summary>The colours of a success badge: a live status.</summary>
     public static (IBrush Foreground, IBrush Background, IBrush Edge) SuccessColours { get; }
@@ -177,7 +188,7 @@ public static class KioskTheme
             Background = Surface,
             BorderBrush = Frame,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(8),
             Padding = new Thickness(metrics.Gap * 2),
             Child = child
         };
@@ -209,6 +220,14 @@ public static class KioskTheme
         return button;
     }
 
+    /// <summary>Marks selection with underline and weight as well as colour.</summary>
+    public static void Selected(Button button, bool selected)
+    {
+        button.FontWeight = selected ? FontWeight.Bold : FontWeight.Normal;
+        if (button.Content is TextBlock label)
+            label.TextDecorations = selected ? TextDecorations.Underline : null;
+    }
+
     /// <summary>The text on a button made by <see cref="TouchButton"/>.</summary>
     public static string GetText(Button button)
     {
@@ -233,7 +252,7 @@ public static class KioskTheme
     private static void SetButton(IResourceDictionary resources, string background, string foreground, string border)
     {
         var normal = Color.Parse(background);
-        var lighter = Blend(normal, Colors.White, 0.18);
+        var lighter = Blend(normal, Colors.White, 0.08);
         var darker = Blend(normal, Colors.Black, 0.25);
         var disabled = Blend(normal, Color.Parse(RoofUiPalette.Background), 0.6);
         var text = Color.Parse(foreground);
@@ -249,6 +268,9 @@ public static class KioskTheme
         resources["ButtonBorderBrush"] = new ImmutableSolidColorBrush(edge);
         resources["ButtonBorderBrushPointerOver"] = new ImmutableSolidColorBrush(Blend(edge, Colors.White, 0.18));
         resources["ButtonBorderBrushPressed"] = new ImmutableSolidColorBrush(Blend(edge, Colors.Black, 0.25));
+        resources["ButtonBackgroundFocused"] = new ImmutableSolidColorBrush(normal);
+        resources["ButtonForegroundFocused"] = new ImmutableSolidColorBrush(text);
+        resources["ButtonBorderBrushFocused"] = FocusRing;
         resources["ButtonBorderBrushDisabled"] = new ImmutableSolidColorBrush(Blend(edge, Color.Parse(RoofUiPalette.Background), 0.6));
     }
 

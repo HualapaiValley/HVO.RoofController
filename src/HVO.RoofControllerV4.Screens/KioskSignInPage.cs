@@ -56,7 +56,7 @@ public sealed class KioskSignInPage : UserControl
             }
         };
 
-        _error = KioskTheme.Label(string.Empty, metrics.Font, KioskTheme.Colours(KioskNoticeLevel.Danger).Foreground);
+        _error = KioskTheme.Label(string.Empty, metrics.Font, KioskTheme.Tone(KioskNoticeLevel.Danger));
         _error.Name = "signin-error";
         _signIn = KioskTheme.TouchButton("Sign in", "signin-submit", metrics, () => _ = form.SignInAsync());
         KioskTheme.Colour(_signIn, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
@@ -64,7 +64,7 @@ public sealed class KioskSignInPage : UserControl
         var back = KioskTheme.TouchButton("Cancel", "signin-cancel", metrics, cancel);
         back.MinWidth = metrics.Touch * 1.6;
 
-        Content = new StackPanel
+        var formPanel = new StackPanel
         {
             Spacing = metrics.Gap,
             MaxWidth = metrics.Touch * 12,
@@ -81,6 +81,7 @@ public sealed class KioskSignInPage : UserControl
                 _error
             }
         };
+        Content = KioskTheme.Card(formPanel, metrics);
         // Return signs in and Escape cancels, from either box; the boxes have no use for them.
         AddHandler(KeyDownEvent, (_, e) =>
         {
@@ -130,7 +131,7 @@ public sealed class KioskSignInPage : UserControl
         _name.IsReadOnly = _form.SigningIn;
         _password.IsReadOnly = _form.SigningIn;
         _error.Text = _form.Error ?? (_form.SigningIn ? "Signing in…" : string.Empty);
-        _error.Foreground = _form.Error is null ? KioskTheme.Muted : KioskTheme.Colours(KioskNoticeLevel.Danger).Foreground;
+        _error.Foreground = _form.Error is null ? KioskTheme.Muted : KioskTheme.Tone(KioskNoticeLevel.Danger);
         _error.IsVisible = _error.Text.Length > 0;
         _signIn.IsEnabled = _form.CanSignIn;
         // Refused: the password box has the keyboard again, for the next try.

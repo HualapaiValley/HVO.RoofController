@@ -1,11 +1,10 @@
 namespace HVO.RoofControllerV4.Client;
 
 /// <summary>
-/// The colours of HVO Dark, the web UI's theme (<c>hvo-dark.css</c> in HVO.WebSite.Themes, from HVO.SkyMonitor), as
-/// <c>#rrggbb</c> values for the interfaces that are not web pages: the terminal interface of <c>hvo-roof</c>, the kiosk
-/// and the Mac app. Each one names the stylesheet's token; a token given with transparency is here as it looks over the
-/// page background. Stop, Open and Close have the colours of the web UI's buttons (Bootstrap's warning, success and
-/// danger buttons), so each looks the same in every interface.
+/// HVO Dark semantic colours, mirrored from final SkyMonitor bf5ef211 and the source-pinned
+/// docs/ui-redesign/tokens.json contract. Web owns wwwroot/css/hvo-dark.css; native and terminal
+/// adapters consume these constants. Notice text belongs on its matching background. Alpha notice
+/// backgrounds are already composited over Background. Compatibility aliases keep staged clients building.
 /// </summary>
 public static class RoofUiPalette
 {
@@ -13,34 +12,37 @@ public static class RoofUiPalette
     public const string Background = "#05070d";
 
     /// <summary>Text: <c>--hvo-body-color</c>.</summary>
-    public const string Text = "#f8fafc";
+    public const string Text = "#f7f9fc";
 
     /// <summary>Secondary text: <c>--hvo-muted</c>.</summary>
-    public const string Muted = "#abb0b7";
+    public const string Muted = "#98a7bb";
 
-    /// <summary>Hints and disabled controls: <c>--hvo-muted-weak</c>.</summary>
-    public const string MutedWeak = "#aeb9c8";
+    /// <summary>Compatibility alias for secondary text, including disabled controls.</summary>
+    public const string MutedWeak = Muted;
 
-    /// <summary>Panels, the header and input fields: <c>--hvo-surface</c>.</summary>
-    public const string Surface = "#0e1628";
+    /// <summary>Panels and header: <c>--hvo-surface</c>.</summary>
+    public const string Surface = "#0d1420";
 
-    /// <summary>Frame lines: <c>--hvo-border-stronger</c>.</summary>
-    public const string Border = "#2d333d";
+    /// <summary>Raised actions and inputs: <c>--hvo-surface-elevated</c>.</summary>
+    public const string SurfaceRaised = "#111c2a";
 
-    /// <summary>The navigation bar's keys: <c>--hvo-nav-badge-bg</c>.</summary>
-    public const string Badge = "#1c2028";
+    /// <summary>Frame lines: <c>--hvo-border-strong</c>.</summary>
+    public const string Border = "#3a4a60";
+
+    /// <summary>Compatibility alias: raised navigation keys.</summary>
+    public const string Badge = SurfaceRaised;
 
     /// <summary>Links, key names and selection: <c>--hvo-accent</c>.</summary>
-    public const string Accent = "#3b82f6";
+    public const string Accent = "#58a6ff";
 
     /// <summary>The focused control: <c>--hvo-accent-strong</c>.</summary>
     public const string AccentStrong = "#2563eb";
 
-    /// <summary>The keyboard focus outline: the stylesheet's <c>.nav-badge:focus-visible</c> outline, which has no token.</summary>
-    public const string FocusRing = "#60a5fa";
+    /// <summary>Compatibility alias: a high contrast accent keyboard outline.</summary>
+    public const string FocusRing = Accent;
 
     /// <summary><c>--hvo-success-strong</c>.</summary>
-    public const string Success = "#34d399";
+    public const string Success = "#3fb950";
 
     /// <summary><c>--hvo-success-fg</c>, on <see cref="SuccessBackground"/>.</summary>
     public const string SuccessText = "#bbf7d0";
@@ -49,7 +51,7 @@ public static class RoofUiPalette
     public const string SuccessBackground = "#0c3721";
 
     /// <summary><c>--hvo-warning-strong</c>.</summary>
-    public const string Warning = "#facc15";
+    public const string Warning = "#d29922";
 
     /// <summary><c>--hvo-warning-fg</c>, on <see cref="WarningBackground"/>: a stale status, for one.</summary>
     public const string WarningText = "#fef9c3";
@@ -58,7 +60,7 @@ public static class RoofUiPalette
     public const string WarningBackground = "#42380f";
 
     /// <summary><c>--hvo-danger-strong</c>.</summary>
-    public const string Danger = "#f87171";
+    public const string Danger = "#f85149";
 
     /// <summary><c>--hvo-danger-fg</c>, on <see cref="DangerBackground"/>: an error.</summary>
     public const string DangerText = "#fecaca";
@@ -67,29 +69,29 @@ public static class RoofUiPalette
     public const string DangerBackground = "#422226";
 
     /// <summary><c>--hvo-info-strong</c>.</summary>
-    public const string Info = "#0ea5e9";
+    public const string Info = "#58a6ff";
 
     /// <summary><c>--hvo-info-fg</c>, on <see cref="InfoBackground"/>.</summary>
-    public const string InfoText = "#e0f2fe";
+    public const string InfoText = "#58a6ff";
 
     /// <summary><c>--hvo-info-bg</c>.</summary>
     public const string InfoBackground = "#123548";
 
-    /// <summary>The Stop button (the web UI's <c>btn-warning</c>).</summary>
-    public const string StopButton = "#ffc107";
+    /// <summary>Permanent red Stop action; retains the danger pair while focused.</summary>
+    public const string StopButton = DangerBackground;
 
-    /// <summary>The Stop button's text.</summary>
-    public const string StopButtonText = "#000000";
+    /// <summary>The Stop action's text, paired with StopButton.</summary>
+    public const string StopButtonText = DangerText;
 
-    /// <summary>The Open button (the web UI's <c>btn-success</c>).</summary>
-    public const string OpenButton = "#198754";
+    /// <summary>Raised directional action; eligibility and label supply its meaning.</summary>
+    public const string OpenButton = SurfaceRaised;
 
-    /// <summary>The Open button's text.</summary>
-    public const string OpenButtonText = "#ffffff";
+    /// <summary>The Open action's text.</summary>
+    public const string OpenButtonText = Text;
 
-    /// <summary>The Close button (the web UI's <c>btn-danger</c>).</summary>
-    public const string CloseButton = "#dc3545";
+    /// <summary>Raised directional action; Stop owns the red emphasis.</summary>
+    public const string CloseButton = SurfaceRaised;
 
-    /// <summary>The Close button's text.</summary>
-    public const string CloseButtonText = "#ffffff";
+    /// <summary>The Close action's text.</summary>
+    public const string CloseButtonText = Text;
 }

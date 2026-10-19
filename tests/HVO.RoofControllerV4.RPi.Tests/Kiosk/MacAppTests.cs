@@ -165,7 +165,7 @@ public sealed class MacAppTests
             Texts(window).Should().ContainInOrder(
                 "HVO Roof did not start",
                 reason,
-                fileExists ? "Its settings file is:" : "Its settings file, which does not exist yet, is:",
+                fileExists ? "Settings file" : "Create this settings file",
                 settingsFile);
             var quit = Named(window, "refusal-quit");
             var bottom = quit.TranslatePoint(new Point(0, quit.Bounds.Height), window)!.Value.Y;

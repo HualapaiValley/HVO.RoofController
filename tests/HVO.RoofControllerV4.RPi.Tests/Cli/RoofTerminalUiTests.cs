@@ -71,6 +71,24 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    [DataRow(RoofRelayRegisterState.Verified, RoofStopText.AcknowledgedVerified)]
+    [DataRow(RoofRelayRegisterState.Unknown, RoofStopText.Acknowledged)]
+    public void StopAcknowledgement_PreservesTheActualVerificationMessage_InTheRgbScheme(RoofRelayRegisterState state, string message)
+    {
+        var roof = RoofServiceMock.Create();
+        roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => RoofServiceMock.Snapshot(relayState: state));
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+        using var tui = Started(rig);
+        tui.Press(Key.F9);
+        tui.WaitIdle("the actual Stop response", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Ui.StopResult.Should().Be(message);
+        ShouldHaveColours(tui.ColoursOf(message), RoofUiPalette.Success, RoofUiPalette.Background);
+        if (state == RoofRelayRegisterState.Unknown) tui.Ui.StopResult.Should().NotContain("verified");
+    }
+
+    [TestMethod]
     public void TheStopButton_SendsStop_AndSaysSoAtOnce()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -182,10 +200,10 @@ public sealed class RoofTerminalUiTests
         using var tui = Started(rig);
         var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
 
-        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground, "Stop is the web UI's red button");
+        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop retains the canonical red action pair");
         tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Bold);
-        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.Text, RoofUiPalette.Badge, "Open is an ordinary raised action");
-        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close uses the raised ordinary action scheme (disabled while the roof is closed)");
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open uses the canonical raised action surface");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close uses the raised action surface (disabled while the roof is closed)");
         ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
         ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Surface, "the page is HVO Dark's");
         ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web UI's navigation bar");
