@@ -116,6 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Upgrades prepare recovery before approved kiosk package setup, including the wizard's approval action:
+  state compatibility and the durable upgrade backup are checked before any apt command. A refused backup or
+  state contract leaves packages unchanged, and the install keeps the same backup (#146).
 - Deploys and first installs keep a safely stopped controller with a classified drive or limit fault, with a warning
   naming the fault and requiring repair and explicit `ClearFault`, instead of removing it or rolling back. Docker
   uses software availability; operational `/health` and `/health/ready` still fail on latched faults. Input/relay,
