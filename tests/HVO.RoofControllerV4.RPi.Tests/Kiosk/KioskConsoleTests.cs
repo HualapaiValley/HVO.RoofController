@@ -27,6 +27,25 @@ public sealed class KioskConsoleTests
     private const string LeaseHeld =
         "Open accepted. The kiosk renews the operator lease while the roof moves; if it is locked or cannot reach the controller, the roof stops when the lease runs out. Stop roof stops it now.";
 
+    [TestMethod]
+    [DataRow(RoofRelayRegisterState.Verified, RoofStopText.AcknowledgedVerified)]
+    [DataRow(RoofRelayRegisterState.Unknown, RoofStopText.Acknowledged)]
+    public async Task StopAcknowledgement_KeepsActualRegisterEvidence_WhileLocked(RoofRelayRegisterState state, string message)
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        harness.Roof.Mock.Setup(service => service.Stop(It.IsAny<RoofControllerStopReason>())).Returns(() =>
+        {
+            harness.Report(KioskHarness.Snapshot(RoofControllerStatus.Stopped) with { RelayRegisterState = state });
+            return Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped);
+        });
+        await harness.StartLiveAsync();
+        await harness.Console.StopAsync();
+        harness.Console.View.IsUnlocked.Should().BeFalse();
+        harness.Console.View.StopOutcome.Should().Be(RoofStopOutcome.Acknowledged);
+        harness.Console.View.StopMessage.Should().Be(message);
+        if (state == RoofRelayRegisterState.Unknown) message.Should().NotContain("verified");
+    }
+
     // ---- Locked --------------------------------------------------------------------------------------------------------
 
     [TestMethod]

@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
@@ -6,129 +7,125 @@ using HVO.RoofControllerV4.Client;
 
 namespace HVO.RoofControllerV4.Screens;
 
-/// <summary>The kiosk's unlock page: the people who may unlock it, and a PIN pad that never shows the digits.</summary>
+/// <summary>Separate bounded people and private PIN steps; setup never grants an operator session.</summary>
 public sealed class KioskPinPage : UserControl
 {
     private readonly KioskPinPad _pad;
     private readonly KioskMetrics _metrics;
-    private readonly StackPanel _people;
-    private readonly TextBlock _loading;
+    private readonly KioskPager _people;
+    private readonly Grid _entry;
     private readonly TextBlock _prompt;
     private readonly TextBlock _masked;
-    private readonly TextBlock _error;
     private readonly Button _unlock;
     private readonly List<Button> _keys = [];
+    private readonly Action _cancel;
     private IReadOnlyList<Common.Models.RoofPinUserResponse>? _shownUsers;
-    private string? _shownSelected;
+    private string? _dismissedError;
+    private bool _wasLoading;
 
-    /// <param name="pad">The PIN pad this page shows.</param>
-    /// <param name="metrics">The kiosk's sizes.</param>
-    /// <param name="cancel">Leaves the page without unlocking.</param>
+    /// <summary>Creates the bounded people, private keypad and recovery steps without changing PIN authorization.</summary>
     public KioskPinPage(KioskPinPad pad, KioskMetrics metrics, Action cancel)
     {
-        ArgumentNullException.ThrowIfNull(pad);
-        ArgumentNullException.ThrowIfNull(metrics);
-        ArgumentNullException.ThrowIfNull(cancel);
         _pad = pad;
         _metrics = metrics;
-
-        _loading = KioskTheme.Label("Reading who may unlock the kiosk…", metrics.Font, KioskTheme.Muted);
-        _people = new StackPanel { Name = "pin-people", Spacing = metrics.Gap };
-        var people = new StackPanel
-        {
-            Spacing = metrics.Gap,
-            Children = { KioskTheme.Label("Who are you?", metrics.Large, weight: FontWeight.SemiBold), _loading, _people }
-        };
-
+        _cancel = cancel;
+        _people = new KioskPager(metrics, "pin-people");
         _prompt = KioskTheme.Label(string.Empty, metrics.Font);
         _prompt.Name = "pin-prompt";
-        _masked = KioskTheme.Label(string.Empty, metrics.Huge, weight: FontWeight.Bold);
+        _masked = KioskTheme.Label(string.Empty, metrics.Large, weight: FontWeight.Bold);
         _masked.Name = "pin-masked";
-        _masked.MinHeight = metrics.Huge * 1.3;
-        _error = KioskTheme.Label(string.Empty, metrics.Font, KioskTheme.Colours(KioskNoticeLevel.Danger).Foreground);
-        _error.Name = "pin-error";
-
-        var keys = new UniformGrid { Columns = 4, ColumnSpacing = metrics.Gap, RowSpacing = metrics.Gap, HorizontalAlignment = HorizontalAlignment.Left };
-        foreach (var key in new[] { "1", "2", "3", "⌫", "4", "5", "6", "Clear", "7", "8", "9", "0" })
+        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = metrics.Gap };
+        heading.Children.Add(_prompt);
+        Grid.SetColumn(_masked, 1);
+        heading.Children.Add(_masked);
+        var keys = new UniformGrid { Columns = 5, ColumnSpacing = metrics.Gap, RowSpacing = metrics.Gap };
+        foreach (var key in new[] { "1", "2", "3", "⌫", "Clear", "4", "5", "6", "0", "Person", "7", "8", "9", "Unlock", "Cancel" })
         {
             var button = key switch
             {
                 "⌫" => KioskTheme.TouchButton(key, "pin-backspace", metrics, pad.Backspace),
                 "Clear" => KioskTheme.TouchButton(key, "pin-clear", metrics, pad.Clear),
+                "Person" => KioskTheme.TouchButton(key, "pin-person", metrics, () => pad.Select(null)),
+                "Unlock" => KioskTheme.TouchButton(key, "pin-unlock", metrics, () => _ = pad.UnlockAsync()),
+                "Cancel" => KioskTheme.TouchButton(key, "pin-cancel", metrics, Cancel),
                 _ => KioskTheme.TouchButton(key, $"pin-digit-{key}", metrics, () => pad.Press(key[0]))
             };
-            // A word on a key is in the text size, so it fits the key; a digit or a symbol is larger.
             button.FontSize = key.Length > 1 ? metrics.Font : metrics.Large;
-            button.Width = metrics.Touch * 1.15;
             button.Height = metrics.Touch;
+            button.Padding = new Thickness(metrics.Gap / 2);
+            if (key == "Unlock")
+            {
+                _unlock = button;
+                KioskTheme.Colour(button, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
+            }
             _keys.Add(button);
             keys.Children.Add(button);
         }
-
-        _unlock = KioskTheme.TouchButton("Unlock", "pin-unlock", metrics, () => _ = pad.UnlockAsync());
-        KioskTheme.Colour(_unlock, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
-        _unlock.MinWidth = metrics.Touch * 2.4;
-        var back = KioskTheme.TouchButton("Cancel", "pin-cancel", metrics, () => { pad.Select(null); cancel(); });
-        back.MinWidth = metrics.Touch * 1.6;
-        var entry = new StackPanel
-        {
-            Spacing = metrics.Gap,
-            Children =
-            {
-                _prompt,
-                _masked,
-                keys,
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = metrics.Gap, Children = { _unlock, back } },
-                _error
-            }
-        };
-
-        var layout = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = metrics.Gap * 3 };
-        layout.Children.Add(people);
-        Grid.SetColumn(entry, 1);
-        layout.Children.Add(entry);
-        Content = layout;
+        _unlock = _keys.Single(button => button.Name == "pin-unlock");
+        _entry = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = metrics.Gap };
+        _entry.Children.Add(heading);
+        Grid.SetRow(keys, 1);
+        keys.VerticalAlignment = VerticalAlignment.Top;
+        _entry.Children.Add(keys);
         pad.Changed += Update;
         Update();
     }
 
-    /// <summary>Shows the pad as it is now.</summary>
+    /// <summary>Updates the current step without exposing digits or replacing the keypad under a touch.</summary>
     public void Update()
     {
-        _loading.IsVisible = _pad.Loading && _pad.Users.Count == 0;
-        if (!ReferenceEquals(_shownUsers, _pad.Users) || _shownSelected != _pad.Selected)
-        {
-            _shownUsers = _pad.Users;
-            _shownSelected = _pad.Selected;
-            _people.Children.Clear();
-            foreach (var user in _pad.Users)
-            {
-                var name = KioskPinPad.SelectionKey(user);
-                var label = user.Provider is null ? user.Name : $"{user.Name} ({user.Provider})";
-                var button = KioskTheme.TouchButton(label, $"pin-user-{name}", _metrics, () => _pad.Select(name));
-                button.IsEnabled = !_pad.ChoosingPin;
-                button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                button.HorizontalContentAlignment = HorizontalAlignment.Left;
-                if (name == _pad.Selected)
-                {
-                    KioskTheme.Colour(button, RoofUiPalette.Accent, RoofUiPalette.Text);
-                }
-
-                _people.Children.Add(button);
-            }
-        }
-
+        if (_pad.Error is null || (_wasLoading && !_pad.Loading)) _dismissedError = null;
+        _wasLoading = _pad.Loading;
         _prompt.Text = _pad.Prompt;
-        _masked.Text = _pad.Length == 0 ? " " : _pad.Masked;
-        _error.Text = _pad.Error ?? (_pad.Unlocking ? "Unlocking…" : string.Empty);
-        _error.Foreground = _pad.Error is null ? KioskTheme.Muted : KioskTheme.Colours(KioskNoticeLevel.Danger).Foreground;
-        _error.IsVisible = _error.Text.Length > 0;
-        _unlock.Content = _pad.ActionLabel;
+        _masked.Text = _pad.Length == 0 ? "—" : _pad.Masked;
+        KioskTheme.SetText(_unlock, _pad.ActionLabel);
         _unlock.IsEnabled = _pad.CanUnlock;
-        _people.IsEnabled = !_pad.ChoosingPin;
-        foreach (var key in _keys)
+        foreach (var key in _keys.Where(button => button != _unlock))
+            key.IsEnabled = !_pad.Unlocking && !(key.Name == "pin-person" && _pad.ChoosingPin);
+        if (_pad.Error is { } error && error != _dismissedError)
         {
-            key.IsEnabled = _pad.Selected is not null && !_pad.Unlocking;
+            var message = new KioskPager(_metrics, "pin-result");
+            var text = KioskTheme.Label(error, _metrics.Font, KioskTheme.Brush(RoofUiPalette.Danger));
+            text.Name = "pin-error";
+            message.SetItems([
+                KioskTheme.Label("PIN / setup result", _metrics.Large, KioskTheme.Accent), text,
+                KioskTheme.TouchButton(_pad.Users.Count == 0 ? "Read people again" : "Try again", "pin-retry", _metrics, () =>
+                {
+                    _dismissedError = error;
+                    if (_pad.Users.Count == 0) _ = _pad.LoadUsersAsync();
+                    Update();
+                }),
+                KioskTheme.TouchButton("Cancel", "pin-cancel", _metrics, Cancel)
+            ]);
+            Content = message;
         }
+        else if (_pad.Selected is null)
+        {
+            if (!ReferenceEquals(_shownUsers, _pad.Users) || Content != _people)
+            {
+                _shownUsers = _pad.Users;
+                var items = new List<Control>
+                {
+                    KioskTheme.Label("Who are you?", _metrics.Large, KioskTheme.Accent, FontWeight.SemiBold),
+                    KioskTheme.Label(_pad.Loading ? "Reading people…" : "PIN access is Operator-only. Settings and System need password sign-in in another client.", _metrics.Font, KioskTheme.Muted)
+                };
+                foreach (var user in _pad.Users)
+                {
+                    var name = KioskPinPad.SelectionKey(user);
+                    var label = user.Provider is null ? user.Name : $"{user.Name} ({user.Provider})";
+                    items.Add(KioskTheme.TouchButton(label, $"pin-user-{name}", _metrics, () => _pad.Select(name)));
+                }
+                items.Add(KioskTheme.TouchButton("Cancel", "pin-cancel", _metrics, Cancel));
+                _people.SetItems(items);
+            }
+            Content = _people;
+        }
+        else Content = _entry;
+    }
+
+    private void Cancel()
+    {
+        _pad.Select(null);
+        _cancel();
     }
 }

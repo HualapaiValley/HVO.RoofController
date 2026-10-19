@@ -142,7 +142,17 @@ raises, the motion the controller has commanded, and when to renew the operator 
 
 ## Colours
 
-`RoofUiPalette` holds HVO Dark, the web UI's theme (`hvo-dark.css` in `HVO.WebSite.Themes`), as `#rrggbb` values
-for the clients that are not web pages: the terminal interface, the kiosk and the Mac app. Each value names the
-stylesheet's token. Stop, Open and Close have the colours of the web UI's buttons, so they look the same in every
-client. `RoofUiPaletteTests` checks each value against the stylesheet.
+`RoofUiPalette` mirrors the 20 roles from the final merged SkyMonitor source pinned in
+[the design contract](../../docs/ui-redesign/design-contract.md). Native controls and the terminal RGB adapter
+consume these constants; Web owns `wwwroot/css/hvo-dark.css` and its parity tests. `SurfaceRaised` is used by inputs,
+directional actions and navigation. The legacy names `Badge`, `MutedWeak` and `FocusRing` remain compatible aliases
+of raised surface, muted text and accent; there is no independent colour list behind them.
+
+Stop uses the danger notice foreground/background, retaining red under focus. Open and Close use raised surfaces.
+Notice text is paired with its notice background; standalone Stop feedback uses the standalone status tone, preserving
+both shared acknowledgement messages. An Acknowledged enum alone makes no register-verification claim.
+
+`RoofUiPaletteTests` checks every role/action against `docs/ui-redesign/tokens.json`. During the independent Web
+migration (#174), it explicitly checks the legacy source still exists when the Web-owned file is absent; as soon as
+that file is present it requires all 20 Web roles and the new asset URL. Exact terminal ANSI-16 emission, capability
+selection and full terminal/installer redesign remain #176; the present RGB migration does not claim that parity.

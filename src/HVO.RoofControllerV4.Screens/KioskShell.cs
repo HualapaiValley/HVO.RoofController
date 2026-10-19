@@ -17,12 +17,15 @@ public enum KioskPage
     Unlock,
     Settings,
     System,
-    About
+    About,
+    Readings,
+    Notices,
+    StopResult
 }
 
 /// <summary>
 /// The kiosk's screen, and the Mac app's: a header with where the status comes from and who unlocked the kiosk (or signed
-/// in to the app), the banners, a rail of pages at the left, the page, and Stop at the right of every page, never disabled
+/// in to the app), a bounded safety summary, bottom navigation, the page, and Stop at the right of every page, never disabled
 /// and never behind the PIN or the password. A blank screen is black; the touch that wakes it goes no further. The kiosk
 /// is unlocked with a PIN (<see cref="PinPage"/>); the app is signed in to with a name and password
 /// (<see cref="SignInPage"/>), as <see cref="KioskConsole.Wording"/> says.
@@ -34,13 +37,21 @@ public sealed class KioskShell : UserControl
     private readonly TextBlock _title;
     private readonly WrapPanel _badges;
     private readonly StackPanel _banners;
-    private readonly ScrollViewer _scroller;
+    private readonly ContentControl _page;
+    private readonly ScrollViewer _desktopScroller = new() { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+    private readonly KioskPager _readings;
+    private readonly KioskPager _notices;
+    private readonly Button _navReadings;
+    private readonly Button _navNotices;
     private readonly Button _navRoof;
     private readonly Button _navSettings;
     private readonly Button _navSystem;
     private readonly Button _navAbout;
     private readonly Button _navLock;
     private readonly TextBlock _stopMessage;
+    private readonly Button _stopDetails;
+    private readonly KioskPager _stopResult;
+    private readonly Grid _stopColumn;
     private readonly Border _blank;
     private bool _wasUnlocked;
     private KioskView? _shown;
@@ -78,31 +89,24 @@ public sealed class KioskShell : UserControl
         _badges = new WrapPanel { Name = "badges", ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap / 2, HorizontalAlignment = HorizontalAlignment.Right };
         var header = new KioskHeaderPanel { Spacing = metrics.Gap * 2, Margin = new Thickness(0, 0, 0, metrics.Gap), Children = { _title, _badges } };
         _banners = new StackPanel { Name = "banners", Spacing = metrics.Gap, Margin = new Thickness(0, 0, 0, metrics.Gap) };
-        _scroller = new ScrollViewer
-        {
-            Name = "page",
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            Content = RoofPage
-        };
-        var middle = new DockPanel { Margin = new Thickness(metrics.Gap * 2) };
-        DockPanel.SetDock(header, Dock.Top);
-        DockPanel.SetDock(_banners, Dock.Top);
-        middle.Children.Add(header);
+        _page = new ContentControl { Name = "page", ClipToBounds = true, Content = RoofPage, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+        _readings = new KioskPager(metrics, "readings");
+        _notices = new KioskPager(metrics, "recent-notices");
+        _stopResult = new KioskPager(metrics, "stop-result");
+        var middle = new Grid { Margin = new Thickness(metrics.Gap * 2), RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = metrics.Gap };
         middle.Children.Add(_banners);
-        middle.Children.Add(_scroller);
+        Grid.SetRow(_page, 1);
+        middle.Children.Add(_page);
 
         _navRoof = Nav("Roof", "nav-roof", () => ShowPage(KioskPage.Roof));
+        _navReadings = Nav("Readings", "nav-readings", () => ShowPage(KioskPage.Readings));
+        _navNotices = Nav("Notices", "nav-notices", () => ShowPage(KioskPage.Notices));
         _navSettings = Nav("Settings", "nav-settings", () => ShowPage(KioskPage.Settings));
         _navSystem = Nav("System", "nav-system", () => ShowPage(KioskPage.System));
         _navAbout = Nav("About", "nav-about", () => ShowPage(KioskPage.About));
         _navLock = Nav(console.Wording.SignInAction, "nav-lock", LockOrUnlock);
-        var navTop = new StackPanel { Spacing = metrics.Gap, Children = { _navRoof, _navSettings, _navSystem, _navAbout } };
-        var nav = new DockPanel { Width = metrics.NavWidth, Margin = new Thickness(metrics.Gap) };
-        DockPanel.SetDock(_navLock, Dock.Bottom);
-        nav.Children.Add(_navLock);
-        nav.Children.Add(navTop);
-        var navFrame = new Border { Background = KioskTheme.Surface, BorderBrush = KioskTheme.Frame, BorderThickness = new Thickness(0, 0, 1, 0), Child = nav };
+        var nav = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navSettings, _navSystem, _navAbout, _navLock } };
+        var navFrame = new Border { Background = KioskTheme.Surface, BorderBrush = KioskTheme.Frame, BorderThickness = new Thickness(0, 1, 0, 0), Child = nav };
 
         Stop = new Button
         {
@@ -118,31 +122,46 @@ public sealed class KioskShell : UserControl
             BorderThickness = new Thickness(3),
             Content = new TextBlock { Text = RoofStopText.ButtonLabel, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center }
         };
-        KioskTheme.Colour(Stop, RoofUiPalette.StopButton, RoofUiPalette.StopButtonText, "#000000");
+        KioskTheme.Colour(Stop, RoofUiPalette.StopButton, RoofUiPalette.StopButtonText, RoofUiPalette.Danger);
+        // The permanent action retains its exact red pair under pointer, press and keyboard focus.
+        Stop.Resources["ButtonBackgroundPointerOver"] = KioskTheme.Brush(RoofUiPalette.StopButton);
+        Stop.Resources["ButtonBackgroundPressed"] = KioskTheme.Brush(RoofUiPalette.StopButton);
         Stop.Click += (_, _) => _ = _console.StopAsync();
         _stopMessage = KioskTheme.Label(RoofStopText.AlwaysAvailable, metrics.Font);
         _stopMessage.Name = "stop-message";
-        _stopMessage.MinHeight = metrics.Font * 4.5;
+        _stopMessage.MinHeight = metrics.Font * 2.5;
         _stopMessage.VerticalAlignment = VerticalAlignment.Top;
-        var stopColumn = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = metrics.Gap * 2, Margin = new Thickness(metrics.Gap * 2) };
-        stopColumn.Children.Add(Stop);
+        _stopDetails = KioskTheme.TouchButton("Full result", "stop-details", metrics, () => ShowPage(KioskPage.StopResult));
+        _stopDetails.IsVisible = false;
+        _stopColumn = new Grid { RowDefinitions = new RowDefinitions("*,Auto,Auto"), RowSpacing = metrics.Gap * 2, Margin = new Thickness(metrics.Gap * 2) };
+        _stopColumn.Children.Add(Stop);
         Grid.SetRow(_stopMessage, 1);
-        stopColumn.Children.Add(_stopMessage);
+        _stopColumn.Children.Add(_stopMessage);
+        Grid.SetRow(_stopDetails, 2);
+        _stopColumn.Children.Add(_stopDetails);
+        _stopColumn.SizeChanged += (_, _) => FitStopResult();
         var stopFrame = new Border
         {
             Width = metrics.StopWidth,
             Background = KioskTheme.Surface,
-            BorderBrush = KioskTheme.Frame,
-            BorderThickness = new Thickness(1, 0, 0, 0),
-            Child = stopColumn
+            BorderBrush = KioskTheme.Brush(RoofUiPalette.Danger),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Margin = new Thickness(metrics.Gap),
+            Child = _stopColumn
         };
 
-        var main = new DockPanel();
+        var body = new DockPanel();
         DockPanel.SetDock(stopFrame, Dock.Right);
-        DockPanel.SetDock(navFrame, Dock.Left);
-        main.Children.Add(stopFrame);
+        body.Children.Add(stopFrame);
+        body.Children.Add(middle);
+        var main = new DockPanel();
+        var headerFrame = new Border { Background = KioskTheme.Surface, BorderBrush = KioskTheme.Frame, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(metrics.Gap * 2, metrics.Gap), Child = header };
+        DockPanel.SetDock(headerFrame, Dock.Top);
+        DockPanel.SetDock(navFrame, Dock.Bottom);
+        main.Children.Add(headerFrame);
         main.Children.Add(navFrame);
-        main.Children.Add(middle);
+        main.Children.Add(body);
 
         _blank = new Border { Name = "blank", Background = KioskTheme.Black, IsVisible = false };
         Content = new Panel { Children = { main, _blank } };
@@ -184,7 +203,7 @@ public sealed class KioskShell : UserControl
     public KioskPage Page { get; private set; } = KioskPage.Roof;
 
     /// <summary>
-    /// Shows a page. Settings and System need the kiosk unlocked, and Unlock needs it locked; each reads what it shows
+    /// Shows a page. Settings and System need a password session, and Unlock needs the client signed out; each reads what it shows
     /// when it opens. Unlock is the PIN pad on the kiosk and the name and password in the app.
     /// </summary>
     public void ShowPage(KioskPage page)
@@ -196,16 +215,25 @@ public sealed class KioskShell : UserControl
         }
 
         Page = page;
-        _scroller.Content = page switch
+        Control content = page switch
         {
             KioskPage.Unlock when _console.Wording.SignIn == KioskSignIn.Password => SignInPage,
             KioskPage.Unlock => PinPage,
             KioskPage.Settings => SettingsPage,
             KioskPage.System => SystemPage,
             KioskPage.About => AboutPage,
+            KioskPage.Readings => _readings,
+            KioskPage.Notices => _notices,
+            KioskPage.StopResult => _stopResult,
             _ => RoofPage
         };
-        _scroller.Offset = default;
+
+        if (_console.Wording.SignIn == KioskSignIn.Password && page is KioskPage.Settings or KioskPage.System or KioskPage.About)
+        {
+            _desktopScroller.Content = content;
+            _page.Content = _desktopScroller;
+        }
+        else _page.Content = content;
         switch (page)
         {
             case KioskPage.Unlock when _console.Wording.SignIn == KioskSignIn.Password:
@@ -256,17 +284,52 @@ public sealed class KioskShell : UserControl
         UpdateNav(view);
 
         _stopMessage.Text = view.StopMessage;
+        _stopResult.SetItems([KioskTheme.Label("Stop result", _metrics.Large, KioskTheme.Accent, FontWeight.SemiBold), KioskTheme.Label(view.StopMessage, _metrics.Font)]);
+        FitStopResult();
         _stopMessage.Foreground = view.StopOutcome switch
         {
-            RoofStopOutcome.Failed => KioskTheme.Colours(KioskNoticeLevel.Danger).Foreground,
-            RoofStopOutcome.RelayUnverified or RoofStopOutcome.Sent => KioskTheme.Colours(KioskNoticeLevel.Warning).Foreground,
-            RoofStopOutcome.Acknowledged => KioskTheme.SuccessColours.Foreground,
+            RoofStopOutcome.Failed => KioskTheme.Brush(RoofUiPalette.Danger),
+            RoofStopOutcome.RelayUnverified => KioskTheme.Brush(RoofUiPalette.Warning),
+            RoofStopOutcome.Sent => KioskTheme.Brush(RoofUiPalette.Info),
+            RoofStopOutcome.Acknowledged => KioskTheme.Brush(RoofUiPalette.Success),
             _ => KioskTheme.Muted
         };
 
         // Stop is never disabled: not while a Stop is on its way, not while locked, not while the controller is unreachable.
         Stop.IsEnabled = true;
         _blank.IsVisible = view.IsBlank;
+    }
+
+    private void FitStopResult()
+    {
+        if (_shown is not { } view || _stopColumn.Bounds.Width <= 0) return;
+        _stopMessage.Text = view.StopMessage;
+        _stopMessage.Measure(new Size(_stopColumn.Bounds.Width, double.PositiveInfinity));
+        var budget = _stopColumn.Bounds.Height - _metrics.Touch * 2 - _metrics.Gap * 2;
+        var breaksWord = _stopMessage.TextLayout.TextLines.Skip(1).Any(line =>
+        {
+            var at = line.FirstTextSourceIndex;
+            return at > 0 && at < view.StopMessage.Length && char.IsLetterOrDigit(view.StopMessage[at - 1]) && char.IsLetterOrDigit(view.StopMessage[at]);
+        });
+        var longAnswer = _stopMessage.DesiredSize.Height > budget || breaksWord;
+        _stopDetails.IsVisible = longAnswer;
+        if (longAnswer)
+        {
+            // Preserve the complete shared message in the adjacent bounded result document. A compact outcome never
+            // infers verification from Acknowledged: the actual message's first sentence is the only summary.
+            var end = view.StopMessage.IndexOf(". ", StringComparison.Ordinal);
+            _stopMessage.Text = end >= 0 ? view.StopMessage[..(end + 1)] : view.StopMessage;
+            _stopMessage.Measure(new Size(_stopColumn.Bounds.Width, double.PositiveInfinity));
+            if (_stopMessage.DesiredSize.Height > budget - _metrics.Touch - _metrics.Gap * 2)
+                _stopMessage.Text = view.StopOutcome switch
+                {
+                    RoofStopOutcome.Failed => "Stop failed.",
+                    RoofStopOutcome.RelayUnverified => "Stop: relay register unverified.",
+                    RoofStopOutcome.Sent => "Stop sent. Waiting…",
+                    RoofStopOutcome.Acknowledged => RoofStopText.Acknowledged,
+                    _ => RoofStopText.AlwaysAvailable
+                };
+        }
     }
 
     private void OnConsoleChanged()
@@ -283,7 +346,20 @@ public sealed class KioskShell : UserControl
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e) => Touched(e);
 
-    private void OnKeyDown(object? sender, KeyEventArgs e) => Touched(e);
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        Touched(e);
+        if (e.Handled || e.Key != Key.Escape) return;
+        if (Page == KioskPage.Settings && Settings.Question is not null) { Settings.Dismiss(); e.Handled = true; }
+        else if (Page == KioskPage.System && System.Question is not null) { System.Dismiss(); e.Handled = true; }
+        else if (Page == KioskPage.Unlock)
+        {
+            PinPad.Select(null);
+            PasswordForm.Clear();
+            ShowPage(KioskPage.Roof);
+            e.Handled = true;
+        }
+    }
 
     /// <summary>
     /// Records the touch, and swallows it only when the screen showed black. What is on the glass decides, not whether
@@ -315,7 +391,7 @@ public sealed class KioskShell : UserControl
     private Button Nav(string text, string name, Action click)
     {
         var button = KioskTheme.TouchButton(text, name, _metrics, click);
-        button.HorizontalAlignment = HorizontalAlignment.Stretch;
+        button.MinWidth = _metrics.NavWidth;
         button.FontSize = _metrics.Font;
         return button;
     }
@@ -325,11 +401,12 @@ public sealed class KioskShell : UserControl
         _navSettings.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navSystem.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
-        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navLock, KioskPage.Unlock) })
+        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navLock, KioskPage.Unlock) })
         {
+            KioskTheme.Selected(button, page == Page);
             if (page == Page)
             {
-                KioskTheme.Colour(button, RoofUiPalette.Accent, RoofUiPalette.Text);
+                KioskTheme.Colour(button, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
             }
             else
             {
@@ -364,46 +441,44 @@ public sealed class KioskShell : UserControl
     private void UpdateBanners(KioskView view)
     {
         _banners.Children.Clear();
-        if (!view.IsStarted)
-        {
-            _banners.Children.Add(KioskTheme.Banner("Connecting to the controller…", KioskNoticeLevel.Info, _metrics, "connecting"));
-        }
-
-        foreach (var warning in view.ModeWarnings)
-        {
-            _banners.Children.Add(KioskTheme.Banner(warning, KioskNoticeLevel.Warning, _metrics, "mode-warning"));
-        }
-
-        if (view.FeedBanner is { } banner)
-        {
-            _banners.Children.Add(KioskTheme.Banner(
-                banner,
-                view.FeedRefused || view.IsUnreachable ? KioskNoticeLevel.Danger : KioskNoticeLevel.Warning,
-                _metrics,
-                "feed-banner"));
-        }
-
+        var warnings = new List<(string Name, string Text, KioskNoticeLevel Level)>();
+        if (!view.IsStarted) warnings.Add(("connecting", "Connecting to the controller…", KioskNoticeLevel.Info));
+        warnings.AddRange(view.ModeWarnings.Select(text => ("mode-warning", text, KioskNoticeLevel.Warning)));
+        if (view.FeedBanner is { } feed) warnings.Add(("feed-banner", feed, KioskNoticeLevel.Warning));
         if (view.Status is { } status && RoofCommandRules.HasFault(status))
-        {
-            _banners.Children.Add(KioskTheme.Banner(
-                $"Fault: {RoofStatusText.DescribeFault(status)}. Open and Close are refused until the cause is fixed and the fault is cleared.{(view.IsOperator ? string.Empty : " An operator must clear it.")}",
-                KioskNoticeLevel.Danger,
-                _metrics,
-                "fault-banner"));
-        }
-
+            warnings.Add(("fault-banner", $"Fault: {RoofStatusText.DescribeFault(status)}. Motion refused until the cause is fixed and the fault is cleared.", KioskNoticeLevel.Danger));
         if (view.Status is { } relays && (relays.RelayRegisterState == RoofRelayRegisterState.Unverified || !relays.RelayRegisterReadsHealthy))
-        {
-            _banners.Children.Add(KioskTheme.Banner($"Relays: {RoofStatusText.DescribeRelays(relays)}.", KioskNoticeLevel.Warning, _metrics, "relays-banner"));
-        }
-
+            warnings.Add(("relays-banner", $"Relays: {RoofStatusText.DescribeRelays(relays)}.", KioskNoticeLevel.Warning));
         if (view.Status is { InputsHealthy: false } inputs)
+            warnings.Add(("inputs-banner", $"Safety inputs: {RoofStatusText.DescribeInputs(inputs)}.", KioskNoticeLevel.Warning));
+        // A bounded summary stays visible on every page. Full, unabridged warnings are in Readings, before the values.
+        if (warnings.Count > 0)
         {
-            _banners.Children.Add(KioskTheme.Banner(
-                $"Safety inputs: {RoofStatusText.DescribeInputs(inputs)}. Motion may be refused.",
-                KioskNoticeLevel.Warning,
-                _metrics,
-                "inputs-banner"));
+            var text = view.FeedRefused ? "Status refused. Motion unavailable. Readings has details."
+                : view.IsUnreachable ? "Controller unreachable. Motion unavailable."
+                : view.IsStale ? "STALE: last known status. Motion unavailable."
+                : view.Status is { } roof && RoofCommandRules.HasFault(roof) ? "Fault latched. Motion refused. Readings has details."
+                : view.ModeWarnings.Count > 0 ? "Simulation / safety mode warning. Readings has details."
+                : !view.IsStarted ? "Connecting to the controller…" : "Safety I/O warning. Readings has details.";
+            _banners.Children.Add(KioskTheme.Banner(text, warnings.Max(w => w.Level), _metrics, "safety-summary"));
         }
+        var readings = new List<Control> { KioskTheme.Label("Controller readings", _metrics.Large, KioskTheme.Accent, FontWeight.SemiBold) };
+        foreach (var warning in warnings)
+        {
+            var label = KioskTheme.Label(warning.Text, _metrics.Font, KioskTheme.Tone(warning.Level));
+            label.Name = warning.Name;
+            readings.Add(label);
+        }
+        foreach (var reason in new[] { view.Busy, view.OpenBlock is { } open ? $"Open: {open}" : null,
+            view.CloseBlock is { } close ? $"Close: {close}" : null, view.ClearFaultBlock is { } clear ? $"Clear fault: {clear}" : null }.Where(text => text is not null))
+            readings.Add(KioskTheme.Label(reason!, _metrics.Font, KioskTheme.Muted));
+        if (view.Status is { } sample)
+            foreach (var (label, value) in RoofStatusText.DescribeRows(sample))
+                readings.Add(KioskTheme.Label($"{label}: {value}", _metrics.Font));
+        else readings.Add(KioskTheme.Label(KioskText.NoStatusYet, _metrics.Font));
+        _readings.SetItems(readings);
+        _notices.SetItems(new[] { KioskTheme.Label("Recent notices", _metrics.Large, KioskTheme.Accent, FontWeight.SemiBold) }
+            .Concat(view.Notices.Count == 0 ? new[] { KioskTheme.Label("No notices yet.", _metrics.Font, KioskTheme.Muted) }
+                : view.Notices.Select(notice => KioskTheme.Label($"{RoofStatusText.Time(notice.At)}  {notice.Text}", _metrics.Font, KioskTheme.Tone(notice.Level)))));
     }
 }
