@@ -2104,8 +2104,8 @@ check_json_once() {
 #  - manifest.json is that one image: the platform's config and its layers, in order, tagged IMAGE_REF's
 #    <repository>:<tag> or not at all;
 #  - every blob is the one its digest names, layers included.
-# What is checked is what Docker loads: the archive is copied once, first, into a folder of the script's own that no one
-# but this user and root can change (ARCHIVE_DIR, make_private_folder), and that copy (ARCHIVE_COPY) is checked, has its
+# Under the private-folder trust assumptions below, what is checked is what Docker loads: the archive is copied once
+# into ARCHIVE_DIR (make_private_folder), and that copy (ARCHIVE_COPY) is checked, has its
 # SHA-256 compared with IMAGE_ARCHIVE_SHA256 when it is given, and is the file docker load reads. Whatever then happens
 # to IMAGE_ARCHIVE (replaced, or written over in place) changes nothing Docker reads. ARCHIVE_MANIFEST and ARCHIVE_CONFIG
 # are then the platform's manifest and config: with the index, the IDs Docker gives the image it loads (the containerd
@@ -2119,17 +2119,18 @@ ARCHIVE_COPY=""
 # Room the copy must leave on its file system, for the members the check takes out of it beside it: 16 MiB, in KiB.
 ARCHIVE_HEADROOM_KB=16384
 
-# Private folders. The script's work folder (WORK_DIR) and its copy of IMAGE_ARCHIVE (ARCHIVE_DIR) are each made as a
-# new folder, mode 0700, by its physical path, and only in a TMPDIR that is a trusted_folder (make_private_folder); each
-# is removed only while it is still the folder that was made (private_folder), and only the exact path that was made.
-# No one but root and this user can then change what is in them, rename them, or put another folder or a link in their
-# place, so what the script writes there, checks and reads back (the copy Docker loads, the new controller's cidfile, the
-# identity check's copies) stays what it wrote, and their removal can only remove them.
+# Private folders on the machine running this script (not necessarily the Docker host). Under the 2026-10-17 owner
+# decision (#147; docs/install.md, Temporary files), this is a single-user Pi, owner's Mac or deploy laptop. Root and
+# the deploying account are assumed to control TMPDIR and its ancestry, allowing sticky shared directories below;
+# no hostile local account is expected. The checks catch ordinary misconfiguration. They do not check macOS ACLs
+# (F7), prevent concurrent ancestor replacement (F8), or retain directory identity for cleanup (F9); all remain accepted.
+# WORK_DIR and ARCHIVE_DIR are new mode-0700 folders under trusted_folder's physical base. Later use and cleanup are
+# by saved path; private_folder checks current type, owner and Unix mode, not a held handle or device/inode identity.
 
-# trusted_folder <folder>: prints <folder>'s physical path (every symbolic link in it followed) when that folder, and
-# every folder above it up to /, is a real folder (not a link), root's or this user's, that no one else can write to
-# unless it is sticky (as /tmp is: there, no one else can rename or remove what root or this user owns). No one else can
-# then change what that path names, or a path below it that root or this user made. Fails, printing nothing, otherwise.
+# trusted_folder <folder>: resolves every link, then checks the physical directory and ancestors upward to /. At
+# inspection each must be a directory, not a link, root's or this user's, without group/other write bits unless sticky
+# (as /tmp is). Links in the supplied spelling are resolved, not refused. Prints the physical path when these checks
+# pass; otherwise fails, printing nothing. This does not preserve the path chain against concurrent replacement.
 trusted_folder() {
   local physical folder user
   user=$(id -u) || return 1
@@ -2145,14 +2146,14 @@ trusted_folder() {
   printf '%s\n' "${physical}"
 }
 
-# private_folder <folder>: <folder> is still a folder make_private_folder made: a real folder (not a link), this user's,
-# mode 0700.
+# private_folder <folder>: current path is a non-link directory, this user's, mode 0700. A same-owner 0700 replacement
+# also passes; this does not identify the directory make_private_folder originally made.
 private_folder() {
   [[ -d "$1" && ! -L "$1" && -n "$(find "$1" -maxdepth 0 -type d -user "$(id -u)" -perm 0700 2>/dev/null)" ]]
 }
 
 # make_private_folder <name>: makes a new folder, <name>.<random> with mode 0700, under TMPDIR's physical path (TMPDIR is
-# /tmp when it is not set) once TMPDIR is a trusted_folder, and prints the exact path it made. Returns 2, having made
+# /tmp when it is unset or empty) once TMPDIR is a trusted_folder, and prints the exact path it made. Returns 2, making
 # nothing, when TMPDIR is not a trusted_folder; 1 when the folder cannot be made, or is not then a private_folder (it
 # then prints the path, which is never removed).
 make_private_folder() {
@@ -2187,10 +2188,11 @@ make_work_dir() {
   WORK_DIR=${folder}
 }
 
-# remove_work_dir: removes WORK_DIR, only while it is still the private_folder that was made, and only what the script
-# puts there: the new controller's cidfile, a built image, the identity check's store copy and its copy of the secrets
-# (from docker cp, so only that one folder is removed whole, and rm never follows a link in it), then the folder with
-# rmdir. Anything else there is left, with the folder, and said. WORK_DIR is forgotten either way.
+# remove_work_dir: checks WORK_DIR with private_folder, then removes known paths: the new controller's cidfile, a built
+# image, the identity check's store copy and its copy of the secrets (from docker cp, so only that one folder is removed
+# whole, and rm never follows a link in it), then the folder with
+# rmdir. Entries outside those paths are left, with the folder, and said. Expected paths in a same-owner 0700
+# replacement can be removed too (accepted F9, #147). WORK_DIR is forgotten either way.
 remove_work_dir() {
   local folder=${WORK_DIR}
   [[ -n "${folder}" ]] || return 0
@@ -2207,8 +2209,8 @@ remove_work_dir() {
   fi
 }
 
-# remove_archive_members <folder>: removes what check_image_archive took out of the archive into <folder> (inside
-# ARCHIVE_DIR), file by known file, then its folders with rmdir; anything else there is left.
+# remove_archive_members <folder>: removes the extracted-member paths inside ARCHIVE_DIR, including blobs/sha256/*,
+# then tries rmdir on their folders. Entries outside those cleanup paths are left; directory identity is not checked.
 remove_archive_members() {
   local members=$1
   [[ -d "${members}" && ! -L "${members}" ]] || return 0
@@ -2223,9 +2225,9 @@ remove_archive_members() {
   rmdir -- "${members}" 2>/dev/null || true
 }
 
-# remove_archive_dir: removes ARCHIVE_DIR, only while it is still the private_folder that was made, and only what the
-# script put there: the copy and the members it took out, file by known file, then the folder with rmdir. Anything
-# else there is left, with the folder, and said. ARCHIVE_DIR is forgotten either way.
+# remove_archive_dir: checks ARCHIVE_DIR with private_folder, then removes the copy and extracted-member paths and
+# tries rmdir. Other entries leave the folder, with a warning. This is not an identity check: expected paths in a
+# same-owner 0700 replacement can be removed too (accepted F9, #147). ARCHIVE_DIR is forgotten either way.
 remove_archive_dir() {
   local folder=${ARCHIVE_DIR}
   [[ -n "${folder}" ]] || return 0
@@ -2257,9 +2259,8 @@ check_image_archive() {
     image_name=""
   fi
 
-  # The copy Docker will load goes in a new folder of the script's own (make_private_folder): made by its physical path,
-  # only in a TMPDIR that no one but this user and root can change, and removed (remove_archive_dir) only while it is
-  # still that folder. Only the exact folder made is ever removed.
+  # The copy Docker will load goes in a new folder under the physical TMPDIR base (make_private_folder), using the
+  # private-folder assumptions above. Cleanup checks current type/owner/mode at its saved path, not directory identity.
   status=0
   folder=$(make_private_folder hvo-roof-archive) || status=$?
   (( status == 0 )) || fail "$(private_folder_problem "${status}" "the copy of IMAGE_ARCHIVE that Docker loads" "${folder}"). Nothing was changed."

@@ -524,28 +524,44 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   ./deploy-roofcontroller-rpi.sh
 ```
 
-- Docker loads only bytes the script has checked. First, the script copies the archive once into a new folder of its
-  own, `hvo-roof-archive.<random>` with mode 0700 and the copy 0600, so that only the user running the script and root
-  can change it. That copy is what is checked and what `docker load` reads: whatever happens to `IMAGE_ARCHIVE`
+- Under the temporary-folder trust model below, Docker loads bytes the script has checked. It copies the archive into
+  a new folder of its own, `hvo-roof-archive.<random>` with mode 0700 and the copy 0600, so that only the user running
+  the script and root can change it. That copy is what is checked and what `docker load` reads: whatever happens to `IMAGE_ARCHIVE`
   afterwards (replaced, or written over in place) changes nothing Docker reads. With `IMAGE_ARCHIVE_SHA256` (optional;
   the installer always gives it), the copy must also have that SHA-256: `[load] Checking a copy of <archive> that only
   this user can change (SHA-256 ..., as release.json gives it): Docker loads that copy`. The script refuses, with
   nothing changed, a file system without room for the archive and 16 MiB more (about 180 MB for the controller's
   archive): free some room, or set `TMPDIR` to a folder that has it.
-- The script's own folders, the copy's and its work folder (`hvo-roof-deploy.<random>`, which holds the new
-  controller's container ID that a restore removes it by), are made only in a `TMPDIR` that no one but you and root can
-  change, in every run that makes them (all but `--verify-remote`, which makes none):
-  - before anything is made, `TMPDIR` (`/tmp` when it is not set) is followed to its physical path, and that folder and
-    every folder above it, up to `/`, must be a real folder (not a link), yours or root's, that no one else can write
-    to unless it is sticky (as `/tmp` is). Otherwise the script refuses before any Docker call and makes nothing there,
-    since someone else could put a link or another folder in the place of one it made. Set `TMPDIR` to a folder only
-    you can change. A `TMPDIR` that is a link to such a folder is fine: it is followed once;
-  - each folder is made new, with `mktemp`, by that physical path, and must then be a real folder of yours with mode
-    0700. Only that exact path is used, and only it is removed;
-  - it is removed, once Docker has read the copy and whenever the script ends, only while it is still that folder, and
-    only what the script put there (the copy and the files it checks, the container ID, a built image, the identity
-    check's copies) is removed, file by file, then the folder itself with `rmdir`. Anything else found there is left,
-    with the folder, and the script says so (`WARNING: … so it was left as it is`).
+- The script's archive folder and work folder (`hvo-roof-deploy.<random>`, which holds the new controller's
+  container ID that a restore removes it by) use the [temporary-folder trust model](install.md#temporary-files)
+  accepted by the owner on 2026-10-17 (#147). The machine running the script is a single-user roof Pi, owner's Mac or
+  deploy laptop; these folders are on that machine, even when its Docker context targets a remote Pi. Root and the
+  deploying account are assumed to control `TMPDIR` and its ancestry, allowing sticky shared folders as below. No
+  other local account is trusted or expected to be present and hostile. In every run that makes folders (all but
+  `--verify-remote`, which makes none):
+  - before creating either folder, the script resolves every link in `TMPDIR` (`/tmp` when unset or empty), then
+    inspects the resulting physical directory and its ancestors upward to `/`. Each must be a directory, not a link
+    at inspection, owned by root or the account running the script, without group or other write bits unless sticky
+    (as `/tmp` is). Failure refuses creation before any Docker call. Links in the supplied spelling, such as macOS's
+    `/var`, are resolved rather than refused; this is not a rejection of every original symlink component;
+  - each folder is made new with `mktemp`, under that physical path, and checked for the running account's ownership
+    and mode 0700. Later operations use the saved path, without a held directory handle;
+  - cleanup, after Docker reads the archive and on script exit, checks for a non-link directory at that path with
+    the current account's ownership and mode 0700. It removes known paths (the archive copy and extracted members,
+    container ID, built image and identity-check copy, including the copied-secrets tree), then uses `rmdir`.
+    Unexpected entries outside those cleanup paths leave the folder with a warning. There is no device/inode check:
+    a same-owner 0700 replacement passes, and expected filenames or trees in it can be removed.
+
+  These owner and Unix-mode checks catch ordinary misconfiguration. They do not check macOS ACL access (F7), prevent
+  concurrent ancestor replacement (F8), or establish directory identity during cleanup (F9). All three remain
+  **unfixed and accepted** under the recorded owner decision, including for sticky ancestors. Private verified release
+  copies (#161) and the existing replacement-folder tests do not fix these gaps; see the finding dispositions in
+  [Temporary files](install.md#temporary-files).
+
+  When the installer runs this script, it runs on the installer's host with `TMPDIR` kept from the installer's
+  environment, except that an offline image run overrides it with the installer's own work folder. Bootstrap sudo
+  handling and the difference between root and user-role installs are described in
+  [Temporary files](install.md#temporary-files).
 - Before any Docker call, the script checks that the copy holds the image `IMAGE_REF`'s digest names for
   `BUILD_PLATFORM`, and nothing else. Each of Docker's image stores loads its own part of an archive and applies all
   it finds there (the containerd store reads `index.json` and the names it gives, the classic store `manifest.json`,
@@ -582,7 +598,8 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   `<name>-previous` as it is, however its image came.
 
 The installer sets `IMAGE_ARCHIVE` and `IMAGE_ARCHIVE_SHA256` itself when it installs from a release's folder, with
-`TMPDIR` its own folder, which only root can open ([The release it installs](install.md#the-release-it-installs)).
+`TMPDIR` set to its own mode-0700 work folder under the [temporary-folder trust model](install.md#temporary-files)
+([The release it installs](install.md#the-release-it-installs)).
 
 ### HAT emulator mode (test rigs)
 

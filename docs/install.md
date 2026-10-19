@@ -238,12 +238,11 @@ makes them last: a check that fails, or an offer you refuse, leaves the machine 
 change (Docker's engine does not answer once installed, or raspi-config can only turn I2C on from the next start), its
 last line names the change. For I2C from the next start, restart the Pi and run the script again.
 
-Then it downloads `hvo-roof-install-<platform>` and `SHA256SUMS` into a folder of its own in `TMPDIR`, which it removes
-afterwards. It makes that folder, mode 0700, only in a `TMPDIR` (`/tmp` when it is not set) that no one but you and root
-can change: followed to its physical path, it and every folder above it, up to `/`, must be a real folder of yours or
-root's that no one else can write to unless it is sticky, as `/tmp` is. Otherwise it stops and makes nothing there,
-since someone else could change the installer between its check and its start as root. It removes only that folder,
-only while it is still the one made, and only the two files it put there. It refuses the installer unless:
+Then it downloads `hvo-roof-install-<platform>` and `SHA256SUMS` into a new mode-0700 folder under the physical path
+of its current `TMPDIR` (`/tmp` when unset or empty). The owner, Unix-mode and ancestor checks, and the accepted
+single-user-host assumptions, are described in [Temporary files](#temporary-files). Cleanup checks the saved path's
+current type, owner and mode, removes the two expected filenames and tries `rmdir`; this does not verify the original
+directory's identity. The installer runs as the person or root according to its roles. It is refused unless:
 
 - its SHA-256 is the one `SHA256SUMS` lists;
 - its attestation, when `gh` is installed and signed in, says the release workflow built it from the release's tag;
@@ -885,24 +884,61 @@ was left. An API key entry that a stopped install left with its name but no key 
 The deploy script runs with a clean environment. Only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, `TMPDIR`
 and Docker's own `DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` reach it from the
 installer's; the installer gives it the rest. The script holds `TMPDIR` to the rule the installer does
-([Temporary files](#temporary-files)). A setting of the deploy script's in your shell never changes what the
-installer deploys. The installer also sets `REQUIRE_IDLE_ROOF`: the script then stops before it replaces the
-controller when it cannot read the roof's status, as well as when the roof moves
+([Temporary files](#temporary-files)). For an offline image, the installer overrides the script's `TMPDIR` with its
+own work folder; otherwise it keeps the installer's `TMPDIR` if set. A setting of the deploy script's in your shell
+never changes what the installer deploys. The installer also sets `REQUIRE_IDLE_ROOF`: the script then stops before
+it replaces the controller when it cannot read the roof's status, as well as when the roof moves
 ([Deploying](deployment.md#deploying-with-the-script)).
 
 ### Temporary files
 
-The installer keeps what it uses during a run (its verified release files and image archives, the deploy script, the
-files it gives the script) in folders of its own, `hvo-roof-install-<random>` with mode 0700, each deleted when its step
-ends.
-It makes them only in a temporary folder (`TMPDIR`, `/tmp` when it is not set) that no one but root can change: that
-folder, followed to its physical path, and every folder above it, up to `/`, must be a real folder (not a link) of
-root's (or, for `hvo-roof` and the Mac app, which you install as yourself, of yours or root's) that no one else can
-write to unless it is sticky, as `/tmp` is. Otherwise the run stops before anything changes (exit 3), and says which
-folder is not, since someone else could put another folder in the place of one the installer made, and so change an
-archive's copy after it is checked, or the script root runs. A `TMPDIR` that is a link to such a folder is fine. Each
-folder is made new (`mkdir`, which fails if anything is there), used by its physical path, and deleted only while it is
-still the folder made. `install.sh` runs the installer with `sudo`, which leaves your `TMPDIR` out, so it uses `/tmp`.
+The [owner's 2026-10-17 decision for #147](https://github.com/HualapaiValley/HVO.RoofController/issues/147)
+accepts a single-user deploying host: the roof Pi, the owner's Mac or a deploy laptop. `TMPDIR` and its ancestry are
+assumed to be controlled by root and the deploying account, with sticky shared folders such as `/tmp` allowed as
+described below. No other local account is trusted, and none is expected to be present and hostile. The checks catch
+ordinary misconfiguration; they do not establish protection against a hostile local account racing the tools.
+
+The installer keeps its verified release files and image archives, deploy script and files given to the script in
+new `hvo-roof-install-<random>` folders with mode 0700. Its temporary base is the running installer's `TMPDIR`, or
+`/tmp` when unset. Before making a work folder, it resolves every link in that base path, then inspects the resulting
+physical folder and each ancestor up to `/`, from the leaf upward. At inspection, each must be a directory, not a
+symbolic link, owned by root or the installer's effective user, with no group or other write bit unless the sticky
+bit is set. Sticky directories restrict who can rename or remove entries under ordinary Unix permissions; they do
+not remove the assumptions about the path chain or ACLs. Links in the original `TMPDIR` spelling (including macOS's
+`/var`) are resolved, not refused; a component seen as a link in the resulting chain is refused. A failed check
+prevents creation of that work folder, naming the problem. The installer checks its base during answer validation
+(a failure refuses the install, exit 3) and checks again before creating each work folder. A later failure stops the
+current step; earlier steps may already have run.
+
+Each work folder is made with `mkdir`, which fails if anything is already at that path, and then checked for the
+current user's ownership and mode 0700. Cleanup checks the saved path for a non-link directory with that owner and
+mode, and recursively deletes its contents and the directory. It does not hold a directory handle or compare device
+and inode identity. A same-owner 0700 replacement at the saved path therefore also passes and can be deleted.
+`install.sh` uses its own `hvo-roof-install.<random>` download folder under its current `TMPDIR` (or `/tmp`), with
+the same physical-path and ancestor rules. Its cleanup checks current ownership/mode and removes the two known
+filenames, then uses `rmdir`; extra entries keep the folder there, but expected filenames in a replacement can still
+be removed. The [deploy script's work folders](deployment.md#without-ghcrio) have the same trust limits.
+
+The bootstrap downloads as the account running `install.sh`, before any sudo hand-over. Controller, kiosk and Linux
+rig installs run the installer as root (using `sudo` when needed); CLI, Mac app and macOS rig installs run as the
+person and keep that person's `TMPDIR`. A plan can run without root. Sudo's handling of `TMPDIR` depends on local
+policy: it may discard or preserve it, so there is no universal promise that a sudo run uses `/tmp`. The installer
+checks the base in its own resulting environment, against its own effective user; a root run refuses a base or
+ancestor owned by a non-root user, even if the bootstrap accepted it for that user.
+
+Under that recorded owner decision, these findings remain **unfixed and accepted** for this trust model:
+
+- **F7 — macOS ACLs:** owner and Unix-mode checks do not inspect ACLs, including inherited ACLs granting another
+  account access to change entries. Mode 0700 alone does not prove exclusive access in their presence.
+- **F8 — ancestor replacement:** resolving a physical path and checking it upward by name does not prevent a
+  concurrent ancestor swap. The tools do not traverse from `/` through held directory descriptors.
+- **F9 — cleanup identity:** the owner/mode/path checks do not distinguish the original directory from a same-owner
+  0700 replacement containing expected filenames and nested data. Existing 0755 replacement tests, and shell tests
+  that leave an unrelated `keep` file, do not establish that protection.
+
+The private verified release copies added in [#161](https://github.com/HualapaiValley/HVO.RoofController/pull/161)
+protect against later changes to the source assets; they do not fix F7, F8 or F9. This documents the accepted limits
+and corrects the earlier sudo claim (N3); it adds no hostile-multi-user hardening.
 
 ## The kiosk
 
@@ -1644,7 +1680,7 @@ Start with what was said: each check that fails, each refusal and each failed st
 | `FAIL  The controller drives the real HAT, on the observatory's Raspberry Pi, and this is not a Pi …` | The controller runs only on the observatory's Pi. To try it on another machine, choose a test rig (`--roles rig`). |
 | `… is yours, and never installed as root …` | Run it as yourself, without `sudo`: `hvo-roof` and the Mac app are installed for you. |
 | `TMPDIR (…) is not a folder only you and root can change: …` | Run it with `TMPDIR` unset, so it uses `/tmp`, or set `TMPDIR` to a folder of yours that no one else can write to: `mkdir -m 0700 ~/.cache/hvo-tmp`. |
-| `The installer's temporary folder … is not one only root can change: …` | Run it with `TMPDIR` unset, so it uses `/tmp` (`install.sh` does), or set `TMPDIR` to a folder that root owns and no one else can write to, such as one made with `sudo install -d -m 0700 /var/tmp/hvo-roof` ([Temporary files](#temporary-files)). |
+| `The installer's temporary folder … is not one only root can change: …` | Leave `TMPDIR` unset in the installer's environment to use `/tmp`, or give it a root-owned base such as one made with `sudo install -d -m 0700 /var/tmp/hvo-roof`, with root-owned ancestry. `install.sh` uses its current `TMPDIR` for the download; sudo may keep or discard it for the installer according to policy ([Temporary files](#temporary-files)). |
 | `Programs cannot run from … (it is mounted noexec) …` | Give it a folder that programs can run from, and that only you can change: `mkdir -p -m 0700 ~/.cache/hvo-tmp`, then put `TMPDIR=~/.cache/hvo-tmp` before `bash` in the command. |
 | `… SHA-256 is …, and SHA256SUMS says …` | The download was not the release's: run it again. A proxy that changes downloads does this too. If it happens again, open an issue. |
 | `note  its attestation was not checked: gh …` | Only a note: the SHA-256 and the version were checked. To have the attestation checked too, install [gh](https://cli.github.com) and sign in (`gh auth login`). |

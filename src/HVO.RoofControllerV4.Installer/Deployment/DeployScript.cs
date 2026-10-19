@@ -23,11 +23,11 @@ public static class DeployScript
     }
 
     /// <summary>
-    /// A folder of the installer's own, which only its user can open, for the script and the files it is given; deleted
-    /// when the run ends, whatever happens. It is made, new, only in a temporary folder that no one but root (or the
-    /// installer's user) can change, by that folder's physical path (<see cref="InstallerMachine.TrustedFolder"/>), so what
-    /// the installer writes and checks in it (an archive's copy that Docker loads, the deploy script that bash runs) is
-    /// what is read back from it; and it is deleted only while it is still the folder made.
+    /// A new mode-0700 folder for the script and files it is given, under the physical temporary base checked by
+    /// <see cref="InstallerMachine.TrustedFolder"/>. Uses the single-user-host trust assumptions in docs/install.md
+    /// (Temporary files, #147): the checks do not cover macOS ACL access or concurrent ancestor replacement.
+    /// Disposal checks the current owner/mode/path before recursive deletion, not the original directory's identity;
+    /// a same-owner 0700 replacement also passes.
     /// </summary>
     public sealed class WorkFolder : IDisposable
     {
@@ -41,7 +41,7 @@ public static class DeployScript
             machine.CreatePrivateDirectory(Path);
         }
 
-        /// <summary>The folder, by its physical path: no link in it.</summary>
+        /// <summary>The physical path saved at creation; no directory handle is retained.</summary>
         public string Path { get; }
 
         public void Dispose() => _machine.DeletePrivateDirectory(Path);

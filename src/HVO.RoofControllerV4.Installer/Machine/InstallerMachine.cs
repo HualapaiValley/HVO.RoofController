@@ -301,13 +301,14 @@ public sealed class InstallerMachine
     public void SetMode(string path, UnixFileMode mode) => File.SetUnixFileMode(OnDisk(path), mode);
 
     /// <summary>
-    /// The physical path of the folder <paramref name="path"/>, a path on this machine with every symbolic link in it
-    /// followed, once that folder and every folder above it, up to /, can be changed by no one but root and the
-    /// installer's own user. Each must be a real folder (not a link), root's or that user's, that no one else can write to
-    /// unless it is sticky (as /tmp is: there no one else can rename or remove what root or that user owns). No one else
-    /// can then change what that path names, nor a path below it that root or that user makes: a folder the installer
-    /// makes there stays where it is, and what it writes there stays what it wrote. Throws
-    /// <see cref="InstallerException"/>, naming the folder that is not, otherwise.
+    /// Resolves every symbolic link in <paramref name="path"/>, then checks the physical folder and its ancestors
+    /// upward to /. At inspection each must be a directory, not a link, owned by root or the effective user, without
+    /// group/other write bits unless sticky (as /tmp is). Returns that physical path on this machine, or throws
+    /// <see cref="InstallerException"/> naming a failed check. Links in the supplied spelling are resolved, not refused.
+    /// These are ordinary misconfiguration checks under the single-user-host decision of 2026-10-17 (#147;
+    /// docs/install.md, Temporary files): root and the deploying account are assumed to control the path chain, with
+    /// no hostile local account expected. They neither inspect macOS ACLs nor prevent concurrent ancestor replacement;
+    /// no directory descriptors are held to preserve the checked chain.
     /// </summary>
     public string TrustedFolder(string path)
     {
@@ -350,9 +351,9 @@ public sealed class InstallerMachine
     }
 
     /// <summary>
-    /// Deletes the folder <paramref name="path"/>, which <see cref="CreatePrivateDirectory"/> made, and everything in it,
-    /// only while it is still that folder: a real folder of the installer's own user with mode 0700. Anything else there
-    /// (a link, or another folder put in its place) is left as it is. Nothing when it is not there.
+    /// Recursively deletes <paramref name="path"/> when its current entry is a non-link directory owned by the effective
+    /// user with mode 0700; otherwise leaves it alone. This checks the saved path, owner and mode, not device/inode
+    /// identity or a held handle. A same-owner 0700 replacement also passes and can be deleted (accepted F9, #147).
     /// </summary>
     public void DeletePrivateDirectory(string path)
     {
@@ -376,12 +377,12 @@ public sealed class InstallerMachine
         return onDisk == root ? "/" : onDisk.StartsWith(root + "/", StringComparison.Ordinal) ? onDisk[root.Length..] : onDisk;
     }
 
-    // The folder, given where it is on disk, is a real folder of the installer's own user with mode 0700.
+    // Current type, owner and Unix mode only; not the identity of the directory originally created or its ACL access.
     private static bool IsPrivateFolder(string onDisk)
         => Inspect(onDisk) is { IsFolder: true, IsLink: false } folder && folder.Owner == geteuid() && (folder.Mode & 0xFFF) == PrivateFolderBits;
 
-    // Why someone other than root and the user could change the folder, given where it is on disk, or what is named
-    // through it; null when no one can.
+    // A failure of the type, owner or Unix-mode checks at this path; null when they pass. ACLs and concurrent path-chain
+    // replacement are outside these checks (accepted F7/F8, #147).
     private static string? Untrusted(string onDisk, uint user)
     {
         if (Inspect(onDisk) is not { } folder)
