@@ -140,7 +140,6 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 | `HVO.RoofControllerV4.Installer` | `hvo-roof-install`: the installer's wizard and its answers files, plans and install records ([docs/install.md](docs/install.md)) |
 | `HVO.RoofControllerV4.Simulation` | Emulated roof plant: SMVector drive, ME-8108 limit switches, SM-I-010 HAT and the wiring |
 | `HVO.RoofControllerV4.Emulator` | HAT emulator: serves the emulated plant's HAT registers over TCP, with a fault-injection API ([docs/emulator.md](docs/emulator.md)) |
-| `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
 | `HVO.RoofControllerV4.RPi.Tests` | Unit, API, simulation and emulated-plant tests (`tests/`) |
 
 The [UI redesign foundation](docs/ui-redesign/README.md) tracks every current screen/workflow, the pinned colour

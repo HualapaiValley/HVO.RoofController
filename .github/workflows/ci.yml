@@ -29,7 +29,8 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Serial supported-RID publishes and expanded workflow tests share this bounded job budget.
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
     env:
@@ -161,6 +162,14 @@ jobs:
       # The Debug output used by the test step above is left untouched.
       - name: Build (Release, warnings as errors)
         run: dotnet build HVO.RoofController.sln -c Release -v minimal -p:ContinuousIntegrationBuild=true
+
+      # #174: check the actual published Web assets, including the fingerprinted serving manifest and notices.
+      - name: Publish and verify Web assets
+        run: |
+          for rid in linux-x64 linux-arm64; do
+            dotnet publish HVO.RoofControllerV4.Web -c Release -r "$rid" --self-contained false -v minimal -o "web-publish/$rid"
+            python3 ../build/check-web-publish.py "web-publish/$rid"
+          done
 
       # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof and hvo-roof-install for osx-arm64, and HVO
       # Roof.app. A Mac with Apple silicon runs no program that is not signed, ad hoc at least. Its release

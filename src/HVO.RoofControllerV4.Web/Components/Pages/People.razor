@@ -4,7 +4,7 @@
 
 <PageTitle>People · HVO Roof Controller</PageTitle>
 
-<h1>People</h1>
+<PageHeading Title="People" Description="Manage people, device keys and sessions. Controller permissions apply to every change." />
 
 <PageMessage Message="Message" />
 
@@ -83,11 +83,11 @@ else if (_tab == UsersTab)
                         {
                             <tr data-testid="user" data-name="@user.Name">
                                 <th scope="row">@user.Name</th>
-                                <td>@WebRoles.Describe(user.Role)</td>
-                                <td>@YesNo(user.HasPassword)</td>
-                                <td>@(user.HasTemporaryPin ? "temporary" : YesNo(user.HasPin))</td>
-                                <td>@user.ActiveSessions</td>
-                                <td>@RoofStatusText.Time(user.UpdatedUtc)</td>
+                                <td data-label="Role">@WebRoles.Describe(user.Role)</td>
+                                <td data-label="Password">@YesNo(user.HasPassword)</td>
+                                <td data-label="PIN">@(user.HasTemporaryPin ? "temporary" : YesNo(user.HasPin))</td>
+                                <td data-label="Sessions">@user.ActiveSessions</td>
+                                <td data-label="Changed">@RoofStatusText.Time(user.UpdatedUtc)</td>
                             </tr>
                             <tr class="web-row-actions">
                                 <td colspan="6">
@@ -157,6 +157,18 @@ else if (_tab == LinuxTab)
         <h2 id="linux-title">Enrolled Linux users</h2>
         <p class="web-muted">Change controller roles and access here. Linux account enrollment and Linux passwords are managed on the host; virtual accounts remain separate. Saving revokes existing sessions and personal keys.</p>
         <button class="btn btn-sm btn-outline-light" disabled="@Busy" @onclick="ReadPrincipalsAsync">Read Linux users</button>
+        @if (_linuxProviderAvailable == false)
+        {
+            <p class="web-status web-status--info" data-testid="linux-provider-disabled">Linux accounts are not enabled on this controller. Enable the provider through the installer.</p>
+        }
+        else if (!_principalsRead)
+        {
+            <p class="web-muted" role="status" data-testid="linux-not-read">Read Linux users to check the current enrollments.</p>
+        }
+        else if (_principals.Length == 0)
+        {
+            <p class="web-muted" data-testid="linux-empty">No enrolled Linux users.</p>
+        }
         @foreach (var person in _principals)
         {
             <div class="web-editor" data-testid="linux-user" data-id="@person.Id">
@@ -219,10 +231,10 @@ else if (_tab == KeysTab)
                             var managed = key.Source == RoofApiKeySource.Managed;
                             <tr data-testid="key" data-name="@key.Name">
                                 <th scope="row">@key.Name</th>
-                                <td>@WebRoles.Describe(key.Role)</td>
-                                <td>@YesNo(key.Kiosk)</td>
-                                <td>@(managed ? "managed" : "configuration (read-only)")</td>
-                                <td>@(key.UpdatedUtc is { } updated ? RoofStatusText.Time(updated) : string.Empty)</td>
+                                <td data-label="Role">@WebRoles.Describe(key.Role)</td>
+                                <td data-label="Kiosk">@YesNo(key.Kiosk)</td>
+                                <td data-label="Source">@(managed ? "managed" : "configuration (read-only)")</td>
+                                <td data-label="Changed">@(key.UpdatedUtc is { } updated ? RoofStatusText.Time(updated) : string.Empty)</td>
                             </tr>
                             @if (managed)
                             {
@@ -294,11 +306,11 @@ else
                             var own = session.Id == _ownSessionId;
                             <tr data-testid="session" data-id="@session.Id">
                                 <th scope="row">@session.Name@(own ? " (this page)" : string.Empty)</th>
-                                <td>@WebRoles.Describe(session.Role)</td>
-                                <td>@RoofIdentityText.DescribeKind(session.Kind)</td>
-                                <td>@session.Device</td>
-                                <td>@RoofStatusText.Time(session.CreatedUtc)</td>
-                                <td>@RoofStatusText.Time(session.ExpiresUtc)</td>
+                                <td data-label="Role">@WebRoles.Describe(session.Role)</td>
+                                <td data-label="Signed in with">@RoofIdentityText.DescribeKind(session.Kind)</td>
+                                <td data-label="Device">@session.Device</td>
+                                <td data-label="Started">@RoofStatusText.Time(session.CreatedUtc)</td>
+                                <td data-label="Ends">@RoofStatusText.Time(session.ExpiresUtc)</td>
                                 <td>
                                     @if (_target == session.Id && _panel == EndSessionPanel)
                                     {
@@ -345,6 +357,8 @@ else
     private bool _loaded;
     private RoofUserResponse[] _users = [];
     private RoofPrincipalResponse[] _principals = [];
+    private bool _principalsRead;
+    private bool? _linuxProviderAvailable;
     private bool _linuxEnabled;
     private RoofApiKeyResponse[] _keys = [];
     private RoofSessionInfoResponse[] _sessions = [];
@@ -393,7 +407,11 @@ else
     private async Task ReadPrincipalsAsync()
         => await SendAsync("Linux users could not be read. Enable Linux authentication through the installer first.", async (session, cancellationToken) =>
         {
-            _principals = (await session.Client.Identity.GetPrincipalsAsync(cancellationToken)).Where(person => person.Provider == "linux").ToArray();
+            _linuxProviderAvailable = (await session.Client.Auth.GetProvidersAsync(cancellationToken)).LinuxEnabled;
+            _principals = _linuxProviderAvailable == true
+                ? (await session.Client.Identity.GetPrincipalsAsync(cancellationToken)).Where(person => person.Provider == "linux").ToArray()
+                : [];
+            _principalsRead = true;
         });
 
     private void OpenPrincipal(RoofPrincipalResponse person)

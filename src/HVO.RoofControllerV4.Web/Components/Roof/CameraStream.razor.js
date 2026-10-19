@@ -391,18 +391,20 @@ class CameraPlayer {
   }
 
   async fullscreen() {
-    if (this.disposed) {
-      return;
+    if (this.disposed || !this.container || typeof this.container.requestFullscreen !== 'function') {
+      return false;
     }
     this.revealControls();
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen();
       } else {
-        await this.container?.requestFullscreen({ navigationUI: 'hide' });
+        await this.container.requestFullscreen({ navigationUI: 'hide' });
       }
+      return true;
     } catch {
-      // Fullscreen can be refused by the browser; nothing to do.
+      // Report a refused/unsupported operation separately from the stream's live/stale state.
+      return false;
     }
   }
 
