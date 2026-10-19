@@ -95,13 +95,14 @@ Mirror the merged Sky semantics with Roof's own implementation in the terminal s
 | Truecolour | `COLORTERM=truecolor` or `24bit`; use the token `value`. |
 | ANSI-16 | Default otherwise, including `TERM=xterm-256color` without COLORTERM; emit the exact named 16-colour fallbacks, not nearest 256-colour/24-bit escapes. `Gray` is standard white 7, `DarkGray` bright black 8, `White` bright white 15. |
 | NO_COLOR | Nonempty `NO_COLOR`, or `TERM=dumb`: terminal defaults; bold titles/notices, underlined inputs/keys, reverse focus/selected/primary and faint disabled. Empty NO_COLOR is not a request. |
-| ASCII | First nonempty `LC_ALL`, then `LC_CTYPE`, then `LANG` is not UTF-8, or TERM is dumb/vt100: `+`, `-`, `|` frames, ASCII checkbox/choice/arrow equivalents. No hidden non-ASCII border/check glyph in a stock widget. |
+| ASCII | First nonempty `LC_ALL`, then `LC_CTYPE`, then `LANG` is not UTF-8, or TERM is dumb/vt100: `+`, `-`, `\|` frames, ASCII checkbox/choice/arrow equivalents. No hidden non-ASCII border/check glyph in a stock widget. |
 | Explicit override | Mirror `HVO_TERMINAL=truecolor,ansi16,nocolor,ascii,unicode` comma-list semantics; nonempty NO_COLOR wins. Detection/override support is a future Roof implementation requirement, not an already shipped option. |
 
 Every notice has `[INFO]`, `[OK]`, `[WARNING]` or `[ERROR]`/`[REFUSED]`; choices `(*)`/`( )`, toggles `[x]`/`[ ]`,
 current tab brackets and labels keep all information without colour. Tab/Enter navigate/activate, Esc closes a prompt;
-roof F1–F5, F9 across prompts and F10 retain existing quit/Stop semantics. Installer Back/Next/Enter/Esc/F10 retain its
-own apply/cancel guards; the installer never becomes a roof operator. Plain/redirected/JSON command output keeps
+roof F1–F5, F9 across prompts and F10 retain existing quit/Stop semantics. Installer Enter advances, Esc goes Back,
+and F10 cancels (exit 130), retaining its apply/cancel guards; the installer never becomes a roof operator.
+Plain/redirected/JSON command output keeps
 its contract and never gains mandatory ANSI escapes.
 
 [Validation](validation.md) must prove rendered combinations, focus states and actual published artifacts. Neither

@@ -14,6 +14,7 @@ removal and evidence below are complete. Existing functionality is not evidence 
   redesign, with final merged SkyMonitor provenance and exact ANSI-16 names. It is contract data, not a runtime import.
 - [Validation and evidence requirements](validation.md): what source inspection proves now, and what production work
   must prove before a row can become verified.
+- [Published payload baseline](payload-audit.md): six hash-verified real v4.1.1 bundles, the specific notice omission and limits; exclusion/runtime/notice-delivery work remains pending.
 - [Delivery boundaries and theme removal](delivery.md): independent implementation task briefs for the parent to
   create after foundation review; these are slice names, not newly created issues or functional authorization.
 

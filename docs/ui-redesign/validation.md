@@ -37,7 +37,9 @@ The validator checks data shape, unique IDs, all current Razor routes/native pag
 classes and concrete installer plan-step outputs represented, each source anchor, all twenty roles and matching pairs, exact fetched primary table/hash and
 CSS composition. It does not prove exhaustive semantic coverage or runtime behavior; review nested workflows against
 the matrix and test definitions. An existing test named below is a **validation starting point**, never a passing
-result from this foundation. No .NET build/test, fresh render/browser check, Docker, service/deploy or hardware work
+result from this foundation. The supplied read-only published-payload audit is summarized separately in [payload-audit.md](payload-audit.md);
+it does not establish runtime success after exclusions. No .NET build/test, fresh render/browser check, Docker,
+service/deploy or hardware work
 is required for these docs/data. No screenshots were generated or claimed.
 
 ## Platform acceptance evidence

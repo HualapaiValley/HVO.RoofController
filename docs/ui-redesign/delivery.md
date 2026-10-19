@@ -60,11 +60,14 @@ release notes or CHANGELOG is not a runtime dependency and should not be silentl
 
 ## Published terminal payload and notices
 
-The owner requested an **actual published-artifact audit**. At foundation authoring, a separate read-only audit is in
-progress for latest release **v4.1.1**, the installer and CLI, `linux-x64`, `linux-arm64`, `osx-arm64`. No confirmed
-Roof notice gap, asset absence, or successful execution is claimed here. Its final parsed inventory/findings should
-be linked before the correction is declared complete. Do not add `osx-x64` or execute a release installer against a
-live host as part of an audit.
+The owner requested an **actual published-artifact audit**. The completed [durable baseline](payload-audit.md)
+records six hash-verified v4.1.1 installer/CLI bundles across `linux-x64`, `linux-arm64`, `osx-arm64`: each parsed
+232-entry manifest contains the highlighting closure/native wrapper. The supplied Onigwrap notice file and specific
+Oniguruma/Fluent Solutions material were absent in the inspected distributions. Other embedded MIT text exists;
+this is a specific verified omission, not a claim that no notices ship or a legal-compliance certification.
+
+Exclusion, current-main publish/runtime behavior and final remaining-notice delivery are **pending**. Do not add
+`osx-x64` or execute a release installer against a live host as part of an audit.
 
 The implementation obligation is broader than Sky #1371's published installer smoke. That smoke covers installer
 help/no-TTY/first page at 80x24 and 120x32 and uses byte-name searching; it does not establish a parsed Roof bundle
@@ -84,9 +87,10 @@ manifest, the Roof CLI's actual UI/commands, all screens, or each supported RID.
 4. Verify removal does not cause dynamic assembly/native-load failure after the first page: navigate all five CLI
    pages/editors and every applicable installer step, failure/recovery and credential prompts in isolation. No real
    install/deploy/service changes or hardware access; the installer execution harness must fake machine operations.
-5. Record per-program/RID results and remaining notices in durable evidence and a regression guard. If a published
-   release gap is confirmed, correct **the next release**; never rewrite a published release/tag. Keep unrelated
-   kiosk/legacy cache purge in #96.
+5. Record per-program/RID results and remaining notices in durable evidence and a regression guard. Verify applicable
+   notices survive final release assembly and installed CLI/installer copying, not only a loose publish folder. Correct
+   the verified omission in **the next release**; never rewrite a published release/tag. Keep unrelated kiosk/legacy
+   cache purge in #96.
 
-The foundation's status is an obligation with evidence pending. Package-reference/source-build tests, a Sky result,
-or successful CLI --help alone cannot close it.
+Published inventory and the specific omission are verified in the baseline; the correction and runtime/notice delivery
+gates remain pending. Package-reference/source-build tests, a Sky result, or successful CLI --help alone cannot close them.
