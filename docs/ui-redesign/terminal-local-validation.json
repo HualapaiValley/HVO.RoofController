@@ -15,7 +15,25 @@
       "passed_tests": 510,
       "runtime_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
       "source_publish_sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
-      "final_copy_sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42"
+      "final_copy_sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
+      "phases": {
+        "contracts": {
+          "filter": "(FullyQualifiedName~.Cli.&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak)&(FullyQualifiedName!~.RoofTerminalUiTests.&FullyQualifiedName!~.TerminalDesignTests.)",
+          "passed_tests": 371,
+          "absolute_dotnet": true,
+          "path_policy": "established runner environment"
+        },
+        "render": {
+          "filter": "(FullyQualifiedName~.Cli.&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak)&(FullyQualifiedName~.RoofTerminalUiTests.|FullyQualifiedName~.TerminalDesignTests.)",
+          "passed_tests": 139,
+          "absolute_dotnet": true,
+          "path_policy": "inert bash only",
+          "path_entries": [
+            "bash"
+          ],
+          "bash_sha256": "c07d6c0d3d6f1bcd8396ab432e050a0578f73e7e644c5c3fd230386c1294cb75"
+        }
+      }
     },
     "hvo-roof-install": {
       "sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
@@ -31,7 +49,25 @@
       "passed_tests": 941,
       "runtime_source_commit": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478",
       "source_publish_sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
-      "final_copy_sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6"
+      "final_copy_sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
+      "phases": {
+        "contracts": {
+          "filter": "(FullyQualifiedName~.Installer.&FullyQualifiedName!~InstallerKioskSystemTests&FullyQualifiedName!~InstallerMacSystemTests&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak)&(FullyQualifiedName!~.InstallerWizardTests.&FullyQualifiedName!~.InstallerWizardClientTests.&FullyQualifiedName!~.InstallerWizardControllerTests.&FullyQualifiedName!~.InstallerDesignTests.&FullyQualifiedName!~.InstallerUpgradePrerequisiteTests.)",
+          "passed_tests": 857,
+          "absolute_dotnet": true,
+          "path_policy": "established runner environment"
+        },
+        "render": {
+          "filter": "(FullyQualifiedName~.Installer.&FullyQualifiedName!~InstallerKioskSystemTests&FullyQualifiedName!~InstallerMacSystemTests&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak)&(FullyQualifiedName~.InstallerWizardTests.|FullyQualifiedName~.InstallerWizardClientTests.|FullyQualifiedName~.InstallerWizardControllerTests.|FullyQualifiedName~.InstallerDesignTests.|FullyQualifiedName~.InstallerUpgradePrerequisiteTests.)",
+          "passed_tests": 84,
+          "absolute_dotnet": true,
+          "path_policy": "inert bash only",
+          "path_entries": [
+            "bash"
+          ],
+          "bash_sha256": "c07d6c0d3d6f1bcd8396ab432e050a0578f73e7e644c5c3fd230386c1294cb75"
+        }
+      }
     }
   },
   "native_pty": [
@@ -121,7 +157,7 @@
   "ascii_glyph_focused": 12,
   "bootstrap_fake_script": 149,
   "python_cli": 13,
-  "python_releasing": 119,
+  "python_releasing": 123,
   "python_docs": 17,
   "controlled_emulator_tmux": {
     "runtime_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
@@ -132,8 +168,7 @@
   "limits": [
     "Local Linux x64 only; hosted Linux arm64/macOS arm64/signatures pending",
     "Managed workflow harness JITs exact bundled IL; original native final files separately tested in PTY/tmux",
-    "Final reviewed MAIN integration and required validation remain merge gates",
-    "Reviewed #177 inert macOS clipboard-probe PATH helper pending MAIN; scope to render phases, retain non-render env/openssl contracts"
+    "#174 reviewed MAIN integration and final required validation remain merge gates"
   ],
   "runtime_source_commits": {
     "hvo-roof": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
@@ -151,5 +186,16 @@
     "source": "actual captured driver cells rendered with installed repository Playwright",
     "final_installer_ca_80x24": "PASS: full CA button, all three trust labels, fingerprint, confirmation, Back/Next and keybar visible",
     "local_evidence": "/tmp/hvo-176/visual-trust-final"
+  },
+  "reviewed_main_integration": {
+    "main_commit": "e14f479196c88899b847737e418751ad9a68a8d2",
+    "merge_commit": "56c184af5e09690ae815ba97de589d249aaa72e1",
+    "unchanged_production_source_since": "c2761e8b80dc32c796ccda98e56bfbbcb3eac376",
+    "runtime_evidence_retained": true,
+    "managed_harness": "Separate disjoint render/contract phases; exact reviewed inert bash helper; absolute dotnet; unchanged exact bundle assembly hashes",
+    "python_path_regressions": 3,
+    "python_releasing": 123,
+    "scoped_managed_evidence": "/tmp/hvo-176/scoped-path-managed",
+    "remaining": "#174 reviewed MAIN integration and final required/hosted supported-RID/signature checks"
   }
 }

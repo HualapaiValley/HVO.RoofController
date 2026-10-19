@@ -82,14 +82,19 @@ The complete mode/size matrix stays in CI artifacts. A prototype image is not ru
 The existing #172 parser, ZERO NativeBinary policy, embedded notices, final signatures, final-file hashes and installed
 copy checks remain authoritative. `published-terminal.py` additionally runs both cell sizes in all four modes, all five
 offline roof pages, a private connection prompt/F9, and installer roles/Back/cancel in isolated PTYs. It requires a
-clean non-root host, private HOME/XDG/tmp and an empty PATH; it applies nothing and invokes no host program.
+clean non-root host and private HOME/XDG/tmp. Its PATH contains only the reviewed inert bash stub, which returns
+127 without executing clipboard probes or any other arguments; host survey commands remain unavailable.
 
 `check-terminal-workflows.py` parses the exact copied/signed final files, then loads each program's exact owned managed assemblies into its own private copy of the compiled
 driver/fake-machine test host and verifies every staged byte. ReadyToRun dependencies can differ between publishes;
 the receipt records each program's assembly hashes separately. The independent test host explicitly disables ReadyToRun and JITs the exact bundled IL;
 this is managed workflow evidence, not proof that every branch executed its published native ReadyToRun image.
 The exact final executables run normally in the separate PTY and controlled emulator/tmux gates. Required test
-names must appear as passed in TRX; a zero-test run fails. This exercises the distributed implementation beyond the
+names must appear as passed in TRX; a zero-test run fails. Driver groups run with private HOME/XDG/tmp and the
+same reviewed inert PATH, with the installed dotnet host resolved to an absolute path before restriction. The
+complementary non-render groups retain their established environment: the actual command-environment and absolute
+`/usr/bin/openssl` chain contracts must pass there. Disjoint filters retain the original catalogue, and separate
+TRX/logs and per-phase PATH policies/counts accompany each program's identity receipt. This exercises the distributed implementation beyond the
 entry page without adding a production simulation switch or installing on the runner. Native execution of each final
 file and its installed-copy notice check remain separate checks. Hosted CI supplies Linux x64, Linux arm64 and macOS
 arm64 execution; local macOS signing proof is unavailable because rcodesign is not installed, and no tool is installed
@@ -110,7 +115,7 @@ The final installer caption-only correction passes **20/20 focused Release cases
 labels in every mode and both sizes; its exact bundled-IL/JIT and native PTY checks are renewed separately.
 ASCII masks/arrows/tracks use Terminal.Gui's immutable glyph settings; its read-only facade has no writable properties.
 
-Fake bootstrap **149**, Python CLI **13**, releasing **119** and docs **17** pass. Prior full solution Debug/Release
+Fake bootstrap **149**, Python CLI **13**, releasing **123** and docs **17** pass. Prior full solution Debug/Release
 builds have zero warnings/errors, and the corrected Release test build also treats warnings as errors. All 26
 operator documentation SVGs are renewed from the corrected actual captures; the full mode/size catalogue includes
 light-default comparisons. Reproduction commands above apply to the current implementation.
@@ -118,12 +123,20 @@ light-default comparisons. Reproduction commands above apply to the current impl
 The prior-candidate required Release suite passes **3,843 with four opt-in skips**. Prior required Debug has **3,842
 passes, four opt-in skips and one stale bUnit event-handler failure** in `PeoplePageTests.cs:41`. Its Web runtime/test
 trees are identical to canonical main `e5f920a`; root identified the existing renderer-safe helper correction in #174.
-No Web assertion or file is changed here. The failed TRX/classification is retained separately. Take #174/#177 through
+No Web assertion or file is changed here. The failed TRX/classification is retained separately. Take #174 through
 reviewed MAIN and run final required validation before merge. Three opt-in host suites were not run locally; the final
 installed-copy notice case skipped in the general suite separately passes in the exact distribution catalogue.
 
-Hosted supported-RID/signature checks, reviewed MAIN integration and the #177 inert macOS clipboard-probe PATH helper
-remain merge gates. Scope its inert PATH to actual render phases; keep meaningful non-render env/openssl contracts.
+Reviewed payload MAIN `e14f479` is merged and its foreign dependency diff is removed. Production source trees are
+unchanged by this integration; the CLI `981f2ea` and installer `647a6a8` distributions, native PTY/motion results
+and documentation captures remain their existing exact evidence. The scoped managed PATH gate renews harness
+evidence against those immutable copies, without republishing or repeating motion/capture work. CLI contracts
+**371** and inert-PATH drivers **139** pass; installer contracts **857** and inert-PATH drivers **84** pass. The
+original totals remain **510/941**, with unchanged distributed assembly hashes. The existing environment-inheritance
+and absolute OpenSSL chain assertions pass in the contract phase. Three focused PATH regressions also prove actual
+absolute-host subprocess startup, inert arguments/no file writes, and preservation of the contract environment.
+
+Hosted supported-RID/signature checks, #174 through reviewed MAIN and final required validation remain merge gates.
 Statuses stay `implemented-unverified` until those gates/review finish. Earlier invalid attempts (old destination/
 ETXTBSY, cross-program R2R equality, independent-host R2R discovery abort) stay separate under `/tmp/hvo-176`; none is
 counted as a runtime pass. Final corrected checks use immutable `dist-trust-final`: the CLI retains its validated `981f2ea` bytes and the
