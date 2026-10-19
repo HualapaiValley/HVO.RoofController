@@ -205,7 +205,7 @@ public sealed class RoofTerminalUiTests
         ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open uses the canonical raised action surface");
         page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close uses the raised action surface (disabled while the roof is closed)");
         ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
-        ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Background, "the page is HVO Dark's");
+        ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Surface, "the page is HVO Dark's");
         ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web UI's navigation bar");
         ShouldHaveColours(tui.ColoursOf("F10"), RoofUiPalette.Accent, RoofUiPalette.Badge, "a key is in the accent colour");
         ShouldHaveColours(tui.ColoursOf("Quit"), RoofUiPalette.Muted, RoofUiPalette.Badge);
@@ -239,7 +239,7 @@ public sealed class RoofTerminalUiTests
         screen.Should().Contain(RoofStopText.KeyRefused, "a Stop result is never cut short");
         screen.Should().Contain("No status: the controller refused the credential. Sign in on Setup (F5).");
         screen.Should().Contain("SAFETY: The roof stopped short of the open limit. Check the drive before you open it again.");
-        tui.Screen.TrimEnd('\n').Split('\n')[^2].Should().Contain(RoofTerminalUi.KeyBar, "the key bar is still on the last row");
+        tui.Screen.TrimEnd('\n').Split('\n')[^3].Should().Contain(RoofTerminalUi.KeyBar, "the key bar is still on the last row");
     }
 
     [TestMethod]
@@ -294,8 +294,8 @@ public sealed class RoofTerminalUiTests
     [DataRow("0", true)]
     [DataRow("false", true)]
     public void NoColor_TurnsTheColoursOff_WhenItIsSetAndNotEmpty(string? value, bool noColour)
-        => RoofUiTheme.For(name => name == "NO_COLOR" ? value : null).Should().BeSameAs(noColour ? RoofUiTheme.NoColour : RoofUiTheme.HvoDark,
-            "no-color.org: set to any value but the empty string");
+        => RoofUiTheme.For(name => name == "NO_COLOR" ? value : null).Capabilities.Should().Be(new TerminalCapabilities(noColour ? TerminalColours.None : TerminalColours.Ansi16, true),
+            "NO_COLOR has precedence; absent truecolour and UTF-8 the explicit fallback is ANSI16/ASCII");
 
     [TestMethod]
     public void TheNoColourTheme_HasNoColourInAnyScheme_AndStillMarksStopTheFocusAndTheWarnings()
@@ -1451,7 +1451,7 @@ public sealed class RoofTerminalUiTests
         tui.Ui.Message.Should().StartWith("Signed in as ada (admin) until ");
         rig.Stored!.Session!.Name.Should().Be("ada");
         rig.Stored.ApiKey.Should().Be(TestApiKeys.Admin, "signing in keeps the saved key");
-        tui.Screen.Should().Contain("ada (admin) · status");
+        tui.Screen.Should().Contain(tui.Ui.Theme.Capabilities.Ascii ? "ada (admin) | status" : "ada (admin) · status");
 
         Click(tui, "Sign out");
         tui.WaitIdle("the sign-out", () => tui.Ui.Caller?.Kind == RoofCredentialKind.ApiKey);
@@ -1539,6 +1539,22 @@ public sealed class RoofTerminalUiTests
         setup.LastCheck.Should().BeNull("a new connection has not been checked");
         setup.Describe().Should().NotContain("Check:");
         tui.WaitIdle("the caller");
+    }
+
+    [TestMethod]
+    public void Reconnect_RetiredOrdinaryReadCannotReplaceTheNewConnectionMessage()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        tui.Ui.Run(null, async (_, _) => await retired.Task);
+        tui.Ui.Reconnect();
+        tui.Ui.Say("New connection check remains visible.");
+        retired.SetException(new ObjectDisposedException("retired client"));
+        tui.WaitIdle("retired read and new caller");
+        tui.Ui.Message.Should().Be("New connection check remains visible.");
     }
 
     [TestMethod]
@@ -1782,7 +1798,7 @@ public sealed class RoofTerminalUiTests
             var roof = new SettingsApiTests.RoofDouble();
             using var host = new RoofApiTestHost(
                 roof.Mock,
-                settings: new Dictionary<string, string?> { ["BlueIris:BaseUrl"] = "http://192.168.0.4:81" },
+                settings: new Dictionary<string, string?> { ["BlueIris:BaseUrl"] = "http://camera.example.org:81" },
                 configureServices: services => services.Configure<Microsoft.AspNetCore.Identity.PasswordHasherOptions>(options => options.IterationCount = 1_000),
                 settingsFilePath: Path.Combine(directory, "config", "appsettings.Local.json"),
                 secretsFilePath: Path.Combine(directory, "secrets", "managed-secrets.json"));

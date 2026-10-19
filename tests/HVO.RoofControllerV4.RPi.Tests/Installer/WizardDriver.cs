@@ -230,6 +230,7 @@ internal sealed class WizardDriver : IDisposable
         var path = Path.Combine(directory, $"{name}.ans");
         File.WriteAllText(path, App.Driver!.ToAnsi());
         context.AddResultFile(path);
+        context.AddResultFile(HVO.RoofControllerV4.RPi.Tests.TestSupport.TerminalCapture.SaveCells(App, path));
         return path;
     }
 

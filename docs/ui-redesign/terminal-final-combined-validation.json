@@ -1,0 +1,235 @@
+{
+  "combined_source_head": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+  "reviewed_main": "410170f89a481841316cc673bb834930dd9f458d",
+  "integration": {
+    "pre_merge_head": "1e738377509a8c9ac35d666f02ceb9796d4eaf4f",
+    "reviewed_main": "410170f89a481841316cc673bb834930dd9f458d",
+    "merge_base": "2c4deb45ed36e1ed32dec44988d738833f317e4e",
+    "single_sided_or_identical_paths_verified": 85,
+    "both_changed_paths": [
+      ".github/workflows/ci.yml",
+      "CHANGELOG.md"
+    ],
+    "conflicts": [],
+    "protected_raw_rows_exact_main": 98,
+    "owned_raw_rows_exact_previous_head": 89,
+    "installer_steps_exact_previous_head": true,
+    "ci_exact_previous_plus_reviewed_additions": [
+      {
+        "job": "installer-mac",
+        "step": "Refuse non-regular files on macOS"
+      },
+      {
+        "job": "installer-mac",
+        "step": "Upload Mac regular-file guard evidence"
+      }
+    ],
+    "ci_budget_minutes": 30,
+    "regular_files_and_new_tests_exact_main": true,
+    "original_refusal_fixture_and_assertions_exact_previous_head": true,
+    "merge_source_delta": [
+      "src/HVO.RoofControllerV4.Installer/Machine/RegularFiles.cs"
+    ],
+    "other_web_native_client_controller_import_sources_exact_main": true,
+    "limits": [
+      "Old647 installer lacks187and189; historical evidence remains separate",
+      "New exact installer and full macOS contracts/render/signatures require normal current-head hosted CI"
+    ],
+    "combined_source_head": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+    "inherited_process_umask_octal": "0002",
+    "reviewed_main_parents_verified": [
+      "2c4deb45ed36e1ed32dec44988d738833f317e4e",
+      "2baebbc13b78db48737fad00bef9ee887416ca5d"
+    ],
+    "reviewed_main_tree_equals_reviewed_fix": true
+  },
+  "results": {
+    "debug": {
+      "build": {
+        "head": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+        "kind": "build",
+        "configuration": "Debug",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "warnings": [
+          "0"
+        ],
+        "errors": [
+          "0"
+        ],
+        "diagnostic_codes": []
+      },
+      "required_tests": {
+        "head": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+        "kind": "test",
+        "configuration": "Debug",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "counters": {
+          "total": "3914",
+          "executed": "3910",
+          "passed": "3910",
+          "failed": "0",
+          "error": "0",
+          "timeout": "0",
+          "aborted": "0",
+          "inconclusive": "0",
+          "passedButRunAborted": "0",
+          "notRunnable": "0",
+          "notExecuted": "0",
+          "disconnected": "0",
+          "warning": "0",
+          "completed": "0",
+          "inProgress": "0",
+          "pending": "0"
+        },
+        "failed_bare_methods": [],
+        "trx_sha256": "6c4d8c8388e0bb4ddea1dbdc33da61a561ef732837c930d936382a161b05927a",
+        "regular_files_cases_outcomes": {
+          "Passed": 12
+        },
+        "regular_files_case_count": 12,
+        "actual_result_outcomes": {
+          "Passed": 3910,
+          "NotExecuted": 4
+        },
+        "nonexecuted_bare_methods": [
+          "FinalPrograms_KeepOfflineNotices_AfterInstallationAndRollbackCopyPaths",
+          "TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem",
+          "TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing",
+          "TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing"
+        ]
+      }
+    },
+    "release": {
+      "build": {
+        "head": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+        "kind": "build",
+        "configuration": "Release",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "warnings": [
+          "0"
+        ],
+        "errors": [
+          "0"
+        ],
+        "diagnostic_codes": []
+      },
+      "required_tests": {
+        "head": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+        "kind": "test",
+        "configuration": "Release",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "counters": {
+          "total": "3914",
+          "executed": "3910",
+          "passed": "3910",
+          "failed": "0",
+          "error": "0",
+          "timeout": "0",
+          "aborted": "0",
+          "inconclusive": "0",
+          "passedButRunAborted": "0",
+          "notRunnable": "0",
+          "notExecuted": "0",
+          "disconnected": "0",
+          "warning": "0",
+          "completed": "0",
+          "inProgress": "0",
+          "pending": "0"
+        },
+        "failed_bare_methods": [],
+        "trx_sha256": "14ec31336174008e678beaff17a0abae141a91897a7ee6fa00a6c6350f5431a6",
+        "regular_files_cases_outcomes": {
+          "Passed": 12
+        },
+        "regular_files_case_count": 12,
+        "actual_result_outcomes": {
+          "Passed": 3910,
+          "NotExecuted": 4
+        },
+        "nonexecuted_bare_methods": [
+          "FinalPrograms_KeepOfflineNotices_AfterInstallationAndRollbackCopyPaths",
+          "TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem",
+          "TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing",
+          "TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing"
+        ]
+      }
+    }
+  },
+  "required_filter": "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak",
+  "test_build_policy": "--no-build after matching solution configuration build; actual inherited0002/default parallelism/assertions retained",
+  "bounds": {
+    "build_seconds": 300,
+    "required_suite_seconds": 900,
+    "flock_wait_seconds": 600,
+    "kill_after_seconds": 30
+  },
+  "prior_combined_acceptance": {
+    "source_head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+    "evidence_commit": "1e738377509a8c9ac35d666f02ceb9796d4eaf4f",
+    "reviewed_main": "2c4deb45ed36e1ed32dec44988d738833f317e4e",
+    "debug_actual_outcomes": {
+      "Passed": 3898,
+      "NotExecuted": 4
+    },
+    "release_actual_outcomes": {
+      "Passed": 3898,
+      "NotExecuted": 4
+    },
+    "debug_trx_sha256": "68bedfed6330303fc307ff2154df5163ebba4814bcc529f1406863349481ad6d",
+    "release_trx_sha256": "a7aedd5fa808a0f5788e7d6367769738ca35ee02c5e94665b14625106f4beb11",
+    "scope": "Prior3898-per-configuration proof belongs only to23acc; full earlier receipt remains in Git history and private evidence"
+  },
+  "invalid_attempt": {
+    "classification": "invalid private runner context; not product test evidence",
+    "head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+    "imposed_umask_octal": "0077",
+    "actual_inherited_umask_octal": "0002",
+    "cause": "private log protection incorrectly changed the full suite child umask",
+    "correction": "remove global mutation; explicit0600 log under private0700 output; preserve actual inherited002",
+    "source_or_assertion_changed": false,
+    "failed_bare_methods": [
+      "AChange_IsSavedToTheSettingsFile_AndSurvivesARestart",
+      "AWrittenFile_ReadsBackWithItsMetadata_AndTheSameHash",
+      "Answers_InstallTheController_ThenASecondRunChangesNothing",
+      "TheMacApp_IsInstalledWithoutQuarantine_WithItsCaKeyAndSettings_ThenChecked_AndASecondRunChangesNothing",
+      "ThePi_IsLeftWithTheFilesThePlanNamed_EachWithItsModeAndOwner_AndNoSecretShown"
+    ]
+  },
+  "invalid_attempt_trx_sha256": "a657c501c23703d4d03f1906aafe2413ba5e5802d193d773e2de2ac8806fd4e4",
+  "historical_fixture_proof": {
+    "source_release_passed": 23,
+    "retained_installer_bundled_il_jit_passed": 23,
+    "retained_installer_runtime_source": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478",
+    "includes187": false,
+    "includes189": false
+  },
+  "prior_mac_distributed_gate": {
+    "head": "1e738377509a8c9ac35d666f02ceb9796d4eaf4f",
+    "run": 39210679397,
+    "job": 117928445311,
+    "cli_contracts_passed": 371,
+    "cli_render_passed": 147,
+    "installer_contracts_passed": 867,
+    "installer_contracts_executed": 868,
+    "installer_contracts_failed": 1,
+    "installer_render": "not reached",
+    "classification": "Original real-socket refusal assertion exposed Darwin102 production error mapping; corrected separately in reviewed189/190, original176fixture/assertion unchanged"
+  },
+  "limits": [
+    "Linux host source acceptance only; new exact installer and full macOS contracts/render/signatures require normal current-head CI",
+    "Old647 installer lacks187AND189; prior native/motion/captures and23focused source+23oldbundledIL proofs retain historical scope",
+    "All earlier valid and invalid attempt directories retained; invalid077 runner context is not product evidence",
+    "No CLI republish or separate native/motion/capture replay or extra broad suites",
+    "Final evidence commit changes documentation only; tested runtime source remains combined_source_head",
+    "Every98protectedN/W/Srow and89ownedT/C/Irow plus48installersteps preserved with no status promotion; final158reconciliation remains root-owned",
+    "PR184 remains ready; readiness/review/watch/merge stay root-owned"
+  ]
+}

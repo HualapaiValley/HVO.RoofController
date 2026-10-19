@@ -157,7 +157,8 @@ internal static class TestCertificates
         return serial;
     }
 
-    // Through PKCS#12, so the key is one the TLS stack can use on every platform.
+    // Through PKCS#12, so the key is one the TLS stack can use on every platform. Fixtures also re-export these keys
+    // to build deliberately varied chains/files; Apple imports are non-extractable unless requested explicitly here.
     private static X509Certificate2 RoundTrip(X509Certificate2 certificate)
-        => X509CertificateLoader.LoadPkcs12(certificate.Export(X509ContentType.Pkcs12), null);
+        => X509CertificateLoader.LoadPkcs12(certificate.Export(X509ContentType.Pkcs12), null, X509KeyStorageFlags.Exportable);
 }

@@ -37,7 +37,12 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
         AddButton("Linux users", sessions, () => Switch(Mode.Linux), y: 0);
         _header = new Label { X = 0, Y = 2, Width = Dim.Fill() };
         _rows = new ListView { X = 0, Y = 3, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
-        Add(_header, _rows);
+        var accounts = new FrameView { Title = "PEOPLE / ACCOUNTS", X = 0, Y = 3, Width = Dim.Fill(), Height = Dim.Fill(1) };
+        Ui.Theme.SetFrame(accounts);
+        _rows.X = _rows.Y = 0;
+        _rows.Height = Dim.Fill();
+        accounts.Add(_rows);
+        Add(_header, accounts);
 
         _actions[Mode.Users] = Buttons(
             ("Add", AddUser),

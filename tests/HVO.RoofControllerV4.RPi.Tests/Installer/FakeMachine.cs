@@ -320,7 +320,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The certificate something presents on a loopback port, by port (as the controller would).</summary>
     public Dictionary<int, X509Certificate2> ServedCertificates { get; } = [];
 
-    public Dictionary<string, string> Environment { get; } = new(StringComparer.Ordinal) { ["PATH"] = "/usr/local/bin:/usr/bin:/bin" };
+    public Dictionary<string, string> Environment { get; } = new(StringComparer.Ordinal) { ["PATH"] = "/usr/local/bin:/usr/bin:/bin", ["COLORTERM"] = "truecolor", ["LANG"] = "C.UTF-8" };
 
     /// <summary>Programs on the PATH, by name: their full paths.</summary>
     public Dictionary<string, string> Programs { get; } = new(StringComparer.Ordinal);
@@ -444,7 +444,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         OpenReadOnDisk = onDisk =>
         {
             BeforeRead?.Invoke("/" + Path.GetRelativePath(Root, onDisk));
-            return new FileStream(onDisk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+            var stream = new FileStream(onDisk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+            var path = "/" + Path.GetRelativePath(Root, onDisk);
+            OpenedFiles[stream.SafeFileHandle.DangerousGetHandle()] = (new(stream), Owners.GetValueOrDefault(path, "root:root"));
+            return stream;
         }
     };
 

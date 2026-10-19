@@ -80,10 +80,10 @@ internal static class RoofCliFormat
     public static void WriteRows(TextWriter output, IEnumerable<(string Label, string Value)> rows)
     {
         var list = rows.ToList();
-        var width = list.Count == 0 ? 0 : list.Max(row => row.Label.Length) + 1;
+        var width = list.Count == 0 ? 0 : list.Max(row => TerminalCells.Width(row.Label)) + 1;
         foreach (var (label, value) in list)
         {
-            output.WriteLine($"{(label + ":").PadRight(width)} {value}");
+            output.WriteLine($"{TerminalCells.PadRight(label + ":", width)} {value}");
         }
     }
 
@@ -91,13 +91,13 @@ internal static class RoofCliFormat
     public static void WriteTable(TextWriter output, IReadOnlyList<string> headers, IEnumerable<IReadOnlyList<string>> rows)
     {
         var list = rows.ToList();
-        var widths = headers.Select((header, column) => list.Select(row => row[column].Length).Append(header.Length).Max()).ToArray();
+        var widths = headers.Select((header, column) => list.Select(row => TerminalCells.Width(row[column])).Append(TerminalCells.Width(header)).Max()).ToArray();
         output.WriteLine(Line(headers));
         foreach (var row in list)
         {
             output.WriteLine(Line(row));
         }
 
-        string Line(IReadOnlyList<string> cells) => string.Join("  ", cells.Select((cell, column) => cell.PadRight(widths[column]))).TrimEnd();
+        string Line(IReadOnlyList<string> cells) => string.Join("  ", cells.Select((cell, column) => TerminalCells.PadRight(cell, widths[column]))).TrimEnd();
     }
 }

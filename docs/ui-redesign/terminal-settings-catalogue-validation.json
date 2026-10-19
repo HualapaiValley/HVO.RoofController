@@ -1,0 +1,84 @@
+{
+  "program": "hvo-roof",
+  "rid": "linux-x64",
+  "runtime_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
+  "sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
+  "assemblies": {
+    "Terminal.Gui.dll": "4d53af3f61c4bdcd86abadd925468468bb17b11a9a616359226a593d61f34f36",
+    "HVO.RoofControllerV4.Client.dll": "d58f2e3d100978877057f8fe512396545840aa8eaebc1016cbf74e57fd7c0791",
+    "HVO.RoofControllerV4.Common.dll": "575c2d9efe02ce2ab3db798e4b77a0ec5fef0e4b9c564aba08dfe3a1903a1956",
+    "HVO.RoofControllerV4.TerminalUi.dll": "f6b59f4a59ce6f03ae4ec9c041a27f66912ba075c2dcb4e32c2851a42ea538f4",
+    "hvo-roof.dll": "0cd8a62765a9e637924abe197cd14ba0c5cd2541661d60b829536c6697c509a3"
+  },
+  "test_harness_sha256": "f78fcbacc160593c64ad766702ec24c030c3cb12ccfd0dece6e6394518e79954",
+  "method": "AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls",
+  "filter": "FullyQualifiedName~AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls",
+  "passed_tests": 8,
+  "execution": "JIT of exact retained bundle managed assemblies; no republish or native replay",
+  "absolute_dotnet": true,
+  "path_entries": [
+    "bash"
+  ],
+  "bash_sha256": "c07d6c0d3d6f1bcd8396ab432e050a0578f73e7e644c5c3fd230386c1294cb75",
+  "modes": [
+    "truecolor,unicode",
+    "ansi16,unicode",
+    "nocolor,unicode",
+    "ansi16,ascii"
+  ],
+  "sizes": [
+    [
+      80,
+      24
+    ],
+    [
+      120,
+      32
+    ]
+  ],
+  "implementation_base_commit": "d37fdf0869ee8b0aa593627b1ba17b39428b74f5",
+  "test_source_sha256": "1c8855e234db5b8b82aeb9bf9fe5ee80e3b08be2fe4d211dbcb74e2be88bbac0",
+  "source_release_passed": 8,
+  "catalogue": {
+    "groups": [
+      "roof",
+      "controller",
+      "camera",
+      "security",
+      "identity",
+      "logging",
+      "ui"
+    ],
+    "fields": 42,
+    "types": [
+      "Boolean",
+      "Integer",
+      "String",
+      "Duration",
+      "Enum"
+    ],
+    "variants": [
+      "writable",
+      "read-only",
+      "secret",
+      "nullable",
+      "long/wide"
+    ],
+    "not_present": "Number is not published by the current real API catalogue; no synthetic setting was added"
+  },
+  "assertions": [
+    "Independent real API catalogue/settings match every actual form group/key",
+    "Keyboard group/field traversal and actual editor initial values; all actions Tab/Enter reachable with Stop and bounds/hit assertions",
+    "Read-only refusal opens no editor; secret controls remain blank and masked",
+    "Long/wide input tail is visible; all cancelled editors preserve values/version",
+    "Invalid boolean rejected; safety review shown and cancelled without a settings write",
+    "Invalid enum rejected; valid non-safety logging enum saved and read back; every other value/IsSet unchanged",
+    "F9 remains reachable over a real editor in every group"
+  ],
+  "limits": [
+    "Only this focused 8-case Release and exact retained CLI bundled-IL/JIT traversal were renewed",
+    "No republish, broad suite, motion or documentation-image refresh; prior native/RID evidence retains its own scope",
+    "Shared/nonowned matrix rows are not promoted; #183 MAIN and final required/hosted gates remain pending"
+  ],
+  "initial_attempts": "Two cancelled new-test attempts blocked on synchronous independent API read capturing the GUI context; final test uses Task.Run for those reads. Private logs retained; no pass claimed for cancelled attempts."
+}

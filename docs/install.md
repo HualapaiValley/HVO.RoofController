@@ -159,6 +159,10 @@ dotnet publish HVO.RoofControllerV4.Installer -c Release -r linux-arm64 -o ../ou
 The wizard needs a terminal of at least 80 × 24 that sends function keys: the Linux console, SSH from any common
 terminal, tmux, or Terminal on a Mac.
 
+Long validation messages occupy a bounded reading area above Back/Next. Tab into the message and use
+PgUp/PgDn or Home/End to reach the complete correction; Esc still goes Back and F10 cancels with exit 130.
+The controller address and **Fetch its CA** use separate rows, including at 80 columns.
+
 ## install.sh
 
 Each release carries `install.sh`, a script that checks the machine, downloads the release's installer for it, checks
@@ -481,6 +485,12 @@ choices.
 
 ## The wizard
 
+The wizard uses the [shared terminal capabilities](cli.md#the-terminal-interface): RGB, exact ANSI16, terminal-default
+`NO_COLOR`, and ASCII controls/frames, with `HVO_TERMINAL` overrides. It fits 80×24 and expands at 120×32. Tab reveals
+fields after long explanations; Page Up/Down scroll the bounded form or plan. Validation/recovery messages and the
+Back/Next/cancellation key bar remain outside that region. Passwords and PINs stay masked and are never saved in answers.
+This installer has no roof-motion interface. Bootstrap prechecks use ASCII section headings and explicit outcome words.
+
 The wizard has up to eight steps. A step with nothing to ask for the roles chosen is passed over, and not counted:
 step 4 asks about the controller for the controller or a rig, and about the connection to it for `hvo-roof` and the
 Mac app; step 6 comes only when the plan needs a password. The key bar says
@@ -554,7 +564,7 @@ rate, and whether other machines may use it (over HTTPS only).
     you do, and a changed address needs its CA fetched again.
   - **Its self-signed certificate:** give the certificate's SHA-256 fingerprint, from the same places. Each
     connection is pinned to it.
-  - **As this machine trusts any website:** a certificate of your own from a CA this machine already trusts, or
+  - **System HTTPS trust, or plain HTTP:** a certificate of your own from a CA this machine already trusts, or
     plain HTTP.
 - **The keychain** (on a Mac, with the CA): trust the CA in your login keychain too, so Safari and Chrome open the web
   UI without a warning.
@@ -1924,17 +1934,12 @@ test runs fails it after two minutes rather than waiting. It runs with `HVO_MAC_
 
 ### Refreshing the screenshots
 
-The wizard's tests save each page as ANSI. CI draws the pages as SVG and keeps them as the `installer-renders-<run id>`
-artifact. To refresh the pictures above, download that artifact from a green run and copy its `.svg` files into
-`docs/images/install/`. To draw them locally, run this from `src/`:
-
-```bash
-HVO_INSTALLER_RENDERS_DIR=/tmp/installer-renders \
-  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter "FullyQualifiedName~.Installer.InstallerWizard"
-for ans in /tmp/installer-renders/*.ans; do
-  python3 ../tests/cli/ansi-to-svg.py "$ans" "../docs/images/install/$(basename "${ans%.ans}").svg" --title hvo-roof-install
-done
-```
+The controlled driver tests save actual ANSI and `.cells.json` for the wizard, including every conditional form,
+private-input validation, plan/review, fake apply/progress, failure and recovery. CI keeps these with the full
+80 × 24 / 120 × 32 mode matrix. The JSON preserves full graphemes and measured cell widths. Use the
+[shared capture procedure](ui-redesign/terminal-evidence.md#reproduce-captures) to refresh all sixteen images from
+fake machines; the helper masks the local host name and refuses a missing source. No installation or host service
+change is needed to reproduce them.
 
 ## Fresh media and display migration
 

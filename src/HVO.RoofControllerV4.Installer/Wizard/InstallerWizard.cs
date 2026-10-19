@@ -20,7 +20,7 @@ internal sealed class InstallerWizard : IDisposable
 
     private readonly IApplication _app;
     private readonly Label _header;
-    private readonly Label _message;
+    private readonly TerminalTextView _message;
     private readonly FrameView _content;
     private readonly Button _back;
     private readonly Button _next;
@@ -37,6 +37,7 @@ internal sealed class InstallerWizard : IDisposable
         _app = app;
         Session = session;
         Theme = RoofUiTheme.For(environment);
+        Theme.Prepare(app);
 
         Window = new Window { Title = WindowTitle(session.Version), X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
         Window.SetScheme(Theme.Base);
@@ -44,20 +45,20 @@ internal sealed class InstallerWizard : IDisposable
 
         _header = new Label { X = 0, Y = 0, Width = Dim.Fill() };
         _header.SetScheme(Theme.Header);
-        _back = Theme.Styled(new Button { Text = "Back", X = 0, Y = Pos.AnchorEnd(2) });
+        _back = Theme.Styled(new TerminalButton { Text = "Back", X = 0, Y = Pos.AnchorEnd(2) });
         _back.Accepting += (_, e) =>
         {
             e.Handled = true;
             Back();
         };
-        _next = Theme.Styled(new Button { Text = "Next", X = Pos.Right(_back) + 2, Y = Pos.AnchorEnd(2), IsDefault = true });
+        _next = Theme.Styled(new TerminalButton { Text = "Next", X = Pos.Right(_back) + 2, Y = Pos.AnchorEnd(2), IsDefault = true });
         _next.Accepting += (_, e) =>
         {
             e.Handled = true;
             Next();
         };
-        _message = new Label { X = Pos.Right(_next) + 2, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
-        _content = new FrameView { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(2) };
+        _message = new TerminalTextView { X = 0, Y = Pos.AnchorEnd(5), Width = Dim.Fill(), Height = 3, CanFocus = false };
+        _content = new FrameView { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(_message) };
         Theme.SetFrame(_content);
         var keyBar = Theme.CreateKeyBar(Keys);
         var keyLabels = keyBar.SubViews.OfType<Label>().ToArray();
@@ -65,6 +66,18 @@ internal sealed class InstallerWizard : IDisposable
         _enterKey = keyLabels[0..2];
         _escKey = keyLabels[2..4];
         Window.Add(_header, _content, _back, _next, _message, keyBar);
+
+        Window.SubViewLayout += (_, _) =>
+        {
+            Theme.Prepare(_app);
+            var width = Math.Max(1, Window.Viewport.Width);
+            var rows = string.IsNullOrEmpty(_message.Text) ? 0 : _message.Text.Split('\n').Sum(line => TerminalCells.Wrap(line, width).Count());
+            var shownRows = Math.Min(rows, Math.Max(2, Window.Viewport.Height / 3));
+            _message.Height = shownRows;
+            _message.CanFocus = rows > shownRows && shownRows > 0;
+            _message.Y = Math.Max(1, Window.Viewport.Height - 2 - shownRows);
+            _content.Height = Math.Max(1, Window.Viewport.Height - 3 - shownRows);
+        };
 
         _pages =
         [
@@ -133,8 +146,10 @@ internal sealed class InstallerWizard : IDisposable
         Say(string.Empty);
         _content.Add(Page);
         Page.Showing();
+        Theme.Style(Page);
         Refresh();
         Page.SetFocus();
+        if (Page is MachinePage or DonePage && _next.Enabled) _next.SetFocus();
     }
 
     /// <summary>Brings the buttons up to date with the page: what Next does, and whether Back and Next may be used.</summary>
@@ -299,9 +314,10 @@ internal sealed class InstallerWizard : IDisposable
     {
         if (key == Key.Esc)
         {
-            // Esc goes back a page; it never closes the installer.
+            // A field menu closes first; otherwise Esc goes Back and never cancels the installer.
             key.Handled = true;
-            Back();
+            if (_app.Popovers?.GetActivePopover() is { } menu) _app.Popovers.Hide(menu);
+            else Back();
             return;
         }
 

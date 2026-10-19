@@ -1,118 +1,223 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1032" height="702" viewBox="0 0 1032.00 702.00" role="img" aria-label="hvo-roof ui">
+<svg xmlns="http://www.w3.org/2000/svg" width="1032" height="630" viewBox="0 0 1032.00 630.00" role="img" aria-label="hvo-roof ui">
 <g font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" xml:space="preserve" style="white-space: pre">
-<rect x="0" y="0" width="1032.00" height="702.00" rx="8" fill="#05070d"/>
+<rect x="0" y="0" width="1032.00" height="630.00" rx="8" fill="#0d1420"/>
 <rect x="0" y="0" width="1032.00" height="30" rx="8" fill="#323233"/>
 <rect x="0" y="22" width="1032.00" height="8" fill="#323233"/>
 <circle cx="16" cy="15.0" r="6" fill="#ff5f57"/>
 <circle cx="36" cy="15.0" r="6" fill="#febc2e"/>
 <circle cx="56" cy="15.0" r="6" fill="#28c840"/>
 <text x="516.00" y="20.0" fill="#cccccc" text-anchor="middle" font-size="13">hvo-roof ui</text>
-<rect x="20.40" y="60" width="151.60" height="18.4" fill="#422226"/>
-<rect x="20.40" y="78" width="991.60" height="18.4" fill="#0d1420"/>
-<rect x="37.20" y="114" width="92.80" height="18.4" fill="#2563eb"/>
-<rect x="28.80" y="150" width="185.20" height="18.4" fill="#2563eb"/>
-<rect x="222.00" y="150" width="781.60" height="18.4" fill="#0d1420"/>
-<rect x="20.40" y="654" width="991.60" height="18.4" fill="#111c2a"/>
-<rect x="171.60" y="69.00" width="4.50" height="9.30" fill="#000000"/>
-<rect x="112.80" y="609.00" width="4.50" height="9.30" fill="#000000"/>
-<rect x="264.00" y="609.00" width="4.50" height="9.30" fill="#000000"/>
-<rect x="364.80" y="609.00" width="4.50" height="9.30" fill="#000000"/>
-<rect x="490.80" y="609.00" width="4.50" height="9.30" fill="#000000"/>
-<line x1="16.20" y1="50.40" x2="16.20" y2="681.60" stroke="#98a7bb" stroke-width="1.2"/>
+<rect x="12.00" y="42" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="60" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="1011.60" y="60" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="78" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="96" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="37.20" y="96" width="92.80" height="18.4" fill="#2563eb"/>
+<rect x="129.60" y="96" width="890.80" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="114" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="114" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="132" width="34.00" height="18.4" fill="#05070d"/>
+<rect x="45.60" y="132" width="50.80" height="18.4" fill="#2563eb"/>
+<rect x="96.00" y="132" width="118.00" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="132" width="798.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="150" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="37.20" y="150" width="168.40" height="18.4" fill="#2563eb"/>
+<rect x="205.20" y="150" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="150" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="150" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="168" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="168" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="168" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="168" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="186" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="186" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="186" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="186" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="204" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="204" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="204" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="204" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="222" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="222" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="222" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="222" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="240" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="240" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="240" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="240" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="258" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="258" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="258" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="258" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="276" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="276" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="276" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="276" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="294" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="294" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="294" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="294" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="312" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="312" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="312" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="312" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="330" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="330" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="330" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="330" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="348" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="348" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="348" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="348" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="366" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="205.20" y="366" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="366" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="994.80" y="366" width="25.60" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="384" width="202.00" height="18.4" fill="#05070d"/>
+<rect x="222.00" y="384" width="798.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="402" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="402" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="420" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="420" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="438" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="438" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="456" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="456" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="474" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="474" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="492" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="492" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="510" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="528" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="546" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="20.40" y="546" width="151.60" height="18.4" fill="#422226"/>
+<rect x="171.60" y="546" width="848.80" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="564" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="20.40" y="564" width="991.60" height="18.4" fill="#111c2a"/>
+<rect x="1011.60" y="564" width="8.80" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="582" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="600" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="986.40" y="168.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="186.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="204.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="222.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="240.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="258.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="276.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<line x1="16.20" y1="50.40" x2="16.20" y2="609.60" stroke="#98a7bb" stroke-width="1.2"/>
 <line x1="15.60" y1="51.00" x2="25.20" y2="51.00" stroke="#98a7bb" stroke-width="1.2"/>
-<line x1="326.40" y1="51.00" x2="1016.40" y2="51.00" stroke="#98a7bb" stroke-width="1.2"/>
+<line x1="276.00" y1="51.00" x2="1016.40" y2="51.00" stroke="#98a7bb" stroke-width="1.2"/>
 <line x1="24.60" y1="41.40" x2="24.60" y2="60.60" stroke="#98a7bb" stroke-width="1.2"/>
-<line x1="327.00" y1="41.40" x2="327.00" y2="60.60" stroke="#98a7bb" stroke-width="1.2"/>
-<line x1="1015.80" y1="50.40" x2="1015.80" y2="681.60" stroke="#98a7bb" stroke-width="1.2"/>
-<line x1="33.00" y1="113.40" x2="33.00" y2="132.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="28.20" y1="123.00" x2="33.60" y2="123.00" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="133.20" y1="123.00" x2="1003.80" y2="123.00" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="133.80" y1="113.40" x2="133.80" y2="132.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="24.60" y1="131.40" x2="24.60" y2="618.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="1007.40" y1="131.40" x2="1007.40" y2="618.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="28.20" y1="627.00" x2="1003.80" y2="627.00" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="15.60" y1="681.00" x2="1016.40" y2="681.00" stroke="#98a7bb" stroke-width="1.2"/>
-<path d="M28.80,123.00 Q24.60,123.00 24.60,132.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<path d="M1003.20,123.00 Q1007.40,123.00 1007.40,132.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<path d="M24.60,618.00 Q24.60,627.00 28.80,627.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<path d="M1007.40,618.00 Q1007.40,627.00 1003.20,627.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<text x="37.20" y="55.50" fill="#98a7bb" textLength="277.20" lengthAdjust="spacingAndGlyphs">HVO roof: http://127.0.0.1:16395/</text>
-<text x="20.40" y="73.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">⟦ Stop roof (F9) ⟧</text>
-<text x="196.80" y="73.50" fill="#f7f9fc" textLength="210.00" lengthAdjust="spacingAndGlyphs">Stop is always available.</text>
-<text x="20.40" y="91.50" fill="#f7f9fc" textLength="394.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">dotnet-run-smoke (admin, API key) · status live</text>
-<text x="37.20" y="127.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">F2 Settings</text>
-<text x="28.80" y="145.50" fill="#f7f9fc" textLength="655.20" lengthAdjust="spacingAndGlyphs">Version 1. Kept in memory only: changes are lost when the controller restarts.</text>
-<text x="28.80" y="163.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Roof</text>
-<text x="222.00" y="163.50" fill="#f7f9fc" textLength="193.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Safety watchdog timeout</text>
-<text x="658.80" y="163.50" fill="#f7f9fc" textLength="134.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">120 s (00:02:00)</text>
-<text x="28.80" y="181.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Controller</text>
-<text x="222.00" y="181.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">Open relay ID</text>
-<text x="658.80" y="181.50" fill="#f7f9fc">1</text>
-<text x="28.80" y="199.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">Camera</text>
-<text x="222.00" y="199.50" fill="#f7f9fc" textLength="117.60" lengthAdjust="spacingAndGlyphs">Close relay ID</text>
-<text x="658.80" y="199.50" fill="#f7f9fc">2</text>
-<text x="28.80" y="217.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Security</text>
-<text x="222.00" y="217.50" fill="#f7f9fc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Clear fault relay ID</text>
-<text x="658.80" y="217.50" fill="#f7f9fc">3</text>
-<text x="28.80" y="235.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Sign-in</text>
-<text x="222.00" y="235.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">Stop relay ID</text>
-<text x="658.80" y="235.50" fill="#f7f9fc">4</text>
-<text x="28.80" y="253.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Logging</text>
-<text x="222.00" y="253.50" fill="#f7f9fc" textLength="235.20" lengthAdjust="spacingAndGlyphs">Enable digital input polling</text>
-<text x="658.80" y="253.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">true</text>
-<text x="28.80" y="271.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Clients</text>
-<text x="222.00" y="271.50" fill="#f7f9fc" textLength="226.80" lengthAdjust="spacingAndGlyphs">Digital input poll interval</text>
-<text x="658.80" y="271.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">0.025 s</text>
-<text x="222.00" y="289.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Enable periodic verification while moving</text>
-<text x="658.80" y="289.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">true</text>
-<text x="222.00" y="307.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Periodic verification interval</text>
-<text x="658.80" y="307.50" fill="#f7f9fc" textLength="25.20" lengthAdjust="spacingAndGlyphs">1 s</text>
-<text x="222.00" y="325.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">Use normally closed limit switches</text>
-<text x="658.80" y="325.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">false</text>
-<text x="222.00" y="343.50" fill="#f7f9fc" textLength="176.40" lengthAdjust="spacingAndGlyphs">Limit switch debounce</text>
-<text x="658.80" y="343.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">0.025 s</text>
-<text x="222.00" y="361.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Ignore physical limit switches</text>
-<text x="658.80" y="361.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">false</text>
-<text x="222.00" y="379.50" fill="#f7f9fc" textLength="420.00" lengthAdjust="spacingAndGlyphs">Allow ignoring limit switches on physical hardware</text>
-<text x="658.80" y="379.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">false</text>
-<text x="717.60" y="379.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">(read-only)</text>
-<text x="222.00" y="397.50" fill="#f7f9fc" textLength="193.20" lengthAdjust="spacingAndGlyphs">Fault input active high</text>
-<text x="658.80" y="397.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">false</text>
-<text x="222.00" y="415.50" fill="#f7f9fc" textLength="294.00" lengthAdjust="spacingAndGlyphs">Max consecutive input read failures</text>
-<text x="658.80" y="415.50" fill="#f7f9fc">3</text>
-<text x="222.00" y="433.50" fill="#f7f9fc" textLength="184.80" lengthAdjust="spacingAndGlyphs">Operator lease timeout</text>
-<text x="658.80" y="433.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(none)</text>
-<text x="222.00" y="451.50" fill="#f7f9fc" textLength="243.60" lengthAdjust="spacingAndGlyphs">At speed confirmation timeout</text>
-<text x="658.80" y="451.50" fill="#f7f9fc" textLength="25.20" lengthAdjust="spacingAndGlyphs">3 s</text>
-<text x="222.00" y="469.50" fill="#f7f9fc" textLength="260.40" lengthAdjust="spacingAndGlyphs">Drive stop confirmation timeout</text>
-<text x="658.80" y="469.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(none)</text>
-<text x="726.00" y="469.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">(read-only)</text>
-<text x="222.00" y="487.50" fill="#f7f9fc" textLength="210.00" lengthAdjust="spacingAndGlyphs">Departure release timeout</text>
-<text x="658.80" y="487.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">(none)</text>
-<text x="726.00" y="487.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">(read-only)</text>
-<text x="28.80" y="523.50" fill="#f7f9fc" textLength="747.60" lengthAdjust="spacingAndGlyphs">Safety watchdog timeout (RoofControllerOptionsV4:SafetyWatchdogTimeout): 120 s (00:02:00)</text>
-<text x="801.60" y="523.50" fill="#f7f9fc" textLength="201.60" lengthAdjust="spacingAndGlyphs">default 120 s (00:02:00)</text>
-<text x="28.80" y="541.50" fill="#f7f9fc" textLength="151.20" lengthAdjust="spacingAndGlyphs">You may change it.</text>
-<text x="28.80" y="559.50" fill="#f7f9fc" textLength="966.00" lengthAdjust="spacingAndGlyphs">Longest continuous run in either direction before the safety watchdog stops the roof. This is the absolute movement</text>
-<text x="28.80" y="577.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">cap.</text>
-<text x="28.80" y="613.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦ Change ⟧</text>
-<text x="129.60" y="613.50" fill="#f7f9fc" textLength="134.40" lengthAdjust="spacingAndGlyphs">⟦ Clear secret ⟧</text>
-<text x="280.80" y="613.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦ Reload ⟧</text>
-<text x="381.60" y="613.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">⟦ Hand edit ⟧</text>
-<text x="20.40" y="649.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Read the settings (version 1).</text>
-<text x="20.40" y="667.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F1</text>
-<text x="45.60" y="667.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs">Roof</text>
-<text x="96.00" y="667.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F2</text>
-<text x="121.20" y="667.50" fill="#98a7bb" textLength="67.20" lengthAdjust="spacingAndGlyphs">Settings</text>
-<text x="205.20" y="667.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F3</text>
-<text x="230.40" y="667.50" fill="#98a7bb" textLength="50.40" lengthAdjust="spacingAndGlyphs">People</text>
-<text x="297.60" y="667.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F4</text>
-<text x="322.80" y="667.50" fill="#98a7bb" textLength="50.40" lengthAdjust="spacingAndGlyphs">System</text>
-<text x="390.00" y="667.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F5</text>
-<text x="415.20" y="667.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs">Setup</text>
-<text x="474.00" y="667.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F9</text>
-<text x="499.20" y="667.50" fill="#98a7bb" textLength="75.60" lengthAdjust="spacingAndGlyphs">Stop roof</text>
-<text x="591.60" y="667.50" fill="#58a6ff" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>
-<text x="625.20" y="667.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
+<line x1="276.60" y1="41.40" x2="276.60" y2="60.60" stroke="#98a7bb" stroke-width="1.2"/>
+<line x1="1015.80" y1="50.40" x2="1015.80" y2="609.60" stroke="#98a7bb" stroke-width="1.2"/>
+<line x1="33.00" y1="95.40" x2="33.00" y2="114.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="33.00" y1="149.40" x2="33.00" y2="384.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="28.20" y1="105.00" x2="33.60" y2="105.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="133.20" y1="105.00" x2="1003.80" y2="105.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="133.80" y1="95.40" x2="133.80" y2="114.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="24.60" y1="113.40" x2="24.60" y2="510.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="1007.40" y1="113.40" x2="1007.40" y2="510.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="41.40" y1="131.40" x2="41.40" y2="150.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="36.60" y1="141.00" x2="42.00" y2="141.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="99.60" y1="141.00" x2="205.80" y2="141.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="229.80" y1="141.00" x2="235.20" y2="141.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="368.40" y1="141.00" x2="995.40" y2="141.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="100.20" y1="131.40" x2="100.20" y2="150.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="234.60" y1="131.40" x2="234.60" y2="150.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="369.00" y1="131.40" x2="369.00" y2="150.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="209.40" y1="149.40" x2="209.40" y2="384.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="226.20" y1="149.40" x2="226.20" y2="384.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="999.00" y1="149.40" x2="999.00" y2="384.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="36.60" y1="393.00" x2="205.80" y2="393.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="229.80" y1="393.00" x2="995.40" y2="393.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="28.20" y1="519.00" x2="1003.80" y2="519.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="15.60" y1="609.00" x2="1016.40" y2="609.00" stroke="#98a7bb" stroke-width="1.2"/>
+<path d="M28.80,105.00 Q24.60,105.00 24.60,114.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M1003.20,105.00 Q1007.40,105.00 1007.40,114.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M37.20,141.00 Q33.00,141.00 33.00,150.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M205.20,141.00 Q209.40,141.00 209.40,150.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M230.40,141.00 Q226.20,141.00 226.20,150.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M994.80,141.00 Q999.00,141.00 999.00,150.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M33.00,384.00 Q33.00,393.00 37.20,393.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M209.40,384.00 Q209.40,393.00 205.20,393.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M226.20,384.00 Q226.20,393.00 230.40,393.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M999.00,384.00 Q999.00,393.00 994.80,393.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M1007.40,510.00 Q1007.40,519.00 1003.20,519.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<text x="37.20" y="55.50" fill="#98a7bb" textLength="226.80" lengthAdjust="spacingAndGlyphs">HVO roof: http://localhost/</text>
+<text x="20.40" y="73.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">HVO ROOF</text>
+<text x="104.40" y="73.50" fill="#f7f9fc" font-weight="bold">|</text>
+<text x="129.60" y="73.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">test-admin (admin, API key) · status live</text>
+<text x="37.20" y="109.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">F2 Settings</text>
+<text x="28.80" y="127.50" fill="#f7f9fc" textLength="655.20" lengthAdjust="spacingAndGlyphs">Version 1. Kept in memory only: changes are lost when the controller restarts.</text>
+<text x="45.60" y="145.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">GROUPS</text>
+<text x="238.80" y="145.50" fill="#3a4a60" textLength="126.00" lengthAdjust="spacingAndGlyphs">SETTING / VALUE</text>
+<text x="37.20" y="163.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">Roof</text>
+<text x="230.40" y="163.50" fill="#f7f9fc" textLength="193.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">Safety watchdog timeout</text>
+<text x="667.20" y="163.50" fill="#f7f9fc" textLength="126.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">90 s (00:01:30)</text>
+<text x="986.40" y="163.50" fill="#f7f9fc">▲</text>
+<text x="37.20" y="181.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Controller</text>
+<text x="230.40" y="181.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">Open relay ID</text>
+<text x="667.20" y="181.50" fill="#f7f9fc">1</text>
+<text x="37.20" y="199.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">Camera</text>
+<text x="230.40" y="199.50" fill="#f7f9fc" textLength="117.60" lengthAdjust="spacingAndGlyphs">Close relay ID</text>
+<text x="667.20" y="199.50" fill="#f7f9fc">2</text>
+<text x="37.20" y="217.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Security</text>
+<text x="230.40" y="217.50" fill="#f7f9fc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Clear fault relay ID</text>
+<text x="667.20" y="217.50" fill="#f7f9fc">3</text>
+<text x="37.20" y="235.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Sign-in</text>
+<text x="230.40" y="235.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">Stop relay ID</text>
+<text x="667.20" y="235.50" fill="#f7f9fc">4</text>
+<text x="37.20" y="253.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Logging</text>
+<text x="230.40" y="253.50" fill="#f7f9fc" textLength="235.20" lengthAdjust="spacingAndGlyphs">Enable digital input polling</text>
+<text x="667.20" y="253.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">true</text>
+<text x="37.20" y="271.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Clients</text>
+<text x="230.40" y="271.50" fill="#f7f9fc" textLength="226.80" lengthAdjust="spacingAndGlyphs">Digital input poll interval</text>
+<text x="667.20" y="271.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">0.025 s</text>
+<text x="230.40" y="289.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Enable periodic verification while moving</text>
+<text x="667.20" y="289.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">true</text>
+<text x="230.40" y="307.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Periodic verification interval</text>
+<text x="667.20" y="307.50" fill="#f7f9fc" textLength="25.20" lengthAdjust="spacingAndGlyphs">1 s</text>
+<text x="986.40" y="307.50" fill="#f7f9fc">░</text>
+<text x="230.40" y="325.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">Use normally closed limit switches</text>
+<text x="667.20" y="325.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">true</text>
+<text x="986.40" y="325.50" fill="#f7f9fc">░</text>
+<text x="230.40" y="343.50" fill="#f7f9fc" textLength="176.40" lengthAdjust="spacingAndGlyphs">Limit switch debounce</text>
+<text x="667.20" y="343.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">0.025 s</text>
+<text x="986.40" y="343.50" fill="#f7f9fc">░</text>
+<text x="230.40" y="361.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Ignore physical limit switches</text>
+<text x="667.20" y="361.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">false</text>
+<text x="986.40" y="361.50" fill="#f7f9fc">░</text>
+<text x="230.40" y="379.50" fill="#f7f9fc" textLength="420.00" lengthAdjust="spacingAndGlyphs">Allow ignoring limit switches on physical hardware</text>
+<text x="667.20" y="379.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">false</text>
+<text x="726.00" y="379.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">(read-only)</text>
+<text x="986.40" y="379.50" fill="#f7f9fc">▼</text>
+<text x="28.80" y="415.50" fill="#f7f9fc" textLength="739.20" lengthAdjust="spacingAndGlyphs">Safety watchdog timeout (RoofControllerOptionsV4:SafetyWatchdogTimeout): 90 s (00:01:30)</text>
+<text x="793.20" y="415.50" fill="#f7f9fc" textLength="201.60" lengthAdjust="spacingAndGlyphs">default 120 s (00:02:00)</text>
+<text x="28.80" y="433.50" fill="#f7f9fc" textLength="151.20" lengthAdjust="spacingAndGlyphs">You may change it.</text>
+<text x="28.80" y="451.50" fill="#f7f9fc" textLength="966.00" lengthAdjust="spacingAndGlyphs">Longest continuous run in either direction before the safety watchdog stops the roof. This is the absolute movement</text>
+<text x="28.80" y="469.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">cap.</text>
+<text x="28.80" y="505.50" fill="#f7f9fc" textLength="436.80" lengthAdjust="spacingAndGlyphs">[ Change ] [ Clear secret ] [ Reload ] [ Hand edit ]</text>
+<text x="20.40" y="541.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Read the settings (version 1).</text>
+<text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
+<text x="188.40" y="559.50" fill="#3fb950" textLength="470.40" lengthAdjust="spacingAndGlyphs">Stop acknowledged. Relay register verified de-energized.</text>
+<text x="20.40" y="577.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F1</text>
+<text x="45.60" y="577.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs">Roof</text>
+<text x="96.00" y="577.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F2</text>
+<text x="121.20" y="577.50" fill="#98a7bb" textLength="67.20" lengthAdjust="spacingAndGlyphs">Settings</text>
+<text x="205.20" y="577.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F3</text>
+<text x="230.40" y="577.50" fill="#98a7bb" textLength="50.40" lengthAdjust="spacingAndGlyphs">People</text>
+<text x="297.60" y="577.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F4</text>
+<text x="322.80" y="577.50" fill="#98a7bb" textLength="50.40" lengthAdjust="spacingAndGlyphs">System</text>
+<text x="390.00" y="577.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F5</text>
+<text x="415.20" y="577.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs">Setup</text>
+<text x="474.00" y="577.50" fill="#58a6ff" textLength="16.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">F9</text>
+<text x="499.20" y="577.50" fill="#98a7bb" textLength="75.60" lengthAdjust="spacingAndGlyphs">Stop roof</text>
+<text x="591.60" y="577.50" fill="#58a6ff" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>
+<text x="625.20" y="577.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
+<text x="20.40" y="595.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Tab move</text>
+<text x="104.40" y="595.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs">Enter select</text>
+<text x="222.00" y="595.50" fill="#f7f9fc" textLength="134.40" lengthAdjust="spacingAndGlyphs">Esc close prompt</text>
+<text x="373.20" y="595.50" fill="#f7f9fc" textLength="117.60" lengthAdjust="spacingAndGlyphs">PgUp/PgDn read</text>
 </g>
 </svg>

@@ -512,16 +512,16 @@ public sealed class InstallerBackupTests
             if (!swapped)
             {
                 swapped = true;
-                File.Move(pi.OnDisk(Kept), pi.OnDisk(roots));
-                File.Move(pi.OnDisk(theirs), pi.OnDisk(Kept));
+                pi.Machine.RenameOnDisk(pi.OnDisk(Kept), pi.OnDisk(roots), false);
+                pi.Machine.RenameOnDisk(pi.OnDisk(theirs), pi.OnDisk(Kept), false);
             }
         };
         pi.BeforeStat = () =>
         {
             if (swapped && File.Exists(pi.OnDisk(roots)))
             {
-                File.Move(pi.OnDisk(Kept), pi.OnDisk(theirs));
-                File.Move(pi.OnDisk(roots), pi.OnDisk(Kept));
+                pi.Machine.RenameOnDisk(pi.OnDisk(Kept), pi.OnDisk(theirs), false);
+                pi.Machine.RenameOnDisk(pi.OnDisk(roots), pi.OnDisk(Kept), false);
             }
         };
 
@@ -617,16 +617,9 @@ public sealed class InstallerBackupTests
         next.Machine.Unexpected.Should().BeEmpty();
     }
 
-    // restore checks the archive it opened through /proc/<pid>/fd, which only Linux has: elsewhere these tests cannot run.
+    // FakeMachine models the Linux descriptor check with the actual registered stream on either supported host.
     private static Task<InstallerRun> RestoreAsync(FakeMachine pi, params string[] arguments)
-    {
-        if (!OperatingSystem.IsLinux())
-        {
-            Assert.Inconclusive("restore checks the archive it opened through /proc/<pid>/fd, which only Linux has.");
-        }
-
-        return pi.RunAsync(["restore", .. arguments]);
-    }
+        => pi.RunAsync(["restore", .. arguments]);
 
     // The controller and the kiosk, installed, with a secret set through the API (as the controller keeps one).
     private static async Task<FakeMachine> InstalledPiAsync()

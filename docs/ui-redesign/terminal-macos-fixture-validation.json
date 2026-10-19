@@ -1,0 +1,138 @@
+{
+  "candidate": "d784d2f61fdd9ecfe088805587128238567ba9b3",
+  "run": 39203626669,
+  "job": 117905624022,
+  "cli": {
+    "contracts_passed": 371,
+    "render_passed": 147
+  },
+  "installer_contracts": {
+    "total": 857,
+    "executed": 830,
+    "passed": 716,
+    "failed": 114,
+    "not_executed": 27
+  },
+  "installer_render": "not reached",
+  "groups": [
+    {
+      "count": 81,
+      "classification": "direct fake Linux descriptor resolution refusal on macOS"
+    },
+    {
+      "count": 20,
+      "classification": "status-only failures source-consistent with descriptor cascade; hosted re-execution required"
+    },
+    {
+      "count": 1,
+      "classification": "swap callback not reached before initial descriptor failure; hosted re-execution required"
+    },
+    {
+      "count": 5,
+      "classification": "test certificate RoundTrip key re-export not enabled on Apple crypto"
+    },
+    {
+      "count": 2,
+      "classification": "supported imported PKCS12 workflow re-export; separate product issue187"
+    },
+    {
+      "count": 1,
+      "classification": "real AF_UNIX pathname longer than Darwin limit"
+    },
+    {
+      "count": 1,
+      "classification": "explicit Linux EphemeralKeySet unsupported on actual Mac test host"
+    },
+    {
+      "count": 2,
+      "classification": "other preflight cases share same Linux crypto test-host boundary; hosted re-execution required"
+    },
+    {
+      "count": 1,
+      "classification": "system LibreSSL verify usage lacks hostname and IP verification options"
+    }
+  ],
+  "already_successful": [
+    "exact macOS signatures and identities/ad-hoc",
+    "native final-program offline PTY",
+    "installed and rollback notices",
+    "CLI contracts and renders"
+  ],
+  "limits": [
+    "No claim all114 failures are resolved",
+    "Actual macOS execution remains current-head normal hosted CI obligation",
+    "No production policy changed by fixture correction",
+    "No unchanged publish/native replay/motion/capture work repeated"
+  ],
+  "focused_source_release": {
+    "exit_code": 0,
+    "scope": "only diagnosed fixture boundaries and existing adversarial/crypto/preflight/strict-openssl regressions",
+    "configuration": "Release",
+    "counters": {
+      "total": "23",
+      "executed": "23",
+      "passed": "23",
+      "failed": "0",
+      "error": "0",
+      "timeout": "0",
+      "aborted": "0",
+      "inconclusive": "0",
+      "passedButRunAborted": "0",
+      "notRunnable": "0",
+      "notExecuted": "0",
+      "disconnected": "0",
+      "warning": "0",
+      "completed": "0",
+      "inProgress": "0",
+      "pending": "0"
+    },
+    "failed_bare_methods": []
+  },
+  "focused_retained_installer_bundle": {
+    "program": "hvo-roof-install",
+    "rid": "linux-x64",
+    "sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
+    "assemblies": {
+      "Terminal.Gui.dll": "3f314c42af815c1e1aef1ed5a6cb70a5c7aef1e3837c65559eafef490d764dab",
+      "HVO.RoofControllerV4.Client.dll": "955794e08c1a8c07521a83e962af7040ed76241785afcc9d98029ec3816c96fb",
+      "HVO.RoofControllerV4.Common.dll": "5beb7f57341a0eb5a5b843a36a4b7a06e152e10b81efb6e0d5622d92c0a623d8",
+      "HVO.RoofControllerV4.TerminalUi.dll": "0ee8d37bb1f331378cb5875dc877da85b6980422e0b94a57fb4a0140da81bbf3",
+      "hvo-roof-install.dll": "81854d21db642f6a73efddd2f9630e46fb9ba63d84ef8963cedda53b7b9d6745"
+    },
+    "runtime_source_commit": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478",
+    "test_harness_sha256": "73424d4c69b50b3446f64e6b7199b78bf7e73936b8dd53754238263d3b47836a",
+    "passed_tests": 23,
+    "bare_methods": [
+      "ABackup_IsHashedAndCheckedFromOneRead_WhateverTakesItsPlaceOnceItIsOpen",
+      "ACaThatDoesNotLimitItsNames_IsMadeAgain",
+      "ACertificateSomeClientsRefuse_HasWarnings",
+      "ACertificateTheControllerCannotServe_HasItsProblems",
+      "ARestore_ChecksTheArchiveItOpened_NotOnlyThePath",
+      "AStoresFile_ThatIsNotAFile_IsRefused_BeforeItIsRead",
+      "AnotherBackupSwappedIn_AfterTheHandOversHash_IsRefused_AndChangesNothing",
+      "FixtureCertificateRoundTrip_RetainsAnExportablePrivateKey",
+      "FixtureHostPemPreflight_PreservesTheCertificate_AndRejectsAWrongPassword",
+      "OpenedFileStat_RefusesClosedForeignUnregisteredAndMalformedDescriptors",
+      "OpenedFileStat_RetainsTheNonRootOwnerAndActualEmptyFileType",
+      "OpenedFileStat_UsesTheLiveStreamAndOwner_AfterItsPathChanges",
+      "Openssl_VerifiesTheChain_ForAServer_ByNameAndAddress",
+      "ThePi_FailsTheDeploymentCheck_WithItsLimitSwitchesIgnored",
+      "ThePi_FailsTheDeploymentCheck_WithTheHatEmulatorTurnedOnInItsSecrets",
+      "ThePi_PassesTheControllersDeploymentCheck_WithTheSettingsTheInstallerGave",
+      "WithNothingRecorded_TheControllerKeepsYourOwnCertificate_OrGetsAPrivateCa_WithNoDomainUnasked",
+      "YourOwnCertificate_IsRenewedByImportingANewOne"
+    ],
+    "execution": "JIT of exact retained installer bundled IL with rebuilt private fixture host; no republish/native replay",
+    "absolute_dotnet": true,
+    "path_policy": "established contract environment; no Terminal.Gui render phase in this focused set"
+  },
+  "fixture_delta": {
+    "production_source_changed": false,
+    "ci_or_artifact_harness_changed": false,
+    "matrix_status_changed": false,
+    "obsolete_macos_restore_inconclusives_removed": 27,
+    "mac_preflight": "Fixture-host same-certificate encrypted PEM adaptation; Linux default PFX/Ephemeral path unchanged",
+    "openssl": "Absolute preinstalled OpenSSL3 on Mac; Linux /usr/bin unchanged; every strict name/IP verification and negative assertion retained"
+  },
+  "private_evidence": "Raw failed TRX/messages/arguments remain private and are not reproduced here."
+}

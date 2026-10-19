@@ -1,4 +1,9 @@
 using HVO.RoofControllerV4.Client;
+using Terminal.Gui.App;
+using Terminal.Gui.Configuration;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Text;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -6,64 +11,56 @@ using Attribute = Terminal.Gui.Drawing.Attribute;
 
 namespace HVO.RoofControllerV4.TerminalUi;
 
-/// <summary>
-/// The terminal programs (<c>hvo-roof ui</c> and the installer) in HVO Dark, the web UI's theme
-/// (<see cref="RoofUiPalette"/>): text on the page's dark background, the focused control in the accent blue, Stop red,
-/// Open and Close on raised surfaces, and a stale status or an error in the theme's warning and danger colours. Terminal.Gui draws
-/// the colours as the terminal allows: true colour, or the nearest of 256 or 16 colours. With <c>NO_COLOR</c> set
-/// (https://no-color.org) the interface is drawn in the terminal's own colours instead (<see cref="NoColour"/>);
-/// Terminal.Gui alone would still draw 16 colours.
-/// </summary>
+/// <summary>The shared Sky semantic theme, exact ANSI16 fallback, terminal defaults and ASCII controls.</summary>
 public sealed class RoofUiTheme
 {
-    private readonly bool _colour;
     private readonly Scheme _stopSent;
     private readonly Scheme _stopAcknowledged;
     private readonly Scheme _stopUnverified;
     private readonly Scheme _stopFailed;
 
-    private RoofUiTheme(bool colour)
+    private RoofUiTheme(TerminalCapabilities capabilities)
     {
-        _colour = colour;
-        Base = new(Of(RoofUiPalette.Text, RoofUiPalette.Background))
+        Capabilities = capabilities;
+        Base = new(Of(Role.Text, Role.Background))
         {
-            Focus = Of(RoofUiPalette.Text, RoofUiPalette.AccentStrong, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold),
-            HotNormal = Of(RoofUiPalette.Accent, RoofUiPalette.Background, plain: TextStyle.Underline),
-            HotFocus = Of(RoofUiPalette.Text, RoofUiPalette.AccentStrong, TextStyle.Bold | TextStyle.Underline, TextStyle.Reverse | TextStyle.Bold | TextStyle.Underline),
-            Active = Of(RoofUiPalette.Text, RoofUiPalette.Surface, TextStyle.Bold, TextStyle.Bold),
-            HotActive = Of(RoofUiPalette.Accent, RoofUiPalette.Surface, TextStyle.Bold, TextStyle.Bold | TextStyle.Underline),
-            Highlight = Of(RoofUiPalette.Text, RoofUiPalette.Badge, plain: TextStyle.Bold),
-            Editable = Of(RoofUiPalette.Text, RoofUiPalette.Surface, plain: TextStyle.Underline),
-            ReadOnly = Of(RoofUiPalette.Muted, RoofUiPalette.Background),
-            Disabled = Of(RoofUiPalette.MutedWeak, RoofUiPalette.Badge, TextStyle.Faint, TextStyle.Faint)
+            Focus = Of(Role.Text, Role.AccentStrong, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold),
+            HotNormal = Of(Role.Accent, Role.Background, plain: TextStyle.Underline),
+            HotFocus = Of(Role.Text, Role.AccentStrong, TextStyle.Bold | TextStyle.Underline, TextStyle.Reverse | TextStyle.Bold | TextStyle.Underline),
+            Active = Of(Role.Text, Role.Surface, TextStyle.Bold, TextStyle.Bold),
+            HotActive = Of(Role.Accent, Role.Surface, TextStyle.Bold, TextStyle.Bold | TextStyle.Underline),
+            Highlight = Of(Role.Text, Role.Badge, plain: TextStyle.Bold),
+            Editable = Of(Role.Text, Role.Surface, plain: TextStyle.Underline),
+            ReadOnly = Of(Role.Muted, Role.Background),
+            Disabled = Of(Role.MutedWeak, Role.Badge, TextStyle.Faint, TextStyle.Faint)
         };
-        Frame = new(Base) { Normal = Of(RoofUiPalette.Border, RoofUiPalette.Background) };
-        WindowFrame = new(Base) { Normal = Of(RoofUiPalette.Muted, RoofUiPalette.Background) };
-        Header = new(Base) { Normal = Of(RoofUiPalette.Text, RoofUiPalette.Surface, TextStyle.Bold, TextStyle.Bold) };
-        Key = new(Base) { Normal = Of(RoofUiPalette.Accent, RoofUiPalette.Badge, TextStyle.Bold, TextStyle.Bold) };
-        KeyName = new(Base) { Normal = Of(RoofUiPalette.Muted, RoofUiPalette.Badge) };
-        Stop = ButtonScheme(RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, filled: true);
-        Open = ButtonScheme(RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, filled: false);
-        Close = ButtonScheme(RoofUiPalette.CloseButtonText, RoofUiPalette.CloseButton, filled: false);
-        Warning = new(Base) { Normal = Of(RoofUiPalette.WarningText, RoofUiPalette.WarningBackground, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
-        Danger = new(Base) { Normal = Of(RoofUiPalette.DangerText, RoofUiPalette.DangerBackground, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
+        Frame = new(Base) { Normal = Of(Role.Border, Role.Background) };
+        WindowFrame = new(Base) { Normal = Of(Role.Muted, Role.Background) };
+        Header = new(Base) { Normal = Of(Role.Text, Role.Surface, TextStyle.Bold, TextStyle.Bold) };
+        Key = new(Base) { Normal = Of(Role.Accent, Role.Badge, TextStyle.Bold, TextStyle.Bold) };
+        KeyName = new(Base) { Normal = Of(Role.Muted, Role.Badge) };
+        Stop = ButtonScheme(Role.DangerText, Role.DangerBackground, filled: true);
+        Open = ButtonScheme(Role.Text, Role.Badge, filled: false);
+        Close = ButtonScheme(Role.Text, Role.Badge, filled: false);
+        Warning = new(Base) { Normal = Of(Role.WarningText, Role.WarningBackground, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
+        Danger = new(Base) { Normal = Of(Role.DangerText, Role.DangerBackground, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
         Panel = new(Base)
         {
-            Normal = Of(RoofUiPalette.Text, RoofUiPalette.Surface),
-            HotNormal = Of(RoofUiPalette.Accent, RoofUiPalette.Surface, plain: TextStyle.Underline),
-            ReadOnly = Of(RoofUiPalette.Muted, RoofUiPalette.Surface),
-            Editable = Of(RoofUiPalette.Text, RoofUiPalette.Background, plain: TextStyle.Underline)
+            Normal = Of(Role.Text, Role.Surface),
+            HotNormal = Of(Role.Accent, Role.Surface, plain: TextStyle.Underline),
+            ReadOnly = Of(Role.Muted, Role.Surface),
+            Editable = Of(Role.Text, Role.Background, plain: TextStyle.Underline)
         };
-        PanelFrame = new(Panel) { Normal = Of(RoofUiPalette.Accent, RoofUiPalette.Surface, plain: TextStyle.Bold) };
-        PanelError = new(Panel) { Normal = Of(RoofUiPalette.Danger, RoofUiPalette.Surface, TextStyle.Bold, TextStyle.Bold) };
-        _stopSent = new(Base) { Normal = Of(RoofUiPalette.Info, RoofUiPalette.Background) };
-        _stopAcknowledged = new(Base) { Normal = Of(RoofUiPalette.Success, RoofUiPalette.Background) };
-        _stopUnverified = new(Base) { Normal = Of(RoofUiPalette.Warning, RoofUiPalette.Background, TextStyle.Bold, TextStyle.Bold) };
-        _stopFailed = new(Base) { Normal = Of(RoofUiPalette.Danger, RoofUiPalette.Background, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
+        PanelFrame = new(Panel) { Normal = Of(Role.Accent, Role.Surface, plain: TextStyle.Bold) };
+        PanelError = new(Panel) { Normal = Of(Role.Danger, Role.Surface, TextStyle.Bold, TextStyle.Bold) };
+        _stopSent = new(Base) { Normal = Of(Role.Info, Role.Background) };
+        _stopAcknowledged = new(Base) { Normal = Of(Role.Success, Role.Background) };
+        _stopUnverified = new(Base) { Normal = Of(Role.Warning, Role.Background, TextStyle.Bold, TextStyle.Bold) };
+        _stopFailed = new(Base) { Normal = Of(Role.Danger, Role.Background, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
     }
 
     /// <summary>HVO Dark, in colour.</summary>
-    public static RoofUiTheme HvoDark { get; } = new(colour: true);
+    public static RoofUiTheme HvoDark { get; } = new(new(TerminalColours.TrueColour, false));
 
     /// <summary>
     /// The interface without colour: the terminal's own foreground and background, with bold, underline and reverse
@@ -71,7 +68,7 @@ public sealed class RoofUiTheme
     /// underlined, a disabled control is faint, and a stale status or an error is bold in reverse video. Buttons have no
     /// shadow, which Terminal.Gui draws in black.
     /// </summary>
-    public static RoofUiTheme NoColour { get; } = new(colour: false);
+    public static RoofUiTheme NoColour { get; } = new(new(TerminalColours.None, false));
 
     /// <summary>The window and everything in it without a scheme of its own.</summary>
     public Scheme Base { get; }
@@ -94,7 +91,7 @@ public sealed class RoofUiTheme
     /// <summary>What a key in the key bar does.</summary>
     public Scheme KeyName { get; }
 
-    /// <summary>The Stop button: red, as in the shared design contract, in every state; focus underlines it.</summary>
+    /// <summary>The Stop button: red, as on the web UI, in every state; focus underlines it.</summary>
     public Scheme Stop { get; }
 
     /// <summary>The Open button.</summary>
@@ -120,7 +117,10 @@ public sealed class RoofUiTheme
 
     /// <summary><see cref="NoColour"/> when <c>NO_COLOR</c> is set and not empty, as no-color.org asks; otherwise <see cref="HvoDark"/>.</summary>
     public static RoofUiTheme For(Func<string, string?> environment)
-        => string.IsNullOrEmpty(environment("NO_COLOR")) ? HvoDark : NoColour;
+    {
+        var capabilities = TerminalCapabilities.Detect(environment);
+        return capabilities == HvoDark.Capabilities ? HvoDark : capabilities == NoColour.Capabilities ? NoColour : new(capabilities);
+    }
 
     /// <summary>The Stop result, coloured as the web UI colours it.</summary>
     public Scheme ForStop(RoofStopOutcome outcome) => outcome switch
@@ -156,6 +156,32 @@ public sealed class RoofUiTheme
         if (view.Border?.View is { } border)
         {
             border.SetScheme(scheme ?? Frame);
+            if (Capabilities.Ascii && !_frames.TryGetValue(view, out _))
+            {
+                _frames.Add(view, new object());
+                view.BorderStyle = LineStyle.None;
+                view.Border!.Thickness = new Thickness(1);
+                var top = new Label { X = 0, Y = 0, Height = 1 };
+                var bottom = new Label { X = 0, Height = 1 };
+                var left = new Label { X = 0, Y = 1, Width = 1 };
+                var right = new Label { Y = 1, Width = 1 };
+                foreach (var line in new[] { top, bottom, left, right }) { line.SetScheme(scheme ?? Frame); border.Add(line); }
+                border.SubViewLayout += (_, _) =>
+                {
+                    var frame = view.Border!.FrameToScreen();
+                    var width = frame.Width;
+                    var height = frame.Height;
+                    if (width < 2 || height < 2) return;
+                    var title = "+-" + TerminalCells.Take(view.Title, Math.Max(0, width - 4));
+                    top.Text = title + new string('-', Math.Max(0, width - TerminalCells.Width(title) - 1)) + "+";
+                    bottom.Text = "+" + new string('-', width - 2) + "+";
+                    top.Width = bottom.Width = width;
+                    bottom.Y = height - 1;
+                    left.Text = right.Text = string.Join('\n', Enumerable.Repeat("|", height - 2));
+                    left.Height = right.Height = height - 2;
+                    right.X = width - 1;
+                };
+            }
         }
     }
 
@@ -167,9 +193,12 @@ public sealed class RoofUiTheme
             button.SetScheme(scheme);
         }
 
-        if (!_colour)
+        button.ShadowStyle = ShadowStyles.None;
+        button.NoDecorations = button is TerminalButton;
+        if (button is TerminalButton ordinary)
         {
-            button.ShadowStyle = ShadowStyles.None;
+            ordinary.Ascii = Capabilities.Ascii;
+            ordinary.Width = Dim.Func(_ => TerminalCells.Width(ordinary.Text) + (ordinary.IsDefault ? 8 : 4));
         }
 
         return button;
@@ -177,7 +206,7 @@ public sealed class RoofUiTheme
 
     // A coloured button keeps its colour when focused, so Stop is always the red button: focus underlines the text.
     // Without colour, Stop is always in reverse video (filled) and the others are bold, in reverse video when focused.
-    private Scheme ButtonScheme(string text, string background, bool filled)
+    private Scheme ButtonScheme(Role text, Role background, bool filled)
     {
         var plain = filled ? TextStyle.Reverse | TextStyle.Bold : TextStyle.Bold;
         var plainFocus = TextStyle.Reverse | TextStyle.Bold | (filled ? TextStyle.Underline : TextStyle.None);
@@ -192,6 +221,147 @@ public sealed class RoofUiTheme
     }
 
     // The colours and style, or without colour, the terminal's own colours and the plain style.
-    private Attribute Of(string foreground, string background, TextStyle style = TextStyle.None, TextStyle plain = TextStyle.None)
-        => _colour ? new(new Color(foreground), new Color(background), style) : new(Color.None, Color.None, plain);
+    private Attribute Of(Role foreground, Role background, TextStyle style = TextStyle.None, TextStyle plain = TextStyle.None)
+        => Capabilities.Colours switch
+        {
+            TerminalColours.TrueColour => new(new Color(Hex(foreground)), new Color(Hex(background)), style),
+            TerminalColours.Ansi16 => new(new Color(Ansi(foreground)), new Color(Ansi(background)), style),
+            _ => new(Color.None, Color.None, plain)
+        };
+
+    /// <summary>The detected protocol and character repertoire.</summary>
+    public TerminalCapabilities Capabilities { get; }
+
+    /// <summary>Configures exact ANSI16 emission and the toolkit's glyphs before either app creates controls.</summary>
+    public void Prepare(IApplication app)
+    {
+        if (app.Driver is { } driver) driver.Force16Colors = Capabilities.Colours == TerminalColours.Ansi16;
+        // Glyphs is a read-only facade in Terminal.Gui 2.5. Set its immutable settings record;
+        // reflecting writable facade properties silently changes nothing, including password masks.
+        GlyphSettings.Current = Capabilities.Ascii ? AsciiGlyphs : UnicodeGlyphs;
+    }
+
+    private static readonly GlyphSettings UnicodeGlyphs = GlyphSettings.Default;
+    private static readonly GlyphSettings AsciiGlyphs = CreateAsciiGlyphs();
+
+    private static GlyphSettings CreateAsciiGlyphs()
+    {
+        var settings = UnicodeGlyphs with { };
+        foreach (var property in typeof(GlyphSettings).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                     .Where(property => property.PropertyType == typeof(Rune) && property.CanWrite))
+        {
+            var original = (Rune)property.GetValue(settings)!;
+            if (original.Value <= 127) continue;
+            var name = property.Name;
+            var glyph = original.Value is >= 0x2500 and <= 0x257f
+                ? name.StartsWith("HLine") ? '-' : name.StartsWith("VLine") ? '|' : '+'
+                : name == "Stipple" ? '.'
+                : name.Contains("MeterSegment") ? '#'
+                : name.StartsWith("CheckState") || name is "Selected" or "UnSelected" ? ' '
+                : name.Contains("Left") ? '<' : name.Contains("Right") ? '>'
+                : name.Contains("Up") ? '^' : name.Contains("Down") ? 'v' : '*';
+            property.SetValue(settings, new Rune(glyph));
+        }
+        return settings;
+    }
+
+    /// <summary>Styles an editable or read-only field, with a visible focus cue in every protocol.</summary>
+    public void StyleField(TextField field)
+    {
+        var ordinary = new Scheme(Panel) { Normal = Of(Role.Text, Role.Badge, Capabilities.Colours == TerminalColours.TrueColour ? TextStyle.None : TextStyle.Underline, TextStyle.Underline) };
+        var focused = new Scheme(ordinary) { Normal = Base.Focus };
+        if (field.ContextMenu is { } menu)
+        {
+            menu.SetScheme(Panel);
+            SetFrame(menu, PanelFrame);
+            if (menu.Root is { } root)
+            {
+                root.SetScheme(Panel);
+                SetFrame(root, PanelFrame);
+                foreach (var child in root.SubViews) child.SetScheme(Panel);
+            }
+        }
+        field.SetScheme(field.HasFocus ? focused : ordinary);
+        field.HasFocusChanged += (_, _) => field.SetScheme(field.HasFocus ? focused : ordinary);
+    }
+
+    /// <summary>Applies shared field/list/control styling to ordinary views, including dynamically added forms.</summary>
+    private readonly ConditionalWeakTable<CheckBox, object> _checks = new();
+    private readonly ConditionalWeakTable<View, object> _frames = new();
+    private readonly ConditionalWeakTable<View, object> _focusStyled = new();
+
+    public void Style(View view)
+    {
+        if (Capabilities.Ascii && view is CheckBox check && !_checks.TryGetValue(check, out _))
+        {
+            _checks.Add(check, new object());
+            check.DrawingContent += (_, args) =>
+            {
+                var mark = check.Value == CheckState.Checked ? (check.RadioStyle ? "(*)" : "[x]") : (check.RadioStyle ? "( )" : "[ ]");
+                check.SetAttributeForRole(!check.Enabled ? VisualRole.Disabled : check.HasFocus ? VisualRole.Focus : VisualRole.Normal);
+                check.AddStr(0, 0, TerminalCells.PadRight(TerminalCells.Take($"{mark} {check.Text}", check.Viewport.Width), check.Viewport.Width));
+                args.Cancel = true;
+            };
+            check.Width = Dim.Func(_ => TerminalCells.Width(check.Text) + 4);
+        }
+        if (view is TextField field && !_focusStyled.TryGetValue(field, out _))
+        {
+            _focusStyled.Add(field, new object());
+            StyleField(field);
+        }
+        if (view is ListView list) list.ViewportSettings |= ViewportSettingsFlags.HasVerticalScrollBar;
+        foreach (var child in view.SubViews) Style(child);
+    }
+
+    private enum Role { Background, Surface, Border, Text, Muted, Accent, AccentStrong, Success, Warning, Danger, Info, SuccessBackground, SuccessText, WarningBackground, WarningText, DangerBackground, DangerText, InfoBackground, InfoText, Badge, MutedWeak }
+    private static string Hex(Role role) => role switch
+    {
+        Role.Background => RoofUiPalette.Background,
+        Role.Surface => RoofUiPalette.Surface,
+        Role.Border => RoofUiPalette.Border,
+        Role.Text => RoofUiPalette.Text,
+        Role.Muted => RoofUiPalette.Muted,
+        Role.Accent => RoofUiPalette.Accent,
+        Role.AccentStrong => RoofUiPalette.AccentStrong,
+        Role.Success => RoofUiPalette.Success,
+        Role.Warning => RoofUiPalette.Warning,
+        Role.Danger => RoofUiPalette.Danger,
+        Role.Info => RoofUiPalette.Info,
+        Role.SuccessBackground => RoofUiPalette.SuccessBackground,
+        Role.SuccessText => RoofUiPalette.SuccessText,
+        Role.WarningBackground => RoofUiPalette.WarningBackground,
+        Role.WarningText => RoofUiPalette.WarningText,
+        Role.DangerBackground => RoofUiPalette.DangerBackground,
+        Role.DangerText => RoofUiPalette.DangerText,
+        Role.InfoBackground => RoofUiPalette.InfoBackground,
+        Role.InfoText => RoofUiPalette.InfoText,
+        Role.Badge => RoofUiPalette.Badge,
+        Role.MutedWeak => RoofUiPalette.MutedWeak,
+        _ => throw new ArgumentOutOfRangeException(nameof(role))
+    };
+    private static ColorName16 Ansi(Role role) => role switch
+    {
+        Role.Background => ColorName16.Black,
+        Role.Surface => ColorName16.Black,
+        Role.Border => ColorName16.DarkGray,
+        Role.Text => ColorName16.White,
+        Role.Muted => ColorName16.Gray,
+        Role.Accent => ColorName16.BrightCyan,
+        Role.AccentStrong => ColorName16.Blue,
+        Role.Success => ColorName16.BrightGreen,
+        Role.Warning => ColorName16.BrightYellow,
+        Role.Danger => ColorName16.BrightRed,
+        Role.Info => ColorName16.BrightCyan,
+        Role.SuccessBackground => ColorName16.Green,
+        Role.SuccessText => ColorName16.Black,
+        Role.WarningBackground => ColorName16.Yellow,
+        Role.WarningText => ColorName16.Black,
+        Role.DangerBackground => ColorName16.Red,
+        Role.DangerText => ColorName16.White,
+        Role.InfoBackground => ColorName16.Cyan,
+        Role.InfoText => ColorName16.Black,
+        Role.Badge => ColorName16.Black,
+        Role.MutedWeak => ColorName16.Gray,
+        _ => throw new ArgumentOutOfRangeException(nameof(role))
+    };
 }

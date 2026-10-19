@@ -12,7 +12,7 @@ internal sealed class RoofUiPanel : FrameView
     private readonly RoofUiTheme _theme;
     private readonly Action<RoofUiPanel> _close;
     private readonly List<Button> _buttons = [];
-    private readonly Label _error;
+    private readonly TerminalTextView _error;
 
     public RoofUiPanel(RoofUiPrompt prompt, RoofUiTheme theme, Action<RoofUiPanel> close)
     {
@@ -21,20 +21,22 @@ internal sealed class RoofUiPanel : FrameView
         Prompt = prompt;
         Title = prompt.Title;
         X = Pos.Center();
-        Y = Pos.Center();
+        Y = 2;
         Width = Dim.Percent(90);
-        Height = Dim.Auto(DimAutoStyle.Content);
+        Height = Dim.Fill(4);
         SetScheme(theme.Panel);
         theme.SetFrame(this, theme.PanelFrame);
 
+        var form = new TerminalForm { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(4) };
+        Add(form);
         var message = new Label { Text = prompt.Message, X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Text) };
-        Add(message);
+        form.Add(message);
         View previous = message;
-        var labelWidth = prompt.Fields.Count == 0 ? 0 : prompt.Fields.Max(field => field.Label.Length) + 2;
+        var labelWidth = prompt.Fields.Count == 0 ? 0 : Math.Min(42, prompt.Fields.Max(field => TerminalCells.Width(field.Label)) + 2);
         var fields = new List<TextField>();
         foreach (var field in prompt.Fields)
         {
-            var label = new Label { Text = field.Label + ":", X = 0, Y = Pos.Bottom(previous) + (fields.Count == 0 ? 1 : 0) };
+            var label = new Label { Text = field.Label + ":", X = 0, Y = Pos.Bottom(previous) + (fields.Count == 0 ? 1 : 0), Width = labelWidth - 1, Height = Dim.Auto(DimAutoStyle.Text) };
             var input = new TextField
             {
                 Text = field.Initial,
@@ -44,13 +46,14 @@ internal sealed class RoofUiPanel : FrameView
                 Y = Pos.Top(label),
                 Width = Dim.Fill()
             };
-            Add(label, input);
+            theme.StyleField(input);
+            form.Add(label, input);
             fields.Add(input);
             previous = label;
         }
 
         Fields = fields;
-        _error = new Label { X = 0, Y = Pos.Bottom(previous) + 1, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Text) };
+        _error = new TerminalTextView { X = 0, Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 2, CanFocus = false };
         _error.SetScheme(theme.PanelError);
         Add(_error);
 
@@ -61,6 +64,17 @@ internal sealed class RoofUiPanel : FrameView
         }
 
         AddButton(prompt.CloseLabel, left, () => _close(this));
+
+        SubViewLayout += (_, _) =>
+        {
+            // Pin controls to the viewport. AnchorEnd can follow an automatically expanded content size when
+            // a long form is first focused in the real loop, putting actions below the visible prompt.
+            SetContentSize(null);
+            var height = Viewport.Height;
+            form.Height = Math.Max(1, height - 4);
+            _error.Y = Math.Max(0, height - 3);
+            foreach (var button in _buttons) button.Y = Math.Max(0, height - 1);
+        };
 
         // Enter in a field runs the first action, as it would in a form.
         foreach (var input in fields.Where(input => !input.ReadOnly))
@@ -82,7 +96,7 @@ internal sealed class RoofUiPanel : FrameView
 
     public IReadOnlyList<Button> Buttons => _buttons;
 
-    public string Error => _error.Text;
+    public string Error => _error.Text.StartsWith("[ERROR] ", StringComparison.Ordinal) ? _error.Text[8..] : _error.Text;
 
     public void FocusFirst()
     {
@@ -100,7 +114,7 @@ internal sealed class RoofUiPanel : FrameView
 
     private Button AddButton(string text, View? left, Action run)
     {
-        var button = _theme.Styled(new Button { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = Pos.Bottom(_error) + 1 });
+        var button = _theme.Styled(new TerminalButton { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = Pos.AnchorEnd(1) });
         button.Accepting += (_, e) =>
         {
             e.Handled = true;
@@ -125,7 +139,8 @@ internal sealed class RoofUiPanel : FrameView
 
         if (error is not null)
         {
-            _error.Text = error;
+            _error.Text = "[ERROR] " + error;
+            _error.CanFocus = true;
             return;
         }
 

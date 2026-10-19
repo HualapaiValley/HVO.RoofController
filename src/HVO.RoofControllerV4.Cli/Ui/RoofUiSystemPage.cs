@@ -13,7 +13,7 @@ internal sealed class RoofUiSystemPage : RoofUiPage
 {
     internal const string RestartQuestion = RoofSystemText.RestartQuestion;
 
-    private readonly ListView _lines;
+    private readonly TerminalReadingView _lines;
     private string[] _information = [];
     private string[] _health = [];
     private bool _loaded;
@@ -22,8 +22,17 @@ internal sealed class RoofUiSystemPage : RoofUiPage
     public RoofUiSystemPage(RoofTerminalUi ui)
         : base(ui, "System")
     {
-        _lines = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
-        Add(_lines);
+        _lines = new TerminalReadingView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
+        var client = new FrameView { Title = "CLIENT", X = 0, Y = 0, Width = Dim.Percent(40), Height = Dim.Fill(1) };
+        var controller = new FrameView { Title = "CONTROLLER / HEALTH", X = Pos.Right(client), Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1) };
+        Ui.Theme.SetFrame(client);
+        Ui.Theme.SetFrame(controller);
+        var local = new TerminalReadingView { Width = Dim.Fill(), Height = Dim.Fill(), CanFocus = true };
+        local.Show([SelfVersion, "Transport: REST + status hub", "Controller information requires Admin.", "Readings are last read; stale data is hidden."]);
+        client.Add(local);
+        _lines.Height = Dim.Fill();
+        controller.Add(_lines);
+        Add(client, controller);
         var refresh = AddButton("Refresh", null, Reload);
         var ready = AddButton("Readiness", refresh, CheckReadiness);
         RestartButton = AddButton("Restart", ready, Restart);

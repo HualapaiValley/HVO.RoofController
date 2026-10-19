@@ -44,6 +44,10 @@ hvo_roof_install_sh() {
   # Output
 
   say() { printf '%s\n' "$*"; }
+  # ASCII structure also works in terminal defaults/NO_COLOR and survives redirected bootstrap logs.
+  heading() {
+    printf '\n-- %s --\n' "$*"
+  }
   ok() { printf '  ok    %s\n' "$*"; }
   note() { printf '  note  %s\n' "$*"; }
   failed() {
@@ -346,6 +350,7 @@ EOF
     ! have_terminal || input=/dev/tty
     if ! ${quick}; then
       say ""
+      heading "HANDOFF / verified installer"
       say "Starting hvo-roof-install ${release_version}$( ((${#sudo_command[@]} > 0)) && printf ' as root (sudo)')"
       say ""
     fi
@@ -495,7 +500,7 @@ EOF
 
   say "HVO Roof Controller ${release_version}: install.sh"
   say ""
-  say "Checking this machine"
+  heading "PRECHECK / Checking this machine"
   ok "${description} (${rid})"
 
   # ---------------------------------------------------------------------------------------------------------------------
@@ -531,7 +536,7 @@ EOF
     local choice=""
     {
       say ""
-      say "What is this machine for? (The installer asks for the rest.)"
+      heading "ROLE / What is this machine for? (The installer asks for the rest.)"
       if [ -n "${pi_model}" ]; then
         say "  1) The observatory's roof controller, which drives the real HAT, and its touchscreen kiosk (installed as root)"
         say "  2) A test rig: the controller with the HAT emulator, which moves no roof (installed as root)"

@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Redesign the roof terminal interface and installer with bounded work panels, a permanent red Stop/result area in
+  the roof UI, shared scrollable forms, exact ANSI16 and terminal-default/ASCII fallbacks, and grapheme-aware tables.
+  Installer Back, cancellation, private inputs and plan/apply boundaries retain their existing behavior (#176, #158).
 - Redesign every Web route and inline workflow with the approved responsive HVO Dark layout, canonical colours,
   grouped panels and fields, 48px controls and 320px reflow. Web now owns its styles, icon fonts and notices; remove
   the obsolete `HVO.WebSite.Themes` project and unused OpenSans assets (#174).

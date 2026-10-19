@@ -12,7 +12,7 @@ using Terminal.Gui.Views;
 namespace HVO.RoofControllerV4.Installer.Wizard;
 
 /// <summary>One page of the wizard.</summary>
-internal abstract class WizardPage : View
+internal abstract class WizardPage : TerminalForm
 {
     protected WizardPage(InstallerWizard wizard, string title)
     {
@@ -23,6 +23,7 @@ internal abstract class WizardPage : View
         Width = Dim.Fill();
         Height = Dim.Fill();
         CanFocus = true;
+        SetScheme(wizard.Theme.Panel);
     }
 
     public InstallerWizard Wizard { get; }
@@ -50,6 +51,12 @@ internal abstract class WizardPage : View
 
     /// <summary>The page as text, for tests and the log.</summary>
     public abstract IReadOnlyList<string> Describe();
+
+    protected override void OnSubViewAdded(View view)
+    {
+        base.OnSubViewAdded(view);
+        Wizard.Theme.Style(view);
+    }
 
     protected static Label Wrapping(Label label)
     {
@@ -107,8 +114,8 @@ internal abstract class WizardPage : View
 
     protected TextField Field(ref View previous, string label, string value, int width, int column = 26)
     {
-        var caption = new Label { Text = $"{label}:", X = 2, Y = Pos.Bottom(previous) + (previous is OptionSelector ? 1 : 0) };
-        var field = new TextField { X = column, Y = Pos.Top(caption), Width = width, Text = value };
+        var caption = new Label { Text = $"{label}:", X = 2, Y = Pos.Bottom(previous) + (previous is OptionSelector ? 1 : 0), Width = column - 3, Height = Dim.Auto(DimAutoStyle.Text) };
+        var field = new TextField { X = column, Y = Pos.Top(caption), Width = Dim.Func(_ => Math.Max(6, Math.Min(width, Viewport.Width - column - 1))), Text = value };
         field.TextChanged += (_, _) => Edited();
         Add(caption, field);
         previous = caption;
@@ -682,9 +689,9 @@ internal sealed class ClientPage : WizardPage
 {
     private static readonly string[] TrustLabels =
     [
-        "Its private CA: fetched from it, and trusted once you check its fingerprint",
-        "Its self-signed certificate, pinned to its fingerprint",
-        "As this machine trusts any website: a certificate of your own, or plain HTTP"
+        "Private CA: fetch, compare and confirm its fingerprint",
+        "Pin its self-signed certificate fingerprint",
+        "System HTTPS trust, or plain HTTP"
     ];
 
     private const int ByCa = 0;
@@ -759,13 +766,14 @@ internal sealed class ClientPage : WizardPage
 
         View previous = Heading(null, $"The controller {who.Name} {(who.Plural ? "connect" : "connects")} to");
         _address = Field(ref previous, "Address", client.Controller, 44);
-        _fetch = Wizard.Theme.Styled(new Button { Text = "Fetch its CA", X = Pos.Right(_address) + 2, Y = Pos.Top(_address) });
+        _fetch = Wizard.Theme.Styled(new TerminalButton { Text = "Fetch its CA", X = 26, Y = Pos.Bottom(_address) });
         _fetch.Accepting += (_, e) =>
         {
             e.Handled = true;
             Fetch();
         };
         Add(_fetch);
+        previous = _fetch;
         _address.TextChanged += (_, _) =>
         {
             _failure = null;
@@ -1010,7 +1018,7 @@ internal sealed class ReviewPage : WizardPage
     public ReviewPage(InstallerWizard wizard)
         : base(wizard, "Review the plan")
     {
-        var setup = Wizard.Theme.Styled(new Button { Text = "Approve kiosk library setup", X = 0, Y = 0 });
+        var setup = Wizard.Theme.Styled(new TerminalButton { Text = "Approve kiosk library setup", X = 0, Y = 0 });
         setup.Accepting += (_, e) =>
         {
             e.Handled = true;
@@ -1041,7 +1049,7 @@ internal sealed class ReviewPage : WizardPage
         _plan = Lines(2, 3);
         var caption = new Label { Text = "Save these answers (no secrets) to:", X = 0, Y = Pos.AnchorEnd(2) };
         _savePath = new TextField { X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill(20) };
-        _save = Wizard.Theme.Styled(new Button { Text = "Save answers", X = Pos.AnchorEnd(18), Y = Pos.AnchorEnd(1) });
+        _save = Wizard.Theme.Styled(new TerminalButton { Text = "Save answers", X = Pos.AnchorEnd(18), Y = Pos.AnchorEnd(1) });
         _save.Accepting += (_, e) =>
         {
             e.Handled = true;
@@ -1225,8 +1233,8 @@ internal sealed class PasswordsPage : WizardPage
 
     private TextField Field(ref View previous, string caption, bool first)
     {
-        var label = new Label { Text = first ? $"{Capitalised(caption)}:" : $"  {caption}:", X = 0, Y = Pos.Bottom(previous) + (first ? 1 : 0) };
-        var field = new TextField { X = Column, Y = Pos.Top(label), Width = 32, Secret = true };
+        var label = new Label { Text = first ? $"{Capitalised(caption)}:" : $"  {caption}:", X = 0, Y = Pos.Bottom(previous) + (first ? 1 : 0), Width = Column - 1, Height = Dim.Auto(DimAutoStyle.Text) };
+        var field = new TextField { X = Column, Y = Pos.Top(label), Width = Dim.Func(_ => Math.Max(6, Math.Min(32, Viewport.Width - Column - 1))), Secret = true };
         field.TextChanged += (_, _) => Edited();
         Add(label, field);
         previous = label;

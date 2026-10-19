@@ -374,7 +374,7 @@ and the Settings page's header then says the file was edited by hand.
 | F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's version, host and resource use (admin), and Restart (admin). |
 | F5 | Setup | Connection, a connection check, Sign in, Sign out, and First admin. |
 
-![hvo-roof ui on the Roof page: the Stop roof (F9) button and who is signed in above the page, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
+![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
 
 - **F9 sends Stop from every page, even over an open prompt**, and the result appears next to the button. The Stop
   button is never disabled.
@@ -423,18 +423,32 @@ and the Settings page's header then says the file was edited by hand.
 
 ### Colours
 
-The interface uses HVO Dark, the web UI's theme (`RoofUiPalette` in the client library), so it looks like the
-[web UI](web.md): light text on the dark page background, the focused control in the accent blue, **Stop red in every focus state**, Open
-and Close on raised surfaces, a stale status in the theme's warning colours, and an error in its danger colours. Terminal.Gui
-draws the theme's RGB colours, retaining its current nearest-colour fallback. The staged palette migration (#175)
-uses standalone status tones for Stop results, preserving both acknowledgement messages. Exact Sky ANSI-16 emission,
-capability detection and the complete terminal/installer redesign remain #176; these captures establish RGB styling.
+The interface follows the approved terminal layout: identity and live/stale status above bounded work panels,
+with a permanent red **Stop roof (F9)** and the newest Stop result above navigation. The Roof page separates actual
+roof state from controller readings; Settings separates groups from values; People, System and Setup keep their
+administrative actions and explanations. Long details and forms use keyboard scrolling; Tab reveals the focused field.
+The minimum is **80×24**, with more room at **120×32**. Stop stays enabled over every roof prompt.
+When validation needs more room, Tab into its bounded message and use PgUp/PgDn or Home/End to read it.
+The prompt actions and permanent Stop remain visible while reading.
 
-With `NO_COLOR` set (see [no-color.org](https://no-color.org)), the interface uses the terminal's own colours instead.
-Stop and the focused control are in reverse video, input fields are underlined, disabled controls are faint, and a
-stale status or an error is bold in reverse video. Buttons have no shadow.
+The [shared terminal theme](../src/HVO.RoofControllerV4.TerminalUi/README.md) uses the
+[canonical Sky roles](ui-redesign/tokens.json). Stop retains its red background through focus, with an underline.
+Ordinary actions use raised surfaces. Success, warning, error and information text use semantic foregrounds;
+notice foregrounds are used only with their matching backgrounds. Acknowledgement wording still reflects the actual
+response: verification unavailable is not relabelled as verified register evidence.
 
-The right-click menu of a text field keeps Terminal.Gui's own colours.
+- `COLORTERM=truecolor` or `24bit` selects RGB. Otherwise, including `TERM=xterm-256color`, the interface emits the
+  exact ANSI16 fallback names, with underlined fields because the three surfaces become Black.
+- Nonempty `NO_COLOR` or `TERM=dumb` uses the terminal's foreground/background, reverse focus/Stop, bold notices,
+  underlined inputs and faint disabled controls. Empty `NO_COLOR` leaves colour detection enabled.
+- The first nonempty `LC_ALL`, `LC_CTYPE`, then `LANG` selects Unicode only for UTF-8. Other locales and dumb/vt100
+  terminals use ASCII frames, checkbox/choice marks, buttons and scrolling cues. User text remains intact.
+- `HVO_TERMINAL=truecolor,ansi16,nocolor,ascii,unicode` is a comma-list override: the last colour/character choice wins;
+  nonempty `NO_COLOR` still wins over colour overrides. For example, `HVO_TERMINAL=ansi16,ascii hvo-roof ui`.
+
+Plain commands keep their wording, JSON and exit codes. Interactive console output can emphasize status and headings;
+redirected output receives no added escape sequences. Tables measure complete graphemes, including CJK, combining
+marks and joined emoji. Text-field context menus use the shared theme too.
 
 ### Screens
 
@@ -487,7 +501,7 @@ Nothing here needs the Pi, the HAT or the roof.
   - saves the connection with `hvo-roof setup`, checks that the credentials file is `0600` in a `0700` directory, and
     that a command works with the file alone;
   - runs a few commands and checks their exit codes;
-  - opens every page of the interface;
+  - opens every page at 80 × 24 and 120 × 32 in truecolour, ANSI16, terminal defaults and ASCII;
   - stops, with F9, a roof that another client started, and checks with `status --json` that the roof stopped short of
     the open limit;
   - checks that Esc leaves the interface open and that F10 exits 0;
@@ -497,23 +511,24 @@ Nothing here needs the Pi, the HAT or the roof.
     exited 130.
 
   The `Emulator image` workflow keeps the screens as the `terminal-screens-<run id>` artifact: each as text, with its
-  colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The screenshots above are those images.
-  To refresh them, run the smoke locally and copy the images into `docs/images/terminal/`:
-
-  ```bash
-  dotnet publish src/HVO.RoofControllerV4.Cli -c Release -r linux-x64 -o /tmp/hvo-roof
-  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/emulator/compose-smoke-test.sh
-  cp /tmp/screens/0[1-7]-*.svg docs/images/terminal/
-  ```
+  colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The controlled driver catalogue adds
+  actual provider/editor/private-input/review/confirmation/quit paths in every mode and size. Driver `.cells.json`
+  records whole graphemes and measured cells; the capture helper also draws NO_COLOR with light defaults.
+  See [the reproducible capture procedure](ui-redesign/terminal-evidence.md#reproduce-captures) for refreshing all ten
+  documentation images and the full matrix from actual output.
 - **Without Docker, and on a Mac.** `tests/cli/dotnet-run-smoke.sh` builds the controller and the HAT emulator, starts
   both with `dotnet run` on loopback (the controller in the Development environment, with a throwaway admin key), waits
   until the controller has the emulated roof closed, and runs `terminal-smoke.sh` against them. It needs the .NET SDK,
-  tmux, curl, python3 and bash 4 or later. The `CI` workflow's `mac-cli` job runs it on macOS with CI's `osx-arm64`
+  tmux, python3 and bash 4 or later. The `CI` workflow's `mac-cli` job runs it on macOS with CI's `osx-arm64`
   build, after checking the file's ad hoc signature and its version, and keeps the screens as the
   `mac-terminal-screens-<run id>` artifact:
 
   ```bash
-  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/cli/dotnet-run-smoke.sh
+  # Publish from src/ so global.json selects the pinned SDK, then return to the repository root.
+  (cd src && flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 600s \
+    dotnet publish HVO.RoofControllerV4.Cli -c Release -r linux-x64 -o /tmp/hvo-roof)
+  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/hvo-176/tmux \
+    flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 900s tests/cli/dotnet-run-smoke.sh
   ```
 
 ## Opt-in provider accounts and local Linux authorization

@@ -15,7 +15,7 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
     private readonly Label _header;
     private readonly ListView _groups;
     private readonly ListView _fields;
-    private readonly Label _detail;
+    private readonly TerminalTextView _detail;
     private RoofSettingsForm? _form;
     private bool _loading;
 
@@ -25,8 +25,16 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
         _header = new Label { X = 0, Y = 0, Width = Dim.Fill() };
         _groups = new ListView { X = 0, Y = 1, Width = 22, Height = Dim.Fill(6), CanFocus = true };
         _fields = new ListView { X = 23, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(6), CanFocus = true };
-        _detail = TextBlock(Pos.AnchorEnd(6), 5);
-        Add(_header, _groups, _fields, _detail);
+        _detail = new TerminalTextView { X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 5, CanFocus = true };
+        var groupsFrame = new FrameView { Title = "GROUPS", X = 0, Y = 1, Width = 22, Height = Dim.Fill(6) };
+        var settingsFrame = new FrameView { Title = "SETTING / VALUE", X = 23, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(6) };
+        Ui.Theme.SetFrame(groupsFrame);
+        Ui.Theme.SetFrame(settingsFrame);
+        _groups.X = _groups.Y = _fields.X = _fields.Y = 0;
+        _groups.Width = Dim.Fill(); _groups.Height = Dim.Fill(); _fields.Width = Dim.Fill(); _fields.Height = Dim.Fill();
+        groupsFrame.Add(_groups);
+        settingsFrame.Add(_fields);
+        Add(_header, groupsFrame, settingsFrame, _detail);
         _groups.ValueChanged += (_, _) => ShowFields();
         _fields.ValueChanged += (_, _) => ShowDetail();
         _fields.Accepting += (_, e) =>
@@ -139,9 +147,9 @@ internal sealed class RoofUiSettingsPage : RoofUiPage
             return;
         }
 
-        var width = group.Fields.Max(field => field.Label.Length);
+        var width = group.Fields.Max(field => TerminalCells.Width(field.Label));
         SetLines(_fields, group.Fields.Select(field =>
-            $"{field.Label.PadRight(width)}  {field.DisplayValue}{(field.CanWrite ? string.Empty : "  (read-only)")}").ToArray());
+            $"{TerminalCells.PadRight(field.Label, width)}  {field.DisplayValue}{(field.CanWrite ? string.Empty : "  (read-only)")}").ToArray());
         ShowDetail();
     }
 

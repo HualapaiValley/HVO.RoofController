@@ -73,8 +73,8 @@ public sealed class RoofCliHost
     /// </summary>
     public static RoofCliHost System(RoofCliTermination? termination = null) => new()
     {
-        Out = new RoofCliConsoleWriter(Console.Out),
-        Error = new RoofCliConsoleWriter(Console.Error),
+        Out = new RoofCliConsoleWriter(Console.IsOutputRedirected ? Console.Out : new TerminalOutputWriter(Console.Out, TerminalCapabilities.Detect(Environment.GetEnvironmentVariable))),
+        Error = new RoofCliConsoleWriter(Console.IsErrorRedirected ? Console.Error : new TerminalOutputWriter(Console.Error, TerminalCapabilities.Detect(Environment.GetEnvironmentVariable))),
         IsInteractive = !Console.IsInputRedirected,
         ReadLine = ReadConsoleLine,
         Termination = termination

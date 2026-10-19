@@ -1,4 +1,5 @@
 using System.Net;
+using FluentAssertions;
 using System.Text;
 using System.Text.Json;
 using HVO.RoofControllerV4.Cli;
@@ -54,7 +55,7 @@ internal sealed class CliRig : IDisposable
     public string CredentialsPath { get; }
 
     /// <summary>The environment the command sees; empty unless a test sets a variable.</summary>
-    public Dictionary<string, string?> Environment { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, string?> Environment { get; } = new(StringComparer.Ordinal) { ["COLORTERM"] = "truecolor", ["LANG"] = "C.UTF-8" };
 
     /// <summary>Answers to prompts, in order; a prompt past the end reads the end of the input (null).</summary>
     public Queue<string?> Input { get; } = new();
@@ -160,9 +161,18 @@ internal sealed record CliResult(int ExitCode, string Out, string Error)
 internal sealed class TuiDriver : IDisposable
 {
     private SessionToken? _session;
+    private RoofUiPanel? _capturedPanel;
+    internal static (string Mode, int Width, int Height, TestContext Context)? WorkflowProfile { get; set; }
+    private static int _captureSequence;
 
     public TuiDriver(CliRig rig, int width = 120, int height = 36)
     {
+        if (WorkflowProfile is { } profile)
+        {
+            rig.Environment["HVO_TERMINAL"] = profile.Mode;
+            width = profile.Width;
+            height = profile.Height;
+        }
         App = Application.Create(Clock);
         App.Init(DriverRegistry.Names.ANSI);
         App.Driver!.SetScreenSize(width, height);
@@ -192,6 +202,8 @@ internal sealed class TuiDriver : IDisposable
     public string Render(TestContext context, string name)
     {
         App.LayoutAndDraw(true);
+        if (WorkflowProfile is { } profile && !name.StartsWith("176-", StringComparison.Ordinal))
+            name = $"176-catalogue-{profile.Mode.Replace(',', '-')}-{profile.Width}x{profile.Height}-{name}";
         var directory = Environment.GetEnvironmentVariable("HVO_CLI_RENDERS_DIR") is { Length: > 0 } configured
             ? configured
             : Path.Combine(context.TestRunResultsDirectory ?? Path.GetTempPath(), "terminal");
@@ -199,6 +211,7 @@ internal sealed class TuiDriver : IDisposable
         var path = Path.Combine(directory, $"{name}.ans");
         File.WriteAllText(path, App.Driver!.ToAnsi());
         context.AddResultFile(path);
+        context.AddResultFile(HVO.RoofControllerV4.RPi.Tests.TestSupport.TerminalCapture.SaveCells(App, path));
         return path;
     }
 
@@ -277,7 +290,26 @@ internal sealed class TuiDriver : IDisposable
     }
 
     /// <summary>Runs what the background requests posted to the loop.</summary>
-    public void Pump() => App.TimedEvents!.RunTimers();
+    public void Pump()
+    {
+        App.TimedEvents!.RunTimers();
+        if (WorkflowProfile is { } profile && Ui.Panel is { } panel && !ReferenceEquals(_capturedPanel, panel))
+        {
+            _capturedPanel = panel;
+            App.LayoutAndDraw(true);
+            var screen = App.Driver!.ToString() ?? string.Empty;
+            screen.Contains("Stop roof (F9)", StringComparison.Ordinal).Should().BeTrue("every actual product prompt keeps the permanent Stop dock");
+            panel.FrameToScreen().Bottom.Should().BeLessThanOrEqualTo(Ui.StopButton.FrameToScreen().Y);
+            foreach (var button in panel.Buttons)
+            {
+                button.FrameToScreen().Y.Should().BeLessThan(panel.FrameToScreen().Bottom - 1, "every prompt action stays inside the visible footer");
+                screen.Contains(button.Text, StringComparison.Ordinal).Should().BeTrue("every actual prompt action is drawn; credential reveal screens are never printed");
+            }
+            var name = $"176-catalogue-{profile.Mode.Replace(',', '-')}-{profile.Width}x{profile.Height}-{Interlocked.Increment(ref _captureSequence):D4}";
+            // The one-time key reveal is drawn and behavior-tested, but no usable generated key enters an artifact.
+            if (panel.Prompt.Title is not ("New API key" or "Rotated API key")) Render(profile.Context, name);
+        }
+    }
 
     /// <summary>Moves the interface's clock on by whole seconds, one timer tick at a time.</summary>
     public void Tick(int seconds = 1)

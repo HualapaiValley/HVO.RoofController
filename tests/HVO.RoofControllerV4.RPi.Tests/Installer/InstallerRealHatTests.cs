@@ -8,6 +8,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Installer.Certificates;
 using HVO.RoofControllerV4.Installer.Deployment;
+using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.RPi.Security;
@@ -414,6 +415,34 @@ public sealed partial class InstallerRealHatTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task FixtureHostPemPreflight_PreservesTheCertificate_AndRejectsAWrongPassword(bool wrongPassword)
+    {
+        using var pi = Pi();
+        var checks = PreFlight(pi, useHostPem: true, wrongPemPassword: wrongPassword);
+        var run = await pi.RunAsync("--answers", DocsAnswers(pi));
+        (run.ExitCode == 0).Should().Be(!wrongPassword);
+
+        // Exercise the Mac-only host adapter on Linux too, without replacing the default Linux PFX path.
+        var check = checks.Should().ContainSingle().Subject;
+
+        check.IsValid.Should().Be(!wrongPassword);
+        if (wrongPassword)
+        {
+            check.Problems.Should().ContainSingle()
+                .Which.Should().Contain("certificate").And.Contain("could not be loaded");
+        }
+        else
+        {
+            check.Problems.Should().BeEmpty();
+            using var original = ControllerCertificates.LoadPfx(File.ReadAllBytes(pi.OnDisk("/etc/hvo-roof/https/roof-controller.pfx")), pi.Read(CertificatePassword))!;
+            check.Notes.Any(note => note.Contains(original.Thumbprint, StringComparison.Ordinal)).Should().BeTrue();
+        }
+        Directory.EnumerateFiles(pi.OnDisk("/tmp"), "preflight-*").Should().BeEmpty("both private adapter files are removed, including after validation failure");
+    }
+
+    [TestMethod]
     public void TheDeployScriptAndTheImage_GiveTheContainerTheSettingsTheCheckIsRunWith()
     {
         var script = DeployScript.Text();
@@ -486,7 +515,7 @@ public sealed partial class InstallerRealHatTests
     // Runs the controller's deployment check each time the deploy script runs, as its pre-flight does (after anything
     // the test does first, and with any one change to the script's settings), and stops the script when the check
     // fails, as the pre-flight does.
-    private static List<DeploymentValidationResult> PreFlight(FakeMachine pi, Action? before = null, (string Name, string Value)? change = null)
+    private static List<DeploymentValidationResult> PreFlight(FakeMachine pi, Action? before = null, (string Name, string Value)? change = null, bool useHostPem = false, bool wrongPemPassword = false)
     {
         var checks = new List<DeploymentValidationResult>();
         pi.DuringDeploy = () =>
@@ -498,7 +527,7 @@ public sealed partial class InstallerRealHatTests
                 settings[changed.Name] = changed.Value;
             }
 
-            var check = DeploymentCheck(pi, settings);
+            var check = DeploymentCheck(pi, settings, useHostPem, wrongPemPassword);
             checks.Add(check);
             pi.DeployFailure = check.IsValid ? null : PreFlightFailed;
         };
@@ -508,7 +537,7 @@ public sealed partial class InstallerRealHatTests
     // The controller's deployment check in the container the deploy script makes from its settings,
     // configured as Program configures it: the ASPNETCORE_ variables lowest, then appsettings.json (there is no
     // appsettings.Production.json), the settings files, the environment, and the secrets folder, one file per setting.
-    private static DeploymentValidationResult DeploymentCheck(FakeMachine pi, IReadOnlyDictionary<string, string> settings)
+    private static DeploymentValidationResult DeploymentCheck(FakeMachine pi, IReadOnlyDictionary<string, string> settings, bool useHostPem = false, bool wrongPemPassword = false)
     {
         var variables = new Dictionary<string, string>(settings, StringComparer.Ordinal);
         foreach (var (setting, value, orEmpty) in ScriptDefaults)
@@ -557,7 +586,49 @@ public sealed partial class InstallerRealHatTests
             ContentRootPath = contentRoot,
             ContentRootFileProvider = new NullFileProvider()
         };
+        if (OperatingSystem.IsMacOS() || useHostPem)
+        {
+            return PemPreflightOnFixtureHost(pi, configuration, host, devices.Contains(DeploymentValidator.HatBusDevicePath), wrongPemPassword);
+        }
+
         return DeploymentValidator.Validate(configuration, host, FakeMachine.Clock, hatBusPresent: devices.Contains(DeploymentValidator.HatBusDevicePath));
+    }
+
+    // The deployed controller is Linux, even when its fake machine's test host is a Mac. Apple's crypto refuses the
+    // controller's Linux-only EphemeralKeySet PFX import. Adapt only this fixture to the existing encrypted-PEM loader:
+    // the SAME generated certificate/key, configured password, validity and deployment checks remain in use. This is
+    // host-side PEM evidence, not literal execution of Linux's PFX import. Production crypto policy is unchanged.
+    private static DeploymentValidationResult PemPreflightOnFixtureHost(FakeMachine pi, ConfigurationManager configuration, IHostEnvironment host, bool hatBusPresent, bool wrongPassword)
+    {
+        const string section = "Kestrel:Certificates:Default:";
+        var password = configuration[section + "Password"]!;
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(configuration[section + "Path"]!, password, X509KeyStorageFlags.Exportable);
+        using var key = certificate.GetECDsaPrivateKey()!;
+        var basename = "/tmp/preflight-" + Guid.NewGuid().ToString("N");
+        var publicPath = basename + ".crt";
+        var keyPath = basename + ".key";
+        try
+        {
+            pi.Machine.WriteAtomically(publicPath, Encoding.UTF8.GetBytes(certificate.ExportCertificatePem()), Modes.PrivateFile);
+            pi.Machine.WriteAtomically(keyPath, Encoding.UTF8.GetBytes(key.ExportEncryptedPkcs8PrivateKeyPem(password, new PbeParameters(PbeEncryptionAlgorithm.Aes256Cbc, HashAlgorithmName.SHA256, 10_000))), Modes.PrivateFile);
+            pi.Mode(publicPath).Should().Be(Modes.PrivateFile);
+            pi.Mode(keyPath).Should().Be(Modes.PrivateFile);
+            using var publicCertificate = X509CertificateLoader.LoadCertificateFromFile(pi.OnDisk(publicPath));
+            publicCertificate.RawData.Should().Equal(certificate.RawData);
+            publicCertificate.HasPrivateKey.Should().BeFalse();
+            configuration[section + "Path"] = pi.OnDisk(publicPath);
+            configuration[section + "KeyPath"] = pi.OnDisk(keyPath);
+            if (wrongPassword)
+                configuration[section + "Password"] = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            else
+                (configuration[section + "Password"] == password).Should().BeTrue();
+            return DeploymentValidator.Validate(configuration, host, FakeMachine.Clock, hatBusPresent);
+        }
+        finally
+        {
+            File.Delete(pi.OnDisk(keyPath));
+            File.Delete(pi.OnDisk(publicPath));
+        }
     }
 
     // A line of the script as bash reads it: its words, unquoted, with ${NAME} given.

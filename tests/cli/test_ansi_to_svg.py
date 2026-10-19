@@ -8,6 +8,7 @@ import importlib.util
 import pathlib
 import re
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ElementTree
 
 _spec = importlib.util.spec_from_file_location("ansi_to_svg", pathlib.Path(__file__).with_name("ansi-to-svg.py"))
@@ -31,6 +32,28 @@ def fills(svg, tag):
 
 
 class AnsiToSvgTests(unittest.TestCase):
+    def test_actual_driver_cells_keep_joined_graphemes_on_the_measured_grid(self):
+        def cell(text, columns):
+            return dict(text=text, columns=columns, foreground=None, background=None,
+                        bold=False, dim=False, underline=False, reverse=False)
+        rows = ansi_to_svg.parse_cells([[cell("👩🏽‍🔬", 2), None, cell("x", 1)]])
+        self.assertEqual(3, len(rows[0]))
+        self.assertTrue(ansi_to_svg.is_wide(rows[0][0][0]))
+        svg = ElementTree.fromstring(ansi_to_svg.render(rows, "driver"))
+        self.assertEqual(["👩🏽‍🔬", "x"], texts(svg))
+        elements = list(svg.iter(f"{SVG}text"))
+        self.assertEqual("16.80", elements[1].get("textLength"))
+        self.assertEqual("28.80", elements[2].get("x"))
+
+    def test_local_host_mask_uses_cells_after_a_joined_grapheme(self):
+        style = ansi_to_svg.Style()
+        rows = [[(ansi_to_svg.CellGlyph("👩🏽‍🔬", 2), style), None] + [(c, style) for c in " host-test done"]]
+        with patch.object(ansi_to_svg.socket, "gethostname", return_value="host-test"):
+            ansi_to_svg.mask_local_host(rows)
+        text = ''.join(cell[0] for cell in rows[0] if cell)
+        self.assertEqual("👩🏽‍🔬 [host]    done", text)
+        self.assertEqual(17, len(rows[0]))
+
     def test_a_combining_mark_stays_with_its_letter(self):
         svg = draw("Name: José  Role: admin\n")
         self.assertIn("Name: José", texts(svg))
