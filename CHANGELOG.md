@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Redesign the roof terminal interface and installer with bounded work panels, a permanent red Stop/result area in
+  the roof UI, shared scrollable forms, exact ANSI16 and terminal-default/ASCII fallbacks, and grapheme-aware tables.
+  Installer Back, cancellation, private inputs and plan/apply boundaries retain their existing behavior (#176, #158).
+
 - Compose starts verify the supervisor's own cgroup v2 CPU quota, memory, zero swap and PID limits against the
   configured expectations. Missing, unlimited, unreadable, malformed or different limits, cgroup v1 and unverifiable
   placement refuse both applications (exit 2). The supervisor still turns every relay off and verifies the register,

@@ -51,7 +51,7 @@ internal sealed class CliRig : IDisposable
     public string CredentialsPath { get; }
 
     /// <summary>The environment the command sees; empty unless a test sets a variable.</summary>
-    public Dictionary<string, string?> Environment { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, string?> Environment { get; } = new(StringComparer.Ordinal) { ["COLORTERM"] = "truecolor", ["LANG"] = "C.UTF-8" };
 
     /// <summary>Answers to prompts, in order; a prompt past the end reads the end of the input (null).</summary>
     public Queue<string?> Input { get; } = new();

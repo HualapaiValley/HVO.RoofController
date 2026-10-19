@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exact final terminal files, without credentials, controller, install/apply or host commands.
 
-Runs offline help/version/notices/nonterminal refusal, then first-page PTYs at 80x24 and
-120x32. All HOME/XDG/cache/temp/extraction paths are private. An empty PATH disables survey
+Runs offline help/version/notices/nonterminal refusal, then bounded PTYs at 80x24 and
+120x32 in all colour/border modes, navigating all roof pages and a private prompt plus installer Back/cancel. All HOME/XDG/cache/temp/extraction paths are private. An empty PATH disables survey
 subprocesses; a clean non-root host with no Roof installation is required. Broader page and
 prompt coverage uses Terminal.Gui/fake-machine tests; CLI/emulator tmux smoke stays separate.
 """
@@ -35,7 +35,7 @@ def require(condition, message):
     if not condition: raise RuntimeError(message)
 
 
-def pty_start(program, args, env, cwd, columns, rows, installer, output):
+def pty_start(program, args, env, cwd, columns, rows, installer, output, workflow=False):
     # Set the size before the child starts; waitpid is always nonblocking and bounded.
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
@@ -47,6 +47,12 @@ def pty_start(program, args, env, cwd, columns, rows, installer, output):
         os.chdir(cwd); os.execve(program,[program,*args],env)
     os.close(slave)
     captured=bytearray(); deadline=time.monotonic()+TIMEOUT; sent=False; status=None
+    steps = ([(b'\r', ('What to install',)), (b'\x1b', ('This machine',))] if installer else
+             [(b'\x1bOP', ('F1 Roof',)), (b'\x1bOQ', ('F2 Settings',)),
+              (b'\x1bOR', ('F3 People',)), (b'\x1bOS', ('F4 System',)),
+              (b'\x1b[15~', ('F5 Setup',)), (b'\t\r', ('Save and check',)),
+              (b'\x1b[20~', ('Stop failed:',)), (b'\x1b', ('F5 Setup',))]) if workflow else []
+    step = -1; since = 0
     try:
         while time.monotonic()<deadline:
             ready,_,_=select.select([master],[],[],0.1)
@@ -59,15 +65,22 @@ def pty_start(program, args, env, cwd, columns, rows, installer, output):
             require(len(captured)<4*1024*1024,'PTY output exceeded bound')
             screen=ESCAPES.sub('',captured.decode('utf-8','replace'))
             expected=('HVO Roof installer','This machine','F10') if installer else ('HVO roof','Setup','F9')
-            if not sent and all(t in screen for t in expected):
-                # F10 is xterm's ESC[21~. Esc goes Back in Roof's installer.
-                os.write(master,b'\x1b[21~'); sent=True
+            recent = ESCAPES.sub('', captured[since:].decode('utf-8', 'replace'))
+            ready_for_step = not sent and (all(t in screen for t in expected) if step < 0 else all(t in recent for t in steps[step][1]))
+            if not sent and ready_for_step:
+                step += 1
+                if step < len(steps):
+                    since = len(captured)
+                    os.write(master, steps[step][0])
+                else:
+                    # F10 is xterm's ESC[21~. Esc goes Back in Roof's installer.
+                    os.write(master,b'\x1b[21~'); sent=True
             done,status_now=os.waitpid(pid,os.WNOHANG)
             if done:
                 status=status_now; break
         require(status is not None,'PTY child timed out (including after F10)')
         code=os.waitstatus_to_exitcode(status)
-        require(sent and code==(130 if installer else 0),f'PTY startup/F10 at {columns}x{rows}: exit {code}; output={screen[-1500:]}')
+        require(sent and code==(130 if installer else 9 if workflow else 0),f'PTY startup/F10 at {columns}x{rows}: exit {code}; output={screen[-1500:]}')
     finally:
         if status is None:
             os.killpg(pid,signal.SIGKILL); os.waitpid(pid,0)
@@ -112,9 +125,15 @@ def main():
             # The option terminates even before a command that would otherwise mutate or authorize.
             run('notices-before-command',['uninstall' if installer else 'open','--third-party-notices'],0,exact=notice)
             run('no-terminal',[] if installer else ['ui'],2,'terminal')
+            modes = ['truecolor,unicode', 'ansi16,unicode', 'nocolor,unicode', 'ansi16,ascii']
             for width,height in [(80,24),(120,32)]:
-                pty_start(program,[] if installer else ['ui'],env,home/'work',width,height,installer,
-                          args.output/f'{name}-{width}x{height}.ans')
+                for mode in modes:
+                    mode_env = dict(env, HVO_TERMINAL=mode)
+                    capture = args.output/f'{name}-{width}x{height}-{mode.replace(",", "-")}.ans'
+                    pty_start(program,[] if installer else ['ui'],mode_env,home/'work',width,height,installer,capture, workflow=True)
+                    drawn = capture.read_bytes()
+                    if mode.startswith('ansi16'):
+                        require(re.search(rb'\x1b\[[0-9;]*(?:38|48);(?:2|5);', drawn) is None, 'ANSI16 emitted extended colour escapes')
             files=[p.relative_to(home).as_posix() for p in home.rglob('*') if p.is_file()]
             require(not any('onigwrap' in f.lower() for f in files),'onigwrap extracted')
             require(not any(f.startswith(('config/','data/','extract/','work/')) for f in files),
@@ -123,9 +142,9 @@ def main():
             allowed={'state/hvo-roof/install.log','Library/Logs/hvo-roof-install.log'} if installer else set()
             require(set(files)<=allowed,'unexpected private files: '+str(files))
             records.append(dict(program=name,rid=args.rid,sha256=payload['sha256'],private_files=files,
-                                notices_sha256=hashlib.sha256(notice).hexdigest(),pty_sizes=[[80,24],[120,32]]))
+                                notices_sha256=hashlib.sha256(notice).hexdigest(),pty_sizes=[[80,24],[120,32]], modes=modes, workflow="roof pages/private prompt/F9 or installer roles/Back/cancel"))
     (args.output/'runtime-summary.json').write_text(json.dumps(records,indent=2)+'\n')
-    print('PASS final installer and CLI: offline help/version/notices, no-TTY, both PTY sizes; no install/answers/extraction')
+    print('PASS final installer and CLI: offline help/version/notices, no-TTY, all-mode PTY workflows at both sizes; no install/answers/extraction')
 
 
 if __name__=='__main__':

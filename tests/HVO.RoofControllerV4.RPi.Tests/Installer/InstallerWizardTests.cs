@@ -57,7 +57,7 @@ public sealed class InstallerWizardTests
         wizard.Wizard.NextButton.Enabled.Should().BeTrue();
 
         ShouldHaveColours(wizard.ColoursOf("Step 1 of 6"), RoofUiPalette.Text, RoofUiPalette.Surface);
-        ShouldHaveColours(wizard.ColoursOf("Machine:"), RoofUiPalette.Text, RoofUiPalette.Background);
+        ShouldHaveColours(wizard.ColoursOf("Machine:"), RoofUiPalette.Text, RoofUiPalette.Surface);
         ShouldHaveColours(wizard.ColoursOf("F10"), RoofUiPalette.Accent, RoofUiPalette.Badge);
         ShouldHaveColours(wizard.ColoursOf("Quit"), RoofUiPalette.Muted, RoofUiPalette.Badge);
         wizard.Render(TestContext, "1-machine");
@@ -507,7 +507,7 @@ public sealed class InstallerWizardTests
         wizard.Wizard.Installing.Should().BeFalse();
         installing.Describe()[^1].Should().Be($"Creating file {InstallPaths.SystemRecord}: done.");
         wizard.Page.Describe().Should().Equal(["The install finished.", .. wizard.Session.DoneLines()]);
-        ShouldHaveColours(wizard.ColoursOf("The install finished."), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton);
+        ShouldHaveColours(wizard.ColoursOf("The install finished."), RoofUiPalette.Text, RoofUiPalette.Badge);
         wizard.Screen.Should().Contain("The controller's API:  https://roofpi.local:8443/")
             .And.Contain("Clients trust its CA:  /etc/hvo-roof/ca.crt, or https://roofpi.local:8443/ca.crt")
             .And.Contain(ControllerCertificates.Fingerprint(X509Certificate2.CreateFromPem(pi.Read("/etc/hvo-roof/ca.crt"))))

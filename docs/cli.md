@@ -374,7 +374,7 @@ and the Settings page's header then says the file was edited by hand.
 | F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's version, host and resource use (admin), and Restart (admin). |
 | F5 | Setup | Connection, a connection check, Sign in, Sign out, and First admin. |
 
-![hvo-roof ui on the Roof page: the Stop roof (F9) button and who is signed in above the page, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
+![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
 
 - **F9 sends Stop from every page, even over an open prompt**, and the result appears next to the button. The Stop
   button is never disabled.
@@ -423,16 +423,30 @@ and the Settings page's header then says the file was edited by hand.
 
 ### Colours
 
-The interface uses HVO Dark, the web UI's theme (`RoofUiPalette` in the client library), so it looks like the
-[web UI](web.md): light text on the dark page background, the focused control in the accent blue, **Stop yellow**, Open
-green and Close red, a stale status in the theme's warning colours, and an error in its danger colours. Terminal.Gui
-draws the theme's colours in true colour, or as the nearest of 256 or 16 colours when that is all the terminal has.
+The interface follows the approved terminal layout: identity and live/stale status above bounded work panels,
+with a permanent red **Stop roof (F9)** and the newest Stop result above navigation. The Roof page separates actual
+roof state from controller readings; Settings separates groups from values; People, System and Setup keep their
+administrative actions and explanations. Long details and forms use keyboard scrolling; Tab reveals the focused field.
+The minimum is **80×24**, with more room at **120×32**. Stop stays enabled over every roof prompt.
 
-With `NO_COLOR` set (see [no-color.org](https://no-color.org)), the interface uses the terminal's own colours instead.
-Stop and the focused control are in reverse video, input fields are underlined, disabled controls are faint, and a
-stale status or an error is bold in reverse video. Buttons have no shadow.
+The [shared terminal theme](../src/HVO.RoofControllerV4.TerminalUi/README.md) uses the
+[canonical Sky roles](ui-redesign/tokens.json). Stop retains its red background through focus, with an underline.
+Ordinary actions use raised surfaces. Success, warning, error and information text use semantic foregrounds;
+notice foregrounds are used only with their matching backgrounds. Acknowledgement wording still reflects the actual
+response: verification unavailable is not relabelled as verified register evidence.
 
-The right-click menu of a text field keeps Terminal.Gui's own colours.
+- `COLORTERM=truecolor` or `24bit` selects RGB. Otherwise, including `TERM=xterm-256color`, the interface emits the
+  exact ANSI16 fallback names, with underlined fields because the three surfaces become Black.
+- Nonempty `NO_COLOR` or `TERM=dumb` uses the terminal's foreground/background, reverse focus/Stop, bold notices,
+  underlined inputs and faint disabled controls. Empty `NO_COLOR` leaves colour detection enabled.
+- The first nonempty `LC_ALL`, `LC_CTYPE`, then `LANG` selects Unicode only for UTF-8. Other locales and dumb/vt100
+  terminals use ASCII frames, checkbox/choice marks, buttons and scrolling cues. User text remains intact.
+- `HVO_TERMINAL=truecolor,ansi16,nocolor,ascii,unicode` is a comma-list override: the last colour/character choice wins;
+  nonempty `NO_COLOR` still wins over colour overrides. For example, `HVO_TERMINAL=ansi16,ascii hvo-roof ui`.
+
+Plain commands keep their wording, JSON and exit codes. Interactive console output can emphasize status and headings;
+redirected output receives no added escape sequences. Tables measure complete graphemes, including CJK, combining
+marks and joined emoji. Text-field context menus use the shared theme too.
 
 ### Screens
 
@@ -495,7 +509,7 @@ Nothing here needs the Pi, the HAT or the roof.
     exited 130.
 
   The `Emulator image` workflow keeps the screens as the `terminal-screens-<run id>` artifact: each as text, with its
-  colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The screenshots above are those images.
+  colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. Driver captures also cover prompts and fallback modes.
   To refresh them, run the smoke locally and copy the images into `docs/images/terminal/`:
 
   ```bash

@@ -320,7 +320,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The certificate something presents on a loopback port, by port (as the controller would).</summary>
     public Dictionary<int, X509Certificate2> ServedCertificates { get; } = [];
 
-    public Dictionary<string, string> Environment { get; } = new(StringComparer.Ordinal) { ["PATH"] = "/usr/local/bin:/usr/bin:/bin" };
+    public Dictionary<string, string> Environment { get; } = new(StringComparer.Ordinal) { ["PATH"] = "/usr/local/bin:/usr/bin:/bin", ["COLORTERM"] = "truecolor", ["LANG"] = "C.UTF-8" };
 
     /// <summary>Programs on the PATH, by name: their full paths.</summary>
     public Dictionary<string, string> Programs { get; } = new(StringComparer.Ordinal);

@@ -419,7 +419,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, rid: linux-arm64 }
           - { runner: macos-latest, rid: osx-arm64 }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -457,6 +457,16 @@ jobs:
           HVO_TERMINAL_DIST: ${{ runner.temp }}/terminal-dist
         working-directory: src
         run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --filter FullyQualifiedName~TerminalInstalledNoticeTests -- RunConfiguration.TreatNoTestsAsError=true
+      # #176 runs the complete controlled driver catalogue against assemblies from these exact final bundles.
+      - name: Build the controlled terminal workflow harness
+        working-directory: src
+        run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
+      - name: Exercise final distributed terminal workflows
+        working-directory: src
+        run: |
+          python3 ../tests/releasing/check-terminal-workflows.py "$RUNNER_TEMP/terminal-dist" \
+            --rid "${{ matrix.rid }}" --tests ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Release/net10.0 \
+            --output "$RUNNER_TEMP/terminal-evidence/workflows"
       - name: Upload exact-file runtime evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

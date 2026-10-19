@@ -481,6 +481,12 @@ choices.
 
 ## The wizard
 
+The wizard uses the [shared terminal capabilities](cli.md#the-terminal-interface): RGB, exact ANSI16, terminal-default
+`NO_COLOR`, and ASCII controls/frames, with `HVO_TERMINAL` overrides. It fits 80×24 and expands at 120×32. Tab reveals
+fields after long explanations; Page Up/Down scroll the bounded form or plan. Validation/recovery messages and the
+Back/Next/cancellation key bar remain outside that region. Passwords and PINs stay masked and are never saved in answers.
+This installer has no roof-motion interface. Bootstrap prechecks use ASCII section headings and explicit outcome words.
+
 The wizard has up to eight steps. A step with nothing to ask for the roles chosen is passed over, and not counted:
 step 4 asks about the controller for the controller or a rig, and about the connection to it for `hvo-roof` and the
 Mac app; step 6 comes only when the plan needs a password. The key bar says

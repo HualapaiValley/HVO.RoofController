@@ -60,8 +60,8 @@ public sealed class InstallerHost
     /// <summary>This process, on the machine it runs on.</summary>
     public static InstallerHost System() => new()
     {
-        Out = Console.Out,
-        Error = Console.Error,
+        Out = Console.IsOutputRedirected ? Console.Out : new TerminalOutputWriter(Console.Out, TerminalCapabilities.Detect(Environment.GetEnvironmentVariable)),
+        Error = Console.IsErrorRedirected ? Console.Error : new TerminalOutputWriter(Console.Error, TerminalCapabilities.Detect(Environment.GetEnvironmentVariable)),
         Machine = InstallerMachine.Current(),
         IsInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected,
         ReadSecret = ReadSecretFromTerminal,

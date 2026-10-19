@@ -13,7 +13,7 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 internal sealed class RoofUiSetupPage : RoofUiPage
 {
     private readonly RoofCliSetup _setup;
-    private readonly ListView _lines;
+    private readonly TerminalReadingView _lines;
     private RoofCliSetup.Check? _check;
     private RoofCliConnection? _checked;
 
@@ -21,8 +21,12 @@ internal sealed class RoofUiSetupPage : RoofUiPage
         : base(ui, "Setup")
     {
         _setup = new RoofCliSetup(ui.Context);
-        _lines = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
-        Add(_lines);
+        _lines = new TerminalReadingView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
+        var connectionPanel = new FrameView { Title = "CONNECTION / TRUST", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1) };
+        Ui.Theme.SetFrame(connectionPanel);
+        _lines.Height = Dim.Fill();
+        connectionPanel.Add(_lines);
+        Add(connectionPanel);
         var connection = AddButton("Connection", null, EditConnection);
         var check = AddButton("Check", connection, () => CheckConnection());
         var signIn = AddButton("Sign in", check, SignIn);

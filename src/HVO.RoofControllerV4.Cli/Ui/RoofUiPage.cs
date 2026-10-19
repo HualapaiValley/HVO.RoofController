@@ -17,6 +17,7 @@ internal abstract class RoofUiPage : View
         Width = Dim.Fill();
         Height = Dim.Fill();
         CanFocus = true;
+        SetScheme(ui.Theme.Panel);
     }
 
     private readonly Dictionary<ListView, IReadOnlyList<string>> _lines = [];
@@ -50,7 +51,7 @@ internal abstract class RoofUiPage : View
 
     protected Button AddButton(string text, View? left, Action run, Pos? y = null)
     {
-        var button = Ui.Theme.Styled(new Button { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = y ?? Pos.AnchorEnd(1) });
+        var button = Ui.Theme.Styled(new TerminalButton { Text = text, X = left is null ? 0 : Pos.Right(left) + 1, Y = y ?? Pos.AnchorEnd(1) });
         button.Accepting += (_, e) =>
         {
             e.Handled = true;
@@ -58,6 +59,12 @@ internal abstract class RoofUiPage : View
         };
         Add(button);
         return button;
+    }
+
+    protected override void OnSubViewAdded(View view)
+    {
+        base.OnSubViewAdded(view);
+        Ui.Theme.Style(view);
     }
 
     protected static Label TextBlock(Pos y, Dim height) => new() { X = 0, Y = y, Width = Dim.Fill(), Height = height };
@@ -80,6 +87,11 @@ internal abstract class RoofUiPage : View
     protected void SetLines(ListView list, IReadOnlyList<string> lines)
     {
         _lines[list] = lines;
+        if (list is TerminalReadingView reading)
+        {
+            reading.Show(lines);
+            return;
+        }
         var selected = list.SelectedItem;
         list.SetSource(new ObservableCollection<string>(lines));
         if (lines.Count > 0)

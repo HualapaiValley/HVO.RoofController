@@ -118,7 +118,7 @@ public static class PlanText
     {
         ArgumentNullException.ThrowIfNull(plan);
         var lines = new List<string>();
-        var width = Math.Min(44, plan.Steps.Select(step => step.Step.Target.Length).DefaultIfEmpty(0).Max());
+        var width = Math.Min(44, plan.Steps.Select(step => TerminalCells.Width(step.Step.Target)).DefaultIfEmpty(0).Max());
         foreach (var kind in Order)
         {
             var steps = plan.Steps.Where(step => step.Step.Kind == kind).ToArray();
@@ -132,7 +132,7 @@ public static class PlanText
             {
                 var detail = check.Detail is null || check.Change == StepChange.Blocked ? string.Empty : $" ({check.Detail})";
                 var word = kind == StepKind.Check && check.MakesChange ? "run" : Word(check.Change);
-                lines.Add($"  {word,-9}  {step.Target.PadRight(width)}  {step.Purpose}{detail}");
+                lines.Add($"  {word,-9}  {TerminalCells.PadRight(step.Target, width)}  {step.Purpose}{detail}");
                 if (check.Change == StepChange.Blocked && check.Detail is not null)
                 {
                     lines.Add($"  {string.Empty,-9}  {check.Detail}");

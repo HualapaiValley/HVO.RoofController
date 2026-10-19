@@ -16,14 +16,24 @@ internal sealed class RoofUiRoofPage : RoofUiPage
 
     private readonly Label _status;
     private readonly Label _blocked;
+    private readonly TerminalReadingView _state;
+    private readonly TerminalReadingView _readings;
     private bool _commandInFlight;
 
     public RoofUiRoofPage(RoofTerminalUi ui)
         : base(ui, "Roof")
     {
-        _status = TextBlock(0, Dim.Fill(2));
-        _blocked = new Label { X = 0, Y = Pos.AnchorEnd(2), Width = Dim.Fill() };
-        Add(_status, _blocked);
+        _status = TextBlock(0, 1);
+        var state = new FrameView { Title = "ROOF STATE", X = 0, Y = 1, Width = Dim.Percent(50), Height = Dim.Fill(3) };
+        var readings = new FrameView { Title = "CONTROLLER READINGS", X = Pos.Right(state), Y = 1, Width = Dim.Fill(), Height = Dim.Fill(3) };
+        Ui.Theme.SetFrame(state);
+        Ui.Theme.SetFrame(readings);
+        _state = new TerminalReadingView { Width = Dim.Fill(), Height = Dim.Fill(), CanFocus = true };
+        _readings = new TerminalReadingView { Width = Dim.Fill(), Height = Dim.Fill(), CanFocus = true };
+        state.Add(_state);
+        readings.Add(_readings);
+        _blocked = new Label { X = 0, Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 2 };
+        Add(_status, state, readings, _blocked);
         OpenButton = AddButton("Open", null, () => Move(RoofMotionDirection.Opening));
         CloseButton = AddButton("Close", OpenButton, () => Move(RoofMotionDirection.Closing));
         OpenButton.SetScheme(Ui.Theme.Open);
@@ -47,6 +57,8 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         var status = Ui.Status;
         if (status is null)
         {
+            _state.Show([]);
+            _readings.Show([]);
             _status.Text = Ui.Connection is null
                 ? "No controller is configured. Use Setup (F5) to add its address and a credential."
                 : "No status from the controller yet.";
@@ -56,7 +68,13 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             var heading = Ui.StaleSince is { } since
                 ? $"LAST KNOWN STATE, as of {RoofCliFormat.Time(status.SnapshotUtc)} (no status since {RoofCliFormat.Time(since)}). It may not be the roof's state now."
                 : $"Status at {RoofCliFormat.Time(status.SnapshotUtc)}";
-            _status.Text = heading + "\n\n" + Rows(RoofCliFormat.DescribeStatus(status));
+            _status.Text = $"{(Ui.IsStale ? "LAST KNOWN" : "LIVE")}: {RoofCliFormat.DescribeRoof(status)}";
+            _status.SetScheme(status.IsFaultLatched ? Ui.Theme.Danger : Ui.IsStale ? Ui.Theme.Warning : Ui.Theme.Header);
+            var rows = RoofCliFormat.DescribeStatus(status);
+            _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Lease" or "Watchdog" or "Last error")
+                .Select(row => $"{row.Label}:  {row.Value}").Prepend(heading).ToArray());
+            _readings.Show(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Lease" or "Watchdog" or "Last error"))
+                .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status)).ToArray());
         }
 
         var open = BlockReason(RoofMotionDirection.Opening);
@@ -68,7 +86,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         _blocked.Text = RoofCommandRules.DescribeMotionBlocks(open, close) ?? string.Empty;
     }
 
-    public override string Describe() => $"{_status.Text}\n{_blocked.Text}";
+    public override string Describe() => string.Join('\n', (Ui.Status is null ? new[] { _status.Text } : _state.Lines).Concat(_readings.Lines).Append(_blocked.Text));
 
     /// <summary>
     /// Why Open or Close is not offered; null when it is. The rules every client shares (RoofCommandRules), and quitting,

@@ -29,7 +29,8 @@ internal sealed class RoofTerminalUi : IDisposable
     private readonly Label _stopResult;
     private readonly Label _banner;
     private readonly FrameView _content;
-    private readonly Label _message;
+    private readonly TerminalTextView _message;
+    private string? _identity;
     private readonly CancellationTokenSource _closing = new();
     private RoofUiPanel? _panel;
     private RoofUiPage? _page;
@@ -82,28 +83,56 @@ internal sealed class RoofTerminalUi : IDisposable
         _context = context;
         _app = app;
         Theme = RoofUiTheme.For(context.Host.GetEnvironmentVariable);
+        Theme.Prepare(app);
 
         Window = new Window { Title = WindowTitle(null), X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
         Window.SetScheme(Theme.Base);
         Theme.SetFrame(Window, Theme.WindowFrame);
 
-        // Stop comes first, so it is also the first control that takes focus.
-        StopButton = Theme.Styled(new Button { Text = $"{RoofStopText.ButtonLabel} (F9)", X = 0, Y = 0 }, Theme.Stop);
-        StopButton.Accepting += (_, e) =>
-        {
-            e.Handled = true;
-            Stop();
-        };
-        // The Stop result, the banner and the message wrap, so a narrow terminal still shows all of each: the page gets
-        // the rows they leave.
+        // Permanent bottom control/result area, outside pages and prompts. Its height follows the newest result.
+        StopButton = Theme.Styled(new TerminalButton { Text = $"{RoofStopText.ButtonLabel} (F9)", X = 0, Y = 0 }, Theme.Stop);
+        StopButton.Accepting += (_, e) => { e.Handled = true; Stop(); };
         _stopResult = Wrapping(new Label { Text = RoofStopText.AlwaysAvailable, X = Pos.Right(StopButton) + 2, Y = 0 });
-        _header = new Label { X = 0, Y = Pos.Bottom(_stopResult), Width = Dim.Fill() };
+        var stopDock = new View { X = 0, Y = Pos.AnchorEnd() - 2, Width = Dim.Fill(), Height = Dim.Auto(DimAutoStyle.Content) };
+        stopDock.Add(StopButton, _stopResult);
+
+        _header = new Label { Text = "HVO ROOF CONTROLLER", X = 0, Y = 0, Width = Dim.Fill() };
         _header.SetScheme(Theme.Header);
-        _banner = Wrapping(new Label { X = 0, Y = Pos.Bottom(_header) });
-        _message = Wrapping(new Label { X = 0, Y = Pos.AnchorEnd() - 1 });
+        _banner = Wrapping(new Label { X = 0, Y = 1 });
+        _message = new TerminalTextView { X = 0, Width = Dim.Fill(), Height = 1, CanFocus = false };
         _content = new FrameView { X = 0, Y = Pos.Bottom(_banner), Width = Dim.Fill(), Height = Dim.Fill(_message) };
+        _content.SetScheme(Theme.Panel);
         Theme.SetFrame(_content);
-        Window.Add(StopButton, _stopResult, _header, _banner, _content, _message, Theme.CreateKeyBar(Keys));
+        var navigation = Theme.CreateKeyBar(Keys);
+        navigation.Y = Pos.AnchorEnd(2);
+        Window.Add(stopDock, _header, _banner, _content, _message, navigation, new Label { Text = "Tab move  Enter select  Esc close prompt  PgUp/PgDn read", X = 0, Y = Pos.AnchorEnd(1), Width = Dim.Fill() });
+
+        Window.SubViewLayout += (_, _) =>
+        {
+            var width = Math.Max(24, Window.Viewport.Width);
+            var height = Window.Viewport.Height;
+            var stopWidth = Math.Max(1, width - 20);
+            var stopRows = CellRows(_stopResult.Text, stopWidth);
+            StopButton.Width = 18;
+            _stopResult.X = 20;
+            _stopResult.Width = stopWidth;
+            _stopResult.Height = stopRows;
+            stopDock.Height = stopRows;
+            stopDock.Y = Math.Max(0, height - 2 - stopRows);
+            var messageRows = string.IsNullOrEmpty(_message.Text) ? 0 : CellRows(_message.Text, width);
+            var bannerRows = string.IsNullOrEmpty(_banner.Text) ? 1 : CellRows(_banner.Text, width);
+            _banner.Height = bannerRows;
+            var shownMessageRows = Math.Min(messageRows, Math.Max(0, height - 2 - stopRows - 1 - bannerRows - 4));
+            _message.Height = shownMessageRows;
+            _message.Y = Math.Max(0, height - 2 - stopRows - shownMessageRows);
+            _content.Y = 1 + bannerRows;
+            _content.Height = Math.Max(0, height - 2 - stopRows - shownMessageRows - 1 - bannerRows);
+            if (_identity is not null)
+            {
+                var feed = $"{(Theme.Capabilities.Ascii ? " |" : " ·")} status {DescribeFeed()}";
+                _header.Text = "HVO ROOF  |  " + TerminalCells.Take(_identity, Math.Max(0, width - 13 - TerminalCells.Width(feed))) + feed;
+            }
+        };
 
         _pages =
         [
@@ -130,6 +159,9 @@ internal sealed class RoofTerminalUi : IDisposable
         label.TextFormatter.WordWrap = true;
         return label;
     }
+
+    private static int CellRows(string text, int width)
+        => Math.Max(1, text.Split('\n').Sum(line => TerminalCells.Wrap(line, width).Count()));
 
     public Button StopButton { get; }
 
@@ -293,7 +325,9 @@ internal sealed class RoofTerminalUi : IDisposable
         _content.Title = $"F{index + 1} {page.Title}";
         _content.Add(page);
         page.Shown();
+        Theme.Style(page);
         page.SetFocus();
+        if (page is RoofUiRoofPage roof && roof.OpenButton.Enabled) roof.OpenButton.SetFocus();
     }
 
     /// <summary>
@@ -589,6 +623,7 @@ internal sealed class RoofTerminalUi : IDisposable
     public void Say(string text, bool error = false)
     {
         _message.Text = text;
+        _message.CanFocus = !string.IsNullOrEmpty(text);
         _message.SetScheme(error ? Theme.Danger : Theme.Base);
     }
 
@@ -671,6 +706,8 @@ internal sealed class RoofTerminalUi : IDisposable
         });
         _panel = panel;
         _content.Enabled = false;
+        panel.Y = Pos.Top(_content);
+        panel.Height = Dim.Func(_ => Math.Max(5, _content.Frame.Height));
         Window.Add(panel);
         panel.FocusFirst();
     }
@@ -834,6 +871,7 @@ internal sealed class RoofTerminalUi : IDisposable
     {
         if (Connection is not { } connection)
         {
+            _identity = null;
             _header.Text = ConnectionProblem ?? "Not configured.";
             return;
         }
@@ -842,7 +880,8 @@ internal sealed class RoofTerminalUi : IDisposable
             ? $"{caller.Name} ({RoofCliFormat.Role(caller.Role)}{(caller.Kind == RoofCredentialKind.ApiKey ? ", API key" : string.Empty)})"
             : _context.Local ? "checking local Linux authorization…" : connection.Credential is null ? "no credential: sign in on Setup (F5)" : "checking the credential…";
         Window.Title = WindowTitle(connection.Controller);
-        _header.Text = $"{who} · status {DescribeFeed()}";
+        _identity = who;
+        _header.Text = $"HVO ROOF  |  {who} · status {DescribeFeed()}";
     }
 
     private void UpdateFeedState()
@@ -884,8 +923,16 @@ internal sealed class RoofTerminalUi : IDisposable
 
         if (feed.State == RoofStatusFeedState.Unauthorized) OfferSignIn();
 
+        var notices = new List<string>();
+        if (!string.IsNullOrEmpty(_banner.Text)) notices.Add(_banner.Text);
+        if (Status is { } current)
+        {
+            if (current.IsFaultLatched) notices.Add($"[FAULT] {RoofStatusText.DescribeFault(current)}. Open and Close are blocked.");
+            notices.AddRange(RoofStatusText.DescribeModeWarnings(current));
+        }
+        _banner.Text = string.Join(' ', notices);
         _banner.SetScheme(_banner.Text.Length == 0 ? Theme.Base
-            : feed.State == RoofStatusFeedState.Unauthorized ? Theme.Danger
+            : feed.State == RoofStatusFeedState.Unauthorized || Status?.IsFaultLatched == true ? Theme.Danger
             : Theme.Warning);
         UpdateHeader();
         if (wasStale != IsStale)
