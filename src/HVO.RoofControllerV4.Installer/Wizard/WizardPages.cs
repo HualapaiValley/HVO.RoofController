@@ -766,13 +766,14 @@ internal sealed class ClientPage : WizardPage
 
         View previous = Heading(null, $"The controller {who.Name} {(who.Plural ? "connect" : "connects")} to");
         _address = Field(ref previous, "Address", client.Controller, 44);
-        _fetch = Wizard.Theme.Styled(new TerminalButton { Text = "Fetch its CA", X = Pos.Right(_address) + 2, Y = Pos.Top(_address) });
+        _fetch = Wizard.Theme.Styled(new TerminalButton { Text = "Fetch its CA", X = 26, Y = Pos.Bottom(_address) });
         _fetch.Accepting += (_, e) =>
         {
             e.Handled = true;
             Fetch();
         };
         Add(_fetch);
+        previous = _fetch;
         _address.TextChanged += (_, _) =>
         {
             _failure = null;

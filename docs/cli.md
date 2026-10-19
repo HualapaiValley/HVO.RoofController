@@ -428,6 +428,8 @@ with a permanent red **Stop roof (F9)** and the newest Stop result above navigat
 roof state from controller readings; Settings separates groups from values; People, System and Setup keep their
 administrative actions and explanations. Long details and forms use keyboard scrolling; Tab reveals the focused field.
 The minimum is **80×24**, with more room at **120×32**. Stop stays enabled over every roof prompt.
+When validation needs more room, Tab into its bounded message and use PgUp/PgDn or Home/End to read it.
+The prompt actions and permanent Stop remain visible while reading.
 
 The [shared terminal theme](../src/HVO.RoofControllerV4.TerminalUi/README.md) uses the
 [canonical Sky roles](ui-redesign/tokens.json). Stop retains its red background through focus, with an underline.

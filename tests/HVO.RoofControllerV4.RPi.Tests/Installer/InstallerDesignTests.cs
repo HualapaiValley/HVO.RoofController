@@ -94,12 +94,95 @@ public sealed class InstallerDesignTests
             {
                 driver.Screen.Should().Contain("F10");
                 if (mode.EndsWith("ascii", StringComparison.Ordinal))
-                    driver.Screen.Should().Contain("+--").And.NotContainAny("┌", "─", "│", "╭", "╰", "⟦", "⟧", "☑", "☐", "◉", "○");
+                    driver.Screen.Should().Contain("+--").And.NotContainAny("┌", "─", "│", "╭", "╰", "⟦", "⟧", "☑", "☐", "◉", "○", "▲", "▼", "░", "▒", "▓", "█", "•", "∙");
                 if (mode.StartsWith("nocolor", StringComparison.Ordinal))
                     driver.DrawnAttributes().Should().OnlyContain(a => a.Foreground == Color.None && a.Background == Color.None);
                 driver.Render(TestContext, tag + "-" + step);
             }
         }
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    public async Task ClientCaAction_IsFullyVisibleFocusableAndHitTestable(string mode, int width, int height)
+    {
+        using var machine = new FakeMachine(InstallerOs.Linux, Architecture.X64, root: false);
+        machine.Environment["HVO_TERMINAL"] = mode;
+        using var driver = await WizardDriver.StartAsync(machine, width: width, height: height);
+        driver.Session.Answers = new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers };
+        driver.Wizard.ShowPage(4);
+        driver.WaitIdle("client form");
+        var page = driver.PageOf<ClientPage>();
+        page.Address!.SetFocus();
+        driver.Press(Key.Tab);
+        var fetch = page.FetchButton!;
+        fetch.HasFocus.Should().BeTrue("Tab from the address reaches its action");
+        driver.Screen.Should().Contain("[ Fetch its CA ]");
+        var bounds = fetch.FrameToScreen();
+        var pageBounds = page.FrameToScreen();
+        bounds.X.Should().BeGreaterThanOrEqualTo(pageBounds.X);
+        bounds.Right.Should().BeLessThanOrEqualTo(pageBounds.X + page.Viewport.Width);
+        bounds.Y.Should().BeGreaterThanOrEqualTo(pageBounds.Y);
+        bounds.Bottom.Should().BeLessThanOrEqualTo(driver.Wizard.BackButton.FrameToScreen().Y);
+        driver.Wizard.Window.GetViewsUnderLocation(bounds.Location, Terminal.Gui.ViewBase.ViewportSettingsFlags.None).Should().Contain(fetch);
+        var last = new System.Drawing.Point(bounds.Right - 1, bounds.Y);
+        driver.Wizard.Window.GetViewsUnderLocation(last, Terminal.Gui.ViewBase.ViewportSettingsFlags.None).Should().Contain(fetch);
+        driver.Press(Key.Enter);
+        driver.WaitIdle("fake CA fetch", () => machine.CaFetches.Count == 1);
+        page.Matches!.Enabled.Should().BeTrue();
+        page.Matches.Value.Should().Be(CheckState.UnChecked);
+        machine.Unexpected.Should().BeEmpty();
+        driver.Render(TestContext, $"176-ca-action-{mode.Replace(',', '-')}-{width}x{height}");
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    public async Task LongFirstAdminValidation_LeavesActionsVisible_AndCompleteCorrectionReachable(string mode, int width, int height)
+    {
+        using var machine = InstallerWizardTests.AdoptablePi();
+        machine.Environment["HVO_TERMINAL"] = mode;
+        using var driver = await WizardDriver.StartAsync(machine, width: width, height: height);
+        driver.Session.Answers = new InstallAnswers { Roles = [InstallRole.Controller] };
+        driver.Wizard.ShowPage(3);
+        var page = driver.PageOf<ControllerPage>();
+        page.AdminName!.Text = new string('x', 2000) + "!";
+        driver.Wizard.NextButton.SetFocus();
+        driver.Press(Key.Enter);
+        driver.Wizard.Page.Should().BeSameAs(page);
+        driver.Wizard.Message.Should().Contain("starting with a letter or digit.");
+        var error = driver.Wizard.Window.SubViews.OfType<TerminalTextView>().Single();
+        var nextLabel = mode.EndsWith(",ascii", StringComparison.Ordinal) ? "[ > Next < ]" : "[ ► Next ◄ ]";
+        driver.Screen.Should().Contain("[ Back ]").And.Contain(nextLabel).And.Contain("F10");
+        var nextBounds = driver.Wizard.NextButton.FrameToScreen();
+        nextBounds.Right.Should().BeLessThan(width);
+        nextBounds.Bottom.Should().BeLessThan(height);
+        driver.Wizard.Window.GetViewsUnderLocation(nextBounds.Location, Terminal.Gui.ViewBase.ViewportSettingsFlags.None).Should().Contain(driver.Wizard.NextButton);
+        error.FrameToScreen().Bottom.Should().BeLessThanOrEqualTo(driver.Wizard.BackButton.FrameToScreen().Y);
+        for (var count = 0; count < 16 && !error.HasFocus; count++) driver.Press(Key.Tab);
+        error.HasFocus.Should().BeTrue("Tab reaches the capped validation reader");
+        driver.Press(Key.End);
+        driver.Screen.Should().Contain("starting with a letter or digit.").And.Contain("[ Back ]").And.Contain(nextLabel).And.Contain("F10");
+        driver.Render(TestContext, $"176-long-installer-validation-{mode.Replace(',', '-')}-{width}x{height}");
+        driver.Press(Key.Esc);
+        driver.Wizard.Page.Should().NotBeSameAs(page, "Esc remains Back while reading validation");
+        driver.Press(Key.F10);
+        driver.Wizard.Result.Should().Be(InstallerExitCode.Cancelled);
+        driver.Closed.Should().BeTrue();
+        machine.Unexpected.Should().BeEmpty();
     }
 
     private static IEnumerable<Terminal.Gui.ViewBase.View> Descendants(Terminal.Gui.ViewBase.View root)

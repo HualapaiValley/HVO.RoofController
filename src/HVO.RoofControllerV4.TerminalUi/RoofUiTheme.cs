@@ -1,5 +1,6 @@
 using HVO.RoofControllerV4.Client;
 using Terminal.Gui.App;
+using Terminal.Gui.Configuration;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -235,26 +236,34 @@ public sealed class RoofUiTheme
     public void Prepare(IApplication app)
     {
         if (app.Driver is { } driver) driver.Force16Colors = Capabilities.Colours == TerminalColours.Ansi16;
-        foreach (var (property, original) in OriginalGlyphs)
-        {
-            var glyph = original;
-            if (Capabilities.Ascii)
-            {
-                var name = property.Name;
-                var value = original.Value;
-                if (value is >= 0x2500 and <= 0x257f) glyph = new Rune(name.StartsWith("HLine") ? '-' : name.StartsWith("VLine") ? '|' : '+');
-                else if (value > 127) glyph = new Rune(name.StartsWith("CheckState") || name is "Selected" or "UnSelected" ? ' '
-                    : name.Contains("Checked") || name == "Selected" ? 'x'
-                    : name.Contains("Left") ? '<' : name.Contains("Right") ? '>'
-                    : name.Contains("Up") ? '^' : name.Contains("Down") ? 'v' : '*');
-            }
-            property.SetValue(null, glyph);
-        }
+        // Glyphs is a read-only facade in Terminal.Gui 2.5. Set its immutable settings record;
+        // reflecting writable facade properties silently changes nothing, including password masks.
+        GlyphSettings.Current = Capabilities.Ascii ? AsciiGlyphs : UnicodeGlyphs;
     }
 
-    private static readonly (PropertyInfo Property, Rune Original)[] OriginalGlyphs = typeof(Glyphs).GetProperties(BindingFlags.Public | BindingFlags.Static)
-        .Where(property => property.PropertyType == typeof(Rune) && property.CanRead && property.CanWrite)
-        .Select(property => (property, (Rune)property.GetValue(null)!)).ToArray();
+    private static readonly GlyphSettings UnicodeGlyphs = GlyphSettings.Default;
+    private static readonly GlyphSettings AsciiGlyphs = CreateAsciiGlyphs();
+
+    private static GlyphSettings CreateAsciiGlyphs()
+    {
+        var settings = UnicodeGlyphs with { };
+        foreach (var property in typeof(GlyphSettings).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                     .Where(property => property.PropertyType == typeof(Rune) && property.CanWrite))
+        {
+            var original = (Rune)property.GetValue(settings)!;
+            if (original.Value <= 127) continue;
+            var name = property.Name;
+            var glyph = original.Value is >= 0x2500 and <= 0x257f
+                ? name.StartsWith("HLine") ? '-' : name.StartsWith("VLine") ? '|' : '+'
+                : name == "Stipple" ? '.'
+                : name.Contains("MeterSegment") ? '#'
+                : name.StartsWith("CheckState") || name is "Selected" or "UnSelected" ? ' '
+                : name.Contains("Left") ? '<' : name.Contains("Right") ? '>'
+                : name.Contains("Up") ? '^' : name.Contains("Down") ? 'v' : '*';
+            property.SetValue(settings, new Rune(glyph));
+        }
+        return settings;
+    }
 
     /// <summary>Styles an editable or read-only field, with a visible focus cue in every protocol.</summary>
     public void StyleField(TextField field)

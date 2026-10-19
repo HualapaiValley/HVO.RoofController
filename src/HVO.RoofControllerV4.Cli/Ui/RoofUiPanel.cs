@@ -12,7 +12,7 @@ internal sealed class RoofUiPanel : FrameView
     private readonly RoofUiTheme _theme;
     private readonly Action<RoofUiPanel> _close;
     private readonly List<Button> _buttons = [];
-    private readonly Label _error;
+    private readonly TerminalTextView _error;
 
     public RoofUiPanel(RoofUiPrompt prompt, RoofUiTheme theme, Action<RoofUiPanel> close)
     {
@@ -53,7 +53,7 @@ internal sealed class RoofUiPanel : FrameView
         }
 
         Fields = fields;
-        _error = new Label { X = 0, Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 2 };
+        _error = new TerminalTextView { X = 0, Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 2, CanFocus = false };
         _error.SetScheme(theme.PanelError);
         Add(_error);
 
@@ -140,6 +140,7 @@ internal sealed class RoofUiPanel : FrameView
         if (error is not null)
         {
             _error.Text = "[ERROR] " + error;
+            _error.CanFocus = true;
             return;
         }
 

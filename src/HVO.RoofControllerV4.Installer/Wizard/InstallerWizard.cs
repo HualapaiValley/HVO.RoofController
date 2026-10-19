@@ -20,7 +20,7 @@ internal sealed class InstallerWizard : IDisposable
 
     private readonly IApplication _app;
     private readonly Label _header;
-    private readonly Label _message;
+    private readonly TerminalTextView _message;
     private readonly FrameView _content;
     private readonly Button _back;
     private readonly Button _next;
@@ -57,8 +57,7 @@ internal sealed class InstallerWizard : IDisposable
             e.Handled = true;
             Next();
         };
-        _message = new Label { X = 0, Y = Pos.AnchorEnd(5), Width = Dim.Fill(), Height = 3 };
-        _message.TextFormatter.WordWrap = true;
+        _message = new TerminalTextView { X = 0, Y = Pos.AnchorEnd(5), Width = Dim.Fill(), Height = 3, CanFocus = false };
         _content = new FrameView { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(_message) };
         Theme.SetFrame(_content);
         var keyBar = Theme.CreateKeyBar(Keys);
@@ -73,9 +72,11 @@ internal sealed class InstallerWizard : IDisposable
             Theme.Prepare(_app);
             var width = Math.Max(1, Window.Viewport.Width);
             var rows = string.IsNullOrEmpty(_message.Text) ? 0 : _message.Text.Split('\n').Sum(line => TerminalCells.Wrap(line, width).Count());
-            _message.Height = rows;
-            _message.Y = Math.Max(1, Window.Viewport.Height - 2 - rows);
-            _content.Height = Math.Max(1, Window.Viewport.Height - 3 - rows);
+            var shownRows = Math.Min(rows, Math.Max(2, Window.Viewport.Height / 3));
+            _message.Height = shownRows;
+            _message.CanFocus = rows > shownRows && shownRows > 0;
+            _message.Y = Math.Max(1, Window.Viewport.Height - 2 - shownRows);
+            _content.Height = Math.Max(1, Window.Viewport.Height - 3 - shownRows);
         };
 
         _pages =

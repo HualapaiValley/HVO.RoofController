@@ -3,7 +3,9 @@
 
 The final executables themselves are exercised by published-terminal.py. This complementary
 check replaces the owned assemblies in a private copy of the test host with exact parsed-bundle
-members, so all pages, prompts, apply/failure paths execute the distributed implementation.
+members separately for each program, so all pages, prompts, apply/failure paths execute that
+program's distributed managed implementation. The independent test host JITs the exact bundled IL;
+self-contained ReadyToRun images are exercised in their original final executables by the PTY gate.
 No machine installer, host service, Docker daemon or physical HAT is called by these filters.
 """
 import argparse
@@ -26,9 +28,26 @@ OWNED = {'hvo-roof.dll', 'hvo-roof-install.dll',
          'HVO.RoofControllerV4.Common.dll', 'Terminal.Gui.dll'}
 # Every installer test in this filter uses FakeMachine/redirected files. The two opt-in real-host
 # installation suites are explicitly excluded, irrespective of the runner's environment.
-FILTER = ('(FullyQualifiedName~.Cli.|FullyQualifiedName~.Installer.)&FullyQualifiedName!~InstallerKioskSystemTests&'
-          'FullyQualifiedName!~InstallerMacSystemTests&TestCategory!=Scenario&'
-          'TestCategory!=Browser&TestCategory!=Soak')
+FILTERS = {
+    'hvo-roof': 'FullyQualifiedName~.Cli.&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak',
+    'hvo-roof-install': ('FullyQualifiedName~.Installer.&FullyQualifiedName!~InstallerKioskSystemTests&'
+                         'FullyQualifiedName!~InstallerMacSystemTests&TestCategory!=Scenario&'
+                         'TestCategory!=Browser&TestCategory!=Soak')
+}
+REQUIRED = {
+    'hvo-roof': ['EveryPageAndLongPrivatePrompt_KeepStopAndNewestResultVisible',
+                 'ActualWorkflowCatalogue_RetainsItsApiAndPromptAssertions', 'Capabilities_AreExplicit',
+                 'RemainingIdentityAndHandEditPrompts_KeepActionsAndStopVisible',
+                 'ExceptionallyLongStopDetails_AreBoundedReadableAndResetForTheNewestResult',
+                 'LongCallerName_PreservesRoleAndFeedInTheHeader',
+                 'StopAcknowledgement_PreservesTheActualVerificationMessage_InTheRgbScheme',
+                 'LongActualNameValidation_IsKeyboardReadable_AboveActionsAndStop', 'F9_SendsStop_FromEveryPage', 'AsciiControls_KeepMasksAndScrollbarsAscii_AfterApplicationConfiguration'],
+    'hvo-roof-install': ['AllConditionalForms_AreBoundedAndKeepCancellationDistinct',
+                         'ClientCaAction_IsFullyVisibleFocusableAndHitTestable',
+                         'LongFirstAdminValidation_LeavesActionsVisible_AndCompleteCorrectionReachable',
+                         'Esc_GoesBackAPage_AndNeverCloses_WhileF10Quits',
+                         'FinalPrograms_KeepOfflineNotices_AfterInstallationAndRollbackCopyPaths']
+}
 
 
 def extract_owned(program, rid):
@@ -46,48 +65,44 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    combined, programs = {}, {}
-    for name in ['hvo-roof', 'hvo-roof-install']:
-        digest, members = extract_owned(args.dist / f'{name}-{args.rid}', args.rid)
-        programs[name] = digest
-        for path, data in members.items():
-            if path in combined and combined[path] != data:
-                raise RuntimeError(f'Final programs disagree on shared assembly {path}')
-            combined[path] = data
-    if set(combined) != OWNED:
-        raise RuntimeError('Final bundle misses owned assembly: ' + str(OWNED - set(combined)))
-    # Repository-relative fixture lookups still resolve, while the staged host remains private and disposable.
+    programs = {}
+    # Repository-relative fixture lookups still resolve, while each staged host remains private and disposable.
     staging_parent = Path(__file__).resolve().parents[2] / 'tests/HVO.RoofControllerV4.RPi.Tests/TestResults'
     staging_parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.final-terminal-workflows-', dir=staging_parent) as temporary:
-        staged = Path(temporary) / 'tests'
-        shutil.copytree(args.tests, staged)
-        for path, data in combined.items():
-            (staged / path).write_bytes(data)
-        environment = dict(os.environ, HVO_CLI_RENDERS_DIR=str(args.output.resolve() / 'roof'),
-                           HVO_INSTALLER_RENDERS_DIR=str(args.output.resolve() / 'installer'),
-                           HVO_TERMINAL_DIST=str(args.dist.resolve()))
-        command = ['dotnet', 'vstest', str(staged / 'HVO.RoofControllerV4.RPi.Tests.dll'),
-                   '/TestCaseFilter:' + FILTER, '/Logger:trx;LogFileName=final-terminal-workflows.trx',
-                   '/ResultsDirectory:' + str(args.output.resolve())]
-        result = subprocess.run(command, env=environment, capture_output=True, timeout=600)
-        (args.output / 'workflow-run.txt').write_bytes(result.stdout + result.stderr)
-        if result.returncode:
-            raise RuntimeError('Final distributed workflow check failed; see workflow-run.txt')
-    results = ET.parse(args.output / 'final-terminal-workflows.trx').getroot()
-    names = [item.attrib.get('testName', '') for item in results.iter() if item.tag.endswith('UnitTestResult') and item.attrib.get('outcome') == 'Passed']
-    required = ['EveryPageAndLongPrivatePrompt_KeepStopAndNewestResultVisible', 'ActualWorkflowCatalogue_RetainsItsApiAndPromptAssertions', 'Capabilities_AreExplicit', 'AllConditionalForms_AreBoundedAndKeepCancellationDistinct',
-                'RemainingIdentityAndHandEditPrompts_KeepActionsAndStopVisible',
-                'ExceptionallyLongStopDetails_AreBoundedReadableAndResetForTheNewestResult',
-                'LongCallerName_PreservesRoleAndFeedInTheHeader',
-                'StopAcknowledgement_PreservesTheActualVerificationMessage_InTheRgbScheme',
-                'F9_SendsStop_FromEveryPage', 'Esc_GoesBackAPage_AndNeverCloses_WhileF10Quits']
-    if any(not any(method in name for name in names) for method in required):
-        raise RuntimeError('Required workflow tests did not execute successfully')
-    summary = dict(rid=args.rid, final_programs=programs,
-                   assemblies={name: hashlib.sha256(data).hexdigest() for name, data in combined.items()},
-                   filter=FILTER, passed_tests=len(names))
-    (args.output / 'workflow-identity.json').write_text(json.dumps(summary, indent=2) + '\n')
+    for name in ['hvo-roof', 'hvo-roof-install']:
+        digest, members = extract_owned(args.dist / f'{name}-{args.rid}', args.rid)
+        expected = (OWNED - {'hvo-roof.dll', 'hvo-roof-install.dll'}) | {name + '.dll'}
+        if set(members) != expected:
+            raise RuntimeError(f'{name}: final bundle misses owned assembly: {expected - set(members)}')
+        result_dir = args.output / name
+        result_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='.final-terminal-workflows-', dir=staging_parent) as temporary:
+            staged = Path(temporary) / 'tests'
+            shutil.copytree(args.tests, staged)
+            for path, data in members.items():
+                target = staged / path
+                target.write_bytes(data)
+                if target.read_bytes() != data:
+                    raise RuntimeError(f'{name}: staged assembly differs: {path}')
+            environment = dict(os.environ, HVO_CLI_RENDERS_DIR=str(args.output.resolve() / 'roof'),
+                               HVO_INSTALLER_RENDERS_DIR=str(args.output.resolve() / 'installer'),
+                               HVO_TERMINAL_DIST=str(args.dist.resolve()),
+                               DOTNET_ReadyToRun='0', COMPlus_ReadyToRun='0')
+            command = ['dotnet', 'vstest', str(staged / 'HVO.RoofControllerV4.RPi.Tests.dll'),
+                       '/TestCaseFilter:' + FILTERS[name], '/Logger:trx;LogFileName=final-terminal-workflows.trx',
+                       '/ResultsDirectory:' + str(result_dir.resolve())]
+            result = subprocess.run(command, env=environment, capture_output=True, timeout=600)
+            (result_dir / 'workflow-run.txt').write_bytes(result.stdout + result.stderr)
+            if result.returncode:
+                raise RuntimeError(f'{name}: final distributed workflow check failed; see workflow-run.txt')
+        results = ET.parse(result_dir / 'final-terminal-workflows.trx').getroot()
+        names = [item.attrib.get('testName', '') for item in results.iter()
+                 if item.tag.endswith('UnitTestResult') and item.attrib.get('outcome') == 'Passed']
+        if any(not any(method in test for test in names) for method in REQUIRED[name]):
+            raise RuntimeError(f'{name}: required workflow tests did not execute successfully')
+        programs[name] = dict(sha256=digest, execution='JIT of exact bundled managed assemblies; native final-file PTY is separate', assemblies={path: hashlib.sha256(data).hexdigest()
+                              for path, data in members.items()}, filter=FILTERS[name], passed_tests=len(names))
+    (args.output / 'workflow-identity.json').write_text(json.dumps(dict(rid=args.rid, programs=programs), indent=2) + '\n')
     print('PASS: distributed owned assemblies, all roof pages/prompts and fake-machine installer workflows')
 
 

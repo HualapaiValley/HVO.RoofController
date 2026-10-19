@@ -67,6 +67,77 @@ public sealed class TerminalDesignTests
     }
 
     [TestMethod]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("nocolor,ascii", 80, 24)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    [DataRow("nocolor,ascii", 120, 32)]
+    public void AsciiControls_KeepMasksAndScrollbarsAscii_AfterApplicationConfiguration(string mode, int width, int height)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("live status", () => tui.Ui.Status is not null && !tui.Ui.IsStale);
+        tui.Ui.Ask(new RoofUiPrompt("ASCII PRIVATE INPUT", string.Join(' ', Enumerable.Repeat("Long explanation with scrolling.", 50)),
+            Enumerable.Range(0, 8).Select(n => new RoofUiField($"Private entry {n + 1}", Secret: true)).ToArray(),
+            [new RoofUiAction("Review", _ => "Correction required.")]));
+        foreach (var field in tui.Ui.Panel!.Fields) field.Text = "masked-fixture-value";
+        tui.Ui.Panel.Fields[^1].SetFocus();
+        var screen = tui.Screen;
+        screen.EnumerateRunes().Where(rune => rune.Value > 127).Should().BeEmpty("ASCII-only fixture data must leave no Unicode control glyph");
+        screen.Should().Contain("*****").And.Contain("+--").And.Contain("[ Review ]").And.NotContain("masked-fixture-value");
+        Terminal.Gui.Drawing.Glyphs.UpArrow.Value.Should().Be('^');
+        Terminal.Gui.Drawing.Glyphs.DownArrow.Value.Should().Be('v');
+        Terminal.Gui.Drawing.Glyphs.Dot.Value.Should().Be('*');
+        tui.Press(Key.F9);
+        tui.WaitIdle("Stop above populated ASCII prompt", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Screen.Should().Contain("Relay register verified de-energized.");
+        tui.Render(TestContext, $"176-ascii-controls-{mode.Replace(',', '-')}-{width}x{height}");
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    public void LongActualNameValidation_IsKeyboardReadable_AboveActionsAndStop(string mode, int width, int height)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("initial status", () => tui.Ui.Caller is not null && tui.Ui.Status is not null && !tui.Ui.IsStale);
+        tui.Ui.ShowPage(2);
+        tui.WaitIdle("people");
+        tui.Ui.CurrentPage.SubViews.OfType<Button>().Single(b => b.Visible && b.Text == "Add").InvokeCommand(Command.Accept);
+        var panel = tui.Ui.Panel!;
+        panel.Fields[0].Text = new string('x', 2000) + "!";
+        panel.Press("Add");
+        panel.Error.Should().EndWith(RoofIdentityText.NameRule);
+        var error = panel.SubViews.OfType<TerminalTextView>().Single();
+        _ = tui.Screen;
+        panel.Fields[^1].SetFocus();
+        for (var count = 0; count < 12 && !error.HasFocus; count++) tui.Press(Key.Tab);
+        error.HasFocus.Should().BeTrue("Tab reaches the bounded validation reader");
+        tui.Press(Key.End);
+        tui.Screen.Should().Contain("starting with a letter or digit.").And.Contain("[ Add ]").And.Contain("[ Cancel ]").And.Contain("Stop roof (F9)");
+        error.FrameToScreen().Bottom.Should().BeLessThanOrEqualTo(panel.Buttons[0].FrameToScreen().Y);
+        tui.Press(Key.F9);
+        tui.WaitIdle("Stop while reading validation", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Screen.Should().Contain("Relay register verified de-energized.").And.Contain("[ Cancel ]");
+        tui.Ui.Panel.Should().BeSameAs(panel);
+        tui.Render(TestContext, $"176-long-validation-{mode.Replace(',', '-')}-{width}x{height}");
+        tui.Press(Key.Esc);
+        tui.Ui.Panel.Should().BeNull();
+    }
+
+    [TestMethod]
     public void PlainTables_AlignWideAndCombiningValues_WithoutAnsi()
     {
         using var output = new StringWriter();

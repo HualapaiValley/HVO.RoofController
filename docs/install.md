@@ -159,6 +159,10 @@ dotnet publish HVO.RoofControllerV4.Installer -c Release -r linux-arm64 -o ../ou
 The wizard needs a terminal of at least 80 × 24 that sends function keys: the Linux console, SSH from any common
 terminal, tmux, or Terminal on a Mac.
 
+Long validation messages occupy a bounded reading area above Back/Next. Tab into the message and use
+PgUp/PgDn or Home/End to reach the complete correction; Esc still goes Back and F10 cancels with exit 130.
+The controller address and **Fetch its CA** use separate rows, including at 80 columns.
+
 ## install.sh
 
 Each release carries `install.sh`, a script that checks the machine, downloads the release's installer for it, checks
