@@ -23,7 +23,8 @@ internal static class RegularFiles
     private const int LinuxFlags = 0x800 | 0x80000;
     private const int MacFlags = 0x4 | 0x1000000;
 
-    // errno: the same on Linux and macOS, but for EOPNOTSUPP (opening a socket on a Mac).
+    // Common errno values; unsupported-operation codes differ on Linux and Darwin. Darwin also distinguishes
+    // ENOTSUP (45) from UNIX03 EOPNOTSUPP (102), which a socket open can report.
     private const int NotPermitted = 1;
     private const int NotThere = 2;
     private const int Interrupted = 4;
@@ -32,6 +33,7 @@ internal static class RegularFiles
     private const int NotAFolder = 20;
     private const int LinuxNotSupported = 95;
     private const int MacNotSupported = 45;
+    private const int MacSocketNotSupported = 102;
 
     // statx(2): AT_EMPTY_PATH (the descriptor itself) and STATX_TYPE; struct statx, whose stx_mask is at 0 and stx_mode at
     // 28 on every architecture. A Mac's struct stat (arm64, the only Mac the installer runs on) has st_mode at 4.
@@ -89,13 +91,7 @@ internal static class RegularFiles
 
         if (descriptor < 0)
         {
-            return error switch
-            {
-                NotThere or NotAFolder => null,
-                Denied or NotPermitted => throw new UnauthorizedAccessException($"Access to the path '{onDisk}' is denied."),
-                NoDevice or LinuxNotSupported or MacNotSupported => throw new NotARegularFileException(path, "a socket or a device"),
-                _ => throw new IOException($"Could not open {onDisk}: {Marshal.GetPInvokeErrorMessage(error)}.", error)
-            };
+            return OpenFailure(error, onDisk, path, OperatingSystem.IsMacOS());
         }
 
         var handle = new SafeFileHandle(descriptor, ownsHandle: true);
@@ -123,6 +119,16 @@ internal static class RegularFiles
             throw;
         }
     }
+
+    /// <summary>Translates a failed native open, retaining physical paths for I/O errors and logical paths for file kinds.</summary>
+    internal static SafeFileHandle? OpenFailure(int error, string onDisk, string path, bool isMacOS) => error switch
+    {
+        NotThere or NotAFolder => null,
+        Denied or NotPermitted => throw new UnauthorizedAccessException($"Access to the path '{onDisk}' is denied."),
+        NoDevice or LinuxNotSupported or MacNotSupported => throw new NotARegularFileException(path, "a socket or a device"),
+        MacSocketNotSupported when isMacOS => throw new NotARegularFileException(path, "a socket or a device"),
+        _ => throw new IOException($"Could not open {onDisk}: {Marshal.GetPInvokeErrorMessage(error)}.", error)
+    };
 
     // The type of what the descriptor is open on (its mode's S_IFMT bits).
     private static int TypeOf(SafeFileHandle handle, string onDisk)
