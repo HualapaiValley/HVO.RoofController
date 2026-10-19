@@ -444,7 +444,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         OpenReadOnDisk = onDisk =>
         {
             BeforeRead?.Invoke("/" + Path.GetRelativePath(Root, onDisk));
-            return new FileStream(onDisk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+            var stream = new FileStream(onDisk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+            var path = "/" + Path.GetRelativePath(Root, onDisk);
+            OpenedFiles[stream.SafeFileHandle.DangerousGetHandle()] = (new(stream), Owners.GetValueOrDefault(path, "root:root"));
+            return stream;
         }
     };
 

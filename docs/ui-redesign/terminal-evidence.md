@@ -191,3 +191,42 @@ and expanded real workflow suite. Every check and every other job/step timeout, 
 and byte check remains intact. The correction uses YAML/diff and existing CI-signature checks; it repeats no build,
 product suite, publish, motion or image work, and requests no manual CI rerun. #183 and #185/#186 through reviewed
 MAIN, final required Debug/Release suites and current-head hosted gates remain prerequisites.
+
+## macOS distributed-workflow fixture failure
+
+At `d784d2f`, [run 39203626669, job 117905624022](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39203626669/job/117905624022)
+passed exact macOS signatures/identities/ad-hoc checks, native final-program offline PTY and installed/rollback notices.
+CLI contracts **371/371** and renders **147/147** passed. Installer contracts reported **857 total, 830 executed,
+716 passed, 114 failed and 27 not executed**; installer rendering was not reached. This is a failed platform gate.
+Raw failure messages, data arguments and private file names remain private; the [safe receipt](terminal-macos-fixture-validation.json)
+records derived classifications and focused proof.
+
+Of the 114 failures, **81** directly report the fake Linux `/proc` lookup on a Mac host. **20** status-only failures
+and one unreached swap callback are source-consistent cascades, requiring hosted re-execution to confirm. Five fixture
+certificate exports require explicitly exportable Apple test keys; two imported-key re-exports are a separate supported
+Mac rig product issue (#187). One real socket exceeds Darwin's pathname limit. Three preflight cases share the Linux
+controller's `EphemeralKeySet` boundary (one explicit exception, two source-consistent cases). The system LibreSSL
+`verify` usage lacks hostname/IP verification options. No claim that all 114 failures are resolved follows from this audit.
+
+The fixture correction registers actual opened streams, with captured fake ownership and exact live descriptor/same-PID
+checks. Rename, unlink and replacement retain the opened inode; unknown, foreign, malformed, closed and unregistered
+descriptors are refused. The existing attacker-owned archive race uses the fake ownership-following rename boundary,
+retaining every refusal and unchanged-state assertion. The obsolete Mac restore guard is removed, adding its previously
+27 unexecuted cases. A real AF_UNIX socket binds under a unique private 0700 short root before its inode moves into the
+store; no global temporary-directory/environment change or substitute regular file is used.
+
+Only the test certificate helper requests exportable fixture keys. The Mac preflight fixture converts its same deployed
+certificate/key to private 0600 public PEM and encrypted-key files, keeps the configured password and production PEM
+validation, and removes both files in `finally`. This is **fixture-host PEM adaptation**, not literal Linux PFX execution;
+the Linux default PFX path and production ephemeral policy are unchanged. The Mac contract uses the already-installed
+absolute `/opt/homebrew/opt/openssl@3/bin/openssl` and fails if absent; Linux retains `/usr/bin/openssl`. All strict-purpose,
+hostname/IP successes and hostile-name rejection assertions remain intact. There is no new install, fallback or skip.
+
+Focused Release compile/tests pass **23/23**, including the existing archive ownership/one-read/swap security cases,
+descriptor negative controls, real socket types, key export/signing, original preflight assertions, positive/wrong-password
+PEM adaptation and strict OpenSSL. The same **23/23** pass using a rebuilt private test host and explicit JIT of the
+retained installer `647a6a8` bundle's exact five managed members (`9c488f6a…7d6`), with absolute dotnet and the established
+contract environment. These are Linux host proofs. The compile-only and initial adapter lifecycle failures remain private
+prior attempts. Production sources, artifact/signature/notice checks, matrix statuses and captures do not change; no
+publish, native replay or motion is repeated. Reviewed #187/#183 integration, final required Debug/Release suites and
+normal current-head supported-RID/macOS execution remain merge gates.

@@ -295,7 +295,13 @@ public sealed class InstallerCertificateTests
     [TestMethod]
     public async Task Openssl_VerifiesTheChain_ForAServer_ByNameAndAddress()
     {
-        if (!File.Exists("/usr/bin/openssl"))
+        if (OperatingSystem.IsMacOS())
+        {
+            // The hosted Mac's /usr/bin/openssl is LibreSSL: its verify command lacks -verify_hostname/-verify_ip.
+            // Use the already-installed OpenSSL 3 at an explicit absolute path; a missing tool fails this contract.
+            File.Exists(OpenSslPath).Should().BeTrue("the supported Mac runner must provide OpenSSL 3 for strict name/address verification");
+        }
+        else if (!File.Exists(OpenSslPath))
         {
             Assert.Inconclusive("openssl is not installed here.");
         }
@@ -516,7 +522,7 @@ public sealed class InstallerCertificateTests
 
     private static async Task<(int Exit, string Output)> OpensslAsync(string[] arguments)
     {
-        var start = new ProcessStartInfo("/usr/bin/openssl") { RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo(OpenSslPath) { RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var argument in arguments)
         {
             start.ArgumentList.Add(argument);
@@ -528,4 +534,6 @@ public sealed class InstallerCertificateTests
         await process.WaitForExitAsync();
         return (process.ExitCode, await output + await error);
     }
+
+    private static string OpenSslPath => OperatingSystem.IsMacOS() ? "/opt/homebrew/opt/openssl@3/bin/openssl" : "/usr/bin/openssl";
 }

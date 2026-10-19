@@ -454,14 +454,30 @@ internal sealed partial class FakeMachine
         return after is null ? Answer(answer) : Answer(answer, after);
     }
 
-    // stat -L -c '%F|%U:%G' /proc/<pid>/fd/<n>: the file the installer has open on that descriptor, wherever it is now.
+    private readonly Dictionary<nint, (WeakReference<FileStream> Stream, string Owner)> OpenedFiles = [];
+
+    // Emulate Linux's /proc descriptor lookup using the actual stream this machine opened. The host need not have
+    // /proc (macOS does not). Never resolve the original path again: it may now name a replacement, or be unlinked.
+    // Retain only a weak reference, and refuse foreign, closed or unknown descriptors instead of inventing a file.
     private CommandResult StatOpened(string opened)
     {
-        var target = opened.StartsWith("/proc/", StringComparison.Ordinal) ? new FileInfo(opened).LinkTarget : null;
-        var root = Root.TrimEnd('/');
-        return target is not null && target.StartsWith(root + "/", StringComparison.Ordinal)
-            ? Stat(target[root.Length..], AfterStatOpened)
-            : new CommandResult(1, string.Empty, $"stat: cannot statx '{opened}': No such file or directory\n");
+        var prefix = $"/proc/{System.Environment.ProcessId}/fd/";
+        if (opened.StartsWith(prefix, StringComparison.Ordinal)
+            && nint.TryParse(opened.AsSpan(prefix.Length), out var descriptor)
+            && opened == prefix + descriptor
+            && OpenedFiles.TryGetValue(descriptor, out var file)
+            && file.Stream.TryGetTarget(out var stream)
+            && stream.CanRead
+            && !stream.SafeFileHandle.IsClosed
+            && !stream.SafeFileHandle.IsInvalid
+            && stream.SafeFileHandle.DangerousGetHandle() == descriptor)
+        {
+            var type = stream.Length == 0 ? "regular empty file" : "regular file";
+            var answer = $"{type}|{file.Owner}";
+            return AfterStatOpened is { } after ? Answer(answer, after) : Answer(answer);
+        }
+
+        return new CommandResult(1, string.Empty, $"stat: cannot statx '{opened}': No such file or directory\n");
     }
 
     // The image a container runs, as Inspect reports it: its ID, for one loaded from an offline archive.

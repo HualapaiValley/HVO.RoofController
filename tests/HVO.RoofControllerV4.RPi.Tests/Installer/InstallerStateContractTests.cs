@@ -1416,8 +1416,27 @@ public sealed class InstallerStateContractTests
             case "a socket or a device":
                 File.Delete(pi.OnDisk(path));
                 var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                socket.Bind(new UnixDomainSocketEndPoint(pi.OnDisk(path)));
-                return socket;
+                // Darwin's sockaddr_un is shorter than the host's private temporary root plus the fake store path.
+                // Bind in a short, private root, then move the real socket inode into the store under test. No global
+                // TMPDIR/current-directory change, and the inspected target is still a socket, not a symbolic link.
+                var socketRoot = Path.Join("/tmp", "hvo-socket-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(socketRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                try
+                {
+                    var bound = Path.Join(socketRoot, "s");
+                    socket.Bind(new UnixDomainSocketEndPoint(bound));
+                    File.Move(bound, pi.OnDisk(path));
+                    return socket;
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+                finally
+                {
+                    Directory.Delete(socketRoot, recursive: true);
+                }
             default:
                 File.Delete(pi.OnDisk(path));
                 File.CreateSymbolicLink(pi.OnDisk(path), "/dev/null");
