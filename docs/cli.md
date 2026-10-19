@@ -499,7 +499,7 @@ Nothing here needs the Pi, the HAT or the roof.
   - saves the connection with `hvo-roof setup`, checks that the credentials file is `0600` in a `0700` directory, and
     that a command works with the file alone;
   - runs a few commands and checks their exit codes;
-  - opens every page of the interface;
+  - opens every page at 80 × 24 and 120 × 32 in truecolour, ANSI16, terminal defaults and ASCII;
   - stops, with F9, a roof that another client started, and checks with `status --json` that the roof stopped short of
     the open limit;
   - checks that Esc leaves the interface open and that F10 exits 0;
@@ -509,23 +509,24 @@ Nothing here needs the Pi, the HAT or the roof.
     exited 130.
 
   The `Emulator image` workflow keeps the screens as the `terminal-screens-<run id>` artifact: each as text, with its
-  colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. Driver captures also cover prompts and fallback modes.
-  To refresh them, run the smoke locally and copy the images into `docs/images/terminal/`:
-
-  ```bash
-  dotnet publish src/HVO.RoofControllerV4.Cli -c Release -r linux-x64 -o /tmp/hvo-roof
-  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/emulator/compose-smoke-test.sh
-  cp /tmp/screens/0[1-7]-*.svg docs/images/terminal/
-  ```
+  colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The controlled driver catalogue adds
+  actual provider/editor/private-input/review/confirmation/quit paths in every mode and size. Driver `.cells.json`
+  records whole graphemes and measured cells; the capture helper also draws NO_COLOR with light defaults.
+  See [the reproducible capture procedure](ui-redesign/terminal-evidence.md#reproduce-captures) for refreshing all ten
+  documentation images and the full matrix from actual output.
 - **Without Docker, and on a Mac.** `tests/cli/dotnet-run-smoke.sh` builds the controller and the HAT emulator, starts
   both with `dotnet run` on loopback (the controller in the Development environment, with a throwaway admin key), waits
   until the controller has the emulated roof closed, and runs `terminal-smoke.sh` against them. It needs the .NET SDK,
-  tmux, curl, python3 and bash 4 or later. The `CI` workflow's `mac-cli` job runs it on macOS with CI's `osx-arm64`
+  tmux, python3 and bash 4 or later. The `CI` workflow's `mac-cli` job runs it on macOS with CI's `osx-arm64`
   build, after checking the file's ad hoc signature and its version, and keeps the screens as the
   `mac-terminal-screens-<run id>` artifact:
 
   ```bash
-  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/screens tests/cli/dotnet-run-smoke.sh
+  # Publish from src/ so global.json selects the pinned SDK, then return to the repository root.
+  (cd src && flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 600s \
+    dotnet publish HVO.RoofControllerV4.Cli -c Release -r linux-x64 -o /tmp/hvo-roof)
+  HVO_ROOF_CLI=/tmp/hvo-roof/hvo-roof TERMINAL_SMOKE_OUT=/tmp/hvo-176/tmux \
+    flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 900s tests/cli/dotnet-run-smoke.sh
   ```
 
 ## Opt-in provider accounts and local Linux authorization

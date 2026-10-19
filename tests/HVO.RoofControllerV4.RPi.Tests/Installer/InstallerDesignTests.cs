@@ -94,7 +94,7 @@ public sealed class InstallerDesignTests
             {
                 driver.Screen.Should().Contain("F10");
                 if (mode.EndsWith("ascii", StringComparison.Ordinal))
-                    driver.Screen.Should().NotContainAny("┌", "─", "│", "╭", "╰", "⟦", "⟧", "☑", "☐", "◉", "○");
+                    driver.Screen.Should().Contain("+--").And.NotContainAny("┌", "─", "│", "╭", "╰", "⟦", "⟧", "☑", "☐", "◉", "○");
                 if (mode.StartsWith("nocolor", StringComparison.Ordinal))
                     driver.DrawnAttributes().Should().OnlyContain(a => a.Foreground == Color.None && a.Background == Color.None);
                 driver.Render(TestContext, tag + "-" + step);

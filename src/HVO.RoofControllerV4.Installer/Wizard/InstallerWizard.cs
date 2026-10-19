@@ -70,6 +70,7 @@ internal sealed class InstallerWizard : IDisposable
 
         Window.SubViewLayout += (_, _) =>
         {
+            Theme.Prepare(_app);
             var width = Math.Max(1, Window.Viewport.Width);
             var rows = string.IsNullOrEmpty(_message.Text) ? 0 : _message.Text.Split('\n').Sum(line => TerminalCells.Wrap(line, width).Count());
             _message.Height = rows;
@@ -147,6 +148,7 @@ internal sealed class InstallerWizard : IDisposable
         Theme.Style(Page);
         Refresh();
         Page.SetFocus();
+        if (Page is MachinePage or DonePage && _next.Enabled) _next.SetFocus();
     }
 
     /// <summary>Brings the buttons up to date with the page: what Next does, and whether Back and Next may be used.</summary>
@@ -311,9 +313,10 @@ internal sealed class InstallerWizard : IDisposable
     {
         if (key == Key.Esc)
         {
-            // Esc goes back a page; it never closes the installer.
+            // A field menu closes first; otherwise Esc goes Back and never cancels the installer.
             key.Handled = true;
-            Back();
+            if (_app.Popovers?.GetActivePopover() is { } menu) _app.Popovers.Hide(menu);
+            else Back();
             return;
         }
 

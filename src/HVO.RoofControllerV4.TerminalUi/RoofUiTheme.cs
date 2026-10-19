@@ -160,18 +160,26 @@ public sealed class RoofUiTheme
                 _frames.Add(view, new object());
                 view.BorderStyle = LineStyle.None;
                 view.Border!.Thickness = new Thickness(1);
-                border.DrawingContent += (_, args) =>
+                view.DrawComplete += (_, _) =>
                 {
-                    var width = border.Viewport.Width;
-                    var height = border.Viewport.Height;
+                    if (view.App?.Driver is not { } driver) return;
+                    var frame = view.Border!.FrameToScreen();
+                    var width = frame.Width;
+                    var height = frame.Height;
                     if (width < 2 || height < 2) return;
-                    border.SetAttributeForRole(VisualRole.Normal);
-                    var title = TerminalCells.Take(view.Title, Math.Max(0, width - 4));
-                    var top = "+-" + title;
-                    border.AddStr(0, 0, top + new string('-', Math.Max(0, width - TerminalCells.Width(top) - 1)) + "+");
-                    border.AddStr(0, height - 1, "+" + new string('-', width - 2) + "+");
-                    for (var row = 1; row < height - 1; row++) { border.AddStr(0, row, "|"); border.AddStr(width - 1, row, "|"); }
-                    args.Cancel = true;
+                    var saved = driver.Clip;
+                    try
+                    {
+                        driver.Clip = TerminalDrawing.Clip(view, frame);
+                        driver.SetAttribute(border.GetAttributeForRole(VisualRole.Normal));
+                        void Write(int x, int y, string text) { driver.Move(frame.X + x, frame.Y + y); driver.AddStr(text); }
+                        var title = TerminalCells.Take(view.Title, Math.Max(0, width - 4));
+                        var top = "+-" + title;
+                        Write(0, 0, top + new string('-', Math.Max(0, width - TerminalCells.Width(top) - 1)) + "+");
+                        Write(0, height - 1, "+" + new string('-', width - 2) + "+");
+                        for (var row = 1; row < height - 1; row++) { Write(0, row, "|"); Write(width - 1, row, "|"); }
+                    }
+                    finally { driver.Clip = saved; }
                 };
             }
         }
@@ -187,6 +195,11 @@ public sealed class RoofUiTheme
 
         button.ShadowStyle = ShadowStyles.None;
         button.NoDecorations = button is TerminalButton;
+        if (button is TerminalButton ordinary)
+        {
+            ordinary.Ascii = Capabilities.Ascii;
+            ordinary.Width = Dim.Func(_ => TerminalCells.Width(ordinary.Text) + (ordinary.IsDefault ? 8 : 4));
+        }
 
         return button;
     }
@@ -249,7 +262,17 @@ public sealed class RoofUiTheme
     {
         var ordinary = new Scheme(Panel) { Normal = Of(Role.Text, Role.Badge, Capabilities.Colours == TerminalColours.TrueColour ? TextStyle.None : TextStyle.Underline, TextStyle.Underline) };
         var focused = new Scheme(ordinary) { Normal = Base.Focus };
-        field.ContextMenu?.SetScheme(Panel);
+        if (field.ContextMenu is { } menu)
+        {
+            menu.SetScheme(Panel);
+            SetFrame(menu, PanelFrame);
+            if (menu.Root is { } root)
+            {
+                root.SetScheme(Panel);
+                SetFrame(root, PanelFrame);
+                foreach (var child in root.SubViews) child.SetScheme(Panel);
+            }
+        }
         field.SetScheme(field.HasFocus ? focused : ordinary);
         field.HasFocusChanged += (_, _) => field.SetScheme(field.HasFocus ? focused : ordinary);
     }
@@ -272,14 +295,6 @@ public sealed class RoofUiTheme
                 args.Cancel = true;
             };
             check.Width = Dim.Func(_ => TerminalCells.Width(check.Text) + 4);
-        }
-        if (view is TerminalReadingView reading && !_focusStyled.TryGetValue(reading, out _))
-        {
-            _focusStyled.Add(reading, new object());
-            var ordinary = reading.GetScheme();
-            var focused = new Scheme(ordinary) { Normal = ordinary.Focus };
-            reading.SetScheme(reading.HasFocus ? focused : ordinary);
-            reading.HasFocusChanged += (_, _) => reading.SetScheme(reading.HasFocus ? focused : ordinary);
         }
         if (view is TextField field && !_focusStyled.TryGetValue(field, out _))
         {

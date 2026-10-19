@@ -458,9 +458,6 @@ jobs:
         working-directory: src
         run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --filter FullyQualifiedName~TerminalInstalledNoticeTests -- RunConfiguration.TreatNoTestsAsError=true
       # #176 runs the complete controlled driver catalogue against assemblies from these exact final bundles.
-      - name: Build the controlled terminal workflow harness
-        working-directory: src
-        run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
       - name: Exercise final distributed terminal workflows
         working-directory: src
         run: |

@@ -28,6 +28,9 @@ would not satisfy these modes. Field context menus also use the shared scheme.
 - `TerminalDesignTests` checks capability precedence and whole-grapheme geometry, then draws all five pages and long
   eight-field private prompts at 80×24 and 120×32 in RGB, ANSI16, terminal defaults and ASCII. It checks the newest
   Stop result remains visible, private values remain masked, and focused Stop retains Red in ANSI16.
+  Its actual workflow catalogue also reruns the existing provider/sign-in, first-admin, connection/trust, people,
+  password/role/Linux access, settings/safety/private input, restart/confirmation and quit/lost-answer assertions at
+  every mode and size. The one-time generated API-key reveal is drawn and asserted but never saved to artifacts.
 - `InstallerWizardTests`, `InstallerWizardControllerTests` and `InstallerWizardClientTests` preserve existing field-fit,
   choice, CA trust, private-input, review/save, fake apply, progress, failure and recovery assertions.
   `InstallerDesignTests` adds both-size/all-mode conditional forms for controller+kiosk, rig and Mac+CLI profiles,
@@ -49,10 +52,20 @@ HVO_CLI_RENDERS_DIR=/tmp/hvo-176/roof HVO_INSTALLER_RENDERS_DIR=/tmp/hvo-176/ins
   --filter 'FullyQualifiedName~RoofTerminalUiTests|FullyQualifiedName~TerminalDesignTests|FullyQualifiedName~InstallerWizard|FullyQualifiedName~InstallerDesignTests'
 ```
 
-The ANSI files are actual rendered cells, attached to the test results. Convert them with
-`python3 tests/cli/ansi-to-svg.py INPUT.ans OUTPUT.svg --title 'hvo-roof'` from the repository root, under the same
-bounded heavy gate. Use synthetic fixture identities and empty/masked private inputs. Documentation images are selected
-from these captures; the complete matrix stays in CI artifacts. A prototype image is not runtime evidence.
+The ANSI files and accompanying `.cells.json` are actual rendered cells, attached to test results. The JSON keeps
+whole graphemes and the driver's cell widths rather than estimating emoji from individual code points. Then run the
+controlled emulator tmux smoke described in [cli.md](../cli.md#tests), with its output at `/tmp/hvo-176/tmux`.
+From the repository root, convert/select the complete documentation set:
+
+```bash
+flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 180s \
+  python3 tests/cli/refresh-captures.py --roof /tmp/hvo-176/roof --installer /tmp/hvo-176/installer \
+  --tmux /tmp/hvo-176/tmux --evidence /tmp/hvo-176/renders --docs
+```
+
+The helper masks the local host name without changing cell positions, emits light-default NO_COLOR comparisons,
+and refuses an incomplete documentation set. Synthetic fixture identities and empty/masked private inputs are used.
+The complete mode/size matrix stays in CI artifacts. A prototype image is not runtime evidence.
 
 ## Exact distribution gate
 

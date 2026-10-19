@@ -10,7 +10,7 @@
 #
 # Settings (environment): TERMINAL_SMOKE_OUT, as for terminal-smoke.sh; DOTNET_RUN_SMOKE_PORT (default 15395), the
 # controller's port, with the emulator's control port and register port the next two. Needs the .NET SDK that
-# src/global.json pins, curl, python3, tmux, and bash 4 or later.
+# src/global.json pins, python3, tmux, and bash 4 or later.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -74,7 +74,6 @@ cleanup() {
 trap cleanup EXIT
 
 command -v dotnet >/dev/null || fail "the .NET SDK is required"
-command -v curl >/dev/null || fail "curl is required"
 command -v python3 >/dev/null || fail "python3 is required"
 
 # Built one after the other, before either starts: two builds at once would both write the projects they share.
@@ -104,9 +103,12 @@ controller_pid=$!
 
 # The controller answers once it has read the emulated HAT: initialized, with the roof at the closed limit.
 initialized_closed() {
-    curl -fsS --max-time 5 -H "X-Api-Key: ${HVO_ROOF_API_KEY}" "${roof}/api/v4.0/RoofControl/Status" 2>/dev/null |
-        python3 -c 'import json, sys; status = json.load(sys.stdin); sys.exit(0 if status["isInitialized"] and status["status"] == "Closed" else 1)' \
-        2>/dev/null
+    HVO_SMOKE_STATUS_URL="${roof}/api/v4.0/RoofControl/Status" python3 - <<'PY_STATUS' 2>/dev/null
+import json, os, sys, urllib.request
+request = urllib.request.Request(os.environ['HVO_SMOKE_STATUS_URL'], headers={'X-Api-Key': os.environ['HVO_ROOF_API_KEY']})
+with urllib.request.urlopen(request, timeout=5) as response: status = json.load(response)
+sys.exit(0 if status['isInitialized'] and status['status'] == 'Closed' else 1)
+PY_STATUS
 }
 
 deadline=$((SECONDS + 120))

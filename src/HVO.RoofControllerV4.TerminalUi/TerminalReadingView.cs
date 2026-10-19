@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Terminal.Gui.Input;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -105,10 +106,26 @@ public class TerminalReadingView : ListView
         }
     }
 
+    /// <inheritdoc/>
+    protected override bool OnDrawingContent(DrawContext? context)
+    {
+        var result = base.OnDrawingContent(context);
+        if (HasFocus && Viewport.Height > 0 && Viewport.Width > 0)
+        {
+            var normal = GetAttributeForRole(VisualRole.Normal);
+            SetAttribute(normal.Foreground == Color.None && normal.Background == Color.None
+                ? GetAttributeForRole(VisualRole.Focus)
+                : new(normal.Foreground, normal.Background, normal.Style | TextStyle.Bold | TextStyle.Underline));
+            var first = TerminalCells.Graphemes(_shown.ElementAtOrDefault(Viewport.Y) ?? " ").FirstOrDefault() ?? " ";
+            AddStr(0, 0, first);
+        }
+        return result;
+    }
+
     private void Rewrap()
     {
         var width = Viewport.Width;
-        _wrappedAt = width;
+        _wrappedAt = Viewport.Width;
         _shown = _lines.SelectMany(line => Wrap(line, width)).ToArray();
         SetSource(new ObservableCollection<string>(_shown));
         if (_followsEnd)

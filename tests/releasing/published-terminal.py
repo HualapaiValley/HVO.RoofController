@@ -48,10 +48,10 @@ def pty_start(program, args, env, cwd, columns, rows, installer, output, workflo
     os.close(slave)
     captured=bytearray(); deadline=time.monotonic()+TIMEOUT; sent=False; status=None
     steps = ([(b'\r', ('What to install',)), (b'\x1b', ('This machine',))] if installer else
-             [(b'\x1bOP', ('F1 Roof',)), (b'\x1bOQ', ('F2 Settings',)),
-              (b'\x1bOR', ('F3 People',)), (b'\x1bOS', ('F4 System',)),
-              (b'\x1b[15~', ('F5 Setup',)), (b'\t\r', ('Save and check',)),
-              (b'\x1b[20~', ('Stop failed:',)), (b'\x1b', ('F5 Setup',))]) if workflow else []
+             [(b'\x1bOP', ('ROOF STATE',)), (b'\x1bOQ', ('SETTING / VALUE',)),
+              (b'\x1bOR', ('PEOPLE / ACCOUNTS',)), (b'\x1bOS', ('CONTROLLER / HEALTH',)),
+              (b'\x1b[15~', ('CONNECTION / TRUST',)), (b'\t\r', ('Save and check',)),
+              (b'\x1b[20~', ('Stop failed:',)), (b'\x1b', ('CONNECTION / TRUST',))]) if workflow else []
     step = -1; since = 0
     try:
         while time.monotonic()<deadline:
@@ -134,6 +134,14 @@ def main():
                     drawn = capture.read_bytes()
                     if mode.startswith('ansi16'):
                         require(re.search(rb'\x1b\[[0-9;]*(?:38|48);(?:2|5);', drawn) is None, 'ANSI16 emitted extended colour escapes')
+                    if mode.startswith('nocolor'):
+                        sgr = re.findall(rb'\x1b\[([0-9;]*)m', drawn)
+                        require(not any(int(part) in {*range(30, 38), *range(40, 48), *range(90, 98), *range(100, 108), 38, 48}
+                                        for codes in sgr for part in codes.split(b';') if part), 'NO_COLOR emitted explicit colours')
+                    if mode.endswith('ascii'):
+                        plain = ESCAPES.sub('', drawn.decode('utf-8', 'replace'))
+                        require(not any(char in plain for char in '┌─│╭╰⟦⟧☑☐◉○►◄'), 'ASCII mode emitted Unicode controls')
+                        require('+--' in plain and '[ ' in plain, 'ASCII mode omitted frame/action glyphs')
             files=[p.relative_to(home).as_posix() for p in home.rglob('*') if p.is_file()]
             require(not any('onigwrap' in f.lower() for f in files),'onigwrap extracted')
             require(not any(f.startswith(('config/','data/','extract/','work/')) for f in files),

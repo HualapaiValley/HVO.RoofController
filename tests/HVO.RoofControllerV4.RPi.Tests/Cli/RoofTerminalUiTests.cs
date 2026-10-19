@@ -1433,7 +1433,7 @@ public sealed class RoofTerminalUiTests
         tui.Ui.Message.Should().StartWith("Signed in as ada (admin) until ");
         rig.Stored!.Session!.Name.Should().Be("ada");
         rig.Stored.ApiKey.Should().Be(TestApiKeys.Admin, "signing in keeps the saved key");
-        tui.Screen.Should().Contain("ada (admin) · status");
+        tui.Screen.Should().Contain(tui.Ui.Theme.Capabilities.Ascii ? "ada (admin) | status" : "ada (admin) · status");
 
         Click(tui, "Sign out");
         tui.WaitIdle("the sign-out", () => tui.Ui.Caller?.Kind == RoofCredentialKind.ApiKey);
@@ -1521,6 +1521,22 @@ public sealed class RoofTerminalUiTests
         setup.LastCheck.Should().BeNull("a new connection has not been checked");
         setup.Describe().Should().NotContain("Check:");
         tui.WaitIdle("the caller");
+    }
+
+    [TestMethod]
+    public void Reconnect_RetiredOrdinaryReadCannotReplaceTheNewConnectionMessage()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        tui.Ui.Run(null, async (_, _) => await retired.Task);
+        tui.Ui.Reconnect();
+        tui.Ui.Say("New connection check remains visible.");
+        retired.SetException(new ObjectDisposedException("retired client"));
+        tui.WaitIdle("retired read and new caller");
+        tui.Ui.Message.Should().Be("New connection check remains visible.");
     }
 
     [TestMethod]
@@ -1764,7 +1780,7 @@ public sealed class RoofTerminalUiTests
             var roof = new SettingsApiTests.RoofDouble();
             using var host = new RoofApiTestHost(
                 roof.Mock,
-                settings: new Dictionary<string, string?> { ["BlueIris:BaseUrl"] = "http://192.168.0.4:81" },
+                settings: new Dictionary<string, string?> { ["BlueIris:BaseUrl"] = "http://camera.example.org:81" },
                 configureServices: services => services.Configure<Microsoft.AspNetCore.Identity.PasswordHasherOptions>(options => options.IterationCount = 1_000),
                 settingsFilePath: Path.Combine(directory, "config", "appsettings.Local.json"),
                 secretsFilePath: Path.Combine(directory, "secrets", "managed-secrets.json"));

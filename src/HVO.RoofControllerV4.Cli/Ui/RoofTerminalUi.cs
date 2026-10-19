@@ -109,6 +109,7 @@ internal sealed class RoofTerminalUi : IDisposable
 
         Window.SubViewLayout += (_, _) =>
         {
+            Theme.Prepare(_app);
             var width = Math.Max(24, Window.Viewport.Width);
             var height = Window.Viewport.Height;
             var stopWidth = Math.Max(1, width - 20);
@@ -327,7 +328,6 @@ internal sealed class RoofTerminalUi : IDisposable
         page.Shown();
         Theme.Style(page);
         page.SetFocus();
-        if (page is RoofUiRoofPage roof && roof.OpenButton.Enabled) roof.OpenButton.SetFocus();
     }
 
     /// <summary>
@@ -555,7 +555,12 @@ internal sealed class RoofTerminalUi : IDisposable
             }
             catch (Exception error)
             {
-                Post(() => ShowError(error));
+                Post(() =>
+                {
+                    // A reconnect retires ordinary reads. Their late disposal/error must not replace the new
+                    // connection's check. Motion answers always remain visible, including a lost answer.
+                    if (motion || ReferenceEquals(client, _client)) ShowError(error);
+                });
             }
             finally
             {
@@ -719,6 +724,7 @@ internal sealed class RoofTerminalUi : IDisposable
             return;
         }
 
+        _app.Popovers?.Hide(null);
         _panel = null;
         Window.Remove(panel);
 
@@ -756,9 +762,10 @@ internal sealed class RoofTerminalUi : IDisposable
 
         if (key == Key.Esc)
         {
-            // Esc closes a prompt; it never closes the interface.
+            // Close a field menu before its form; Esc never closes the interface.
             key.Handled = true;
-            ClosePanel();
+            if (_app.Popovers?.GetActivePopover() is { } menu) _app.Popovers.Hide(menu);
+            else ClosePanel();
             return;
         }
 

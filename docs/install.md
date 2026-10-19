@@ -1930,17 +1930,12 @@ test runs fails it after two minutes rather than waiting. It runs with `HVO_MAC_
 
 ### Refreshing the screenshots
 
-The wizard's tests save each page as ANSI. CI draws the pages as SVG and keeps them as the `installer-renders-<run id>`
-artifact. To refresh the pictures above, download that artifact from a green run and copy its `.svg` files into
-`docs/images/install/`. To draw them locally, run this from `src/`:
-
-```bash
-HVO_INSTALLER_RENDERS_DIR=/tmp/installer-renders \
-  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter "FullyQualifiedName~.Installer.InstallerWizard"
-for ans in /tmp/installer-renders/*.ans; do
-  python3 ../tests/cli/ansi-to-svg.py "$ans" "../docs/images/install/$(basename "${ans%.ans}").svg" --title hvo-roof-install
-done
-```
+The controlled driver tests save actual ANSI and `.cells.json` for the wizard, including every conditional form,
+private-input validation, plan/review, fake apply/progress, failure and recovery. CI keeps these with the full
+80 × 24 / 120 × 32 mode matrix. The JSON preserves full graphemes and measured cell widths. Use the
+[shared capture procedure](ui-redesign/terminal-evidence.md#reproduce-captures) to refresh all sixteen images from
+fake machines; the helper masks the local host name and refuses a missing source. No installation or host service
+change is needed to reproduce them.
 
 ## Fresh media and display migration
 

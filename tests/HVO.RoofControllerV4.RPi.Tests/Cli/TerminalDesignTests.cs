@@ -68,6 +68,26 @@ public sealed class TerminalDesignTests
     }
 
     [TestMethod]
+    [DataRow(TerminalColours.TrueColour)]
+    [DataRow(TerminalColours.Ansi16)]
+    [DataRow(TerminalColours.None)]
+    public void PlainOutput_PreservesMessagesAndJson_AndEmitsExactAnsi16(TerminalColours mode)
+    {
+        using var output = new StringWriter();
+        var writer = new TerminalOutputWriter(output, new(mode, true));
+        foreach (var line in new[] { RoofStopText.AcknowledgedVerified, RoofStopText.Acknowledged,
+                     RoofStopText.Sending, RoofStopText.Failed("Controlled failure"), "Warning: controlled warning", "{", "  \"status\": \"Closed\"", "}" })
+            writer.WriteLine(line);
+        var text = output.ToString();
+        text.Should().Contain(RoofStopText.AcknowledgedVerified).And.Contain(RoofStopText.Acknowledged)
+            .And.Contain("  \"status\": \"Closed\"" + Environment.NewLine);
+        if (mode == TerminalColours.None) text.Should().NotContain("\u001b");
+        if (mode == TerminalColours.Ansi16)
+            text.Should().Contain("\u001b[92m" + RoofStopText.Acknowledged + "\u001b[39m")
+                .And.Contain("\u001b[91m").And.Contain("\u001b[93m").And.NotContain("38;2").And.NotContain("38;5");
+    }
+
+    [TestMethod]
     [DataRow("truecolor,unicode", 80, 24)]
     [DataRow("ansi16,unicode", 80, 24)]
     [DataRow("nocolor,unicode", 80, 24)]
@@ -84,6 +104,7 @@ public sealed class TerminalDesignTests
         rig.Environment["HVO_TERMINAL"] = mode;
         using var tui = new TuiDriver(rig, width, height);
         tui.WaitIdle("live status", () => tui.Ui.Caller is not null && tui.Ui.Status is not null && !tui.Ui.IsStale);
+        tui.Screen.Should().Contain("[ Stop roof (F9) ]");
         var tag = mode.Replace(',', '-');
         for (var index = 0; index < 5; index++)
         {
@@ -91,7 +112,7 @@ public sealed class TerminalDesignTests
             tui.WaitIdle("page data");
             tui.Screen.Should().Contain($"F{index + 1} {tui.Ui.CurrentPage.Title}").And.Contain("Stop roof (F9)");
             if (mode.EndsWith("ascii", StringComparison.Ordinal))
-                tui.Screen.Should().NotContainAny("┌", "─", "│", "╭", "╰", "⟦", "⟧");
+                tui.Screen.Should().Contain("+--").And.NotContainAny("┌", "─", "│", "╭", "╰", "⟦", "⟧");
             tui.Render(TestContext, $"176-{tag}-{width}x{height}-page{index + 1}");
             tui.Ui.Ask(new RoofUiPrompt("LONG / PRIVATE REVIEW", string.Join(' ', Enumerable.Repeat("屋根 é 👩🏽‍🔬 Long explanation with a correction and safe cancellation.", 12)),
                 Enumerable.Range(0, 8).Select(n => new RoofUiField($"Private entry {n + 1}", Secret: true)).ToArray(),
@@ -118,9 +139,58 @@ public sealed class TerminalDesignTests
             }
             if (mode.StartsWith("nocolor", StringComparison.Ordinal)) tui.DrawnAttributes().Should().OnlyContain(a => a.Foreground == Color.None && a.Background == Color.None);
             tui.Render(TestContext, $"176-{tag}-{width}x{height}-prompt{index + 1}");
+            panel.Fields[0].SetFocus();
+            panel.Fields[0].InvokeCommand(Command.Context);
+            tui.Pump();
+            tui.App.Popovers!.GetActivePopover().Should().NotBeNull("the real field context menu was opened");
+            tui.Screen.Should().Contain("Stop roof (F9)");
+            tui.Press(Key.F9);
+            tui.WaitIdle("Stop over the field menu", () => tui.Ui.StopResult != RoofStopText.Sending);
+            tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
+            tui.Screen.Should().Contain("Relay register verified de-energized.");
+            if (tui.App.Popovers?.GetActivePopover() is not null)
+            {
+                tui.Press(Key.Esc);
+                tui.Ui.Panel.Should().NotBeNull("Esc closes the field menu first");
+            }
             tui.Press(Key.Esc);
             tui.Ui.Panel.Should().BeNull();
         }
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("nocolor,ascii", 120, 32)]
+    public void ActualWorkflowCatalogue_RetainsItsApiAndPromptAssertions(string mode, int width, int height)
+    {
+        // Reuse the real command workflows and their existing assertions at each capability/size. The driver
+        // records each actual prompt and asserts it fits above Stop; no production simulation path is introduced.
+        TuiDriver.WorkflowProfile = (mode, width, height, TestContext);
+        try
+        {
+            var workflows = new RoofTerminalUiTests { TestContext = TestContext };
+            workflows.Setup_FromNothing_SavesTheConnection_AddsTheFirstAdmin_SignsInAndOut();
+            workflows.Setup_ProviderSignIn_RendersEditableOsNameForDocumentation();
+            workflows.Setup_Connection_RefusesABadAddress_InThePrompt();
+            workflows.Setup_Connection_ACaReplacesTheSavedPin_ButNotOneTypedWithIt();
+            workflows.People_AddsAPerson_AndShowsANewKeysSecretOnce();
+            workflows.People_SettingAPassword_KeepsARoleChangedElsewhere();
+            workflows.People_Role_ChangesTheRole();
+            workflows.People_LinuxRoleAndAccess_AreChangedThroughTheApi();
+            workflows.Settings_AnOperatorChangesTheUiGroup();
+            workflows.Settings_ASafetyCriticalChange_IsShown_AndSentOnlyWhenConfirmed();
+            workflows.Settings_TheCamerasUserAndPassword_AreSetAndClearedTogether();
+            workflows.System_ShowsHealth_AndRestartsOnlyWhenConfirmed();
+            workflows.F10_WhileAStopIsOnItsWay_ThatNothingConfirms_StaysOpenAndSaysSo_UntilF10AgainClosesIt();
+            workflows.F10_WhileItsOpenIsOnItsWay_WithNoAnswerInTime_AndTheStopUnconfirmed_SaysBoth_ThenF10StopsTheRoofAgainIfTheOpenArrivedLate();
+        }
+        finally { TuiDriver.WorkflowProfile = null; }
     }
 
     [TestMethod]

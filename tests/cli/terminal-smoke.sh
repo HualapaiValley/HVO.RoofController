@@ -26,10 +26,10 @@ cli=${HVO_ROOF_CLI:?HVO_ROOF_CLI must name the hvo-roof executable}
 out=${TERMINAL_SMOKE_OUT:-$(mktemp -d)}
 mkdir -p "${out}"
 
-home=$(mktemp -d)
+smoke_home=$(mktemp -d)
 session="hvo-roof-smoke"
 socket="hvo-roof-smoke-$$"
-export HOME="${home}" XDG_CONFIG_HOME="${home}/.config" HVO_ROOF_URL HVO_ROOF_API_KEY
+export HOME="${smoke_home}" XDG_CONFIG_HOME="${smoke_home}/.config" HVO_ROOF_URL HVO_ROOF_API_KEY
 
 # The screens are drawn in colour, as a terminal that supports 24-bit colour shows them.
 export COLORTERM=truecolor
@@ -59,7 +59,7 @@ cleanup() {
         t capture-pane -p -t "${session}" >"${out}/last-screen.txt" 2>/dev/null || true
     fi
     t kill-server 2>/dev/null || true
-    rm -rf "${home}"
+    rm -rf "${smoke_home}"
     exit "${status}"
 }
 trap cleanup EXIT
@@ -163,7 +163,7 @@ wait_screen() {
 save() {
     screen >"${out}/$1.txt"
     t capture-pane -e -N -p -t "${session}" >"${out}/$1.ans"
-    python3 "${here}/ansi-to-svg.py" "${out}/$1.ans" "${out}/$1.svg" --title "hvo-roof ui"
+    python3 "${here}/ansi-to-svg.py" "${out}/$1.ans" "${out}/$1.svg" --title "hvo-roof ui" --mask-local-host
 }
 
 # mode <path>: the permission bits, in octal, as stat prints them on Linux (%a) and a Mac (%Lp).
@@ -196,12 +196,12 @@ grep -q "Closed" "${out}/status.txt" || fail "the status does not say Closed: $(
 run usage 2 status --no-such-option
 run health 8 health
 
-# The interface in a 120 x 36 pane. The pane stays after the command ends, so its exit code can be read. It first
+# The interface in a 120 x 32 pane. The pane stays after the command ends, so its exit code can be read. It first
 # writes its HOME, to prove it runs with this script's environment (the variables are not written: one is a key).
-t new-session -d -s "${session}" -x 120 -y 36 \
+t new-session -d -s "${session}" -x 120 -y 32 \
     "printf '%s\\n' \"\$HOME\" >'${out}/pane-home.txt'; '${cli}' ui; echo \"hvo-roof exited \$?\"; sleep 600"
 wait_screen "the interface shows the live status" 30 "status live"
-[ "$(cat "${out}/pane-home.txt")" = "${home}" ] || fail "the interface did not run with this script's environment"
+[ "$(cat "${out}/pane-home.txt")" = "${smoke_home}" ] || fail "the interface did not run with this script's environment"
 rm -f "${out}/pane-home.txt"
 wait_screen "Stop is on the screen" 5 "Stop roof (F9)"
 save 01-roof
@@ -251,4 +251,36 @@ stopped_short term-stopped Closed
 
 run close 0 close
 grep -q "Done. Roof: Closed" "${out}/close.txt" || fail "'hvo-roof close' did not end at the closed limit: $(cat "${out}/close.txt")"
+# Each fresh session independently selects its capability mode. This adds live emulator navigation and F9
+# over a connection prompt at both bounded sizes; the controlled driver catalogue covers the other prompt types.
+for terminal_mode in truecolor,unicode ansi16,unicode nocolor,unicode ansi16,ascii; do
+    t set-environment -g HVO_TERMINAL "${terminal_mode}"
+    if [[ "${terminal_mode}" == nocolor,* ]]; then
+        t set-environment -g NO_COLOR 1
+    else
+        t set-environment -gu NO_COLOR
+    fi
+    for dimensions in 80:24 120:32; do
+        IFS=: read -r columns rows <<<"${dimensions}"
+        session="hvo-matrix-${terminal_mode//,/-}-${columns}x${rows}"
+        t new-session -d -s "${session}" -x "${columns}" -y "${rows}" \
+            "'${cli}' ui; echo \"hvo-roof exited \$?\"; sleep 600"
+        wait_screen "matrix live status" 30 "status live"
+        for page in F1:Roof F2:Settings F3:People F4:System F5:Setup; do
+            IFS=: read -r key title <<<"${page}"
+            t send-keys -t "${session}" "${key}"
+            wait_screen "matrix ${key} ${title}" 15 "${key} ${title}"
+            wait_screen "matrix Stop remains visible" 5 "Stop roof (F9)"
+            save "matrix-${terminal_mode//,/-}-${columns}x${rows}-${key}"
+        done
+        t send-keys -t "${session}" Tab Enter
+        wait_screen "matrix connection prompt" 15 "Save and check"
+        t send-keys -t "${session}" F9
+        wait_screen "matrix Stop over prompt" 15 "Relay register verified de-energized."
+        save "matrix-${terminal_mode//,/-}-${columns}x${rows}-prompt-stop"
+        t send-keys -t "${session}" Escape F10
+        wait_screen "matrix safe quit" 15 "hvo-roof exited 0"
+        t kill-session -t "${session}"
+    done
+done
 echo "[terminal] PASS: the screens are in ${out}"

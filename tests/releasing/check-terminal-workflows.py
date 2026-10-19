@@ -73,7 +73,7 @@ def main():
             raise RuntimeError('Final distributed workflow check failed; see workflow-run.txt')
     results = ET.parse(args.output / 'final-terminal-workflows.trx').getroot()
     names = [item.attrib.get('testName', '') for item in results.iter() if item.tag.endswith('UnitTestResult') and item.attrib.get('outcome') == 'Passed']
-    required = ['EveryPageAndLongPrivatePrompt_KeepStopAndNewestResultVisible', 'Capabilities_AreExplicit', 'AllConditionalForms_AreBoundedAndKeepCancellationDistinct',
+    required = ['EveryPageAndLongPrivatePrompt_KeepStopAndNewestResultVisible', 'ActualWorkflowCatalogue_RetainsItsApiAndPromptAssertions', 'Capabilities_AreExplicit', 'AllConditionalForms_AreBoundedAndKeepCancellationDistinct',
                 'F9_SendsStop_FromEveryPage', 'Esc_GoesBackAPage_AndNeverCloses_WhileF10Quits']
     if any(not any(method in name for name in names) for method in required):
         raise RuntimeError('Required workflow tests did not execute successfully')

@@ -12,6 +12,8 @@ glyphs, so the picture lines up whatever monospace font the viewer has.
 
 import argparse
 import html
+import json
+import socket
 import re
 import sys
 import unicodedata
@@ -201,7 +203,7 @@ def parse(text):
 
 def is_wide(text):
     """True when a cell's text (a character, with any combining marks after it) takes two columns."""
-    return unicodedata.east_asian_width(text[0]) in ("W", "F")
+    return getattr(text, "columns", None) == 2 if hasattr(text, "columns") else unicodedata.east_asian_width(text[0]) in ("W", "F")
 
 
 def add_text(cells, text, style):
@@ -217,6 +219,52 @@ def add_text(cells, text, style):
         cells.append((ch, style.copy()))
         if is_wide(ch):
             cells.append(None)
+
+
+class CellGlyph(str):
+    """Whole grapheme and width measured by the actual Terminal.Gui driver fixture."""
+    def __new__(cls, text, columns):
+        value = super().__new__(cls, text)
+        value.columns = columns
+        return value
+
+
+def parse_cells(rows):
+    result = []
+    for row in rows:
+        cells = []
+        for cell in row:
+            if cell is None:
+                cells.append(None)
+                continue
+            style = Style()
+            style.fg, style.bg = cell['foreground'], cell['background']
+            for attribute in ('bold', 'dim', 'underline', 'reverse'):
+                setattr(style, attribute, cell[attribute])
+            cells.append((CellGlyph(cell['text'], cell['columns']), style))
+        result.append(cells)
+    return result
+
+
+def mask_local_host(rows):
+    # Replace only the local machine name, at the existing cells, without changing layout or exposing it in argv.
+    host = socket.gethostname()
+    if not host: return rows
+    replacement = '[host]'.ljust(len(host))[:len(host)]
+    for row in rows:
+        line, offsets = '', []
+        for column, cell in enumerate(row):
+            if cell is None: continue
+            text = cell[0]
+            line += text
+            offsets.extend([column] * len(text))
+        start = 0
+        while (index := line.find(host, start)) >= 0:
+            for offset, character in enumerate(replacement):
+                column = offsets[index + offset]
+                row[column] = (character, row[column][1])
+            start = index + len(host)
+    return rows
 
 
 def arm_width(weight):
@@ -397,9 +445,17 @@ def main():
     parser.add_argument("source", help="the screen, with escape sequences (tmux capture-pane -e -N -p)")
     parser.add_argument("target", help="the SVG file to write")
     parser.add_argument("--title", help="a window title to draw above the screen")
+    parser.add_argument("--cells", help="actual driver .cells.json; preserves full graphemes and measured widths")
+    parser.add_argument("--defaults", choices=['dark', 'light'], default='dark', help="terminal defaults for NO_COLOR captures")
+    parser.add_argument("--mask-local-host", action='store_true', help="mask this machine's name, preserving cells")
     arguments = parser.parse_args()
-    with open(arguments.source, encoding="utf-8", errors="replace") as source:
-        rows = parse(source.read())
+    global DEFAULT_FG, DEFAULT_BG
+    if arguments.defaults == 'light': DEFAULT_FG, DEFAULT_BG = '#202020', '#ffffff'
+    if arguments.cells:
+        with open(arguments.cells, encoding='utf-8') as source: rows = parse_cells(json.load(source))
+    else:
+        with open(arguments.source, encoding="utf-8", errors="replace") as source: rows = parse(source.read())
+    if arguments.mask_local_host: rows = mask_local_host(rows)
     with open(arguments.target, "w", encoding="utf-8") as target:
         target.write(render(rows, arguments.title))
     return 0
