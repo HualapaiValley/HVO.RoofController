@@ -165,10 +165,11 @@ input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-
 [data-web-stop-result][data-state="ok"] { color: var(--roof-success); }
 [data-web-stop-result][data-state="warn"] { color: var(--roof-warning); font-weight: 600; }
 [data-web-stop-result][data-state="failed"] { color: var(--roof-danger); font-weight: 600; }
-#components-reconnect-modal { display: none; position: fixed; inset: 0; z-index: 2000; align-items: center; justify-content: center; padding: 20px; background: color-mix(in srgb, var(--roof-background) 90%, transparent); overflow-y: auto; }
+#components-reconnect-modal { display: none; position: fixed; inset: 0; z-index: 2000; align-items: center; justify-content: center; padding: 16px; background: color-mix(in srgb, var(--roof-background) 90%, transparent); overflow: hidden; }
 #components-reconnect-modal:is(.components-reconnect-show, .components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-paused, .components-reconnect-resume-failed) { display: flex; }
-.reconnect-dialog { margin: auto; width: 100%; max-width: 480px; padding: 24px; border: 1px solid var(--roof-border); border-radius: 8px; background: var(--roof-surface); text-align: center; }
-.reconnect-state { display: none; }
+.reconnect-dialog { display: flex; flex-direction: column; gap: 16px; margin: auto; width: 100%; max-width: 480px; max-height: calc(100dvh - 32px); overflow: hidden; padding: 16px; border: 1px solid var(--roof-border); border-radius: 8px; background: var(--roof-surface); text-align: center; }
+/* Scroll the state explanation/actions independently; Stop never depends on scrolling the overlay. */
+.reconnect-state { display: none; min-height: 0; overflow-y: auto; }
 #components-reconnect-modal.components-reconnect-show .components-reconnect-show,
 #components-reconnect-modal.components-reconnect-failed .components-reconnect-failed,
 #components-reconnect-modal.components-reconnect-rejected .components-reconnect-rejected,
@@ -178,12 +179,22 @@ input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-
 .reconnect-icon { color: var(--roof-warning); font-size: 24px; }
 .reconnect-copy { color: var(--roof-muted); font-size: 13px; }
 .reconnect-actions { margin: 16px 0; }
-.reconnect-stop { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 20px; margin: 20px 0 0; border-top: 1px solid var(--roof-border); }
+.reconnect-stop { display: flex; flex: 0 0 auto; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; margin: 0; border-top: 1px solid var(--roof-border); }
 .reconnect-stop .btn { min-height: 62px; min-width: 200px; }
+.reconnect-stop .reconnect-copy { margin: 0; }
+.reconnect-stop-result { max-height: min(25dvh, 7rem); overflow-y: auto; }
 .reconnect-stop-result:empty { display: none; }
 #blazor-error-ui { display: none; position: fixed; inset: auto 0 var(--web-stop-bar-space); z-index: 1060; padding: 16px 48px 16px 20px; border-top: 1px solid var(--roof-warning); background: var(--roof-warning-background); color: var(--roof-warning-text); }
 #blazor-error-ui .reload { color: inherit; margin-left: 12px; }
 #blazor-error-ui .dismiss { position: absolute; right: 16px; top: 8px; cursor: pointer; min-width: 48px; min-height: 48px; border: 0; border-radius: 6px; background: var(--roof-warning-background); color: var(--roof-warning-text); }
+@media (max-height: 400px) {
+    .reconnect-dialog { gap: 8px; padding: 12px; }
+    .reconnect-icon { display: none; }
+    .reconnect-heading { margin: 0 0 4px; font-size: 18px; }
+    .reconnect-state .reconnect-copy { margin: 0; }
+    .reconnect-actions { margin: 4px 0; }
+    .reconnect-stop { gap: 6px; padding-top: 8px; }
+}
 @media (max-width: 760px) {
     .web-main { padding: 24px 16px; }
     .app-navbar { padding: 16px; }

@@ -131,7 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   its actual verified-register or verification-unavailable acknowledgement and failure messages. Inline editors now
   focus their fields, associate validation errors and return focus after Escape/Cancel. Camera operation failures
   now show separate feedback without presenting a live stream as offline, and a failed recording stop remains
-  available to retry (#174).
+  available to retry. Reconnect Stop stays initially visible in short landscape views while explanations scroll
+  independently (#174).
 
 - Corrected the kiosk guide's PIN-access instructions: PIN unlock permits roof operation, while settings and
   administration use the existing web, CLI/TUI or password-authenticated Mac paths. Authorization behavior is unchanged (#171).

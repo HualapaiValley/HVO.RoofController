@@ -158,6 +158,29 @@ public sealed class WebScreenshotTests
         await shots.TakeAsync("12-personal-keys");
     }
 
+    [TestMethod]
+    public async Task ReconnectLandscape_KeepsStopVisible_BeforeScrolling()
+    {
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(), WebDevices.Desktop, cuttableConnection: true);
+        await browser.SignInAsync(WebBrowser.Viewer);
+        await browser.Page.SetViewportSizeAsync(568, 320);
+        await browser.CutConnectionAsync();
+        await browser.ExpectReconnectDialogAsync();
+        await browser.ReconnectDialog.EvaluateAsync("dialog => { dialog.className = 'components-reconnect-resume-failed'; dialog.scrollTop = 0; }");
+        await browser.NextFrameAsync();
+        var placement = await browser.PlacementOfAsync(browser.DialogStop);
+        placement.Top.Should().BeGreaterThanOrEqualTo(0);
+        placement.Bottom.Should().BeLessThanOrEqualTo(320);
+        placement.Reachable.Should().BeTrue("no scrolling or focus has exposed Stop");
+        await Expect(browser.DialogStop).ToBeEnabledAsync();
+        await browser.DialogStop.ClickAsync();
+        await Expect(browser.ReconnectDialog.Locator("[data-web-stop-result]")).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
+        placement = await browser.PlacementOfAsync(browser.DialogStop);
+        placement.Bottom.Should().BeLessThanOrEqualTo(320);
+        placement.Reachable.Should().BeTrue("the actual answer cannot push Stop offscreen");
+        await new Screens(this, browser, "landscape").TakeAsync("15-reconnect", wholePage: false);
+    }
+
     private sealed class Screens(WebScreenshotTests test, WebBrowser browser, string device)
     {
         private static readonly string[] Secrets = [TestApiKeys.Viewer, TestApiKeys.Operator, TestApiKeys.Admin, TestSecrets.Password];

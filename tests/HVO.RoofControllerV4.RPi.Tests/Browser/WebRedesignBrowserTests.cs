@@ -154,16 +154,31 @@ public sealed class WebRedesignBrowserTests
         await page.SetViewportSizeAsync(width, height);
         await browser.CutConnectionAsync();
         await browser.ExpectReconnectDialogAsync();
+        foreach (var state in new[] { "show", "failed", "rejected", "paused", "resume-failed" })
+        {
+            // Measure the initial position before Playwright can scroll/focus the action into view.
+            await browser.ReconnectDialog.EvaluateAsync("""
+                (dialog, state) => {
+                  dialog.className = 'components-reconnect-' + state;
+                  dialog.scrollTop = 0;
+                  for (const child of dialog.querySelectorAll('.reconnect-dialog, .reconnect-state')) child.scrollTop = 0;
+                }
+                """, state);
+            await browser.NextFrameAsync();
+            var bounds = await browser.DialogStop.BoundingBoxAsync();
+            bounds.Should().NotBeNull();
+            bounds!.X.Should().BeGreaterThanOrEqualTo(0, state);
+            bounds.Y.Should().BeGreaterThanOrEqualTo(0, state);
+            (bounds.X + bounds.Width).Should().BeLessThanOrEqualTo(width, state);
+            (bounds.Y + bounds.Height).Should().BeLessThanOrEqualTo(height, state);
+            var placement = await browser.PlacementOfAsync(browser.DialogStop);
+            placement.Reachable.Should().BeTrue("Stop must be initially uncovered in {0}: {1}", state, placement);
+            await Expect(browser.DialogStop).ToBeEnabledAsync();
+        }
         message = RoofStopText.Acknowledged;
         await browser.DialogStop.ClickAsync();
         await Expect(browser.ReconnectDialog.Locator("[data-web-stop-result]")).ToHaveTextAsync(RoofStopText.Acknowledged);
         await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.Acknowledged);
-        foreach (var state in new[] { "show", "failed", "rejected", "paused", "resume-failed" })
-        {
-            await browser.ReconnectDialog.EvaluateAsync("(dialog, state) => dialog.className = 'components-reconnect-' + state", state);
-            await browser.NextFrameAsync();
-            (await browser.PlacementOfAsync(browser.DialogStop)).Reachable.Should().BeTrue("Stop must remain on-screen in every reconnect state");
-        }
     }
 
     private async Task FitAndStopAsync()

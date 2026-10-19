@@ -234,7 +234,11 @@ its end, so the bar never covers the end of a page.
 - **The reconnect dialog.** When a page loses its live connection, a dialog covers it, and it has its own **Stop roof**
   (`Stop still works while this page is disconnected.`). When the web UI cannot be reached, it says
   `Stop failed: The web UI could not be reached. Use the stop control at the roof.`
-  ([commissioning C15](commissioning.md#c15-stop-from-the-web-uis-reconnect-dialog)).
+  ([commissioning C15](commissioning.md#c15-stop-from-the-web-uis-reconnect-dialog)). Stop is visible without scrolling,
+  including short landscape views. The state explanation and longer answers have their own keyboard-scrollable
+  areas; Tab reaches them without hiding Stop.
+
+![Reconnect Stop remains visible in a real 568×320 viewport after an emulated-controller acknowledgement](images/web/15-reconnect-landscape.jpg)
 
 ## Settings
 
@@ -263,6 +267,7 @@ The web UI checks its settings at start, and an invalid one stops it with
 Every answer carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin`.
 Every form post (sign-in, sign-out, Stop) and the live connection must come from the web UI's own pages or an
 `AllowedOrigins` origin; anything else is refused with 403 `origin_not_allowed`.
+
 
 ## Design and secondary workflows
 
