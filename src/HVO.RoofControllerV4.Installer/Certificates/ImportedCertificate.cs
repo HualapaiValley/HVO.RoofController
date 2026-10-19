@@ -158,10 +158,13 @@ public sealed class ImportedCertificate : IDisposable
     private static ImportedCertificate ReadPkcs12(string name, byte[] content, Func<string, string?> password)
     {
         X509Certificate2Collection loaded;
+        // The import step writes the key again with the installer's own file password. On macOS a default-key-set
+        // import is otherwise non-exportable; this applies only to keys explicitly imported for repackaging.
+        var storage = ControllerCertificates.KeyStorage | X509KeyStorageFlags.Exportable;
         try
         {
             // Many files have no password: only ask when this one does.
-            loaded = X509CertificateLoader.LoadPkcs12Collection(content, null, ControllerCertificates.KeyStorage);
+            loaded = X509CertificateLoader.LoadPkcs12Collection(content, null, storage);
         }
         catch (Pkcs12LoadLimitExceededException)
         {
@@ -172,7 +175,7 @@ public sealed class ImportedCertificate : IDisposable
             var given = password($"{name}'s password") ?? throw NoPassword(name);
             try
             {
-                loaded = X509CertificateLoader.LoadPkcs12Collection(content, given, ControllerCertificates.KeyStorage);
+                loaded = X509CertificateLoader.LoadPkcs12Collection(content, given, storage);
             }
             catch (Pkcs12LoadLimitExceededException)
             {

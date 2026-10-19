@@ -565,6 +565,13 @@ jobs:
       - name: Build the tests
         run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release -v minimal
 
+      - name: Import PKCS12 certificates for Mac rigs
+        run: >-
+          dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
+          --filter FullyQualifiedName~InstallerMacCertificateImportTests
+          --logger "trx;LogFileName=mac-certificate-import.trx" --results-directory TestResults/mac-certificate-import
+          -- RunConfiguration.TreatNoTestsAsError=true
+
       # The test is skipped without HVO_MAC_INSTALL, so the summary must show it passed, not skipped.
       - name: Install the Mac app
         run: |
@@ -573,6 +580,15 @@ jobs:
             --filter "TestCategory=MacInstall" --logger "console;verbosity=normal" | tee mac-install.txt
           grep -q '^  Passed TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing ' mac-install.txt
           grep -q '^  Passed TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem ' mac-install.txt
+
+      - name: Upload Mac certificate import evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-certificate-import-${{ github.run_id }}
+          path: src/TestResults/mac-certificate-import/
+          if-no-files-found: warn
+          retention-days: 14
 
   mac-app:
     needs: build-and-test
