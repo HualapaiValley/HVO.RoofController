@@ -386,7 +386,8 @@ jobs:
         run: |
           shopt -s nullglob
           for ans in TestResults/installer-renders/*.ans; do
-            python3 ../tests/cli/ansi-to-svg.py "$ans" "${ans%.ans}.svg" --title hvo-roof-install
+            python3 ../tests/cli/ansi-to-svg.py "$ans" "${ans%.ans}.svg" --title hvo-roof-install \
+              --cells "${ans%.ans}.cells.json" --mask-local-host
           done
 
       - name: Upload installer renders
@@ -397,6 +398,7 @@ jobs:
           path: |
             src/TestResults/installer-renders/*.ans
             src/TestResults/installer-renders/*.svg
+            src/TestResults/installer-renders/*.cells.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -464,6 +466,10 @@ jobs:
           python3 ../tests/releasing/check-terminal-workflows.py "$RUNNER_TEMP/terminal-dist" \
             --rid "${{ matrix.rid }}" --tests ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Release/net10.0 \
             --output "$RUNNER_TEMP/terminal-evidence/workflows"
+          python3 ../tests/cli/refresh-captures.py \
+            --roof "$RUNNER_TEMP/terminal-evidence/workflows/roof" \
+            --installer "$RUNNER_TEMP/terminal-evidence/workflows/installer" \
+            --evidence "$RUNNER_TEMP/terminal-evidence/workflows/renders"
       - name: Upload exact-file runtime evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

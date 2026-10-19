@@ -29,11 +29,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--roof', type=Path, required=True)
     parser.add_argument('--installer', type=Path, required=True)
-    parser.add_argument('--tmux', type=Path, required=True)
+    parser.add_argument('--tmux', type=Path, help='controlled emulator captures; required with --docs')
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--docs', action='store_true', help='replace the complete documented set; requires all sources')
     args = parser.parse_args()
-    for family, folder in [('roof', args.roof), ('installer', args.installer), ('tmux', args.tmux)]:
+    families = [('roof', args.roof), ('installer', args.installer)]
+    if args.tmux is not None: families.append(('tmux', args.tmux))
+    if args.docs and args.tmux is None: parser.error('--docs requires --tmux')
+    for family, folder in families:
         for source in sorted(folder.glob('*.ans')):
             target = args.evidence / family / source.with_suffix('.svg').name
             convert(source, target, 'hvo-roof-install' if family == 'installer' else 'hvo-roof ui')
