@@ -18,6 +18,9 @@ namespace HVO.RoofControllerV4.Installer;
 /// </summary>
 public sealed class InstallerSession
 {
+    private (string From, string To, (string Path, string Sha256)? Taken)? _upgradeBackupFor;
+    private UpgradeBackupStep? _upgradeBackup;
+
     /// <summary>The file the wizard offers to save the answers to, in the folder the installer was started in.</summary>
     public const string AnswersFileName = "hvo-roof-answers.json";
 
@@ -302,8 +305,8 @@ public sealed class InstallerSession
 
     /// <summary>
     /// For an upgrade of the machine's controller on Linux (an older release recorded, and installed, or this release's
-    /// upgrade not finished), the backup of its stores the plan takes first, of the release the upgrade started from; null
-    /// otherwise.
+    /// upgrade not finished), the recovery step for the stores of the release the upgrade started from; null otherwise.
+    /// Approved prerequisite setup and later application plans share this step, whichever prepares the backup first.
     /// </summary>
     public UpgradeBackupStep? UpgradeBackup()
     {
@@ -313,7 +316,35 @@ public sealed class InstallerSession
             return null;
         }
 
-        return new UpgradeBackupStep(record.UpgradingFrom ?? record.Version, Version, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), HandedOverBackup);
+        var key = (From: record.UpgradingFrom ?? record.Version, To: Version, Taken: HandedOverBackup);
+        if (_upgradeBackupFor is not { } previous || previous != key)
+        {
+            _upgradeBackupFor = key;
+            _upgradeBackup = new UpgradeBackupStep(key.From, key.To, BackupCommands.DefaultPath(Survey.HostName, Time.GetUtcNow(), Version), key.Taken);
+        }
+
+        // Preparation and later plans share one backup even when a resurvey or the wizard crosses a clock second.
+        return _upgradeBackup;
+    }
+
+    /// <summary>
+    /// Prepares the upgrade's recovery before approved prerequisite changes: the release must read the stores, and the
+    /// backup must be taken (or the handed-over one verified) and durable. The later application plan keeps this step.
+    /// Does not mark the upgrade started: that still precedes the plan's first application change.
+    /// </summary>
+    internal async Task PrepareUpgradeRecoveryAsync(CancellationToken cancellationToken)
+    {
+        if (UpgradeBackup() is not { } backup) return;
+        var context = Context;
+        var release = await context.ReleaseAsync(cancellationToken).ConfigureAwait(false);
+        if (StateContractGuard.Problem(Machine, ControllerLayout.For(Machine), release) is { } problem)
+            throw new InstallerRefusedException(problem);
+
+        var recovery = await new InstallPlan([backup]).CheckAsync(context, cancellationToken).ConfigureAwait(false);
+        if (recovery.Steps[0].Check is { Change: StepChange.Blocked } blocked)
+            throw new InstallerRefusedException(blocked.Detail!);
+        await recovery.ApplyAsync(context, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (backup.Kept is { } kept) MakeUpgradeBackupDurable(context, kept);
     }
 
     /// <summary>
@@ -348,21 +379,26 @@ public sealed class InstallerSession
         var backup = plan.Steps.Select(step => step.Step).OfType<UpgradeBackupStep>().FirstOrDefault()?.Kept;
         if (backup is not null)
         {
-            try
-            {
-                BackupCommands.MakeDurable(context.Machine, backup);
-            }
-            catch (IOException error)
-            {
-                var message = $"Before its first change, the installer could not make sure that the backup {backup} is there after a power loss: {error.Message} Nothing else was changed.";
-                context.Log.Write($"Failed: {message}");
-                throw new InstallerException(message, error);
-            }
+            MakeUpgradeBackupDurable(context, backup);
         }
 
         foreach (var record in plan.Steps.Select(step => step.Step).OfType<RecordStep>())
         {
             record.MarkUpgradeStarted(context, backup);
+        }
+    }
+
+    private static void MakeUpgradeBackupDurable(InstallContext context, string backup)
+    {
+        try
+        {
+            BackupCommands.MakeDurable(context.Machine, backup);
+        }
+        catch (IOException error)
+        {
+            var message = $"Before its first change, the installer could not make sure that the backup {backup} is there after a power loss: {error.Message} Nothing else was changed.";
+            context.Log.Write($"Failed: {message}");
+            throw new InstallerException(message, error);
         }
     }
 

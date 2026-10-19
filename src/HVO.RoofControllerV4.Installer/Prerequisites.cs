@@ -20,7 +20,7 @@ public static class Prerequisites
         return lines;
     }
 
-    /// <summary>Sets up only explicitly approved kiosk libraries, then checks readiness before application changes.</summary>
+    /// <summary>Prepares upgrade recovery before explicitly approved kiosk libraries, then rechecks readiness.</summary>
     public static async Task PrepareAsync(InstallerSession session, CancellationToken cancellationToken = default)
     {
         await session.RefreshSurveyAsync(cancellationToken).ConfigureAwait(false);
@@ -35,6 +35,8 @@ public static class Prerequisites
         if (check.Change == StepChange.Blocked) throw new InstallerRefusedException(check.Detail!);
         if (check.MakesChange)
         {
+            // Direct installs, session apply and the wizard's approval all enter here before any apt command (#146).
+            await session.PrepareUpgradeRecoveryAsync(cancellationToken).ConfigureAwait(false);
             await packages.ApplyAsync(session.Context, check, cancellationToken).ConfigureAwait(false);
             await session.RefreshSurveyAsync(cancellationToken).ConfigureAwait(false);
             if (session.Machine.FileExists("/var/run/reboot-required"))

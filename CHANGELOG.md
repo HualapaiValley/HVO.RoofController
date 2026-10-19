@@ -116,6 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Upgrades prepare recovery before approved kiosk package setup, including the wizard's approval action:
+  state compatibility and the durable upgrade backup are checked before any apt command. A refused backup or
+  state contract leaves packages unchanged, and the install keeps the same backup (#146).
 - Pull-mode deploy logs read version and commit labels independently, so whitespace in a version cannot forge the
   displayed commit. Pull and archive deploy logs show only printable ASCII labels without JSON escapes; other labels,
   including ordinary Unicode, control characters, quotes and backslashes, are suppressed independently without
