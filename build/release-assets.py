@@ -55,6 +55,8 @@ import zipfile
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPOSITORY_ROOT / "build"))
+import terminal_payload
 DEPLOY_SCRIPT = REPOSITORY_ROOT / "src" / "HVO.RoofControllerV4.RPi" / "deploy-roofcontroller-rpi.sh"
 INSTALL_SCRIPT = REPOSITORY_ROOT / "src" / "HVO.RoofControllerV4.Installer" / "install.sh"
 REPOSITORY_URL = "https://github.com/HualapaiValley/HVO.RoofController"
@@ -171,6 +173,11 @@ def program_assets(folder, program_name, out):
         name = f"{program_name}-{runtime}"
         shutil.copyfile(program, out / name)
         (out / name).chmod(0o755)
+        # Inspect the final bytes, after signing and copying, not an intermediate publish directory (#172).
+        try:
+            terminal_payload.check(out / name, runtime)
+        except (ValueError, KeyError, TypeError, StopIteration) as error:
+            raise AssetError(f"{out / name}: terminal payload check failed: {error}") from error
         names[name] = runtime
     return names
 

@@ -9,7 +9,12 @@
 
   <ItemGroup>
     <PackageReference Include="Terminal.Gui" />
+    <PackageReference Include="System.CommandLine" />
     <ProjectReference Include="../HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Notices/THIRD-PARTY-NOTICES.txt" LogicalName="HVO.Terminal.ThirdPartyNotices" />
   </ItemGroup>
 
 </Project>
