@@ -511,7 +511,12 @@ independently sets touch/text metrics (DRM scale remains 1). A portrait mode suc
 
 Roof groups position/commanded motion and motion actions into separate panels. Larger layouts also show a compact
 readings grid. Readings retains the full status, including input freshness, relay-register evidence and controller name;
-Notices holds recent complete messages. Both use measured Previous/Next pages. PIN loading, failures and empty-user
+the compact input values say **last read** with the successful-read time when reads fail, even while new status
+snapshots arrive. Before any successful input read they say **unavailable**, including the drive-running input.
+A fresh status timestamp does not establish fresh input values. Recovery restores the current values.
+Notices holds recent complete messages. Both use measured Previous/Next pages. Very long tokens, text without spaces
+and multiline messages continue across pages without dropping whitespace or splitting a Unicode grapheme; the same
+document is available through **Full result** for long Stop answers. PIN loading, failures and empty-user
 recovery use the same bounded documents, while Choose/Confirm keeps setup locked until a fresh personal-PIN login.
 The first touch/key on a blank screen only wakes it. Stop continues to use the viewer key while locked.
 
@@ -524,3 +529,9 @@ connection to the observatory controller.
 ![Bounded Readings on the 800×480 fixture](images/kiosk/readings-800x480.png)
 
 ![Complete recent Notices with touch pagination on the 800×480 fixture](images/kiosk/notices-800x480.png)
+
+![Fresh status feed with failed input reads: each retained limit/drive value has its last successful read time](images/kiosk/input-read-failure-1920x1200.png)
+
+![Before a successful input read, even the drive-running false value is shown as unavailable](images/kiosk/inputs-unavailable-1920x1200.png)
+
+![A long no-space Stop result continues at full text size, with reachable Previous/Next pages and permanent Stop](images/kiosk/long-stop-result-800x480.png)

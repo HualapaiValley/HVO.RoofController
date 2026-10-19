@@ -182,6 +182,117 @@ public sealed class KioskRedesignTests
     }
 
     [TestMethod]
+    [DataRow(1920, 1200, 8.2)]
+    [DataRow(1920, 1200, 9.0)]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
+    public async Task ArbitraryServerText_IsFullyRenderedAcrossReadingsAndStopPages(int width, int height, double density)
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
+        var messages = new[]
+        {
+            string.Concat(Enumerable.Range(0, 600).Select(i => $"reading{i:000}")),
+            string.Join("\r\n\n", Enumerable.Range(0, 45).Select(i => $"測定{i:000}e\u0301")),
+            string.Concat(Enumerable.Range(0, 600).Select(i => $"測定{i:000}e\u0301"))
+        };
+        for (var i = 0; i < messages.Length; i++)
+        {
+            var message = messages[i];
+            var view = harness.Console.View with { Status = harness.Console.View.Status! with { LastError = message } };
+            await OnUiAsync(() =>
+            {
+                screen.Shell.Update(view);
+                screen.Shell.ShowPage(KioskPage.Readings);
+            });
+            var readings = await DrawAllPages(screen, $"review-readings-{i}", "Last error: " + message);
+            readings.Should().Contain(" (continued)");
+            readings.Replace(" (continued)", string.Empty, StringComparison.Ordinal).Should().Contain("Last error: " + message);
+            await OnUiAsync(() =>
+            {
+                var pager = screen.Window.GetVisualDescendants().OfType<KioskPager>().Single(p => p.IsEffectivelyVisible);
+                pager.PageCount.Should().BeGreaterThan(1);
+                var current = pager.CurrentPage;
+                screen.Shell.Update(view with { Status = view.Status! with { StatusVersion = view.Status!.StatusVersion + 1 } });
+                screen.Window.UpdateLayout();
+                pager.CurrentPage.Should().Be(current, "a heartbeat preserves the page within an oversized token too");
+                screen.Shell.ShowPage(KioskPage.Roof);
+                screen.Shell.Update(view with { StopOutcome = RoofStopOutcome.Failed, StopMessage = message });
+            });
+            await screen.DrawAsync();
+            await screen.TouchAsync(screen.Find("stop-details")!);
+            var result = await DrawAllPages(screen, $"review-stop-{i}", message);
+            result.Should().Contain(" (continued)");
+            result.Replace(" (continued)", string.Empty, StringComparison.Ordinal).Should().Contain(message);
+            await OnUiAsync(() => screen.Window.GetVisualDescendants().OfType<ScrollViewer>().Should().BeEmpty());
+        }
+    }
+
+    [TestMethod]
+    [DataRow(1920, 1200, 9.0)]
+    [DataRow(960, 600, 4.0)]
+    public async Task CompactInputs_DistinguishCachedNeverReadAndRecoveredValues(int width, int height, double density)
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
+        var live = harness.Console.View.Status! with
+        {
+            InputsHealthy = true, LastSuccessfulInputReadUtc = KioskHarness.Start.AddSeconds(-10),
+            IsOpenLimitActive = true, IsClosedLimitActive = false, IsAtSpeed = true, IsDriveFaultActive = false
+        };
+        var cases = new[]
+        {
+            ("healthy", live),
+            ("cached", live with { InputsHealthy = false, ConsecutiveInputReadFailures = 1, SnapshotUtc = KioskHarness.Start }),
+            ("never-read", live with { InputsHealthy = false, LastSuccessfulInputReadUtc = null,
+                IsOpenLimitActive = null, IsClosedLimitActive = null, IsAtSpeed = false, IsDriveFaultActive = null }),
+            ("recovered", live with { LastSuccessfulInputReadUtc = KioskHarness.Start,
+                IsOpenLimitActive = false, IsClosedLimitActive = true, IsAtSpeed = false, IsDriveFaultActive = true })
+        };
+        foreach (var (name, status) in cases)
+        {
+            harness.Push(status);
+            await harness.WaitForAsync(v => v.Status?.StatusVersion == harness.Current.StatusVersion, "fresh hub snapshot");
+            harness.Console.View.IsStale.Should().BeFalse("input health is independent of feed freshness");
+            await screen.RenderAsync($"review-inputs-{name}", TestContext);
+            await OnUiAsync(() =>
+            {
+                var values = new[] { "Open limit", "Closed limit", "Drive running", "Drive fault" }
+                    .Select(label => screen.Shell.RoofPage.GetVisualDescendants().OfType<StackPanel>()
+                        .Single(panel => panel.Children.FirstOrDefault() is TextBlock heading && heading.Text == label)
+                        .Children.OfType<TextBlock>().Last()).ToArray();
+                foreach (var value in values)
+                {
+                    value.IsEffectivelyVisible.Should().BeTrue();
+                    screen.VisibleText(value).Should().Be(value.Text);
+                    if (name == "cached")
+                    {
+                        value.Text.Should().Contain("last read").And.Contain(RoofStatusText.Time(live.LastSuccessfulInputReadUtc!.Value));
+                        value.Text.Should().NotContain(RoofStatusText.Time(status.SnapshotUtc), "snapshot time does not date the cached input");
+                    }
+                    else if (name == "never-read") value.Text.Should().Be("unavailable (no successful read)");
+                    else value.Text.Should().NotContain("last read").And.NotContain("unavailable");
+                }
+                if (name is "healthy" or "cached")
+                    values.Select(v => v.Text!.Split(' ')[0]).Should().Equal("active", "inactive", "active", "inactive");
+                if (name == "recovered") values.Select(v => v.Text).Should().Equal("inactive", "active", "inactive", "active");
+            });
+        }
+        await OnUiAsync(() => screen.Shell.Update(harness.Console.View with { StaleSince = KioskHarness.Start }));
+        await screen.RenderAsync("review-inputs-stale-feed", TestContext);
+        await OnUiAsync(() =>
+        {
+            foreach (var id in new[] { "input-open-limit", "input-closed-limit", "input-drive-running", "input-drive-fault" })
+            {
+                var value = (TextBlock)screen.Find(id)!;
+                screen.VisibleText(value).Should().Contain("last read").And.Contain(RoofStatusText.Time(KioskHarness.Start));
+            }
+        });
+    }
+
+    [TestMethod]
     [DataRow(960, 600)]
     [DataRow(1280, 800)]
     public async Task Desktop_AllGroupsFieldsEditorsAndQuestions_KeepStopAndRoleBoundaries(int width, int height)
@@ -281,7 +392,7 @@ public sealed class KioskRedesignTests
         await pending;
     }
 
-    private async Task<string> DrawAllPages(KioskScreen screen, string name)
+    private async Task<string> DrawAllPages(KioskScreen screen, string name, string? expected = null)
     {
         await screen.DrawAsync();
         var pager = await OnUiAsync(() => screen.Window.GetVisualDescendants().OfType<KioskPager>().SingleOrDefault(p => p.IsEffectivelyVisible));
@@ -295,7 +406,7 @@ public sealed class KioskRedesignTests
             {
                 screen.OffScreen(_ => true).Should().BeEmpty("every visible named native control fits without page scrolling");
                 var scope = pager is null ? screen.Window : screen.Find($"{pager.Name}-body")!;
-                text.AddRange(scope.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible && !string.IsNullOrEmpty(t.Text)).Select(t => t.Text!));
+                text.AddRange(scope.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible && !string.IsNullOrEmpty(t.Text)).Select(screen.VisibleText));
             });
             if (pager is not null && i + 1 < count)
             {
@@ -303,6 +414,22 @@ public sealed class KioskRedesignTests
                 await screen.TouchAsync(next);
             }
         }
-        return string.Join(" ", text);
+        var whole = string.Concat(text);
+        if (expected is not null)
+        {
+            var fragments = text.Select(t => t.EndsWith(" (continued)", StringComparison.Ordinal) ? t[..^12] : t).ToArray();
+            var exact = string.Concat(fragments);
+            var first = exact.IndexOf(expected, StringComparison.Ordinal);
+            first.Should().BeGreaterThanOrEqualTo(0, "all visible source text, including whitespace, survives page traversal in order");
+            var graphemes = System.Globalization.StringInfo.ParseCombiningCharacters(expected).Append(expected.Length).ToHashSet();
+            var offset = 0;
+            foreach (var fragment in fragments)
+            {
+                offset += fragment.Length;
+                if (offset >= first && offset <= first + expected.Length)
+                    graphemes.Should().Contain(offset - first, "page fragments must also end on original source grapheme boundaries");
+            }
+        }
+        return whole;
     }
 }

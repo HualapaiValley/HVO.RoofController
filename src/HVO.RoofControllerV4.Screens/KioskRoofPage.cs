@@ -109,17 +109,29 @@ public sealed class KioskRoofPage : UserControl
         {
             var values = new[]
             {
-                ("Open limit", RoofStatusText.DescribeInput(status.IsOpenLimitActive)),
-                ("Closed limit", RoofStatusText.DescribeInput(status.IsClosedLimitActive)),
-                ("Drive running", RoofStatusText.DescribeInput(status.IsAtSpeed)),
-                ("Drive fault", RoofStatusText.DescribeInput(status.IsDriveFaultActive)),
-                ("Safety inputs", RoofStatusText.DescribeInputs(status)),
-                ("Relay read-back", RoofStatusText.DescribeRelays(status))
+                ("input-open-limit", "Open limit", Input(status.IsOpenLimitActive)),
+                ("input-closed-limit", "Closed limit", Input(status.IsClosedLimitActive)),
+                ("input-drive-running", "Drive running", Input(status.IsAtSpeed)),
+                ("input-drive-fault", "Drive fault", Input(status.IsDriveFaultActive)),
+                ("input-health", "Safety inputs", RoofStatusText.DescribeInputs(status)),
+                ("relay-read-back", "Relay read-back", RoofStatusText.DescribeRelays(status))
             };
             for (var i = 0; i < values.Length; i++)
             {
-                var fact = new StackPanel { Children = { KioskTheme.Label(values[i].Item1, _metrics.Small, KioskTheme.Muted), KioskTheme.Label(values[i].Item2, _metrics.Font) } };
+                var value = KioskTheme.Label(values[i].Item3, _metrics.Font);
+                value.Name = values[i].Item1;
+                var fact = new StackPanel { Children = { KioskTheme.Label(values[i].Item2, _metrics.Small, KioskTheme.Muted), value } };
                 _facts.Children.Add(Place(fact, i / 2, i % 2));
+            }
+
+            string Input(bool? active)
+            {
+                if (status.InputsHealthy && !stale) return RoofStatusText.DescribeInput(active);
+                // SnapshotUtc advances even while the controller retains cached raw inputs. IsAtSpeed is a bool,
+                // so its default false is no evidence of inactivity before the first successful input read.
+                return status.LastSuccessfulInputReadUtc is { } read
+                    ? $"{RoofStatusText.DescribeInput(active)} (last read)\n{RoofStatusText.Time(read)}"
+                    : "unavailable (no successful read)";
             }
         }
         _commands.IsVisible = view.IsOperator;

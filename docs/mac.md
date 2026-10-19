@@ -362,6 +362,10 @@ Stop stays outside them. Escape dismisses a focused question. Startup refusal gr
 with recovery instructions and keeps Quit/Return/Escape outside the scrolling document. Closing the application
 continues to end its session and drop any held operator lease; it does not turn a PIN into desktop privileges.
 
+Compact limit and drive readings say **last read** with the successful-read time when input reads fail or the feed
+is stale, and **unavailable** before a successful read. A live status timestamp alone does not make inputs current.
+Readings and Full result retain complete multiline or no-space text across bounded pages, with full-size text and Stop.
+
 [Native redesign evidence](ui-redesign/native-evidence.md) records headless catalogue/editor/question coverage,
 reproducible images, the palette source pin and platform checks still owned by CI.
 

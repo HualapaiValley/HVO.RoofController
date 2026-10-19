@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
@@ -150,6 +152,33 @@ internal sealed class KioskScreen : IAsyncDisposable
         var other => throw new InvalidOperationException($"{name} is a {other.GetType().Name}, which has no text.")
     };
 
+    /// <summary>Reconstructs only laid-out lines that fit the visible viewport, after an actual frame was drawn.</summary>
+    public string VisibleText(TextBlock block)
+    {
+        var text = block.Text ?? string.Empty;
+        var visible = new StringBuilder();
+        var top = block.Padding.Top;
+        var boundaries = StringInfo.ParseCombiningCharacters(text).Append(text.Length).ToHashSet();
+        foreach (var line in block.TextLayout.TextLines)
+        {
+            line.FirstTextSourceIndex.Should().Be(visible.Length, "rendered lines retain source order without omissions");
+            // Avalonia includes its synthetic end-of-paragraph run in the final line's Length.
+            var length = Math.Min(line.Length, text.Length - line.FirstTextSourceIndex);
+            boundaries.Should().Contain(line.FirstTextSourceIndex, "a rendered line starts on a grapheme boundary");
+            boundaries.Should().Contain(line.FirstTextSourceIndex + length, "a rendered line ends on a grapheme boundary");
+            line.HasCollapsed.Should().BeFalse();
+            var origin = block.TranslatePoint(new Point(block.Padding.Left + line.Start, top), Window)!.Value;
+            var ink = new Rect(origin, new Size(line.Width, line.Height));
+            Shown(block).Inflate(1).Contains(ink).Should().BeTrue("every rendered line fits all clipping ancestors and the screen");
+            new Rect(block.Bounds.Size).Inflate(1).Contains(new Rect(new Point(block.Padding.Left + line.Start, top), ink.Size))
+                .Should().BeTrue("the TextBlock must hold the actual laid-out lines, not just the backing text");
+            visible.Append(text.AsSpan(line.FirstTextSourceIndex, length));
+            top += line.Height;
+        }
+        visible.Length.Should().Be(text.Length, "every source character has a visible rendered line");
+        return visible.ToString();
+    }
+
     /// <summary>
     /// Hides every visible text that is exactly <paramref name="text"/> behind a grey bar, as the web UI's screenshots
     /// hide the host name: the renders are published, and the machine that drew them is nobody's business. Returns how
@@ -262,10 +291,17 @@ internal sealed class KioskScreen : IAsyncDisposable
                 }
             }
 
+            // Bounded documents may wrap an oversized server token or CJK at grapheme boundaries. Keep the original
+            // word-breaking assertion for normal words, including prose inside these documents.
+            var paged = block.GetVisualAncestors().OfType<KioskPager>().Any();
+            var graphemes = paged ? StringInfo.ParseCombiningCharacters(text).ToHashSet() : null;
             foreach (var line in block.TextLayout.TextLines.Skip(1))
             {
                 var at = line.FirstTextSourceIndex;
-                if (at > 0 && at < text.Length && char.IsLetterOrDigit(text[at - 1]) && char.IsLetterOrDigit(text[at]))
+                if (paged && at < text.Length && !graphemes!.Contains(at))
+                    problems.Add("A bounded document breaks a Unicode grapheme across rendered lines");
+                else if (at > 0 && at < text.Length && char.IsLetterOrDigit(text[at - 1]) && char.IsLetterOrDigit(text[at])
+                    && !(paged && TokenWiderThanBox(block, at)))
                 {
                     problems.Add($"\"{text}\" is broken inside a word, before \"{text[at..]}\" ({block.Bounds.Width:0} px wide)");
                 }
@@ -301,6 +337,23 @@ internal sealed class KioskScreen : IAsyncDisposable
         problems.AddRange(Overlaps(buttons));
         problems.Should().BeEmpty(
             $"every button on {name} at {Size} is a whole touch target on the screen, no text is cut off (but for one abbreviated on purpose), and nothing is drawn over anything else");
+    }
+
+    private static bool TokenWiderThanBox(TextBlock block, int at)
+    {
+        var text = block.Text!;
+        var first = at;
+        var end = at;
+        while (first > 0 && !char.IsWhiteSpace(text[first - 1])) first--;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+        var token = new TextBlock
+        {
+            Text = text[first..end], FontFamily = block.FontFamily, FontSize = block.FontSize,
+            FontStyle = block.FontStyle, FontWeight = block.FontWeight, FontStretch = block.FontStretch,
+            LetterSpacing = block.LetterSpacing, TextWrapping = TextWrapping.NoWrap
+        };
+        token.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return token.DesiredSize.Width > block.Bounds.Width + 1;
     }
 
     /// <summary>

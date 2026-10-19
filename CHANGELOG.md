@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Redesign the kiosk and Mac screens with the approved HVO hierarchy, permanent red Stop, bounded kiosk readings/notices/people
   pages, private PIN steps, clearer password administration and startup recovery. Preserve 12 mm targets, consumed wake input,
   Operator-only PIN policy and all shared Stop messages, including acknowledgement without register-verification evidence.
+  Keep complete long-token/multiline messages reachable across pages, and qualify cached or never-read compact input values.
   Align the shared palette and existing terminal RGB schemes with the 20 final Sky roles; terminal capability/layout work remains
   separate (#175, refs #158).
 

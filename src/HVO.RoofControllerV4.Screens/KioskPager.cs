@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -104,32 +105,78 @@ public sealed class KioskPager : UserControl
                 yield return item;
                 continue;
             }
-            // Arbitrary server messages can exceed one page. Keep complete words, explicit continuation and all text.
-            var words = (text.Text ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var part = string.Empty;
-            var index = 0;
-            foreach (var word in words)
+            // Measure complete graphemes, including the continuation cue. Prefer a nearby whitespace boundary for
+            // normal prose, but a single server token/newline-only/CJK paragraph must also have reachable pages.
+            // Keep the source whitespace verbatim so concatenating the fragments recovers the complete message.
+            var source = text.Text ?? string.Empty;
+            var boundaries = StringInfo.ParseCombiningCharacters(source).Append(source.Length).ToArray();
+            var start = 0;
+            while (start < boundaries.Length - 1)
             {
-                var candidate = part.Length == 0 ? word : $"{part} {word}";
-                var probe = Piece(candidate);
-                probe.Measure(new Size(width, double.PositiveInfinity));
-                if (part.Length > 0 && probe.DesiredSize.Height > height - _metrics.Font * 1.5)
+                var offset = boundaries[start];
+                var rest = Piece(source[offset..]);
+                if (Fits(rest))
                 {
-                    yield return Piece(part + " (continued)");
-                    index++;
-                    part = word;
+                    yield return rest;
+                    break;
                 }
-                else part = candidate;
+                var low = start + 1;
+                var high = boundaries.Length - 2;
+                var end = start;
+                while (low <= high)
+                {
+                    var middle = low + (high - low) / 2;
+                    if (Fits(Piece(source[offset..boundaries[middle]] + " (continued)")))
+                    {
+                        end = middle;
+                        low = middle + 1;
+                    }
+                    else high = middle - 1;
+                }
+                // At supported geometry at least one full-size grapheme and cue fit. If a temporarily tiny viewport
+                // cannot hold the cue, the page counter still supplies continuation; never split the grapheme.
+                var cue = " (continued)";
+                if (end == start)
+                {
+                    end = start + 1;
+                    cue = string.Empty;
+                }
+                else
+                {
+                    for (var wordEnd = end; wordEnd > start + (end - start) / 2; wordEnd--)
+                    {
+                        if (!char.IsWhiteSpace(source[boundaries[wordEnd - 1]])) continue;
+                        if (!Fits(Piece(source[offset..boundaries[wordEnd]] + cue))) continue;
+                        end = wordEnd;
+                        break;
+                    }
+                }
+                yield return Piece(source[offset..boundaries[end]] + cue);
+                start = end;
             }
-            if (part.Length > 0) yield return Piece(part);
+
+            bool Fits(TextBlock candidate)
+            {
+                candidate.Measure(new Size(width, double.PositiveInfinity));
+                return candidate.DesiredSize.Height <= height;
+            }
 
             TextBlock Piece(string value) => new()
             {
-                Name = index == 0 ? text.Name : null,
+                Name = start == 0 ? text.Name : null,
                 Text = value,
+                FontFamily = text.FontFamily,
                 FontSize = text.FontSize,
+                FontStyle = text.FontStyle,
                 FontWeight = text.FontWeight,
+                FontStretch = text.FontStretch,
+                LineHeight = text.LineHeight,
+                LetterSpacing = text.LetterSpacing,
+                TextAlignment = text.TextAlignment,
+                FlowDirection = text.FlowDirection,
+                Padding = text.Padding,
                 Foreground = text.Foreground,
+                VerticalAlignment = text.VerticalAlignment,
                 TextWrapping = TextWrapping.Wrap
             };
         }
