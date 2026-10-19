@@ -232,7 +232,7 @@ publish, native replay or motion is repeated. Reviewed #187/#183 integration, fi
 normal current-head supported-RID/macOS execution remain merge gates.
 
 
-## Final reviewed MAIN integration and required validation
+## Prior combined acceptance at 23acc238
 
 Combined source head `23acc238f0af5f66132f60a70c1d01b77373b581` merges reviewed canonical MAIN
 `2c4deb45ed36e1ed32dec44988d738833f317e4e`, including Web #183/#174, fixture #186/#185 and Mac import #188/#187.
@@ -260,4 +260,39 @@ The earlier **23 source + 23 exact retained-installer IL/JIT** fixture checks re
 three-case import proof is presented as the combined candidate's new macOS all-contracts result. Normal current-head
 supported-RID, final distributed-byte/native, macOS strict signature and notice gates remain pending before merge.
 No CLI republish or separate motion/capture replay is run. The final evidence commit changes docs only; #158
-and shared matrix acceptance remain root-owned, and PR184 stays draft for final review and hosted checks.
+and shared matrix acceptance remain root-owned; PR184 was draft at that checkpoint.
+
+
+## Reviewed socket fix integration and renewed combined acceptance
+
+Combined source `7d75b32f5d67eab8469604f234f9739d5cea52b4` merges only reviewed MAIN
+`410170f89a481841316cc673bb834930dd9f458d` (product #189 / PR190). The merge is conflict-free; its `RegularFiles.cs`
+and new 12-case class are exact MAIN blobs. The original real FIFO/socket/device fixture and refusal assertions remain
+byte-identical to `1e73837`. The production correction maps Darwin's socket-specific error 102 only on Mac; other
+errors retain the original stateless mapping. The only production-source integration delta is that reviewed file.
+
+The exact union preserves every existing final-bundle, ZERO NativeBinary, notice/copy, strict signature, scoped PATH,
+Web and Mac import gate, adding only MAIN's two Mac regular-file evidence steps. All **98 N/W/S raw rows** match
+new MAIN; **89 owned rows and 48 installer steps** match `1e73837`, without status promotion. Other Web/native,
+Client/controller/import sources match MAIN; CLI/TerminalUi runtime code is unchanged by this merge.
+
+Separate Debug and Release full solution builds pass with **zero warnings/errors**. Matching required suites pass
+**Debug 3910 and Release 3910**, with **zero failures and 4/4 existing opt-in nonexecuted cases**.
+**All 12 new regular-file cases execute and pass in each configuration**, including real AF_UNIX refusal and errno
+positive/negative controls. Counts come from the actual TRX; no fixed total is imposed. Runs use exactly
+`TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak`, `--no-build` after the matching build, default
+parallelism and inherited `0002` without mutation. Each build/test uses a separate `flock -w 600 -o` lock window,
+300/900-second timeout and 30-second kill-after. [The current receipt](terminal-final-combined-validation.json)
+records the combined source, full integration proof, counters and TRX hashes; raw logs/results remain private.
+
+The previous **3898 per configuration** acceptance belongs to source `23acc238` only. Its full receipt and the
+invalid runner-umask `077` attempt remain retained separately, without another invalid-context run or source/assertion
+change. Prior head `1e73837` Mac CI passed native signatures/PTY/notices and CLI **371+147**, but installer contracts
+reported **867/868**, with this real-socket category assertion failing and installer rendering not reached. The separate
+reviewed #189 Mac proof does not substitute for the combined candidate's full distributed gate.
+
+Old installer `647a6a8` lacks **both #187 and #189**. Prior CLI `981f2ea` / installer `647a6a8` native, motion,
+captures and focused **23 source + 23 old-installer IL/JIT** evidence retain their stated historical scopes. No CLI
+republish or separate native/motion/capture replay is run here. Normal new-head hosted CI must exercise the new exact
+installer and full Mac contracts/render/signatures before merge. PR184 remains ready; root owns review/watch/merge
+and the separate final #158 matrix reconciliation.
