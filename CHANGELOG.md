@@ -127,6 +127,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Report macOS socket paths as non-regular files when the installer refuses to read a state store, retaining the
+  existing refusal before reading and Linux error handling (#189).
 - Allow password-protected and passwordless PKCS#12 certificate imports for Mac rigs to be saved with the installer's
   private file password, retaining the certificate's key and public chain (#187).
 - Keep the permanent red direct-REST Stop visible in browser camera fullscreen and red under keyboard focus. Preserve

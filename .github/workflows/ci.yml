@@ -565,6 +565,13 @@ jobs:
       - name: Build the tests
         run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release -v minimal
 
+      - name: Refuse non-regular files on macOS
+        run: >-
+          dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
+          --filter FullyQualifiedName~InstallerRegularFilesTests
+          --logger "trx;LogFileName=mac-regular-files.trx" --results-directory TestResults/mac-regular-files
+          -- RunConfiguration.TreatNoTestsAsError=true
+
       - name: Import PKCS12 certificates for Mac rigs
         run: >-
           dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build
@@ -587,6 +594,15 @@ jobs:
         with:
           name: mac-certificate-import-${{ github.run_id }}
           path: src/TestResults/mac-certificate-import/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Mac regular-file guard evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-regular-files-${{ github.run_id }}
+          path: src/TestResults/mac-regular-files/
           if-no-files-found: warn
           retention-days: 14
 
