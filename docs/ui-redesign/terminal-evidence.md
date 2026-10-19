@@ -1,5 +1,9 @@
 # Terminal and installer redesign evidence (#176)
 
+Current status: reviewed and merged; [final integrated acceptance](acceptance.md) and
+[exact final artifact/results receipt](acceptance.json) complete the platform gates. Sections below preserve their
+original checkpoint results, failures and then-pending work; they do not describe an outstanding gate now.
+
 This delivery owns T/C/I rows and the 48 plan-output surfaces in the [inventory](inventory.csv) and
 [installer step catalogue](installer-steps.csv). #158 remains the family completion issue; #96, #153 and #76
 retain their independent functional contracts. The source pins and exact semantic roles remain in
@@ -296,3 +300,14 @@ captures and focused **23 source + 23 old-installer IL/JIT** evidence retain the
 republish or separate native/motion/capture replay is run here. Normal new-head hosted CI must exercise the new exact
 installer and full Mac contracts/render/signatures before merge. PR184 remains ready; root owns review/watch/merge
 and the separate final #158 matrix reconciliation.
+
+
+## Final integrated acceptance
+
+[Final acceptance](acceptance.md) records merged main `c0c41b87d443861523ec9d7eccdc8448658c2d30` and final
+reviewed PR184 head `90ab3e14fed0309fe98fc76476491607dcf6b91e`. Both combined Debug/Release builds have zero
+warnings/errors and each required suite passes 3,910 tests with four existing opt-in outcomes. All 18 triggered
+checks pass; two optional soak jobs are skipped. All three supported RIDs pass separate native final-program PTYs
+and exact bundled-IL/JIT workflows (CLI 518, installer 964 per RID), matching manifest/runtime/program hashes.
+Mac strict signatures, notices, 12 file-guard and three import cases pass. The original platform-specific tests/captures
+and failed-attempt limitations above remain intact; this final docs reconciliation changes no runtime or image.

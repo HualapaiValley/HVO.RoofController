@@ -2,7 +2,7 @@
 
 Read-only research completed 2026-10-19 for #171/#158; Roof source baseline
 `2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3`. This durable summary records the supplied parsed-artifact audit, not an
-execution test by the foundation. It scopes the active [payload-fix task #172](https://github.com/HualapaiValley/HVO.RoofController/issues/172), coordinated with
+execution test by the foundation. It scoped the subsequently merged [payload-fix task #172](https://github.com/HualapaiValley/HVO.RoofController/issues/172), coordinated with
 [#96](https://github.com/HualapaiValley/HVO.RoofController/issues/96); #171 changes no packaging/runtime behavior.
 
 ## Verified release inventory
@@ -48,13 +48,15 @@ asset was present. This confirms omission of that supplied notice material in th
 permission material, and JetBrains.Annotations has an MIT clause. This is neither exhaustive author-attribution
 coverage nor certification of legal compliance for the whole release, other products or future builds.
 
-## Pending implementation and validation (#172)
+## Foundation implementation boundary (#172)
 
 Source inspection found no direct use of Terminal.Gui Code/Markdown/Wizard/WizardStep in Roof's two terminal programs
 and shared theme. Roof's [InstallerWizard](../../src/HVO.RoofControllerV4.Installer/Wizard/InstallerWizard.cs) is its own
 Window-based coordinator, and [ReadingView](../../src/HVO.RoofControllerV4.Installer/Wizard/ReadingView.cs) a ListView.
 That supports investigating scoped highlighting exclusions; it does not prove runtime success without that closure.
-Current-main publishing, post-exclusion runtime behavior and complete remaining-notice delivery **were not tested**.
+At that foundation checkpoint, current-main publishing, post-exclusion runtime behavior and complete remaining-notice
+delivery **were not tested**. Completed correction and final artifact results are recorded below; the historical
+baseline is not retroactively relabelled as runtime evidence.
 
 Use merged Sky
 [exclusions](https://github.com/HualapaiValley/HVO.SkyMonitor/blob/bf5ef211fa66e76dd83ac171a3fea944b6d5dc26/Directory.Build.targets#L25)
@@ -74,5 +76,14 @@ notice does not prove it ships or is installed.
 Fix future builds/releases only. Published v4.1.1 assets/tags remain immutable. The kiosk's required native libraries
 and kiosk/legacy-home cache purge/uninstall requirements remain independent #96 work.
 
-Historical inventory/omission research is complete. Correction and runtime/publish/notice-delivery validation belong to
-#172 and remain pending; its completion does not close #158 or the independent #96 cache-lifecycle requirements.
+## Completed correction and final artifact validation
+
+#172 merged through [PR177](https://github.com/HualapaiValley/HVO.RoofController/pull/177). It excludes only the unused
+highlighting closure, embeds retained dependency notices behind an early offline `--third-party-notices` path and
+enforces parsed final-bundle/dependency/notice checks. [Final acceptance](acceptance.md#payload-and-theme-removal)
+identifies all six PR184 final files: each has 228 parsed entries, zero NativeBinary members, and the same program hash
+as the actual supported-host runtime and separate exact bundled-IL/JIT workflow proof. Strict Mac signatures and
+installed/rollback-copy notice delivery pass. This fixes future builds; v4.1.1 files/tags remain unchanged.
+
+This bounded correction does not certify every release or other product and does not close the independent #96
+kiosk/legacy-cache lifecycle requirements.

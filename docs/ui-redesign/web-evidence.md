@@ -1,5 +1,9 @@
 # Web redesign evidence (#174)
 
+Current status: reviewed and merged; [final integrated acceptance](acceptance.md) and
+[exact final artifact/results receipt](acceptance.json) complete the platform gates. Sections below preserve their
+original checkpoint results, failures and then-pending work; they do not describe an outstanding gate now.
+
 This records the Web-owned delivery (W01–W63) and theme-project removal for #158. It does not close the native,
 terminal, installer or shared-contract rows. The approved prototype remains pinned at
 [9cc8f2b](https://github.com/HualapaiValley/HVO.RoofController/blob/9cc8f2bbc677f41a9e30217a9881ded0c47860a9/docs/prototypes/roofcontroller-cameraagent.html).
@@ -167,3 +171,14 @@ Existing bUnit/API/browser cases remain the behavior evidence for refusal, stale
 expiry, settings conflicts and hand edits, private inputs, leases, camera recovery and Stop outcomes. Prototype renders
 are not counted as production evidence. No test uses real hardware or a live controller; there was no deployment,
 host-service change, Docker operation, release, tag or external publication.
+
+
+## Final integrated acceptance
+
+[Final acceptance](acceptance.md) records merged main `c0c41b87d443861523ec9d7eccdc8448658c2d30` and final
+reviewed PR184 head `90ab3e14fed0309fe98fc76476491607dcf6b91e`. Both combined Debug/Release builds have zero
+warnings/errors and each required suite passes 3,910 tests with four existing opt-in outcomes. All 18 triggered
+checks pass; two optional soak jobs are skipped. All three supported RIDs pass separate native final-program PTYs
+and exact bundled-IL/JIT workflows (CLI 518, installer 964 per RID), matching manifest/runtime/program hashes.
+Mac strict signatures, notices, 12 file-guard and three import cases pass. The original platform-specific tests/captures
+and failed-attempt limitations above remain intact; this final docs reconciliation changes no runtime or image.

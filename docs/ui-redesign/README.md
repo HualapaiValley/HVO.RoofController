@@ -1,10 +1,12 @@
-# UI redesign foundation (#171)
+# UI redesign acceptance (#158)
 
-This is the delivery contract for [#158](https://github.com/HualapaiValley/HVO.RoofController/issues/158),
-recorded against Roof main `2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3` on 2026-10-19.
-[Foundation #171](https://github.com/HualapaiValley/HVO.RoofController/issues/171) delivers an inventory and design
-contract. **Every production redesign row remains pending. Keep #158 open** until the platform work, dependency
-removal and evidence below are complete. Existing functionality is not evidence of a completed redesign.
+This is the delivery contract and acceptance index for
+[#158](https://github.com/HualapaiValley/HVO.RoofController/issues/158).
+[Foundation #171](https://github.com/HualapaiValley/HVO.RoofController/issues/171) recorded the inventory at
+`2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3`. Native #175, Web #174, terminal/installer #176 and payload #172
+are merged. The [final acceptance record](acceptance.md) identifies reviewed source heads, combined builds/tests,
+all supported-RID artifacts and the scope behind all 187 verified surface rows and 48 installer-step rows.
+Existing functionality or a prototype alone is never acceptance evidence.
 
 - [Coverage matrix](inventory.csv): filter by `platform`, `slice`, `states` or `redesign_status`. Each row identifies
   an existing surface, access rule, current source and literal source anchor, Stop applicability and specific acceptance
@@ -14,9 +16,8 @@ removal and evidence below are complete. Existing functionality is not evidence 
   redesign, with final merged SkyMonitor provenance and exact ANSI-16 names. It is contract data, not a runtime import.
 - [Validation and evidence requirements](validation.md): what source inspection proves now, and what production work
   must prove before a row can become verified.
-- [Published payload baseline](payload-audit.md): six hash-verified real v4.1.1 bundles, the specific notice omission and limits; exclusion/runtime/notice-delivery work remains pending.
-- [Delivery boundaries and theme removal](delivery.md): independent implementation task briefs for the parent to
-  create after foundation review; these are slice names, not newly created issues or functional authorization.
+- [Published payload baseline](payload-audit.md): six hash-verified real v4.1.1 bundles and the specific historical notice omission; merged correction and final artifact evidence are linked separately.
+- [Delivery boundaries and theme removal](delivery.md): completed implementation ownership and retained acceptance obligations; separate functional features retain their own issues.
 
 ## Reading the matrix
 
@@ -30,9 +31,9 @@ removal and evidence below are complete. Existing functionality is not evidence 
 | S01–S04 | Existing shared Client palette, wording, Stop and catalogue forms | `contract`, coordinated with all adapters |
 
 `source` is relative to the repository root; `source_anchor` is an exact string in that file, more stable than a line
-number as this document changes. The baseline is the commit above, not a deployed build. `baseline_evidence` names
-inspection/test-definition families; it never means those tests were run for this foundation. `redesign_evidence`
-starts at `none; redesign not implemented`. A platform PR must replace it with a durable test/capture reference,
+number as this document changes. The source baseline is the foundation commit above, not a deployed build. `baseline_evidence` names
+inspection/test-definition families; it never means those tests were run for this foundation. At the foundation, `redesign_evidence`
+started at `none; redesign not implemented`. Each platform PR supplies a durable test/capture reference,
 commit and dimensions/modes/roles actually exercised. Use `in-progress`, `implemented-unverified`, then `verified`
 only when the row's entire acceptance requirement is demonstrated; link split work instead of marking a partial row done.
 
@@ -109,8 +110,9 @@ Production [interface rights](../authentication-interfaces.md), [security](../se
   [#96](https://github.com/HualapaiValley/HVO.RoofController/issues/96). Its independent kiosk and legacy-cache purge
   work is not absorbed into #158. Source dependencies alone do not prove what a published single-file executable ships.
 
-Foundation validation is documented in [validation.md](validation.md). No runtime layout/palette was changed, no .NET
-suite or hardware/container operation was run, and no new screenshot is claimed. The contributor-only inventory needs
-no CHANGELOG entry. The operator-facing kiosk PIN guidance correction has a narrow Unreleased Fixed entry for #171;
+Foundation-only validation is distinguished from completed platform evidence in [validation.md](validation.md) and
+[acceptance.md](acceptance.md). The foundation changed no runtime layout/palette, ran no .NET suite or container
+operation, and claimed no new screenshot. This final contributor-only reconciliation changes no runtime or images
+and needs no CHANGELOG entry. The operator-facing kiosk PIN guidance correction has a narrow Unreleased Fixed entry for #171;
 it describes existing policy, with no authentication behavior change. Platform behavior and theme-removal PRs need
 their own entries and regenerated documentation images.

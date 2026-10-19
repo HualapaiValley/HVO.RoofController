@@ -1,5 +1,9 @@
 # Native redesign evidence (#175)
 
+Current status: reviewed and merged; [final integrated acceptance](acceptance.md) and
+[exact final artifact/results receipt](acceptance.json) complete the platform gates. Sections below preserve their
+original checkpoint results, failures and then-pending work; they do not describe an outstanding gate now.
+
 This slice implements N01–N31 and the Client/native portion of S01 for #158, from the approved native prototype at
 `9cc8f2bbc677f41a9e30217a9881ded0c47860a9` and the exact reviewed foundation `984dbdc13b5a22546e595f2a756a13e2e76a39ce`.
 Sky primary README/CSS were fetched through canonical `gh api` at `bf5ef211fa66e76dd83ac171a3fea944b6d5dc26`;
@@ -145,3 +149,14 @@ command above, selecting `-c Debug` or `-c Release`. No full suite, publish, emu
 repeated after these review corrections. The prior full-suite and RGB-runtime evidence is explicitly pre-review.
 Required new-head CI/platform execution and independent follow-up review are still pending; these local gates do not
 mark platform acceptance complete.
+
+
+## Final integrated acceptance
+
+[Final acceptance](acceptance.md) records merged main `c0c41b87d443861523ec9d7eccdc8448658c2d30` and final
+reviewed PR184 head `90ab3e14fed0309fe98fc76476491607dcf6b91e`. Both combined Debug/Release builds have zero
+warnings/errors and each required suite passes 3,910 tests with four existing opt-in outcomes. All 18 triggered
+checks pass; two optional soak jobs are skipped. All three supported RIDs pass separate native final-program PTYs
+and exact bundled-IL/JIT workflows (CLI 518, installer 964 per RID), matching manifest/runtime/program hashes.
+Mac strict signatures, notices, 12 file-guard and three import cases pass. The original platform-specific tests/captures
+and failed-attempt limitations above remain intact; this final docs reconciliation changes no runtime or image.
