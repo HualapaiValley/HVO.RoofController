@@ -27,6 +27,9 @@ internal sealed class CliRig : IDisposable
     public CliRig(RoofApiTestHost? host = null)
         : this(host is null ? null : () => host.Server)
     {
+        // Feed, caller and provider reads start concurrently. Bootstrap this lazy factory once on the test
+        // thread; concurrent WebApplicationFactory.Server initialization can construct competing hosts.
+        if (host is not null) _ = host.Server;
     }
 
     public CliRig(Func<TestServer>? server)
