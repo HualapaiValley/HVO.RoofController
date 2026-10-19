@@ -19,6 +19,12 @@ Linux mapping snapshots, including partial-run evidence when the job times out. 
 written at the end of a completed run. File formats and interpretation are described in
 [C14 commissioning](commissioning.md#c14-rv-6-soak); diagnostics do not change its pass criteria.
 
+CI's `terminal-distributions` matrix runs the final release-assembled installer and CLI on Linux x64,
+Linux arm64 and macOS arm64, after macOS signing. It checks offline notices, help/version, nonterminal
+refusal and isolated PTY startup, and proves the notice document survives the actual installer copy
+and rollback paths on fake machines. Manifest/dependency validation also runs in the production
+release assembler. See [terminal distributions](terminal-distributions.md) for the inventory and bounds.
+
 All workflows:
 
 - declare `permissions: contents: read`;

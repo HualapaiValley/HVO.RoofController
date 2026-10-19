@@ -107,6 +107,7 @@ public static class Installer
         root.Options.Add(memory);
         root.Options.Add(pidsLimit);
         root.Options.Add(version);
+        root.Options.Add(ThirdPartyNotices.CreateOption(host.Out));
         foreach (var option in secretFiles.Values)
         {
             root.Options.Add(option);

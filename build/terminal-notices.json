@@ -1,0 +1,517 @@
+{
+  "noticeSha256": "3a7a0feedb855b95bbca32dc8c7ff1bc18f8725c37b5a629b325cf4c99edcadb",
+  "packages": {
+    "ColorHelper/1.8.1": {
+      "authors": "Artyom Gritsuk",
+      "copyright": null,
+      "license": "MIT",
+      "repository": {
+        "url": "https://github.com/iamartyom/ColorHelper"
+      },
+      "noticeSection": "ColorHelper",
+      "packageUrl": "https://www.nuget.org/packages/ColorHelper/1.8.1",
+      "nuspecSha256": "6a2eb94b6f730d6c88b5afc49e4081e2baa73cd4b16fb1d104123aa6a58d6727"
+    },
+    "JetBrains.Annotations/2026.2.0": {
+      "authors": "JetBrains",
+      "copyright": "Copyright (c) 2016-2025 JetBrains s.r.o.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/JetBrains/JetBrains.Annotations.git"
+      },
+      "noticeSection": "JetBrains.Annotations",
+      "packageUrl": "https://www.nuget.org/packages/JetBrains.Annotations/2026.2.0",
+      "nuspecSha256": "4f2772bb4e7fa48d506e5ed9c27717f00b505753e97f21e7549e37f27c698faf"
+    },
+    "Markdig/1.3.2": {
+      "authors": "Alexandre Mutel",
+      "copyright": "Alexandre Mutel",
+      "license": "BSD-2-Clause",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/xoofx/markdig",
+        "commit": "fc705234fa211d179ee1d5e7656b51ab99f70ca9"
+      },
+      "noticeSection": "Markdig",
+      "packageUrl": "https://www.nuget.org/packages/Markdig/1.3.2",
+      "nuspecSha256": "23715fc01bcda55aba415e7a7d1e69028c51071f9cafd71cf0e45571900ff8f7"
+    },
+    "Microsoft.AspNetCore.Connections.Abstractions/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.Connections.Abstractions/10.0.13",
+      "nuspecSha256": "252ad3ff8205a8df30e874ff0a5ea12a06f3c47072a9af1a3fd1b2b46c76debf"
+    },
+    "Microsoft.AspNetCore.Http.Connections.Client/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.Http.Connections.Client/10.0.13",
+      "nuspecSha256": "cfd8ab3cee834d5eba9f66f40abc10d2989efa2d37a3f6e09f984ca6f268300a"
+    },
+    "Microsoft.AspNetCore.Http.Connections.Common/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.Http.Connections.Common/10.0.13",
+      "nuspecSha256": "1094cbfd67e98bedde594e962dcc6a0621cfb19b5a36ddad1021d260ff8f3b33"
+    },
+    "Microsoft.AspNetCore.SignalR.Client/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.SignalR.Client/10.0.13",
+      "nuspecSha256": "1b641f3edbe5c020111c8a3dcad7ecbc65c0774548f5fba446517385427b3166"
+    },
+    "Microsoft.AspNetCore.SignalR.Client.Core/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.SignalR.Client.Core/10.0.13",
+      "nuspecSha256": "39b0e0f885404be2b3eae3828ed0e7c634fbed159d4015a7d455e5d71db8a72f"
+    },
+    "Microsoft.AspNetCore.SignalR.Common/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.SignalR.Common/10.0.13",
+      "nuspecSha256": "2f8575a2ec439e421ceaa501ca3d1c093586f318fcfc991ebce06bbbc0474a52"
+    },
+    "Microsoft.AspNetCore.SignalR.Protocols.Json/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.AspNetCore.SignalR.Protocols.Json/10.0.13",
+      "nuspecSha256": "63c774eb00168066fb821786aa44345b4126bc125f1636b8880e1849fa4951ae"
+    },
+    "Microsoft.Extensions.Configuration/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Configuration/10.0.11",
+      "nuspecSha256": "9870119538edfc4bab84cff7c3302dfe6573a3e82b909821762498a23bfcedc6"
+    },
+    "Microsoft.Extensions.Configuration.Abstractions/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Configuration.Abstractions/10.0.11",
+      "nuspecSha256": "64cf10520bfd0deaee38da16f4ba942655321a37d30adb9102b5883ee50b8bb0"
+    },
+    "Microsoft.Extensions.Configuration.Binder/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Configuration.Binder/10.0.11",
+      "nuspecSha256": "819f9233cc7fc9c196478bb51dc7e0fcb4d723618b65993baf38755c5905ff56"
+    },
+    "Microsoft.Extensions.Configuration.FileExtensions/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Configuration.FileExtensions/10.0.11",
+      "nuspecSha256": "bc2dff44806bb908dc5cc3d887e28e61088a50f21bb2b15c9dfc9e6dfbb4abac"
+    },
+    "Microsoft.Extensions.Configuration.Json/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Configuration.Json/10.0.11",
+      "nuspecSha256": "066f461a7c098b361ef96361c74f8581603d6b42bcaae3731b3ae5096299ed1b"
+    },
+    "Microsoft.Extensions.DependencyInjection/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection/10.0.13",
+      "nuspecSha256": "39f0d9c0d603553c7d8045e6b8efb370ad21dafd12b98c18bd6964a9d9a09534"
+    },
+    "Microsoft.Extensions.DependencyInjection.Abstractions/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection.Abstractions/10.0.13",
+      "nuspecSha256": "ec1c51eb90a4226aa13870d456ccd34b6e80658ec314547ceb79e47ad3249069"
+    },
+    "Microsoft.Extensions.Features/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Features/10.0.13",
+      "nuspecSha256": "8c221c484f319623d77922912625378685ad3437c63a8e24ad88239d53093dfd"
+    },
+    "Microsoft.Extensions.FileProviders.Abstractions/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.FileProviders.Abstractions/10.0.11",
+      "nuspecSha256": "4bc14b4d0f5af25efe5876e5d5d3ef29d822dddd0c76744d3be3f3d73b09fb28"
+    },
+    "Microsoft.Extensions.FileProviders.Physical/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.FileProviders.Physical/10.0.11",
+      "nuspecSha256": "4ea78c456e852b24c5a4a0cdcf1146bc00654c1d4bf8ab9f16f482773806a952"
+    },
+    "Microsoft.Extensions.FileSystemGlobbing/10.0.11": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "e2f47b0110ed922f21a1522da67279133ce28f32"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.FileSystemGlobbing/10.0.11",
+      "nuspecSha256": "93366d6bf11128b1ee9459429a29d57834e1c2cbc84075eb2455450bef2800cb"
+    },
+    "Microsoft.Extensions.Logging/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Logging/10.0.13",
+      "nuspecSha256": "9c2c22321a3fb1b48a754c40d9af7cb3a443bf2cf13550c550aca5a527ff37db"
+    },
+    "Microsoft.Extensions.Logging.Abstractions/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Logging.Abstractions/10.0.13",
+      "nuspecSha256": "5cf07bdbf6c071a75f07908369d7d078a04ca012af8df71728ff748a1fd818e9"
+    },
+    "Microsoft.Extensions.Options/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Options/10.0.13",
+      "nuspecSha256": "a41380a2ce7eebbc668ef6635b0a452a3c72ef618892996422545df4345bc46b"
+    },
+    "Microsoft.Extensions.Primitives/10.0.13": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      },
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.Extensions.Primitives/10.0.13",
+      "nuspecSha256": "e82aab032c88deebaeb36aaf0f98504500b199b445b08158850a9fcc4bfccda0"
+    },
+    "System.CommandLine/2.0.12": {
+      "authors": "Microsoft",
+      "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "95017c711e6afc1085133d440e42b4bd78155701"
+      },
+      "noticeSection": "System.CommandLine",
+      "packageUrl": "https://www.nuget.org/packages/System.CommandLine/2.0.12",
+      "nuspecSha256": "1ea55594bbab79d567841a60d209374f988d0f57a180e71372e12f4cc37939d9"
+    },
+    "System.IO.Abstractions/22.2.0": {
+      "authors": "Tatham Oddie & friends",
+      "copyright": "Copyright \u00a9 Tatham Oddie & friends 2010-2026",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/TestableIO/System.IO.Abstractions.git",
+        "commit": "ec68061d1cf181d50f089f979301f874885bf0be"
+      },
+      "noticeSection": "System.IO.Abstractions",
+      "packageUrl": "https://www.nuget.org/packages/System.IO.Abstractions/22.2.0",
+      "nuspecSha256": "4478ce4c68ed7b3dc57ae3decf50eaac4adb9d2b142b9e28e7d37fe418886de9"
+    },
+    "Terminal.Gui/2.5.0": {
+      "authors": "Miguel de Icaza, Tig Kindel (@tig), @BDisp",
+      "copyright": null,
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/tui-cs/Terminal.Gui.git",
+        "branch": "main",
+        "commit": "ece73d25c37df9bb17cb0c0d2171abd4d98eeaff"
+      },
+      "noticeSection": "Terminal.Gui",
+      "packageUrl": "https://www.nuget.org/packages/Terminal.Gui/2.5.0",
+      "nuspecSha256": "56e71687d01620971576c4aab87b48121e1ee5b13234be7aa828793beebb3c66"
+    },
+    "TestableIO.System.IO.Abstractions/22.2.0": {
+      "authors": "Tatham Oddie & friends",
+      "copyright": "Copyright \u00a9 Tatham Oddie & friends 2010-2026",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/TestableIO/System.IO.Abstractions.git",
+        "commit": "ec68061d1cf181d50f089f979301f874885bf0be"
+      },
+      "noticeSection": "System.IO.Abstractions",
+      "packageUrl": "https://www.nuget.org/packages/TestableIO.System.IO.Abstractions/22.2.0",
+      "nuspecSha256": "60d362fa9399db01a53b3bae44c77bbce6e64a8ac9982f50a65d424c950ea98b"
+    },
+    "TestableIO.System.IO.Abstractions.Wrappers/22.2.0": {
+      "authors": "Tatham Oddie & friends",
+      "copyright": "Copyright \u00a9 Tatham Oddie & friends 2010-2026",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/TestableIO/System.IO.Abstractions.git",
+        "commit": "ec68061d1cf181d50f089f979301f874885bf0be"
+      },
+      "noticeSection": "System.IO.Abstractions",
+      "packageUrl": "https://www.nuget.org/packages/TestableIO.System.IO.Abstractions.Wrappers/22.2.0",
+      "nuspecSha256": "918e45f7621aae9efdc3d1a7065aab2b1513e3d1f5be2198d16f7e2e406020b0"
+    },
+    "Testably.Abstractions.FileSystem.Interface/10.3.0": {
+      "authors": "Testably",
+      "copyright": "Copyright (c) 2024- 2026 Testably",
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/Testably/Testably.Abstractions.git",
+        "commit": "9b967ee024caa2d47e3ac27a23d26ea55cd20ded"
+      },
+      "noticeSection": "Testably.Abstractions",
+      "packageUrl": "https://www.nuget.org/packages/Testably.Abstractions.FileSystem.Interface/10.3.0",
+      "nuspecSha256": "38e7efb8b9d052365629058740885edeeea9ecc1aae82202fb3499029053e04e"
+    },
+    "Wcwidth/4.0.1": {
+      "authors": "Patrik Svensson and contributors",
+      "copyright": null,
+      "license": "MIT",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/spectreconsole/wcwidth",
+        "commit": "64a3f523d5dc27124e04ff9079137ac2c5c72143"
+      },
+      "noticeSection": "Wcwidth",
+      "packageUrl": "https://www.nuget.org/packages/Wcwidth/4.0.1",
+      "nuspecSha256": "f7a4e20dada2c18c9a688ab8125855d5164c93ca060c044fe952d05ad1cbf633"
+    },
+    "runtimepack.Microsoft.NETCore.App.Runtime.linux-x64/10.0.13": {
+      "authors": "Microsoft",
+      "license": "MIT",
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.NETCore.App.Runtime.linux-x64/10.0.13",
+      "nuspecSha256": "7f25e9c1b869c979c7a9cffa766efcb31845acd2fd382830fbd773ec42b31998",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      }
+    },
+    "runtimepack.Microsoft.NETCore.App.Runtime.linux-arm64/10.0.13": {
+      "authors": "Microsoft",
+      "license": "MIT",
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.NETCore.App.Runtime.linux-arm64/10.0.13",
+      "nuspecSha256": "a9cb3d5c6ac95ca99f11f1a84e40e6b9243bf0dba34173e8a0189c8326008435",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      }
+    },
+    "runtimepack.Microsoft.NETCore.App.Runtime.osx-arm64/10.0.13": {
+      "authors": "Microsoft",
+      "license": "MIT",
+      "noticeSection": ".NET MIT license",
+      "packageUrl": "https://www.nuget.org/packages/Microsoft.NETCore.App.Runtime.osx-arm64/10.0.13",
+      "nuspecSha256": "c7c72ea3d09de84619b2826b3baa6ba30585fe44522d877c7372d40aca1d3cb5",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/dotnet/dotnet",
+        "commit": "4099f83977f4d29604a9aeb971fb0a7bc1d5f699"
+      }
+    }
+  },
+  "sources": [
+    {
+      "name": "Terminal.Gui",
+      "source": "https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/LICENSE",
+      "sha256": "2a7331c273b7c121f5e1f6f10e13d279a739ac310c49b56f2fb251d0490988d0"
+    },
+    {
+      "name": "Wcwidth",
+      "source": "https://github.com/spectreconsole/wcwidth/blob/64a3f523d5dc27124e04ff9079137ac2c5c72143/LICENSE.md",
+      "sha256": "29f03aba55e0761c5cb75a266839cd5cd25f013514fbe034bfb5a9b7529e8cce"
+    },
+    {
+      "name": "Markdig",
+      "source": "https://github.com/xoofx/markdig/blob/fc705234fa211d179ee1d5e7656b51ab99f70ca9/license.txt",
+      "sha256": "ae543293657b6782e3d4a76257dc4157210ce88a352ef8392065d3f04dcd88d1"
+    },
+    {
+      "name": "ColorHelper",
+      "source": "https://github.com/iamartyom/ColorHelper/blob/0b4574db8981ade5e45638d180ec094dd7d1eef9/LICENSE",
+      "sha256": "2b9c3c7771d40dc756572b857719d55744dcb21c53bd814a2ac5ad462ffb1ba1"
+    },
+    {
+      "name": "JetBrains.Annotations",
+      "source": "https://github.com/JetBrains/JetBrains.Annotations/blob/51456a32946d20b160c91b384e08ba6d4a5731e4/license.md",
+      "sha256": "f2b4cfa16e46cef7fbf49c00563cb5db53d76108c56ee770beb65b5ef03a5fbb"
+    },
+    {
+      "name": "System.IO.Abstractions",
+      "source": "https://github.com/TestableIO/System.IO.Abstractions/blob/ec68061d1cf181d50f089f979301f874885bf0be/LICENSE",
+      "sha256": "9b4f46dc8e65bb14714479eb4de76b7a1e2e7f9eff7ab1eb0e9dea712f19b1ed"
+    },
+    {
+      "name": "Testably.Abstractions",
+      "source": "https://github.com/Testably/Testably.Abstractions/blob/9b967ee024caa2d47e3ac27a23d26ea55cd20ded/LICENSE",
+      "sha256": "024f2e034ea52d1b47be884bda1bd9b776ceddbfb2a7cc4d49f79255c8ed483c"
+    },
+    {
+      "name": "System.CommandLine",
+      "source": "https://github.com/dotnet/dotnet/blob/95017c711e6afc1085133d440e42b4bd78155701/src/command-line-api/LICENSE.md",
+      "sha256": "58fd5ebf25d75b5bb5f4cd407a9fef3befd3641e1af90a1d0716618e6430fc19"
+    },
+    {
+      "name": ".NET MIT license",
+      "source": "NuGet Microsoft.NETCore.App.Runtime.linux-x64/10.0.13/LICENSE.TXT",
+      "sha256": "cfc21f5e8bd655ae997eec916138b707b1d290b83272c02a95c9f821b8c87310"
+    },
+    {
+      "name": "Microsoft.AspNetCore.Connections.Abstractions/10.0.13 THIRD-PARTY-NOTICES.TXT",
+      "source": "NuGet Microsoft.AspNetCore.Connections.Abstractions/10.0.13/THIRD-PARTY-NOTICES.TXT",
+      "sha256": "307d014f65d8482314f1400ddeae7a0cbabb96c2207bcc77f6233cc10588e5d9"
+    },
+    {
+      "name": "Microsoft.Extensions.Configuration/10.0.11 THIRD-PARTY-NOTICES.TXT",
+      "source": "NuGet Microsoft.Extensions.Configuration/10.0.11/THIRD-PARTY-NOTICES.TXT",
+      "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21"
+    },
+    {
+      "name": "Microsoft.NETCore.App.Runtime.linux-x64/10.0.13 THIRD-PARTY-NOTICES.TXT",
+      "source": "NuGet Microsoft.NETCore.App.Runtime.linux-x64/10.0.13/THIRD-PARTY-NOTICES.TXT",
+      "sha256": "66f1d4e44973185519bb4aa8a9718eb22fc7af2cc532e3ae9cfc4c127ee7fc54"
+    }
+  ]
+}

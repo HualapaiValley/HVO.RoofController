@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Exact final terminal files, without credentials, controller, install/apply or host commands.
+
+Runs offline help/version/notices/nonterminal refusal, then first-page PTYs at 80x24 and
+120x32. All HOME/XDG/cache/temp/extraction paths are private. PATH contains only an inert bash
+stub: clipboard detection reports unsupported and host survey commands stay unavailable.
+A clean non-root host with no Roof installation is required. Broader page and
+prompt coverage uses Terminal.Gui/fake-machine tests; CLI/emulator tmux smoke stays separate.
+"""
+import argparse
+import errno
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pty
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'build'))
+from terminal_payload import check, RIDS, ROOT
+
+ESCAPES = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][A-Za-z0-9]|\x1b[=>78]')
+TIMEOUT = 45
+
+
+def require(condition, message):
+    if not condition: raise RuntimeError(message)
+
+
+def isolated_command_path(home):
+    # Terminal.Gui 2.5.0's macOS clipboard constructor starts bash without catching a missing
+    # executable. A stub returns command-not-found without executing its arguments or accessing
+    # the host clipboard. Do not expose the runner's real shell, utilities or survey commands.
+    commands = home / 'command-path'
+    commands.mkdir(mode=0o700)
+    shell = commands / 'bash'
+    shell.write_text('#!/bin/sh\nexit 127\n')
+    shell.chmod(0o700)
+    return commands
+
+
+def pty_start(program, args, env, cwd, columns, rows, installer, output):
+    # Set the size before the child starts; waitpid is always nonblocking and bounded.
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+    pid=os.fork()
+    if pid==0:
+        os.close(master); os.setsid(); fcntl.ioctl(slave,termios.TIOCSCTTY,0)
+        for fd in (0,1,2): os.dup2(slave,fd)
+        if slave>2: os.close(slave)
+        os.chdir(cwd); os.execve(program,[program,*args],env)
+    os.close(slave)
+    captured=bytearray(); deadline=time.monotonic()+TIMEOUT; sent=False; status=None
+    try:
+        while time.monotonic()<deadline:
+            ready,_,_=select.select([master],[],[],0.1)
+            if ready:
+                try: chunk=os.read(master,65536)
+                except OSError as e:
+                    if e.errno!=errno.EIO: raise
+                    chunk=b''
+                captured.extend(chunk)
+            require(len(captured)<4*1024*1024,'PTY output exceeded bound')
+            screen=ESCAPES.sub('',captured.decode('utf-8','replace'))
+            expected=('HVO Roof installer','This machine','F10') if installer else ('HVO roof','Setup','F9')
+            if not sent and all(t in screen for t in expected):
+                # F10 is xterm's ESC[21~. Esc goes Back in Roof's installer.
+                os.write(master,b'\x1b[21~'); sent=True
+            done,status_now=os.waitpid(pid,os.WNOHANG)
+            if done:
+                status=status_now; break
+        require(status is not None,'PTY child timed out (including after F10)')
+        code=os.waitstatus_to_exitcode(status)
+        require(sent and code==(130 if installer else 0),f'PTY startup/F10 at {columns}x{rows}: exit {code}; output={screen[-1500:]}')
+    finally:
+        if status is None:
+            os.killpg(pid,signal.SIGKILL); os.waitpid(pid,0)
+        os.close(master)
+        output.write_bytes(captured)
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('dist',type=Path); parser.add_argument('--rid',required=True,choices=RIDS)
+    parser.add_argument('--output',required=True,type=Path)
+    args=parser.parse_args(); args.output.mkdir(parents=True,exist_ok=True)
+    require(os.geteuid()!=0,'PTY smoke requires a non-root disposable user')
+    require(not Path('/etc/hvo-roof').exists() and not Path('/usr/local/bin/hvo-roof').exists(),
+            'PTY smoke refuses an installed Roof host')
+    notice=(ROOT/'src/HVO.RoofControllerV4.TerminalUi/Notices/THIRD-PARTY-NOTICES.txt').read_bytes()
+    records=[]
+    for name in ['hvo-roof-install','hvo-roof']:
+        program=str((args.dist/f'{name}-{args.rid}').resolve()); installer=name.endswith('install')
+        payload=check(program,args.rid)
+        with tempfile.TemporaryDirectory(prefix='hvo-terminal-') as tmp:
+            home=Path(tmp); home.chmod(0o700)
+            for folder in ['config','cache','state','data','tmp','extract','work']:(home/folder).mkdir(mode=0o700)
+            commands = isolated_command_path(home)
+            # Allowlist: no credentials, inherited Docker context, DOTNET_STARTUP_HOOKS or user config.
+            env=dict(HOME=tmp,XDG_CONFIG_HOME=str(home/'config'),XDG_CACHE_HOME=str(home/'cache'),
+                     XDG_STATE_HOME=str(home/'state'),XDG_DATA_HOME=str(home/'data'),TMPDIR=str(home/'tmp'),
+                     DOTNET_BUNDLE_EXTRACT_BASE_DIR=str(home/'extract'),PATH=str(commands),
+                     TERM='xterm-256color',COLORTERM='truecolor',LANG='C.UTF-8',LC_ALL='C.UTF-8',
+                     DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
+            def run(label,argv,code,contains=None,exact=None):
+                result=subprocess.run([program,*argv],env=env,cwd=home/'work',stdin=subprocess.DEVNULL,
+                                      capture_output=True,timeout=TIMEOUT)
+                (args.output/f'{name}-{label}.txt').write_bytes(result.stdout+result.stderr)
+                require(result.returncode==code,f'{name} {label}: exit {result.returncode}: {result.stderr[:300]}')
+                if contains:require(contains.encode() in result.stdout+result.stderr,f'{name} {label}: missing expected text')
+                if exact is not None:require(result.stdout==exact and not result.stderr,f'{name} {label}: embedded notices differ')
+                return result
+            run('help',['--help'],0,'--third-party-notices')
+            version = run('version',['--version'],0)
+            require(re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+[^\s]*\s*', version.stdout.decode('utf-8')) is not None, 'invalid version output')
+            run('notices',['--third-party-notices'],0,exact=notice)
+            # The option terminates even before a command that would otherwise mutate or authorize.
+            run('notices-before-command',['uninstall' if installer else 'open','--third-party-notices'],0,exact=notice)
+            run('no-terminal',[] if installer else ['ui'],2,'terminal')
+            for width,height in [(80,24),(120,32)]:
+                pty_start(program,[] if installer else ['ui'],env,home/'work',width,height,installer,
+                          args.output/f'{name}-{width}x{height}.ans')
+            files=[p.relative_to(home).as_posix() for p in home.rglob('*') if p.is_file()]
+            require(not any('onigwrap' in f.lower() for f in files),'onigwrap extracted')
+            require(not any(f.startswith(('config/','data/','extract/','work/')) for f in files),
+                    'smoke wrote configuration, install record, answers or extracted payload: '+str(files))
+            # The installer deliberately writes its cancellation log. Nothing else is allowed.
+            allowed={'command-path/bash'}
+            if installer: allowed.update({'state/hvo-roof/install.log','Library/Logs/hvo-roof-install.log'})
+            require(set(files)<=allowed,'unexpected private files: '+str(files))
+            records.append(dict(program=name,rid=args.rid,sha256=payload['sha256'],private_files=files,
+                                notices_sha256=hashlib.sha256(notice).hexdigest(),pty_sizes=[[80,24],[120,32]]))
+    (args.output/'runtime-summary.json').write_text(json.dumps(records,indent=2)+'\n')
+    print('PASS final installer and CLI: offline help/version/notices, no-TTY, both PTY sizes; no install/answers/extraction')
+
+
+if __name__=='__main__':
+    main()

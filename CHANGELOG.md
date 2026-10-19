@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Exclude unused terminal highlighting/native assets and carry retained third-party notices inside the standalone and installed installer/CLI (`--third-party-notices`); validate final release payloads and supported-host terminal startup (#172).
 - Corrected the kiosk guide's PIN-access instructions: PIN unlock permits roof operation, while settings and
   administration use the existing web, CLI/TUI or password-authenticated Mac paths. Authorization behavior is unchanged (#171).
 - Installation and deployment documentation now states the accepted single-user temporary-folder assumptions, the
