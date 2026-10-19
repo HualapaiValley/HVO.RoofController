@@ -128,7 +128,8 @@ controller or the camera. A stream ends when the person's session ends.
   its camera control; the permanent roof Stop remains direct and enabled throughout.
 
 ![A browser without recording support reports the control failure while video remains live](images/web/14-camera-control-error-desktop.jpg)
-- The camera is in the web UI only: the terminal interface has none.
+
+The camera is in the web UI only: the terminal interface has none.
 
 ### Health
 

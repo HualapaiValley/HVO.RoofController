@@ -36,11 +36,11 @@ public sealed class PeoplePageTests
         await using var context = harness.Context(session);
         var cut = Loaded(context);
         cut.Click("[data-testid=people-tab][data-tab=linux]");
-        cut.Find("[data-testid=linux-users] button").Click();
+        cut.Click("[data-testid=linux-users] button");
         cut.WaitForElement("[data-testid=linux-user]");
-        cut.Find("[data-testid=linux-user] button").Click();
+        cut.Click("[data-testid=linux-user] button");
         cut.Change("[data-testid=linux-role]", RoofControllerApiContract.OperatorRole);
-        cut.Find("[data-testid=linux-user] input[type=checkbox]").Change(false);
+        cut.Change("[data-testid=linux-user] input[type=checkbox]", false);
         cut.Click("[data-testid=linux-save]");
         cut.WaitForAssertion(() => cut.Find("[data-testid=linux-user]").TextContent.Should().Contain("Disabled"));
         var changed = (await admin.Identity.GetPrincipalsAsync()).Single(item => item.Id == person.Id);
@@ -65,7 +65,7 @@ public sealed class PeoplePageTests
         var cut = Loaded(context);
         cut.Click("[data-testid=people-tab][data-tab=linux]");
         cut.Find("[data-testid=linux-not-read]").TextContent.Should().Contain("Read Linux users");
-        cut.Find("[data-testid=linux-users] button").Click();
+        cut.Click("[data-testid=linux-users] button");
         await cut.WaitForAssertionAsync(() => cut.Find(enabled ? "[data-testid=linux-empty]" : "[data-testid=linux-provider-disabled]")
             .TextContent.Should().Contain(enabled ? "No enrolled Linux users" : "not enabled"));
     }
