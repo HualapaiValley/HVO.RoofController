@@ -85,7 +85,9 @@ fixtures for unrelated products; it retains only the final terminal files from t
 A GitHub-hosted Linux x64, Linux arm64 and macOS arm64 matrix executes those exact files after signing:
 help, version, full notice output, command termination by the notice option, nonterminal refusal,
 and real PTY first-page startup at 80×24 and 120×32. HOME, configuration, cache, state, temporary,
-working and extraction directories are private. An empty PATH disables host survey subprocesses;
+working and extraction directories are private. PATH contains only an inert `bash` stub that returns
+command-not-found without executing its arguments. This lets Terminal.Gui's macOS clipboard probe
+report unsupported; host clipboard utilities and survey commands remain unavailable.
 no controller address or credential is configured. Smoke refuses root and installed Roof hosts.
 It permits the installer's cancellation log, and asserts no installation, saved answers,
 configuration or extracted payload was created. Child processes and waits are bounded.
