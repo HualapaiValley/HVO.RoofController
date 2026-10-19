@@ -197,9 +197,11 @@ observatory's Pi.
   the client library.
 - Stop is always visible, never disabled, goes straight to the REST API, and is worded the same everywhere. The hub
   pushes full status snapshots; commands stay on REST.
-- All the UIs share one look, HVO Dark, set by the web UI. Its source is `hvo-dark.css` on the `main` branch of
-  HualapaiValley/HVO.SkyMonitor, fetched with `gh api`, not a local copy (the copies may be out of date). Define a
-  colour once, as a documented token, and reuse it in the Terminal.Gui and Avalonia themes.
+- All the UIs share one look, HVO Dark. The approved redesign's source is the final merged SkyMonitor PR #1371 at
+  `bf5ef211fa66e76dd83ac171a3fea944b6d5dc26`, fetched with `gh api`, not a local copy or a moving branch. Follow the
+  [design contract and canonical tokens](docs/ui-redesign/design-contract.md), reusing the existing `RoofUiPalette`
+  for native and terminal adapters. The [coverage matrix](docs/ui-redesign/inventory.csv) tracks migration; pending
+  rows are not implemented. Do not silently recolour only some production UIs or add a replacement shared theme package.
 - Each UI's doc page shows its main screens. The screenshots are made from the emulated controller by a script or test,
   so they can be made again, and look like the real UI, colour included. A screenshot never shows a real credential,
   key, PIN or private address. When the screens or the theme change, make the screenshots again.
