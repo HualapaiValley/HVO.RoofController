@@ -2,7 +2,7 @@
 
 Read-only research completed 2026-10-19 for #171/#158; Roof source baseline
 `2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3`. This durable summary records the supplied parsed-artifact audit, not an
-execution test by the foundation. It scopes a separate payload-fix task coordinated with
+execution test by the foundation. It scopes the active [payload-fix task #172](https://github.com/HualapaiValley/HVO.RoofController/issues/172), coordinated with
 [#96](https://github.com/HualapaiValley/HVO.RoofController/issues/96); #171 changes no packaging/runtime behavior.
 
 ## Verified release inventory
@@ -48,7 +48,7 @@ asset was present. This confirms omission of that supplied notice material in th
 permission material, and JetBrains.Annotations has an MIT clause. This is neither exhaustive author-attribution
 coverage nor certification of legal compliance for the whole release, other products or future builds.
 
-## Pending implementation and validation
+## Pending implementation and validation (#172)
 
 Source inspection found no direct use of Terminal.Gui Code/Markdown/Wizard/WizardStep in Roof's two terminal programs
 and shared theme. Roof's [InstallerWizard](../../src/HVO.RoofControllerV4.Installer/Wizard/InstallerWizard.cs) is its own
@@ -73,3 +73,6 @@ notice does not prove it ships or is installed.
 
 Fix future builds/releases only. Published v4.1.1 assets/tags remain immutable. The kiosk's required native libraries
 and kiosk/legacy-home cache purge/uninstall requirements remain independent #96 work.
+
+Historical inventory/omission research is complete. Correction and runtime/publish/notice-delivery validation belong to
+#172 and remain pending; its completion does not close #158 or the independent #96 cache-lifecycle requirements.

@@ -1,7 +1,7 @@
 # Delivery boundaries
 
 After foundation review, the parent can create linked implementation issues from these slices, each referencing #158
-and the matrix IDs it owns. #171 closes only the foundation. No platform issue exists merely because it appears here.
+and the matrix IDs it owns. #171 closes only the foundation. The payload-notices task is now [#172](https://github.com/HualapaiValley/HVO.RoofController/issues/172); other platform issue IDs remain to be assigned by the parent.
 Keep one branch/PR per task and link evidence back to the matrix. Avoid parallel edits to the same theme/palette files
 without an explicit owner and integration order.
 
@@ -13,7 +13,7 @@ without an explicit owner and integration order.
 | `terminal` | T/C rows: TerminalUi visual primitives actually consumed by both apps, five roof pages, all prompts/private fields/Stop/quit and existing plain CLI contract. | Coordinate shared theme changes with installer; truecolour/ANSI16/NO_COLOR/ASCII in both sizes; published CLI payload and notices obligation below; CLI docs images. |
 | `installer` | I rows: every wizard step/conditional role form/nested consent/private entry/plan/progress/done/failure plus current plain lifecycle/bootstrap output. | Reuse terminal adapter without importing roof TUI session/quit rules. Preserve private input, plan/apply boundaries, resource/state/rollback contracts. Published installer and headless wizard validation, install docs images. |
 | `theme-removal` | Delete HVO.WebSite.Themes and all build/static-asset/guidance dependencies once Web assets and palette adapters are ready. | Build/publish/container/asset checks and repository reference audit below. May be combined with the Web issue if explicitly owned; avoid a broken intermediate published asset path. |
-| `payload-notices` | Audit and correct shipped terminal highlighting material/notice closure in actual release artifacts and candidate publishes. | Coordinate #96; can be its own linked task or explicit terminal+installer acceptance gate. Must cover both programs/all supported RIDs; no claim of completion from package references or Sky smoke. |
+| `payload-notices` — [#172](https://github.com/HualapaiValley/HVO.RoofController/issues/172) | Correct the verified historical omission through scoped highlighting exclusions and retained notice delivery; audit candidate final artifacts. Historical inventory/omission research is complete. | Active independent delivery task; correction/runtime/publish validation pending. Cover both programs/all supported RIDs and final installed notice delivery. It closes neither #158 nor #96; kiosk/legacy-cache work remains separate. |
 
 Root owns independent review, CI readiness/watches and merging. Implementation PRs update their matrix rows and the
 operator-facing changelog/documentation/screenshots. Final #158 reconciliation checks every row and dependency-removal
@@ -66,7 +66,8 @@ records six hash-verified v4.1.1 installer/CLI bundles across `linux-x64`, `linu
 Oniguruma/Fluent Solutions material were absent in the inspected distributions. Other embedded MIT text exists;
 this is a specific verified omission, not a claim that no notices ship or a legal-compliance certification.
 
-Exclusion, current-main publish/runtime behavior and final remaining-notice delivery are **pending**. Do not add
+Exclusion, current-main publish/runtime behavior and final remaining-notice delivery are **pending in
+[#172](https://github.com/HualapaiValley/HVO.RoofController/issues/172)**. The historical inventory/omission research is complete; the foundation does not wait for #172 implementation. Do not add
 `osx-x64` or execute a release installer against a live host as part of an audit.
 
 The implementation obligation is broader than Sky #1371's published installer smoke. That smoke covers installer
