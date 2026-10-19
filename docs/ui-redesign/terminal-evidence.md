@@ -84,10 +84,48 @@ copy checks remain authoritative. `published-terminal.py` additionally runs both
 offline roof pages, a private connection prompt/F9, and installer roles/Back/cancel in isolated PTYs. It requires a
 clean non-root host, private HOME/XDG/tmp and an empty PATH; it applies nothing and invokes no host program.
 
-`check-terminal-workflows.py` parses the exact copied/signed final files, checks shared assembly byte identity, then
-loads their owned managed assemblies into a private copy of the compiled driver/fake-machine test host. Required test
+`check-terminal-workflows.py` parses the exact copied/signed final files, then loads each program's exact owned managed assemblies into its own private copy of the compiled
+driver/fake-machine test host and verifies every staged byte. ReadyToRun dependencies can differ between publishes;
+the receipt records each program's assembly hashes separately. The independent test host explicitly disables ReadyToRun and JITs the exact bundled IL;
+this is managed workflow evidence, not proof that every branch executed its published native ReadyToRun image.
+The exact final executables run normally in the separate PTY and controlled emulator/tmux gates. Required test
 names must appear as passed in TRX; a zero-test run fails. This exercises the distributed implementation beyond the
 entry page without adding a production simulation switch or installing on the runner. Native execution of each final
 file and its installed-copy notice check remain separate checks. Hosted CI supplies Linux x64, Linux arm64 and macOS
 arm64 execution; local macOS signing proof is unavailable because rcodesign is not installed, and no tool is installed
 for this task. No local result is presented as hosted all-RID evidence.
+
+
+## Local validation and remaining gates
+
+The [Linux x64 receipt](terminal-local-validation.json) records separate runtime sources: CLI `981f2ea` and installer `647a6a8`, with exact final
+copied program/staged assembly hashes. Both copied programs match their completed publish sources byte-for-byte and
+remain read-only. Renewed native offline PTYs pass all four modes at both sizes. The unchanged CLI `981f2ea` controlled emulator/tmux
+checks pass the live five-page/private-prompt/F9 matrix, plus terminal loss and SIGTERM Stop/exit assertions.
+The complementary exact bundled-IL/JIT catalogue passes **510 CLI and 941 installer cases**, including actual
+installation/rollback file-copy notice delivery on FakeMachine. Both corrected owned suites pass **576/576 in Debug
+and 576/576 in Release**; Release includes full default Next brackets and hit bounds. The new 28-case F1/F2/F3/ASCII
+matrix proves actual error tails, focus, action rendering/hit areas, F9 and distinct installer Back/cancellation.
+The final installer caption-only correction passes **20/20 focused Release cases**, including complete trust-choice
+labels in every mode and both sizes; its exact bundled-IL/JIT and native PTY checks are renewed separately.
+ASCII masks/arrows/tracks use Terminal.Gui's immutable glyph settings; its read-only facade has no writable properties.
+
+Fake bootstrap **149**, Python CLI **13**, releasing **119** and docs **17** pass. Prior full solution Debug/Release
+builds have zero warnings/errors, and the corrected Release test build also treats warnings as errors. All 26
+operator documentation SVGs are renewed from the corrected actual captures; the full mode/size catalogue includes
+light-default comparisons. Reproduction commands above apply to the current implementation.
+
+The prior-candidate required Release suite passes **3,843 with four opt-in skips**. Prior required Debug has **3,842
+passes, four opt-in skips and one stale bUnit event-handler failure** in `PeoplePageTests.cs:41`. Its Web runtime/test
+trees are identical to canonical main `e5f920a`; root identified the existing renderer-safe helper correction in #174.
+No Web assertion or file is changed here. The failed TRX/classification is retained separately. Take #174/#177 through
+reviewed MAIN and run final required validation before merge. Three opt-in host suites were not run locally; the final
+installed-copy notice case skipped in the general suite separately passes in the exact distribution catalogue.
+
+Hosted supported-RID/signature checks, reviewed MAIN integration and the #177 inert macOS clipboard-probe PATH helper
+remain merge gates. Scope its inert PATH to actual render phases; keep meaningful non-render env/openssl contracts.
+Statuses stay `implemented-unverified` until those gates/review finish. Earlier invalid attempts (old destination/
+ETXTBSY, cross-program R2R equality, independent-host R2R discovery abort) stay separate under `/tmp/hvo-176`; none is
+counted as a runtime pass. Final corrected checks use immutable `dist-trust-final`: the CLI retains its validated `981f2ea` bytes and the
+installer uses its newly completed `647a6a8` publish. Each program's source/copy hashes and managed/native evidence
+remain separate in the receipt; the prior immutable distributions and failed attempts remain intact.

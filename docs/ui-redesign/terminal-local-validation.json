@@ -1,0 +1,155 @@
+{
+  "rid": "linux-x64",
+  "programs": {
+    "hvo-roof": {
+      "sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
+      "execution": "JIT of exact bundled managed assemblies; native final-file PTY is separate",
+      "assemblies": {
+        "Terminal.Gui.dll": "4d53af3f61c4bdcd86abadd925468468bb17b11a9a616359226a593d61f34f36",
+        "HVO.RoofControllerV4.Client.dll": "d58f2e3d100978877057f8fe512396545840aa8eaebc1016cbf74e57fd7c0791",
+        "HVO.RoofControllerV4.Common.dll": "575c2d9efe02ce2ab3db798e4b77a0ec5fef0e4b9c564aba08dfe3a1903a1956",
+        "HVO.RoofControllerV4.TerminalUi.dll": "f6b59f4a59ce6f03ae4ec9c041a27f66912ba075c2dcb4e32c2851a42ea538f4",
+        "hvo-roof.dll": "0cd8a62765a9e637924abe197cd14ba0c5cd2541661d60b829536c6697c509a3"
+      },
+      "filter": "FullyQualifiedName~.Cli.&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak",
+      "passed_tests": 510,
+      "runtime_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
+      "source_publish_sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
+      "final_copy_sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42"
+    },
+    "hvo-roof-install": {
+      "sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
+      "execution": "JIT of exact bundled managed assemblies; native final-file PTY is separate",
+      "assemblies": {
+        "Terminal.Gui.dll": "3f314c42af815c1e1aef1ed5a6cb70a5c7aef1e3837c65559eafef490d764dab",
+        "HVO.RoofControllerV4.Client.dll": "955794e08c1a8c07521a83e962af7040ed76241785afcc9d98029ec3816c96fb",
+        "HVO.RoofControllerV4.Common.dll": "5beb7f57341a0eb5a5b843a36a4b7a06e152e10b81efb6e0d5622d92c0a623d8",
+        "HVO.RoofControllerV4.TerminalUi.dll": "0ee8d37bb1f331378cb5875dc877da85b6980422e0b94a57fb4a0140da81bbf3",
+        "hvo-roof-install.dll": "81854d21db642f6a73efddd2f9630e46fb9ba63d84ef8963cedda53b7b9d6745"
+      },
+      "filter": "FullyQualifiedName~.Installer.&FullyQualifiedName!~InstallerKioskSystemTests&FullyQualifiedName!~InstallerMacSystemTests&TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak",
+      "passed_tests": 941,
+      "runtime_source_commit": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478",
+      "source_publish_sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
+      "final_copy_sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6"
+    }
+  },
+  "native_pty": [
+    {
+      "program": "hvo-roof-install",
+      "rid": "linux-x64",
+      "sha256": "9c488f6a959c984b869ffc9c52cc472cc6b82dc3defc05f53e50cc56add217d6",
+      "private_files": [
+        "state/hvo-roof/install.log"
+      ],
+      "notices_sha256": "3a7a0feedb855b95bbca32dc8c7ff1bc18f8725c37b5a629b325cf4c99edcadb",
+      "pty_sizes": [
+        [
+          80,
+          24
+        ],
+        [
+          120,
+          32
+        ]
+      ],
+      "modes": [
+        "truecolor,unicode",
+        "ansi16,unicode",
+        "nocolor,unicode",
+        "ansi16,ascii"
+      ],
+      "workflow": "roof pages/private prompt/F9 or installer roles/Back/cancel",
+      "runtime_source_commit": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478"
+    },
+    {
+      "program": "hvo-roof",
+      "rid": "linux-x64",
+      "sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
+      "private_files": [],
+      "notices_sha256": "3a7a0feedb855b95bbca32dc8c7ff1bc18f8725c37b5a629b325cf4c99edcadb",
+      "pty_sizes": [
+        [
+          80,
+          24
+        ],
+        [
+          120,
+          32
+        ]
+      ],
+      "modes": [
+        "truecolor,unicode",
+        "ansi16,unicode",
+        "nocolor,unicode",
+        "ansi16,ascii"
+      ],
+      "workflow": "roof pages/private prompt/F9 or installer roles/Back/cancel",
+      "runtime_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e"
+    }
+  ],
+  "owned_corrected_suites": {
+    "Debug": {
+      "passed": 576,
+      "failed": 0
+    },
+    "Release": {
+      "passed": 576,
+      "failed": 0,
+      "includes": "full default Next label/hit-area assertions"
+    }
+  },
+  "prior_candidate_required_suites": {
+    "runtime_source_commit": "29349a14a2666880ab1b13e5eabb0bd3ce32b329",
+    "Debug": {
+      "passed": 3842,
+      "failed": 1,
+      "skipped": 4,
+      "failure": "Web.PeoplePageTests.LinuxUsers_ChangeControllerRoleAndDisableAccess_WithoutTouchingVirtualUsers: stale bUnit event; unchanged Web trees; #174 MAIN fix pending"
+    },
+    "Release": {
+      "passed": 3843,
+      "failed": 0,
+      "skipped": 4
+    }
+  },
+  "prior_solution_builds": {
+    "Debug": "PASS; zero warnings",
+    "Release": "PASS; zero warnings"
+  },
+  "review_regressions": 28,
+  "ascii_glyph_focused": 12,
+  "bootstrap_fake_script": 149,
+  "python_cli": 13,
+  "python_releasing": 119,
+  "python_docs": 17,
+  "controlled_emulator_tmux": {
+    "runtime_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
+    "sha256": "c52aaa3aba7b94789c8b45f2da52dd6d5bd67f5689b23dc102bbe565ee80fa42",
+    "result": "PASS; all modes and both sizes, five pages/private prompt/F9, owned HUP/TERM Stop and exit assertions; CLI unchanged by installer captions"
+  },
+  "documentation_captures": 26,
+  "limits": [
+    "Local Linux x64 only; hosted Linux arm64/macOS arm64/signatures pending",
+    "Managed workflow harness JITs exact bundled IL; original native final files separately tested in PTY/tmux",
+    "Final reviewed MAIN integration and required validation remain merge gates",
+    "Reviewed #177 inert macOS clipboard-probe PATH helper pending MAIN; scope to render phases, retain non-render env/openssl contracts"
+  ],
+  "runtime_source_commits": {
+    "hvo-roof": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
+    "hvo-roof-install": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478"
+  },
+  "owned_corrected_suite_source_commit": "981f2ea9dd1140d169225d0390c86b0bc365ac5e",
+  "final_installer_caption_focused": {
+    "runtime_source_commit": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478",
+    "configuration": "Release",
+    "passed": 20,
+    "failed": 0,
+    "includes": "actual complete trust choices at both sizes and all modes"
+  },
+  "visual_audit": {
+    "source": "actual captured driver cells rendered with installed repository Playwright",
+    "final_installer_ca_80x24": "PASS: full CA button, all three trust labels, fingerprint, confirmation, Back/Next and keybar visible",
+    "local_evidence": "/tmp/hvo-176/visual-trust-final"
+  }
+}
