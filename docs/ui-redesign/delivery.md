@@ -38,13 +38,21 @@ main dashboards look finished.
 
 ## Theme removal inputs
 
-This is a **pending removal checklist**, not edits made by #171. Exact direct references were searched in tracked and
+Web/#174 owns the removal and active [Web stylesheet](../../src/HVO.RoofControllerV4.Web/wwwroot/css/hvo-dark.css).
+The project, solution GUID/configuration rows, Docker copies, workflow filters and coverage dependency are removed.
+The original project-tree link below is pinned to the foundation baseline; it is historical evidence, not an active
+path. [Web delivery evidence](web-evidence.md) records actual builds, published assets/notices and browser captures.
+The retained Bootstrap/Icon font licences stay with their Web assets; the unused OpenSans files were not referenced
+by the baseline stylesheet and are removed. No native or terminal runtime input is removed by that change.
+
+This was the **pending removal checklist** recorded by #171; the table retains its required proof, not a claim that
+source inspection alone establishes published output. Exact direct references were searched in tracked and
 hidden repository files at the baseline; validate again after platform work. Historical mention in this foundation,
 release notes or CHANGELOG is not a runtime dependency and should not be silently erased.
 
 | Input | Required action / proof |
 | --- | --- |
-| [Theme project tree](../../src/HVO.WebSite.Themes/README.md) | Delete project, CSS and obsolete OpenSans assets after enumerating consumers. Prove required fonts/icons/assets owned by Web still ship with their notices; do not blindly copy unrelated CameraAgent styles. |
+| [Theme project tree](https://github.com/HualapaiValley/HVO.RoofController/blob/2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3/src/HVO.WebSite.Themes/README.md) | Delete project, CSS and obsolete OpenSans assets after enumerating consumers. Prove required fonts/icons/assets owned by Web still ship with their notices; do not blindly copy unrelated CameraAgent styles. |
 | [Solution](../../src/HVO.RoofController.sln) | Remove project entry **and its GUID configuration rows**, not only the path. Debug and Release solution builds must pass. |
 | [Web project](../../src/HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj) | Remove ProjectReference; Web publishes with its own required CSS/fonts/icons and scoped assets. No replacement RCL/package. |
 | [App](../../src/HVO.RoofControllerV4.Web/Components/App.razor), [app.css](../../src/HVO.RoofControllerV4.Web/wwwroot/css/app.css) | Replace `_content/HVO.WebSite.Themes` asset URL and ownership comment; validate fingerprinted asset mapping and every CSS import/url, including font/data references. |

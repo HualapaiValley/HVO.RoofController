@@ -49,6 +49,27 @@ public sealed class PeoplePageTests
         (await admin.Identity.GetUsersAsync()).Should().ContainSingle(item => item.Name == "ada");
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task LinuxProviderDisabled_AndEmptyEnrollments_AreExplicit(bool enabled)
+    {
+        using var directory = new TemporaryDirectory();
+        using var harness = new WebAdminHarness(new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = enabled.ToString()
+        });
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        cut.Click("[data-testid=people-tab][data-tab=linux]");
+        cut.Find("[data-testid=linux-not-read]").TextContent.Should().Contain("Read Linux users");
+        cut.Find("[data-testid=linux-users] button").Click();
+        await cut.WaitForAssertionAsync(() => cut.Find(enabled ? "[data-testid=linux-empty]" : "[data-testid=linux-provider-disabled]")
+            .TextContent.Should().Contain(enabled ? "No enrolled Linux users" : "not enabled"));
+    }
+
     private const string NewPassword = "test-new-password-not-real";
     private const string NewPin = "8642";
 

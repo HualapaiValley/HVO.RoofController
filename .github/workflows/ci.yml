@@ -162,6 +162,12 @@ jobs:
       - name: Build (Release, warnings as errors)
         run: dotnet build HVO.RoofController.sln -c Release -v minimal -p:ContinuousIntegrationBuild=true
 
+      # #174: check the actual published Web assets, including the fingerprinted serving manifest and notices.
+      - name: Publish and verify Web assets
+        run: |
+          dotnet publish HVO.RoofControllerV4.Web -c Release -r linux-x64 --self-contained false -v minimal -o web-publish
+          python3 ../build/check-web-publish.py web-publish
+
       # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof and hvo-roof-install for osx-arm64, and HVO
       # Roof.app. A Mac with Apple silicon runs no program that is not signed, ad hoc at least. Its release
       # is checked against a pinned SHA-256. Not RCODESIGN_*: rcodesign reads those variables as its own settings, and

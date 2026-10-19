@@ -14,8 +14,8 @@ as the merged README specifies. Do not composite them again over another platfor
 
 The existing [RoofUiPalette](../../src/HVO.RoofControllerV4.Client/RoofUiPalette.cs) already supplies
 [RoofUiTheme](../../src/HVO.RoofControllerV4.TerminalUi/RoofUiTheme.cs) and
-[KioskTheme](../../src/HVO.RoofControllerV4.Screens/KioskTheme.cs). Retain this structure. Web will own its CSS after
-[theme removal](delivery.md#theme-removal-inputs). There is no replacement shared theme package and no dependency on
+[KioskTheme](../../src/HVO.RoofControllerV4.Screens/KioskTheme.cs). Retain this structure. Web owns [its canonical stylesheet](../../src/HVO.RoofControllerV4.Web/wwwroot/css/hvo-dark.css) after
+[theme removal](delivery.md#theme-removal-inputs) in #174. There is no replacement shared theme package and no dependency on
 SkyMonitor assemblies. The contract file can be checked by adapter tests; runtime JSON parsing or unused framework
 components are not needed. Add bounded palette members/aliases only when a consumer uses them.
 
@@ -23,7 +23,9 @@ The `roof_palette_member` field maps the canonical role onto an existing member 
 needs an explicit mapping during migration. Legacy `Badge`, `MutedWeak`, `FocusRing` and Bootstrap action constants
 need a call-site audit: use surface/raised/muted/accent semantics, retain an alias only where compatibility requires it,
 and test contrast before deleting any specialized treatment. These are migration tasks, not values already applied.
-Of the 20 roles, nine current Roof values match, ten differ and surface-raised is absent; **Stop is currently amber**. #171 changes no runtime palette.
+At the #171 foundation baseline, nine Roof role values matched, ten differed and surface-raised was absent; Stop was amber.
+#171 changed no runtime palette. #174 applies every canonical role and the red Stop action to Web; native/terminal
+adoption is tracked in their own matrix rows rather than inferred from Web.
 Coordinate adapter migrations so a palette change does not silently recolour only some supported UIs.
 
 ## Role pairing and contrast

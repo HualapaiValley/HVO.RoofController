@@ -12,10 +12,10 @@
 <div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel">
     <header class="rc2-header">
         <div class="rc2-header-text">
-            <h1 class="rc2-title">Roof</h1>
+            <p class="web-eyebrow">Hualapai Valley Observatory</p>
+            <h1 class="rc2-title">Roof control</h1>
             <p class="rc2-intro-text">
-                Open or close the roof from the controls below. The controller stops the motor on a limit, a fault, a lost
-                input or a timeout. @RoofStopText.ButtonLabel is at the bottom of every page.
+                Roof position, motion controls, and an eye on the observatory. @RoofStopText.ButtonLabel stays at the bottom of every page.
             </p>
         </div>
 
@@ -91,12 +91,7 @@
         }
     </div>
 
-    <div class="rc2-main">
-        <section class="rc2-card rc2-controls" aria-labelledby="rc2-controls-title">
-            <div class="rc2-card-head">
-                <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2" aria-hidden="true"></i>Controls</h2>
-            </div>
-            <div class="rc2-card-body">
+    <section class="rc-overview" aria-label="Roof overview">
                 <div class="rc2-state @(stale ? "rc2-state--stale" : null)" aria-live="polite">
                     <div class="rc2-state-item">
                         <div class="rc2-state-label">@(stale && status is not null ? "Position (last known)" : "Position")</div>
@@ -125,16 +120,25 @@
                     }
                 </div>
 
+    </section>
+
+    <div class="rc2-main">
+        <section class="rc2-card rc2-controls" aria-labelledby="rc2-controls-title">
+            <div class="rc2-card-head">
+                <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2" aria-hidden="true"></i>Controls</h2>
+            </div>
+            <div class="rc2-card-body">
+                <div class="rc-position-line"><i class="bi bi-house" aria-hidden="true"></i><div><strong>@(status is null ? "Position unknown" : RoofText.DescribePosition(status.Status))@(stale && status is not null ? " (last known)" : string.Empty)</strong><span>One direction at a time. The controller enforces its safety settings.</span></div></div>
                 <div class="rc2-action-grid">
-                    <button class="btn btn-success btn-lg rc2-action" type="button" data-testid="open"
+                    <button class="btn btn-outline-light btn-lg rc2-action rc-open" type="button" data-testid="open"
                             disabled="@(View.OpenBlock is not null)" title="@(View.OpenBlock is { } open ? RoofCommandRules.Capitalize(open) : "Open the roof")"
                             @onclick="Roof.OpenAsync">
-                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i>Open
+                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i><span><strong>Open roof</strong><small>@(View.OpenBlock ?? "Begin opening")</small></span>
                     </button>
-                    <button class="btn btn-danger btn-lg rc2-action" type="button" data-testid="close"
+                    <button class="btn btn-outline-light btn-lg rc2-action rc-close" type="button" data-testid="close"
                             disabled="@(View.CloseBlock is not null)" title="@(View.CloseBlock is { } close ? RoofCommandRules.Capitalize(close) : "Close the roof")"
                             @onclick="Roof.CloseAsync">
-                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i>Close
+                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i><span><strong>Close roof</strong><small>@(View.CloseBlock ?? "Begin closing")</small></span>
                     </button>
                     <button class="btn btn-outline-light rc2-action rc2-action--small" type="button" data-testid="clear-fault"
                             disabled="@(View.ClearFaultBlock is not null)" title="@(View.ClearFaultBlock is { } clear ? RoofCommandRules.Capitalize(clear) : "Clear the latched fault")"
@@ -166,18 +170,6 @@
                     </p>
                 }
 
-                @if (View.Notices.Count > 0)
-                {
-                    <ul class="rc2-notices" data-testid="notices" aria-live="polite">
-                        @foreach (var notice in View.Notices)
-                        {
-                            <li class="rc2-notice rc2-notice--@notice.Level.ToString().ToLowerInvariant()" data-testid="notice" data-level="@notice.Level">
-                                <span class="rc2-notice-time">@RoofStatusText.Time(notice.At)</span>
-                                <span>@notice.Text</span>
-                            </li>
-                        }
-                    </ul>
-                }
             </div>
         </section>
 
@@ -189,6 +181,10 @@
                 @* A camera that fails takes only its own view with it: the roof controls, and Stop, are unaffected. *@
                 <ErrorBoundary @ref="_cameraErrorBoundary">
                     <ChildContent>
+                        @if (Cameras.Count == 0)
+                        {
+                            <p class="rc-camera-empty web-muted">No camera is configured.</p>
+                        }
                         @foreach (var camera in Cameras)
                         {
                             <CameraStream @key="camera" CameraId="camera" Label="@(Cameras.Count == 1 ? "Roof camera stream" : $"Camera {camera} stream")" />
@@ -202,6 +198,28 @@
                         </div>
                     </ErrorContent>
                 </ErrorBoundary>
+            </div>
+        </section>
+
+        <section class="rc2-card rc-activity" aria-labelledby="activity-title">
+            <div class="rc2-card-head"><h2 class="rc2-card-title" id="activity-title"><i class="bi bi-clock-history me-2" aria-hidden="true"></i>Command feedback</h2></div>
+            <div class="rc2-card-body">
+                @if (View.Notices.Count > 0)
+                {
+                    <ul class="rc2-notices" data-testid="notices" aria-live="polite">
+                        @foreach (var notice in View.Notices)
+                        {
+                            <li class="rc2-notice rc2-notice--@notice.Level.ToString().ToLowerInvariant()" data-testid="notice" data-level="@notice.Level">
+                                <span class="rc2-notice-time">@RoofStatusText.Time(notice.At)</span>
+                                <span>@notice.Text</span>
+                            </li>
+                        }
+                    </ul>
+                }
+                @if (View.Notices.Count == 0)
+                {
+                    <p class="web-muted mb-0">No commands from this page yet. Results appear here after the controller answers.</p>
+                }
             </div>
         </section>
 

@@ -7,7 +7,7 @@
     <base href="/" />
     <link rel="stylesheet" href="@Assets["lib/bootstrap/css/bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["lib/bootstrap-icons/bootstrap-icons.min.css"]" />
-    <link rel="stylesheet" href="@Assets["_content/HVO.WebSite.Themes/css/themes/hvo-dark.css"]" />
+    <link rel="stylesheet" href="@Assets["css/hvo-dark.css"]" />
     <link rel="stylesheet" href="@Assets["css/app.css"]" />
     <link rel="stylesheet" href="@Assets["HVO.RoofControllerV4.Web.styles.css"]" />
     <HeadOutlet @rendermode="PageRenderMode" />
@@ -21,7 +21,7 @@
     <form class="web-stop-bar" method="post" action="@WebAuthentication.StopPostPath.TrimStart('/')" aria-label="Stop"
           data-web-stop data-web-stop-texts="@WebStopTexts.Json">
         <AntiforgeryToken />
-        <button class="btn btn-warning web-stop-button" type="submit" data-testid="stop">
+        <button class="btn web-stop-action web-stop-button" type="submit" data-testid="stop">
             <i class="bi bi-stop-circle-fill" aria-hidden="true"></i> @RoofStopText.ButtonLabel
         </button>
         <p class="web-stop-result" data-web-stop-result data-testid="stop-outcome" role="status" aria-live="assertive"></p>
@@ -71,7 +71,7 @@
                   data-web-stop data-web-stop-texts="@WebStopTexts.Json">
                 <AntiforgeryToken />
                 <p class="reconnect-copy">Stop still works while this page is disconnected.</p>
-                <button class="btn btn-warning" type="submit" data-testid="reconnect-stop">
+                <button class="btn web-stop-action" type="submit" data-testid="reconnect-stop">
                     <i class="bi bi-stop-circle-fill" aria-hidden="true"></i> @RoofStopText.ButtonLabel
                 </button>
                 <p class="reconnect-stop-result" data-web-stop-result role="status" aria-live="assertive"></p>
@@ -82,11 +82,12 @@
     <div id="blazor-error-ui" data-nosnippet>
         This page hit an error and stopped updating. Stop still works.
         <a href="" class="reload">Reload</a>
-        <a class="dismiss" role="button" aria-label="Dismiss">🗙</a>
+        <button type="button" class="dismiss" aria-label="Dismiss">×</button>
     </div>
 
     <script src="_framework/blazor.web.js"></script>
     <script src="@Assets["js/stop.js"]"></script>
+    <script src="@Assets["js/ui.js"]"></script>
 </body>
 
 </html>

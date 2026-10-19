@@ -93,6 +93,23 @@ public sealed class WebScreenshotTests
         await Expect(page.GetByTestId("system-fact").First).ToBeVisibleAsync();
         await Expect(page.GetByTestId("restart")).ToBeVisibleAsync();
         await shots.TakeAsync("07-system", mask: page.Locator("[data-testid=system-fact][data-label=Host]"));
+
+        // Secondary workflows use the same real components; leave all private inputs empty.
+        await page.GotoAsync("/people");
+        await page.GetByTestId("user-add").ClickAsync();
+        await shots.TakeAsync("09-person-editor", wholePage: false);
+        await page.GotoAsync("/account/password");
+        await shots.TakeAsync("11-password");
+        await page.GotoAsync("/settings");
+        await page.Locator("[data-testid=settings-group][data-group=roof]").ClickAsync();
+        var safety = page.Locator("[data-testid=setting][data-key$=':AtSpeedConfirmationTimeout']");
+        await safety.GetByTestId("setting-change").ClickAsync();
+        await page.GetByTestId("setting-input").FillAsync("");
+        await page.GetByTestId("setting-save").ClickAsync();
+        await Expect(page.GetByTestId("setting-review")).ToBeVisibleAsync();
+        await page.GetByTestId("setting-review").ScrollIntoViewIfNeededAsync();
+        await shots.TakeAsync("08-setting-review", wholePage: false, startAtTop: false);
+
     }
 
     [TestMethod]
@@ -113,15 +130,22 @@ public sealed class WebScreenshotTests
         {
             Subject = Guid.NewGuid().ToString(), EnrollmentStamp = Guid.NewGuid().ToString(), Name = "fixture-linux", Role = "RoofOperator"
         });
-        await browser.SignInAsync(WebBrowser.Admin);
         var page = browser.Page;
+        var shots = new Screens(this, browser, "desktop");
+        await page.GotoAsync("/signin");
+        await Expect(page.Locator("#signin-provider")).ToBeVisibleAsync();
+        await shots.TakeAsync("13-provider-signin");
+        await browser.SignInAsync(WebBrowser.Admin);
         await page.GotoAsync("/people");
         await page.Locator("[data-testid=people-tab][data-tab=linux]").ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Read Linux users" }).ClickAsync();
         await Expect(page.GetByTestId("linux-user")).ToBeVisibleAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Role / access" }).ClickAsync();
         await Expect(page.GetByTestId("linux-role")).ToBeVisibleAsync();
-        await new Screens(this, browser, "desktop").TakeAsync("10-linux-users");
+        await shots.TakeAsync("10-linux-users");
+        await page.GotoAsync("/account/keys");
+        await Expect(page.Locator("#owned-name")).ToBeVisibleAsync();
+        await shots.TakeAsync("12-personal-keys");
     }
 
     private sealed class Screens(WebScreenshotTests test, WebBrowser browser, string device)
@@ -132,7 +156,7 @@ public sealed class WebScreenshotTests
             ? output
             : Path.Combine(test.TestContext.TestRunResultsDirectory ?? Path.GetTempPath(), "browser", "screens");
 
-        public async Task TakeAsync(string screen, bool wholePage = true, ILocator? mask = null)
+        public async Task TakeAsync(string screen, bool wholePage = true, ILocator? mask = null, bool startAtTop = true)
         {
             var page = browser.Page;
 
@@ -156,7 +180,7 @@ public sealed class WebScreenshotTests
             // The whole page as a screen as tall as it shows it: a full-page capture of the device's own screen would draw
             // the fixed Stop bar over the middle of the page, where it is at the bottom of the screen.
             var screenSize = page.ViewportSize!;
-            await page.EvaluateAsync("() => window.scrollTo(0, 0)");
+            if (startAtTop) await page.EvaluateAsync("() => window.scrollTo(0, 0)");
             for (var i = 0; wholePage && i < 3; i++)
             {
                 var height = await page.EvaluateAsync<int>("() => Math.ceil(document.documentElement.scrollHeight)");

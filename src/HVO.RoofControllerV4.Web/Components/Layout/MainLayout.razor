@@ -1,13 +1,14 @@
 @inherits LayoutComponentBase
 @inject RoofControllerConnector Connector
 
+<a class="web-skip-link" href="#main-content">Skip to content</a>
 <div class="app-frame">
     <header>
         <ModeBanner />
         <nav class="navbar navbar-expand navbar-dark app-navbar" aria-label="Main">
             <div class="container-fluid web-nav">
                 <a class="navbar-brand" href="">
-                    <i class="bi bi-house-fill me-2" aria-hidden="true"></i>HVO Roof Controller
+                    <i class="bi bi-house-fill me-2" aria-hidden="true"></i>HVO RoofController<span class="web-brand-caption">Observatory control</span>
                 </a>
                 <AuthorizeView>
                     <Authorized>
@@ -53,7 +54,7 @@
         </nav>
     </header>
 
-    <main class="app-main web-main">
+    <main id="main-content" class="app-main web-main" tabindex="-1">
         @Body
     </main>
     <footer class="web-muted px-3 pb-2 text-break" data-testid="web-version">

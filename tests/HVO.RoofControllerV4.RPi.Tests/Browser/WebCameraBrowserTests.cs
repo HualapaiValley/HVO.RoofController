@@ -6,6 +6,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using HVO.RoofControllerV4.Simulation.Camera;
+using Microsoft.Playwright;
 using static Microsoft.Playwright.Assertions;
 using WebProgram = HVO.RoofControllerV4.Web.Program;
 
@@ -73,6 +74,38 @@ public sealed class WebCameraBrowserTests
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 30_000 });
         await Expect(browser.CameraOverlay).ToHaveCountAsync(0);
         await Expect(browser.Page.GetByTestId("camera-failed")).ToHaveCountAsync(0);
+    }
+
+    /// <summary>Real canvas/media operations against the emulated camera, without a live feed or roof.</summary>
+    [TestMethod]
+    public async Task PlaybackSnapshotRecordingAndReconnect_KeepTheirCameraBehavior_AndStopAvailable()
+    {
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production() with { Camera = true }, WebDevices.Desktop);
+        var page = browser.Page;
+        await browser.SignInAsync(WebBrowser.Viewer);
+        await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
+        await page.GetByRole(AriaRole.Button, new() { Name = "Snapshot", Exact = true }).ClickAsync();
+        var snapshotLink = page.GetByRole(AriaRole.Link, new() { Name = "Download snapshot", Exact = true });
+        await Expect(snapshotLink).ToBeVisibleAsync();
+        var snapshot = await page.RunAndWaitForDownloadAsync(() => snapshotLink.ClickAsync());
+        snapshot.SuggestedFilename.Should().EndWith(".jpg");
+        await page.GetByRole(AriaRole.Button, new() { Name = "Pause", Exact = true }).ClickAsync();
+        await Expect(browser.CameraStatus).ToContainTextAsync("Paused");
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Resume", Exact = true }).ClickAsync();
+        await Expect(browser.CameraStatus).ToHaveTextAsync("Live");
+        await page.GetByRole(AriaRole.Button, new() { Name = "Start recording", Exact = true }).ClickAsync();
+        await Expect(page.GetByRole(AriaRole.Button, new() { Name = "Stop recording", Exact = true })).ToBeVisibleAsync();
+        // Allow the real MediaRecorder to receive several frames before asking for its completed download.
+        await page.WaitForTimeoutAsync(300);
+        await page.GetByRole(AriaRole.Button, new() { Name = "Stop recording", Exact = true }).ClickAsync();
+        var recordingLink = page.GetByRole(AriaRole.Link, new() { Name = "Download recording", Exact = true });
+        await Expect(recordingLink).ToBeVisibleAsync();
+        var recording = await page.RunAndWaitForDownloadAsync(() => recordingLink.ClickAsync());
+        recording.SuggestedFilename.Should().EndWith(".webm");
+        await page.GetByRole(AriaRole.Button, new() { Name = "Reconnect stream", Exact = true }).ClickAsync();
+        await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
+        await Expect(browser.Stop).ToBeEnabledAsync();
     }
 
     /// <summary>

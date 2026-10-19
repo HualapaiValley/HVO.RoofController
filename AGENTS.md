@@ -52,7 +52,6 @@ macOS machine with Docker.
 | `HVO.RoofControllerV4.Common` | The models, options and DTOs the controller and its clients share. |
 | `HVO.RoofControllerV4.Simulation` | The emulated drive, limit switches, HAT and wiring, used by the tests and the emulator. |
 | `HVO.RoofControllerV4.Emulator` | The HAT emulator: the emulated plant's HAT registers over TCP, and a control API for fault injection ([docs/emulator.md](docs/emulator.md)). |
-| `HVO.WebSite.Themes` | A Razor class library with the web UI's HVO Dark CSS. |
 
 ```text
 src/                          # the projects, HVO.RoofController.sln, global.json, docker-compose.yml (development)
@@ -201,7 +200,9 @@ observatory's Pi.
   `bf5ef211fa66e76dd83ac171a3fea944b6d5dc26`, fetched with `gh api`, not a local copy or a moving branch. Follow the
   [design contract and canonical tokens](docs/ui-redesign/design-contract.md), reusing the existing `RoofUiPalette`
   for native and terminal adapters. The [coverage matrix](docs/ui-redesign/inventory.csv) tracks migration; pending
-  rows are not implemented. Do not silently recolour only some production UIs or add a replacement shared theme package.
+  rows are not implemented. Web owns `src/HVO.RoofControllerV4.Web/wwwroot/css/hvo-dark.css` and its assets;
+  there is no theme RCL. Check Web CSS parity against every canonical role and verify actual publish output with
+  `build/check-web-publish.py`. Do not silently recolour only some production UIs or add a replacement shared theme package.
 - Each UI's doc page shows its main screens. The screenshots are made from the emulated controller by a script or test,
   so they can be made again, and look like the real UI, colour included. A screenshot never shows a real credential,
   key, PIN or private address. When the screens or the theme change, make the screenshots again.

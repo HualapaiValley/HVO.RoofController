@@ -104,6 +104,21 @@
 
     keepRoomForTheBar();
 
+    // Native fullscreen shows only that element. Keep the same live-independent POST form inside it, and restore
+    // it even if the camera component is removed while fullscreen. Its antiforgery token and result stay intact.
+    const stopBar = document.querySelector(".web-stop-bar");
+    const stopHome = document.createComment("permanent Stop");
+    if (stopBar) {
+        stopBar.before(stopHome);
+        document.addEventListener("fullscreenchange", () => {
+            if (document.fullscreenElement) {
+                document.fullscreenElement.append(stopBar);
+            } else {
+                stopHome.after(stopBar);
+            }
+        });
+    }
+
     document.addEventListener("submit", event => {
         const form = event.target;
         if (!(form instanceof HTMLFormElement) || !form.hasAttribute("data-web-stop")) {

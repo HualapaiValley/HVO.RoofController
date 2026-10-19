@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Redesign every Web route and inline workflow with the approved responsive HVO Dark layout, canonical colours,
+  grouped panels and fields, 48px controls and 320px reflow. Web now owns its styles, icon fonts and notices; remove
+  the obsolete `HVO.WebSite.Themes` project and unused OpenSans assets (#174).
+
 - Compose starts verify the supervisor's own cgroup v2 CPU quota, memory, zero swap and PID limits against the
   configured expectations. Missing, unlimited, unreadable, malformed or different limits, cgroup v1 and unverifiable
   placement refuse both applications (exit 2). The supervisor still turns every relay off and verifies the register,
@@ -116,6 +120,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   blocked, and nothing is removed, until Docker answers (#130).
 
 ### Fixed
+
+- Keep the permanent red direct-REST Stop visible in native camera fullscreen and red under keyboard focus. Preserve
+  its actual verified-register or verification-unavailable acknowledgement and failure messages. Inline editors now
+  focus their fields, associate validation errors and return focus after Escape/Cancel (#174).
 
 - Corrected the kiosk guide's PIN-access instructions: PIN unlock permits roof operation, while settings and
   administration use the existing web, CLI/TUI or password-authenticated Mac paths. Authorization behavior is unchanged (#171).

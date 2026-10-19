@@ -1,532 +1,223 @@
-/* The web UI's own styles, on top of Bootstrap and the HVO dark theme (HVO.WebSite.Themes). */
-body[data-theme="hvo-dark"] {
-    background: var(--hvo-body-bg, #05070d);
-    color: var(--hvo-body-color, #f8fafc);
-    /* Room for the Stop bar, so it never covers the end of a page. The theme fixes the body's height to the screen,
-       which puts that room at the end of the first screen instead of the page's. */
-    height: auto;
-    padding-bottom: var(--web-stop-bar-space);
-}
-
-/* The theme's frame fills the screen; here it fills the screen above the Stop bar's room, so a short page does not
-   scroll by that room. */
-body[data-theme="hvo-dark"] .app-frame {
-    min-height: calc(100vh - var(--web-stop-bar-space));
-    min-height: calc(100dvh - var(--web-stop-bar-space));
-}
-
+/* RoofController's Web layout and control vocabulary. Colours live only in hvo-dark.css. */
 :root {
-    --web-stop-bar-height: 4.5rem;
-    /* How tall the Stop bar is: js/stop.js sets it to the bar's height, which an answer to a Stop can make taller. */
+    --web-stop-bar-height: 86px;
     --web-stop-bar-space: calc(var(--web-stop-bar-height) + env(safe-area-inset-bottom, 0px));
 }
-
-/* Long setting keys and names break rather than widen the page past a phone's screen. */
-.web-main {
-    width: 100%;
-    max-width: 72rem;
-    margin: 0 auto;
-    overflow-wrap: anywhere;
-    padding: 1rem;
-}
-
-.web-main h1 {
-    font-size: 1.6rem;
-    margin-bottom: 1rem;
-}
-
-/* Bootstrap's .navbar > .container-fluid keeps the bar on one line (nowrap), which on a phone pushes the signed-in user
-   off the side of the page; here it wraps instead. */
-.app-navbar > .web-nav {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-
-.web-nav-links {
-    flex-wrap: wrap;
-    margin-right: auto;
-}
-
-.web-user {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-}
-
-.web-user-name {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    color: inherit;
-    text-decoration: none;
-}
-
-.web-user-name:hover,
-.web-user-name:focus {
-    text-decoration: underline;
-}
-
-.web-signout {
+* { box-sizing: border-box; }
+html { min-width: 320px; }
+body[data-theme="hvo-dark"] {
     margin: 0;
-}
-
-.web-card {
-    padding: 1.5rem;
-    border-radius: 16px;
-    border: 1px solid var(--hvo-border-muted, #334155);
-    background: var(--hvo-card-bg, #0f172a);
-    box-shadow: var(--hvo-panel-shadow, none);
-}
-
-.web-narrow {
-    max-width: 32rem;
-}
-
-.web-muted {
-    color: var(--hvo-muted-strong, #cbd5e1);
-}
-
-/* The screen above the Stop bar, so the form is centred where it is not covered. */
-.web-signin-frame {
-    min-height: calc(100vh - var(--web-stop-bar-space));
-    min-height: calc(100dvh - var(--web-stop-bar-space));
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
-    background: radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 55%), var(--hvo-body-bg, #05070d);
-}
-
-.web-signin-main {
-    width: 100%;
-    max-width: 26rem;
-}
-
-.web-signin-title {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0 0 0.25rem;
-    font-size: 1.5rem;
-    font-weight: 700;
-}
-
-.web-signin-help {
-    margin: 1rem 0 0;
-    font-size: 0.9rem;
-}
-
-.web-status {
-    margin: 1rem 0;
-    padding: 1rem;
-    border-radius: 0.5rem;
-    border: 1px solid var(--hvo-border-strong, #334155);
-}
-
-.web-status h2 {
-    margin-top: 0;
-    font-size: 1.25rem;
-}
-
-.web-status--good {
-    background: var(--hvo-success-bg);
-    color: var(--hvo-success-fg);
-}
-
-.web-status--busy {
-    background: var(--hvo-info-bg);
-    color: var(--hvo-info-fg);
-}
-
-.web-status--warning {
-    background: var(--hvo-warning-bg);
-    color: var(--hvo-warning-fg);
-}
-
-.web-status--bad {
-    background: var(--hvo-danger-bg);
-    color: var(--hvo-danger-fg);
-}
-
-.web-supervisor h2 {
-    font-size: 1rem;
-}
-
-.web-checked {
-    color: var(--hvo-muted, #cbd5e1);
-    font-size: 0.9rem;
-}
-
-.web-status--info {
-    background: var(--hvo-info-bg);
-    color: var(--hvo-info-fg);
-}
-
-/* Stop, fixed at the bottom of every page (App.razor, js/stop.js). Above the page, below the reconnect dialog. Stop,
-   Open and Close have the colours every client uses (RoofUiPalette): warning, success and danger. */
-.web-stop-bar {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 1050;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    min-height: var(--web-stop-bar-height);
-    margin: 0;
-    padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
-    border-top: 1px solid var(--hvo-warning-strong, #facc15);
-    background: color-mix(in srgb, var(--hvo-card-bg, #0f172a) 94%, transparent);
-    backdrop-filter: blur(6px);
-    box-shadow: 0 -8px 24px rgba(2, 6, 23, 0.55);
-}
-
-/* A button a person taps is at least 44 x 44 CSS pixels (WebTouchTargetBrowserTests). */
-.web-tap,
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-actions .btn {
-    min-width: 2.75rem;
-    min-height: 2.75rem;
-}
-
-.web-stop-button {
-    flex: 0 0 auto;
-    min-width: 12rem;
-    min-height: 3.25rem;
-    font-size: 1.2rem;
-    font-weight: 700;
-}
-
-.web-stop-result {
-    flex: 1 1 auto;
-    min-width: 0;
-    margin: 0;
-    font-size: 0.95rem;
-    line-height: 1.35;
+    background: var(--roof-background);
+    color: var(--roof-text);
+    font: 15px/1.55 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding-bottom: var(--web-stop-bar-space);
     overflow-wrap: anywhere;
 }
-
-.web-stop-result[data-state="sent"] {
-    color: var(--hvo-info-fg);
+a { color: var(--roof-accent); text-underline-offset: 4px; }
+a:hover { color: var(--roof-text); }
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 3px solid var(--roof-accent);
+    outline-offset: 3px;
+    box-shadow: none;
 }
-
-.web-stop-result[data-state="ok"] {
-    color: var(--hvo-success-strong);
+.btn:focus-visible, .form-control:focus, .form-select:focus {
+    outline: 3px solid var(--roof-accent);
+    outline-offset: 3px;
+    box-shadow: none;
 }
-
-.web-stop-result[data-state="warn"] {
-    color: var(--hvo-warning-strong);
-    font-weight: 600;
+h1, h2, h3 { color: var(--roof-text); font-weight: 600; line-height: 1.3; }
+h1 { font-size: clamp(24px, 2.5vw, 30px); letter-spacing: -.03em; }
+h2 { font-size: 18px; }
+h3 { font-size: 16px; }
+code { color: var(--roof-accent); overflow-wrap: anywhere; }
+.app-frame { min-height: calc(100dvh - var(--web-stop-bar-space)); display: flex; flex-direction: column; }
+.web-main { width: 100%; max-width: 1280px; margin: 0 auto; padding: 28px; flex: 1; min-width: 0; }
+.web-skip-link { position: fixed; top: 8px; left: 8px; z-index: 3000; padding: 12px; background: var(--roof-focus); color: var(--roof-text); transform: translateY(-160%); }
+.web-skip-link:focus { transform: none; }
+.app-navbar { border-bottom: 1px solid var(--roof-border); background: var(--roof-surface); padding: 12px 20px; }
+.app-navbar > .web-nav { flex-wrap: wrap; gap: 8px 24px; padding: 0; }
+.navbar-brand { min-height: 48px; color: var(--roof-text); font-size: 16px; font-weight: 600; margin: 0; line-height: 1.3; }
+.navbar-brand .bi { color: var(--roof-accent); }
+.web-brand-caption { display: block; margin: 3px 0 0 28px; color: var(--roof-muted); font-size: 11px; font-weight: 400; }
+.web-nav-links { flex-wrap: wrap; gap: 4px 12px; margin-right: auto; }
+.navbar-nav .nav-link { color: var(--roof-muted); min-height: 48px; padding: 12px 4px; font-size: 13px; border-bottom: 2px solid transparent; }
+.navbar-nav .nav-link.active { color: var(--roof-text); border-color: var(--roof-accent); }
+.navbar-nav .nav-link:hover { color: var(--roof-text); }
+.web-user { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; min-width: 0; }
+.web-user-name { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 48px; color: var(--roof-muted); text-decoration: none; }
+.web-user-name:hover { text-decoration: underline; }
+.web-signout { margin: 0; }
+footer[data-testid="web-version"] { border-top: 1px solid var(--roof-border); padding: 16px 28px !important; background: var(--roof-surface); font-size: 11px; }
+.web-page-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
+.web-page-heading h1 { margin: 0 0 8px; }
+.web-eyebrow { color: var(--roof-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .12em; margin: 0 0 8px; }
+.web-page-description { color: var(--roof-muted); margin: 0; max-width: 64ch; font-size: 13px; }
+.web-muted, .web-checked { color: var(--roof-muted); }
+.web-checked { font-size: 12px; }
+.web-card { padding: 20px; border-radius: 8px; border: 1px solid var(--roof-border); background: var(--roof-surface); min-width: 0; }
+.web-card > h2, .web-health-head h2 { margin: 0 0 12px; font-size: 16px; }
+.web-card + .web-card, .web-pills + .web-card, .web-card + .web-pills, .web-status + .web-pills { margin-top: 20px; }
+.web-narrow { max-width: 38rem; }
+.web-health-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.web-health-head h2 { margin: 0; }
+.web-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.btn {
+    --bs-btn-color: var(--roof-text);
+    --bs-btn-bg: var(--roof-surface-raised);
+    --bs-btn-border-color: var(--roof-border);
+    --bs-btn-hover-color: var(--roof-text);
+    --bs-btn-hover-bg: var(--roof-surface-raised);
+    --bs-btn-hover-border-color: var(--roof-accent);
+    --bs-btn-active-color: var(--roof-text);
+    --bs-btn-active-bg: var(--roof-focus);
+    --bs-btn-active-border-color: var(--roof-accent);
+    --bs-btn-disabled-color: var(--roof-muted);
+    --bs-btn-disabled-bg: var(--roof-surface-raised);
+    --bs-btn-disabled-border-color: var(--roof-border);
+    --bs-btn-disabled-opacity: 1;
+    border-radius: 6px;
+    min-height: 48px;
+    min-width: 48px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: normal;
 }
-
-.web-stop-result[data-state="failed"] {
-    color: var(--hvo-danger-strong);
-    font-weight: 600;
+.btn-sm { min-height: 48px; padding: 8px 12px; font-size: 12px; }
+.btn-primary { --bs-btn-bg: var(--roof-focus); --bs-btn-border-color: var(--roof-focus); }
+.btn-danger, .btn-outline-danger { --bs-btn-color: var(--roof-danger-text); --bs-btn-bg: var(--roof-danger-background); --bs-btn-border-color: var(--roof-danger); --bs-btn-hover-bg: var(--roof-danger-background); --bs-btn-hover-color: var(--roof-danger-text); --bs-btn-hover-border-color: var(--roof-danger); }
+.btn-warning { --bs-btn-color: var(--roof-warning-text); --bs-btn-bg: var(--roof-warning-background); --bs-btn-border-color: var(--roof-warning); --bs-btn-hover-color: var(--roof-warning-text); --bs-btn-hover-bg: var(--roof-warning-background); }
+.btn-success { --bs-btn-color: var(--roof-success-text); --bs-btn-bg: var(--roof-success-background); --bs-btn-border-color: var(--roof-success); --bs-btn-hover-bg: var(--roof-success-background); }
+.btn:disabled { cursor: not-allowed; border-style: dashed; }
+.form-control, .form-select {
+    min-height: 48px; border: 1px solid var(--roof-border); border-radius: 6px; background-color: var(--roof-surface-raised); color: var(--roof-text); padding: 10px 12px; font-size: 14px; max-width: 100%;
 }
-
+.form-control:focus, .form-select:focus { background-color: var(--roof-surface-raised); color: var(--roof-text); border-color: var(--roof-accent); }
+.form-control::placeholder { color: var(--roof-muted); }
+.form-control[readonly] { background: var(--roof-background); border-style: dashed; }
+.form-label, legend { margin: 12px 0 6px; color: var(--roof-muted); font-size: 13px; }
+label:has(> input[type="checkbox"]) { display: inline-flex; align-items: center; gap: 10px; min-height: 48px; cursor: pointer; }
+input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-color: var(--roof-focus); flex-shrink: 0; }
+.web-status, .alert { padding: 14px 16px; margin: 16px 0; border: 1px solid var(--roof-border); border-left-width: 3px; border-radius: 6px; }
+.web-status h2 { font-size: 18px; margin: 0 0 8px; }
+.web-status p:last-child, .web-message p { margin-bottom: 0; }
+.web-message p + p { margin-top: 4px; }
+.web-status--good, .alert-success { background: var(--roof-success-background); color: var(--roof-success-text); border-color: var(--roof-success); }
+.web-status--warning, .alert-warning { background: var(--roof-warning-background); color: var(--roof-warning-text); border-color: var(--roof-warning); }
+.web-status--bad, .alert-danger { background: var(--roof-danger-background); color: var(--roof-danger-text); border-color: var(--roof-danger); }
+.web-status--info, .web-status--busy, .alert-info { background: var(--roof-info-background); color: var(--roof-info-text); border-color: var(--roof-info); }
+.badge { border: 1px solid var(--roof-border); border-radius: 5px; font-size: 11px; font-weight: 500; padding: 6px 8px; white-space: normal; }
+.bg-success { background: var(--roof-success-background) !important; color: var(--roof-success-text) !important; border-color: var(--roof-success); }
+.bg-warning { background: var(--roof-warning-background) !important; color: var(--roof-warning-text) !important; border-color: var(--roof-warning); }
+.bg-danger { background: var(--roof-danger-background) !important; color: var(--roof-danger-text) !important; border-color: var(--roof-danger); }
+.bg-info { background: var(--roof-info-background) !important; color: var(--roof-info-text) !important; border-color: var(--roof-info); }
+.bg-secondary, .bg-outline { background: var(--roof-surface-raised) !important; color: var(--roof-muted) !important; }
+.web-pills { display: flex; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--roof-border); padding-bottom: 16px; margin-top: 20px; }
+.web-pills [aria-pressed="true"] { border-bottom: 3px solid var(--roof-accent); font-weight: 600; }
+.web-settings-list, .web-health-list { display: flex; flex-direction: column; gap: 16px; padding: 0; margin: 0; list-style: none; }
+.web-setting { border-top: 1px solid var(--roof-border); padding: 20px 0 4px; }
+.web-setting:first-child { border-top: 0; padding-top: 8px; }
+.web-setting p { margin: 8px 0; }
+.web-setting-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.web-setting-key { font-size: 11px; color: var(--roof-muted); }
+.web-setting-value { font-weight: 600; }
+.web-setting-description, .web-editor-help { color: var(--roof-muted); font-size: 13px; max-width: 80ch; }
+.web-editor, .web-confirm { display: flex; flex-direction: column; gap: 8px; max-width: 42rem; margin: 16px 0; padding: 20px; border: 1px solid var(--roof-accent); border-radius: 8px; background: var(--roof-surface-raised); min-width: 0; }
+.web-confirm { border-color: var(--roof-warning); }
+.web-editor h3 { margin: 0; }
+.web-editor > .btn, .web-confirm > .btn { align-self: start; }
+.web-change-list { padding-left: 20px; margin: 8px 0; }
+.web-change-list code { color: inherit; }
+.web-health { margin-top: 20px; }
+.web-supervisor { padding: 16px 0; }
+.web-health-check { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--roof-border); }
+.web-health-description { flex-basis: 100%; color: var(--roof-muted); font-size: 13px; }
+.web-table { --bs-table-bg: transparent; --bs-table-color: var(--roof-text); --bs-table-border-color: var(--roof-border); margin: 0; font-size: 13px; }
+.web-table th, .web-table td { padding: 12px 8px; vertical-align: middle; }
+.web-table thead th { color: var(--roof-muted); font-weight: 500; }
+.web-row-actions td { border-top: 0; padding-top: 0; padding-bottom: 20px; }
+.table-responsive { max-width: 100%; }
+.web-secret { border-color: var(--roof-warning); }
+.web-secret-value { font-family: var(--bs-font-monospace); }
+.web-facts { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr); gap: 12px 20px; margin: 0 0 16px; }
+.web-facts dt { color: var(--roof-muted); font-weight: 400; }
+.web-facts dd { margin: 0; }
+.web-signin-frame { min-height: calc(100dvh - var(--web-stop-bar-space)); display: grid; place-items: center; padding: 28px 16px; }
+.web-signin-main { width: 100%; max-width: 440px; }
+.web-signin-card { padding: 28px; }
+.web-signin-title { font-size: 22px; margin: 0 0 24px; }
+.web-signin-title .bi { color: var(--roof-accent); }
+.web-signin-subtitle { font-size: 20px; }
+.web-signin-help { font-size: 12px; margin: 20px 0 0; }
+.web-signin-mode { margin: 0 0 16px; }
+.web-signin-status { margin: 0 0 16px; }
+.web-mode-banner { margin: 0; padding: 10px 20px; text-align: center; border-width: 0 0 1px; border-radius: 0; font-size: 13px; }
+.web-mode-banner p { margin: 0; }
+.web-stop-bar { position: fixed; inset: auto 0 0; z-index: 1050; display: flex; align-items: center; gap: 20px; min-height: var(--web-stop-bar-height); margin: 0; padding: 12px 28px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--roof-danger); background: var(--roof-surface); }
+/* Stop retains the canonical danger pair on hover, keyboard focus, active and pending requests. */
+.web-stop-action, .web-stop-action:hover, .web-stop-action:focus, .web-stop-action:active {
+    color: var(--roof-danger-text) !important; background: var(--roof-danger-background) !important; border: 1px solid var(--roof-danger) !important; font-weight: 600;
+}
+.web-stop-action:focus-visible { outline: 3px solid var(--roof-danger-text); outline-offset: 3px; text-decoration: underline; }
+.web-stop-button { flex: 0 0 auto; min-height: 62px; min-width: 220px; font-size: 16px; }
+.web-stop-result, .reconnect-stop-result { margin: 0; min-width: 0; font-size: 13px; }
+[data-web-stop-result][data-state="sent"] { color: var(--roof-info); }
+[data-web-stop-result][data-state="ok"] { color: var(--roof-success); }
+[data-web-stop-result][data-state="warn"] { color: var(--roof-warning); font-weight: 600; }
+[data-web-stop-result][data-state="failed"] { color: var(--roof-danger); font-weight: 600; }
+#components-reconnect-modal { display: none; position: fixed; inset: 0; z-index: 2000; align-items: center; justify-content: center; padding: 20px; background: color-mix(in srgb, var(--roof-background) 90%, transparent); overflow-y: auto; }
+#components-reconnect-modal:is(.components-reconnect-show, .components-reconnect-failed, .components-reconnect-rejected, .components-reconnect-paused, .components-reconnect-resume-failed) { display: flex; }
+.reconnect-dialog { margin: auto; width: 100%; max-width: 480px; padding: 24px; border: 1px solid var(--roof-border); border-radius: 8px; background: var(--roof-surface); text-align: center; }
+.reconnect-state { display: none; }
+#components-reconnect-modal.components-reconnect-show .components-reconnect-show,
+#components-reconnect-modal.components-reconnect-failed .components-reconnect-failed,
+#components-reconnect-modal.components-reconnect-rejected .components-reconnect-rejected,
+#components-reconnect-modal.components-reconnect-paused .components-reconnect-paused,
+#components-reconnect-modal.components-reconnect-resume-failed .components-reconnect-resume-failed { display: block; }
+.reconnect-heading { font-size: 22px; margin: 12px 0; }
+.reconnect-icon { color: var(--roof-warning); font-size: 24px; }
+.reconnect-copy { color: var(--roof-muted); font-size: 13px; }
+.reconnect-actions { margin: 16px 0; }
+.reconnect-stop { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 20px; margin: 20px 0 0; border-top: 1px solid var(--roof-border); }
+.reconnect-stop .btn { min-height: 62px; min-width: 200px; }
+.reconnect-stop-result:empty { display: none; }
+#blazor-error-ui { display: none; position: fixed; inset: auto 0 var(--web-stop-bar-space); z-index: 1060; padding: 16px 48px 16px 20px; border-top: 1px solid var(--roof-warning); background: var(--roof-warning-background); color: var(--roof-warning-text); }
+#blazor-error-ui .reload { color: inherit; margin-left: 12px; }
+#blazor-error-ui .dismiss { position: absolute; right: 16px; top: 8px; cursor: pointer; min-width: 48px; min-height: 48px; border: 0; border-radius: 6px; background: var(--roof-warning-background); color: var(--roof-warning-text); }
+@media (max-width: 760px) {
+    .web-main { padding: 24px 16px; }
+    .app-navbar { padding: 16px; }
+    .navbar-brand { width: 100%; }
+    .web-user { width: 100%; justify-content: space-between; }
+    .web-card { padding: 16px; }
+    .web-editor, .web-confirm { padding: 16px; }
+    .web-facts { grid-template-columns: 1fr; gap: 4px; }
+    .web-facts dd { margin-bottom: 12px; }
+}
 @media (max-width: 576px) {
-    :root {
-        --web-stop-bar-height: 6.5rem;
-    }
-
-    .web-stop-bar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0.35rem;
-    }
-
-    .web-stop-button {
-        width: 100%;
-    }
-
-    .web-stop-result:empty {
-        display: none;
-    }
+    :root { --web-stop-bar-height: 90px; }
+    .web-stop-bar { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); }
+    .web-stop-button { width: 100%; min-width: 0; }
+    .web-stop-result:empty { display: none; }
+    .web-signin-card { padding: 20px; }
+    .reconnect-dialog { padding: 20px; }
 }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
 
-/* The error notice (App.razor) sits just above the Stop bar and over its shadow: under the bar, a page whose live
-   connection ended on an error would still look live. Below the reconnect dialog. */
-body[data-theme="hvo-dark"] #blazor-error-ui {
-    bottom: var(--web-stop-bar-space);
-    z-index: 1060;
+/* On a phone the People tables become labelled records, keeping each editor beside its target. */
+@media (max-width: 680px) {
+    .web-table, .web-table tbody, .web-table tr, .web-table td, .web-table th { display: block; width: 100%; }
+    .web-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .web-table tbody > tr:not(.web-row-actions) { border-top: 1px solid var(--roof-border); padding-top: 12px; }
+    .web-table td, .web-table th { border: 0; padding: 4px 0; }
+    .web-table td[data-label] { display: grid; grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr); gap: 12px; }
+    .web-table td[data-label]::before { content: attr(data-label); color: var(--roof-muted); }
+    .web-table .web-row-actions td { padding: 12px 0 20px; }
 }
+.form-check { min-height: 48px; display: flex; align-items: center; gap: 10px; padding-left: 0; }
+.form-check .form-check-input { float: none; margin: 0; }
 
-/* The reconnect dialog (App.razor): the theme styles it, and the states it leaves out. */
-body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused,
-body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed {
-    display: flex;
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-paused .components-reconnect-paused,
-body[data-theme="hvo-dark"] #components-reconnect-modal.components-reconnect-resume-failed .components-reconnect-resume-failed {
-    display: block;
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0;
-    padding-top: 1rem;
-    border-top: 1px solid rgba(148, 163, 184, 0.25);
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop .btn {
-    min-width: 12rem;
-    min-height: 3rem;
-    font-weight: 700;
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result {
-    margin: 0;
-    font-size: 0.9rem;
-    line-height: 1.4;
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result:empty {
-    display: none;
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="ok"] {
-    color: var(--hvo-success-strong);
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="warn"] {
-    color: var(--hvo-warning-strong);
-}
-
-body[data-theme="hvo-dark"] #components-reconnect-modal .reconnect-stop-result[data-state="failed"] {
-    color: var(--hvo-danger-strong);
-}
-
-/* The mode banner (Layout/ModeBanner.razor): on every page while the roof does not move, or ignores its limits. */
-.web-mode-banner {
-    margin: 0;
-    padding: 0.5rem 1rem;
-    border-radius: 0;
-    border-width: 0 0 1px;
-    text-align: center;
-    font-size: 0.95rem;
-}
-
-.web-mode-banner p {
-    margin: 0;
-}
-
-/* On the sign-in page the banner sits above the sign-in card, as a card of its own. */
-.web-signin-mode {
-    margin-bottom: 1rem;
-    border-width: 1px;
-    border-radius: var(--bs-border-radius);
-}
-
-/* The controller's status on the sign-in page: the Health page's headline, one line above the sign-in card. */
-.web-signin-status {
-    margin: 0 0 1rem;
-    padding: 0.75rem 1rem;
-    text-align: center;
-    font-weight: 600;
-}
-
-.web-health {
-    margin-top: 1rem;
-}
-
-.web-health-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-}
-
-.web-health-head h2 {
-    margin: 0;
-    font-size: 1.15rem;
-}
-
-.web-health-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.web-health-check {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.35rem 0.6rem;
-    padding: 0.6rem 0.8rem;
-    border-radius: 12px;
-    border: 1px solid var(--hvo-border-muted, #334155);
-    background: var(--hvo-card-glass, rgba(15, 23, 42, 0.6));
-}
-
-.web-health-description {
-    flex: 1 1 100%;
-    color: var(--hvo-muted-strong, #cbd5e1);
-    font-size: 0.9rem;
-}
-
-/* Settings, People and System (admin pages). */
-.web-card + .web-card,
-.web-pills + .web-card,
-.web-card + .web-pills,
-.web-status + .web-pills {
-    margin-top: 1rem;
-}
-
-.web-card > h2 {
-    font-size: 1.15rem;
-}
-
-.web-message p {
-    margin: 0;
-}
-
-.web-message p + p {
-    margin-top: 0.25rem;
-}
-
-.web-pills {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.web-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.web-settings-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-}
-
-.web-setting {
-    padding: 0.75rem 1rem;
-    border-radius: 12px;
-    border: 1px solid var(--hvo-border-muted, #334155);
-    background: var(--hvo-card-glass, rgba(15, 23, 42, 0.6));
-}
-
-.web-setting p {
-    margin: 0.35rem 0;
-}
-
-.web-setting .web-status {
-    padding: 0.5rem 0.75rem;
-}
-
-.web-setting-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.35rem 0.6rem;
-}
-
-.web-setting-key {
-    font-size: 0.8rem;
-    color: var(--hvo-muted, #94a3b8);
-    overflow-wrap: anywhere;
-}
-
-.web-setting-value {
-    font-weight: 600;
-    overflow-wrap: anywhere;
-}
-
-.web-setting-description {
-    color: var(--hvo-muted-strong, #cbd5e1);
-    font-size: 0.9rem;
-}
-
-.web-editor,
-.web-confirm {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    max-width: 36rem;
-    margin-top: 0.5rem;
-    padding: 0.75rem;
-    border-radius: 12px;
-    border: 1px solid var(--hvo-border-strong, #475569);
-    background: var(--hvo-card-bg, #0f172a);
-}
-
-.web-editor .form-label {
-    margin: 0.25rem 0 0;
-}
-
-.web-editor-help {
-    font-size: 0.85rem;
-}
-
-.web-change-list {
-    margin: 0.25rem 0;
-    padding-left: 1.25rem;
-}
-
-.web-change-list code {
-    color: inherit;
-    overflow-wrap: anywhere;
-}
-
-.web-table {
-    --bs-table-bg: transparent;
-    margin: 0;
-}
-
-.web-table th,
-.web-table td {
-    vertical-align: middle;
-}
-
-.web-row-actions td {
-    border-top: 0;
-    padding-top: 0;
-}
-
-.web-secret-value {
-    font-family: var(--bs-font-monospace);
-}
-
-.web-facts {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.35rem 1rem;
-    margin: 0 0 0.5rem;
-}
-
-.web-facts dt {
-    color: var(--hvo-muted-strong, #cbd5e1);
-    font-weight: 400;
-}
-
-.web-facts dd {
-    margin: 0;
-    overflow-wrap: anywhere;
-}
-
-@media (max-width: 575.98px) {
-    .web-facts {
-        grid-template-columns: 1fr;
-    }
-
-    .web-facts dd {
-        margin-bottom: 0.35rem;
-    }
-}
+.web-key-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+.web-key-workspace > .web-card { margin: 0; }
+.web-owned-key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-bottom: 1px solid var(--roof-border); padding: 16px 0; }
+@media (max-width: 760px) { .web-key-workspace { grid-template-columns: minmax(0, 1fr); } }

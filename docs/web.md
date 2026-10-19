@@ -7,7 +7,19 @@ runs in the controller's container as a process of its own, on port 8088
 loopback, and never drives the HAT itself. The controller decides what each person may do. The web UI only uses their
 role to choose what to offer.
 
-It uses HVO Dark, the observatory's web theme, as does the terminal interface ([Colours](cli.md#colours)).
+The responsive design follows the approved RoofController prototype: a roof overview, controls beside the camera,
+and detailed readings beside command feedback. Other pages use the same titled panels, grouped fields and inline
+reviews. People lists become labelled records on narrow screens, keeping each editor next to its target. Navigation,
+forms and secondary screens reflow from 320 CSS pixels; actions and fields have at least 48px touch targets.
+
+Web owns its HVO Dark stylesheet and local assets. Its colours mirror all 20 roles in the
+[source-pinned contract](ui-redesign/design-contract.md); there is no shared theme RCL. Bootstrap Icons fonts and
+both Bootstrap MIT notices remain bundled with Web. The old unused OpenSans files are removed, and the font stack
+uses installed system fonts without a remote font request.
+
+Use Tab to navigate, visible outlines to identify focus, and Escape to cancel an inline editor or review. Opening an
+editor focuses its first field; cancelling returns focus to its action. Invalid fields reference their error message.
+The red Stop action keeps its identity under keyboard focus.
 
 ![The roof page on a desktop: the navigation, the mode banner, the position and the controls, the roof camera, the status, and the Stop bar at the bottom](images/web/02-roof-desktop.jpg)
 
@@ -207,9 +219,12 @@ its end, so the bar never covers the end of a page.
   answer is
   `Stop failed: Too many Stops were sent in a short time. Wait a moment, then press Stop again. Use the stop control at the roof.`
   (429), and the web UI does not ask the controller. The controller itself never limits Stop.
-- The answer says what the controller verified, for example
-  `Stop acknowledged. Relay register verified de-energized.`, or why Stop failed, with
-  `Use the stop control at the roof.` The page waits up to 25 s for the answer.
+- The answer preserves the controller/client's actual evidence. Verified read-back says
+  `Stop acknowledged. Relay register verified de-energized.`; it proves the register, never physical contacts.
+  A successful response with missing or Unknown verification, including an unreadable HTTP 200 body, keeps the
+  generic acknowledgement that says verification is unavailable. Both use the same `Acknowledged` classification;
+  the page never derives a verification claim from that enum. Unverified and failed outcomes keep their shared
+  wording and `Use the stop control at the roof.` guidance. The page waits up to 25 s for the answer.
 - **The reconnect dialog.** When a page loses its live connection, a dialog covers it, and it has its own **Stop roof**
   (`Stop still works while this page is disconnected.`). When the web UI cannot be reached, it says
   `Stop failed: The web UI could not be reached. Use the stop control at the roof.`
@@ -243,6 +258,18 @@ Every answer carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` 
 Every form post (sign-in, sign-out, Stop) and the live connection must come from the web UI's own pages or an
 `AllowedOrigins` origin; anything else is refused with 403 `origin_not_allowed`.
 
+## Design and secondary workflows
+
+The same responsive panels cover settings groups, private multipart inputs, safety reviews and pending hand edits;
+people, roles, passwords, kiosk PINs, managed keys, one-time key values, sessions and Linux role/access editors;
+personal scoped keys; readiness and restart reviews; password changes; denied and unknown addresses; and reconnect
+or circuit errors. These remain controller-backed workflows. A camera image never establishes roof position or
+command success.
+
+![A private person editor with empty synthetic fields](images/web/09-person-editor-desktop.jpg)
+![Settings safety review before sending](images/web/08-setting-review-desktop.jpg)
+![Personal API key scope and lifetime controls](images/web/12-personal-keys-desktop.jpg)
+
 ## Tests
 
 Nothing here needs the Pi, the HAT or the roof.
@@ -256,8 +283,11 @@ Nothing here needs the Pi, the HAT or the roof.
   another origin's form posts and live connection refused, Stop in view and uncovered on every page and stopping the
   roof, what each role is offered, the stale status, the camera stalling and going offline, the lease when the page
   closes or loses its connection (commissioning C9), the reconnect dialog's Stop (commissioning C15), and that every
-  button a person taps is at least 44 x 44 CSS pixels and 8 CSS pixels from its neighbours (`WebTouchTargetBrowserTests`).
-  CI keeps the screenshots and a failed test's trace with the results. From `src/`, build the tests, install Chromium
+  button a person taps is at least 48 x 48 CSS pixels and 8 CSS pixels from its neighbours (`WebTouchTargetBrowserTests`).
+  `WebRedesignBrowserTests` additionally exercises every settings editor and People panel at 320px and desktop,
+  keyboard error association/cancel, both acknowledgement messages, red focus and native-fullscreen Stop.
+  `build/check-web-publish.py` checks actual shipped CSS, fingerprint mappings, icon fonts and notices; image CI also
+  fetches these from the published Web process. CI keeps the screenshots and a failed test's trace with the results. From `src/`, build the tests, install Chromium
   once from the same build (`playwright.ps1` is in the output of the configuration built, here `Release`; leave out
   `--with-deps` when its system libraries are installed), and run them:
 
@@ -284,20 +314,19 @@ When the controller enables provider accounts, the sign-in form offers an **Acco
 in the two providers refer to separate people. Passwords still pass through the shared Client
 API. Refused Linux credentials never fall back to a Roof Controller account.
 
-![Provider sign-in on the installed emulator website, with the account-type selector and empty credential fields](images/web/08-provider-signin-desktop.png)
+![Provider sign-in on the controlled emulator website, with the account-type selector and empty credential fields](images/web/13-provider-signin-desktop.jpg)
 
 The **My API keys** page appears only when provider accounts are enabled. A signed-in person
 can create an expiring automation key with selected scopes, list their own keys, and revoke
 them. The key value is returned only at creation. Scope and ownership checks run in the
 controller API in addition to the person's current role.
 
-![My API keys on the installed emulator website, showing key scopes and expiry with the one-time secret panel closed](images/web/09-provider-owned-keys-desktop.png)
+![My API keys on the controlled emulator website, showing scopes and expiry inputs without a secret](images/web/12-personal-keys-desktop.jpg)
 
-These two screenshots come from the installed website and controller in the
-[disposable Linux guest](../tests/installer/disposable-guest/README.md), using the emulated HAT and fixture accounts.
-The [provider browser acceptance script](../tests/auth-integration/run_browser.py) captures them in Chromium:
-before entering sign-in credentials, and after closing the new-key secret panel. The same run checks Linux and
-Roof Controller sign-in, roles, scoped-key access, and revocation against the real controller API.
+These screenshots are regenerated by `WebScreenshotTests.EnrolledLinuxAccess_IsCapturedWithoutCredentials`,
+using the actual Web process, emulated HAT and synthetic identities: before entering credentials and with no one-time
+secret present. The separate [provider browser acceptance script](../tests/auth-integration/run_browser.py) checks
+Linux and Roof Controller sign-in, roles, scoped-key access and revocation in its isolated guest workflow.
 
 Existing sign-in remains the default when provider accounts are disabled. Kiosk PIN, device
 credentials, and the existing Stop behavior are unchanged. A Linux password is managed by the
