@@ -53,6 +53,9 @@ Other switches:
   FAKE_PULLED_DIGEST=sha256:<hex>  the digest `pull` records for the image (default: the digest in the reference)
   FAKE_PULLED_PLATFORM=<os/arch>   the platform `pull` gets (default: its --platform), as from a reference that names a
                                    single image of another platform
+  FAKE_PULLED_VERSION=<value>      the pulled image's version label (default 4.0.0; empty means absent)
+  FAKE_PULLED_REVISION=<value>     the pulled image's revision label (default 0123456789abcdef0123456789abcdef01234567;
+                                   empty means absent)
   FAKE_IMAGE_STORE=containerd      `image inspect --platform` for a platform the image store does not hold prints empty
                                    fields ("/"), as Docker's containerd store does; by default it fails, as the classic
                                    store does
@@ -385,8 +388,8 @@ def pull(state, args):
     state.setdefault("images", {})[ref] = {
         "repo_digests": [f"{repository}@{digest}"],
         "platform": os.environ.get("FAKE_PULLED_PLATFORM") or platform or "linux/amd64",
-        "version": "4.0.0",
-        "revision": "0123456789abcdef0123456789abcdef01234567",
+        "version": os.environ.get("FAKE_PULLED_VERSION", "4.0.0"),
+        "revision": os.environ.get("FAKE_PULLED_REVISION", "0123456789abcdef0123456789abcdef01234567"),
     }
     save(state)
     out(f"{digest.split(':')[1][:12]}: Pull complete")

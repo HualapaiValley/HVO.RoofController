@@ -1788,9 +1788,13 @@ check_pulled_image() {
     || fail "Could not inspect the pulled image ${IMAGE_REF}. The running controller was not touched."
   grep -q "@${IMAGE_DIGEST}\$" <<<"${digests}" \
     || fail "The pulled image does not carry the digest ${IMAGE_DIGEST} (Docker reports: $(tr '\n' ' ' <<<"${digests}")). The running controller was not touched."
-  labels=$(inspect_pulled '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} {{index .Labels "org.opencontainers.image.revision"}}{{end}}' 2>/dev/null) \
+  # Each label as JSON on a line of its own; one that is not plain is not shown (as in check_loaded_image).
+  labels=$(inspect_pulled '{{with .Config}}{{json (index .Labels "org.opencontainers.image.version")}}{{println}}{{json (index .Labels "org.opencontainers.image.revision")}}{{end}}' 2>/dev/null) \
     || labels=""
-  read -r version revision <<<"${labels}" || true
+  version="" revision=""
+  { IFS= read -r version; IFS= read -r revision; } <<<"${labels}" || true
+  if [[ "${version}" =~ ${PLAIN_JSON_STRING} ]]; then version=${version:1:${#version}-2}; else version=""; fi
+  if [[ "${revision}" =~ ${PLAIN_JSON_STRING} ]]; then revision=${revision:1:${#revision}-2}; else revision=""; fi
   echo "[pull] ${IMAGE_DIGEST} for ${platform}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
   # The pre-flight and the controller run this platform's image, whatever else the Pi holds under the digest.
   image_platform_args=(--platform "${BUILD_PLATFORM}")

@@ -1904,6 +1904,18 @@ test_build_platform_amd64_is_for_the_emulator_only() {
 
 # --- Pull mode --------------------------------------------------------------------------------------------------------
 
+# assert_pull_metadata <display>: exactly one complete metadata line, with no unexpected controls in the output
+# (Docker's final container table uses tabs, and the log uses newlines).
+assert_pull_metadata() {
+  printf '%s' "${OUTPUT}" | python3 -c '
+import sys
+output = sys.stdin.buffer.read()
+expected = sys.argv[1].encode()
+sys.exit(0 if output.split(b"\n").count(expected) == 1
+         and not any((byte < 32 and byte not in (9, 10)) or byte == 127 for byte in output) else 1)
+' "[pull] ${DIGEST} for linux/arm64: $1" || fail_test "expected plain, independent pull metadata: $1"
+}
+
 # assert_nothing_changed <label>: no container stopped, renamed, removed or started, and no image built or loaded.
 assert_nothing_changed() {
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls buildx)$(docker_calls load)" ]] \
@@ -1917,7 +1929,7 @@ test_pull_mode_pulls_checks_and_deploys_the_released_image_without_building() {
 
   assert_status 0
   assert_output_contains "[pull] Pulling ${IMAGE_REF} for linux/arm64 into Docker context 'test-context'..."
-  assert_output_contains "[pull] ${DIGEST} for linux/arm64: version 4.0.0, commit 0123456789ab"
+  assert_pull_metadata "version 4.0.0, commit 0123456789ab"
   assert_output_contains "Deployment complete and verified at https://pi.test:8443"
   assert_output_not_contains "[build]"
   assert_container roof-controller new true unless-stopped
@@ -1945,6 +1957,72 @@ test_pull_mode_pulls_checks_and_deploys_the_released_image_without_building() {
   jq -e --arg ref "${IMAGE_REF}" '.[-1] == $ref' <<<"$(controller_run_args)" >/dev/null \
     || fail_test "the controller does not run ${IMAGE_REF}: $(controller_run_args)"
   assert_key_never_in_argv
+}
+
+test_pull_mode_keeps_version_with_spaces_separate_from_revision() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_VERSION=4.0.0 forged-commit"
+
+  assert_status 0
+  assert_pull_metadata "version 4.0.0 forged-commit, commit 0123456789ab"
+  assert_output_not_contains ", commit forged-commit"
+  assert_container roof-controller new true unless-stopped
+}
+
+test_pull_mode_missing_labels_keep_the_other_label() {
+  local labels
+  for labels in version revision both; do
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    case "${labels}" in
+      version)
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_VERSION=
+        assert_pull_metadata "version unknown, commit 0123456789ab"
+        ;;
+      revision)
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_REVISION=
+        assert_pull_metadata "version 4.0.0"
+        ;;
+      both)
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_VERSION= FAKE_PULLED_REVISION=
+        assert_pull_metadata "version unknown"
+        ;;
+    esac
+    assert_status 0
+    assert_container roof-controller new true unless-stopped
+  done
+}
+
+test_pull_mode_suppresses_newline_version_without_forging_revision() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" $'FAKE_PULLED_VERSION=4.0.0 forged-commit\nspoofed-version'
+
+  assert_status 0
+  assert_pull_metadata "version unknown, commit 0123456789ab"
+  assert_output_not_contains "forged-commit"
+  assert_output_not_contains "spoofed-version"
+  assert_container roof-controller new true unless-stopped
+}
+
+test_pull_mode_suppresses_control_labels_independently() {
+  local value
+  for value in $'spoofed\033[2K' $'spoofed\rhidden' $'spoofed\nextra'; do
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_VERSION=${value}"
+    assert_status 0
+    assert_pull_metadata "version unknown, commit 0123456789ab"
+    assert_output_not_contains "spoofed"
+    assert_container roof-controller new true unless-stopped
+
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_REVISION=${value}"
+    assert_status 0
+    assert_pull_metadata "version 4.0.0"
+    assert_output_not_contains "spoofed"
+    assert_container roof-controller new true unless-stopped
+  done
 }
 
 test_pull_mode_runs_outside_a_checkout() {

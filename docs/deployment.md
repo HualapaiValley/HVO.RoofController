@@ -474,7 +474,9 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt \
   or an image with nothing for that platform, fails the pull. The script then checks what Docker reports for the image:
   its platform, and the digest among its repository digests, which also covers an image that was already on the Pi or
   came through a mirror. It prints the version and commit from the image's labels:
-  `[pull] sha256:... for linux/arm64: version 4.0.0, commit 0123abcd4567`. Any failure stops the deploy before the
+  `[pull] sha256:... for linux/arm64: version 4.0.0, commit 0123abcd4567`. Each label is read independently; a label
+  containing control characters, quotes or backslashes is suppressed. A missing or suppressed version is shown as
+  `unknown`; a missing or suppressed commit is omitted. A failed platform or digest check stops the deploy before the
   pre-flight, with the running controller untouched.
 - From the pre-flight on, the deploy is the same as for a built image, and the pre-flight and the new controller run
   the checked platform's image. `--dry-run` shows the pull in its plan and pulls nothing.
