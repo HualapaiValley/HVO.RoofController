@@ -1904,6 +1904,22 @@ test_build_platform_amd64_is_for_the_emulator_only() {
 
 # --- Pull mode --------------------------------------------------------------------------------------------------------
 
+# assert_image_metadata <prefix> <display>: exactly one complete ASCII metadata line, with no unexpected bytes in the
+# output (Docker's final container table uses tabs, and the log uses newlines).
+assert_image_metadata() {
+  printf '%s' "${OUTPUT}" | python3 -c '
+import sys
+output = sys.stdin.buffer.read()
+expected = sys.argv[1].encode()
+sys.exit(0 if output.split(b"\n").count(expected) == 1
+         and not any((byte < 32 and byte not in (9, 10)) or byte > 126 for byte in output) else 1)
+' "$1 $2" || fail_test "expected printable ASCII, independent image metadata: $2"
+}
+
+assert_pull_metadata() {
+  assert_image_metadata "[pull] ${DIGEST} for linux/arm64:" "$1"
+}
+
 # assert_nothing_changed <label>: no container stopped, renamed, removed or started, and no image built or loaded.
 assert_nothing_changed() {
   [[ -z "$(docker_calls stop)$(docker_calls rename)$(docker_calls rm)$(docker_calls run)$(docker_calls buildx)$(docker_calls load)" ]] \
@@ -1917,7 +1933,7 @@ test_pull_mode_pulls_checks_and_deploys_the_released_image_without_building() {
 
   assert_status 0
   assert_output_contains "[pull] Pulling ${IMAGE_REF} for linux/arm64 into Docker context 'test-context'..."
-  assert_output_contains "[pull] ${DIGEST} for linux/arm64: version 4.0.0, commit 0123456789ab"
+  assert_pull_metadata "version 4.0.0, commit 0123456789ab"
   assert_output_contains "Deployment complete and verified at https://pi.test:8443"
   assert_output_not_contains "[build]"
   assert_container roof-controller new true unless-stopped
@@ -1945,6 +1961,115 @@ test_pull_mode_pulls_checks_and_deploys_the_released_image_without_building() {
   jq -e --arg ref "${IMAGE_REF}" '.[-1] == $ref' <<<"$(controller_run_args)" >/dev/null \
     || fail_test "the controller does not run ${IMAGE_REF}: $(controller_run_args)"
   assert_key_never_in_argv
+}
+
+test_pull_mode_keeps_version_with_spaces_separate_from_revision() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_VERSION=4.0.0 forged-commit"
+
+  assert_status 0
+  assert_pull_metadata "version 4.0.0 forged-commit, commit 0123456789ab"
+  assert_output_not_contains ", commit forged-commit"
+  assert_container roof-controller new true unless-stopped
+}
+
+test_pull_mode_missing_labels_keep_the_other_label() {
+  local labels
+  for labels in version revision both; do
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    case "${labels}" in
+      version)
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_VERSION=
+        assert_pull_metadata "version unknown, commit 0123456789ab"
+        ;;
+      revision)
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_REVISION=
+        assert_pull_metadata "version 4.0.0"
+        ;;
+      both)
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" FAKE_PULLED_VERSION= FAKE_PULLED_REVISION=
+        assert_pull_metadata "version unknown"
+        ;;
+    esac
+    assert_status 0
+    assert_container roof-controller new true unless-stopped
+  done
+}
+
+test_pull_mode_suppresses_newline_version_without_forging_revision() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" $'FAKE_PULLED_VERSION=4.0.0 forged-commit\nspoofed-version'
+
+  assert_status 0
+  assert_pull_metadata "version unknown, commit 0123456789ab"
+  assert_output_not_contains "forged-commit"
+  assert_output_not_contains "spoofed-version"
+  assert_container roof-controller new true unless-stopped
+}
+
+test_pull_mode_suppresses_control_labels_independently() {
+  local value
+  for value in $'spoofed\033[2K' $'spoofed\rhidden' $'spoofed\nextra'; do
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_VERSION=${value}"
+    assert_status 0
+    assert_pull_metadata "version unknown, commit 0123456789ab"
+    assert_output_not_contains "spoofed"
+    assert_container roof-controller new true unless-stopped
+
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_REVISION=${value}"
+    assert_status 0
+    assert_pull_metadata "version 4.0.0"
+    assert_output_not_contains "spoofed"
+    assert_container roof-controller new true unless-stopped
+  done
+}
+
+# check_non_displayable_image_labels <pull|load>: each rejected label leaves the other valid label visible and does
+# not refuse deployment. Load cases build real, internally consistent archive fixtures with the requested labels.
+check_non_displayable_image_labels() {
+  local mode=$1 kind field value version revision display
+  for kind in del c1 unicode quote backslash; do
+    case "${kind}" in
+      del) value=$'invalid\177label' ;;
+      c1) value=$'invalid\302\233label' ;;
+      unicode) value=$'r\303\251lease' ;;
+      quote) value='invalid"label' ;;
+      backslash) value='invalid\label' ;;
+    esac
+    for field in version revision; do
+      echo "    ${mode}: ${field} with ${kind}"
+      setup_fresh_state
+      seed_container roof-controller old true 8443:8443
+      version='4.0.0 ~![ok]' revision=0123456789abcdef0123456789abcdef01234567
+      if [[ "${field}" == version ]]; then
+        version=${value}
+        display='version unknown, commit 0123456789ab'
+      else
+        revision=${value}
+        display="version ${version}"
+      fi
+      if [[ "${mode}" == pull ]]; then
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${IMAGE_REF}" "FAKE_PULLED_VERSION=${version}" "FAKE_PULLED_REVISION=${revision}"
+        assert_pull_metadata "${display}"
+      else
+        offline_archive linux/arm64 "${version}" "${revision}" || return
+        deploy "${HTTPS_ENV[@]}" "IMAGE_REF=${ARCHIVE_REF}" "IMAGE_ARCHIVE=${ARCHIVE}"
+        assert_image_metadata "[load] ${ARCHIVE_DIGEST} for linux/arm64, image ${ARCHIVE_CONFIG}:" "${display}"
+        assert_runs_loaded_image "${ARCHIVE_CONFIG}"
+      fi
+      assert_status 0
+      assert_container roof-controller new true unless-stopped
+    done
+  done
+}
+
+test_pull_mode_suppresses_non_displayable_labels_independently() {
+  check_non_displayable_image_labels pull
 }
 
 test_pull_mode_runs_outside_a_checkout() {
@@ -2098,15 +2223,16 @@ test_rollback_and_verify_remote_ignore_a_malformed_image_ref() {
 # ---------------------------------------------------------------------------------------------------------------------
 # Offline: a release's archive of the image (IMAGE_ARCHIVE), loaded in place of the pull (#127)
 
-# offline_archive [<platform>]: a made-up controller image's offline archives, for linux/amd64 and linux/arm64, as
-# build/release-assets.py writes a release's (into ${WORK}/archives). Sets ARCHIVE (the one for the platform, by default
-# linux/arm64), ARCHIVE_DIGEST (the image's index), ARCHIVE_REF (IMAGE_REF for it) and ARCHIVE_MANIFEST and
+# offline_archive [<platform> [<version> [<revision>]]]: a made-up controller image's offline archives, for linux/amd64
+# and linux/arm64, as build/release-assets.py writes a release's (into ${WORK}/archives). Sets ARCHIVE (the one for the
+# platform, by default linux/arm64), ARCHIVE_DIGEST (the image's index), ARCHIVE_REF (IMAGE_REF for it) and ARCHIVE_MANIFEST and
 # ARCHIVE_CONFIG (the platform's manifest and config digests).
 offline_archive() {
   local values
-  values=$(python3 - "${TESTS_DIR}/../../build/release-assets.py" "${WORK}/archives" "${1:-linux/arm64}" <<'PY'
+  values=$(python3 - "${TESTS_DIR}/../../build/release-assets.py" "${WORK}/archives" "${1:-linux/arm64}" \
+      "${2-4.0.0}" "${3-0123456789abcdef0123456789abcdef01234567}" <<'PY'
 import gzip, hashlib, importlib.util, io, json, pathlib, sys, tarfile
-script, folder, wanted = sys.argv[1:]
+script, folder, wanted, version, revision = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("release_assets", script)
 assets = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assets)
@@ -2127,8 +2253,8 @@ for platform in ("linux/amd64", "linux/arm64"):
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
     layer = add(gzip.compress(raw.getvalue(), mtime=0), "application/vnd.oci.image.layer.v1.tar+gzip")
-    labels = {"org.opencontainers.image.version": "4.0.0",
-              "org.opencontainers.image.revision": "0123456789abcdef0123456789abcdef01234567"}
+    labels = {"org.opencontainers.image.version": version,
+              "org.opencontainers.image.revision": revision}
     config = add(json.dumps({"architecture": arch, "os": os_, "config": {"Labels": labels},
                              "rootfs": {"type": "layers", "diff_ids": ["sha256:" + hashlib.sha256(raw.getvalue()).hexdigest()]}}).encode(),
                  "application/vnd.oci.image.config.v1+json")
@@ -2278,6 +2404,10 @@ test_archive_mode_loads_checks_and_deploys_the_released_image_by_its_id_without_
   (( $(call_index '"load"') < $(call_index '"--validate-deployment"') )) || fail_test "the pre-flight ran before the load"
   assert_runs_loaded_image "${ARCHIVE_CONFIG}"
   assert_key_never_in_argv
+}
+
+test_archive_mode_suppresses_non_displayable_labels_independently() {
+  check_non_displayable_image_labels load
 }
 
 test_archive_mode_in_the_containerd_image_store_deploys_the_index_by_its_digest() {

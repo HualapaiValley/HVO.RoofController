@@ -1764,6 +1764,15 @@ restore_rollback_limits() {
 # ---------------------------------------------------------------------------------------------------------------------
 # Pull mode
 
+# image_label_for_display <JSON string>: print only printable ASCII without JSON escapes. Other values are suppressed
+# independently, without refusing deployment. This display policy is shared by pulled and loaded image metadata.
+image_label_for_display() {
+  local value=$1 printable_json='^"[ -~]*"$' LC_ALL=C
+  if [[ "${value}" =~ ${PLAIN_JSON_STRING} && "${value}" =~ ${printable_json} ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+  fi
+}
+
 # inspect_pulled <format>: fields of the pulled image, for the platform it was pulled for. Docker's containerd image
 # store can hold several platforms of an image: asked for one it does not hold, it reports empty fields (or fails, in
 # the classic store). A Docker CLI without `image inspect --platform` reports the only platform the classic store holds.
@@ -1788,9 +1797,13 @@ check_pulled_image() {
     || fail "Could not inspect the pulled image ${IMAGE_REF}. The running controller was not touched."
   grep -q "@${IMAGE_DIGEST}\$" <<<"${digests}" \
     || fail "The pulled image does not carry the digest ${IMAGE_DIGEST} (Docker reports: $(tr '\n' ' ' <<<"${digests}")). The running controller was not touched."
-  labels=$(inspect_pulled '{{with .Config}}{{index .Labels "org.opencontainers.image.version"}} {{index .Labels "org.opencontainers.image.revision"}}{{end}}' 2>/dev/null) \
+  # Each label as JSON on a line of its own; the display policy is shared with check_loaded_image.
+  labels=$(inspect_pulled '{{with .Config}}{{json (index .Labels "org.opencontainers.image.version")}}{{println}}{{json (index .Labels "org.opencontainers.image.revision")}}{{end}}' 2>/dev/null) \
     || labels=""
-  read -r version revision <<<"${labels}" || true
+  version="" revision=""
+  { IFS= read -r version; IFS= read -r revision; } <<<"${labels}" || true
+  version=$(image_label_for_display "${version}")
+  revision=$(image_label_for_display "${revision}")
   echo "[pull] ${IMAGE_DIGEST} for ${platform}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
   # The pre-flight and the controller run this platform's image, whatever else the Pi holds under the digest.
   image_platform_args=(--platform "${BUILD_PLATFORM}")
@@ -2407,14 +2420,14 @@ check_loaded_image() {
   [[ "${platform}" != "/" ]] || platform=""
   [[ "${platform}" == "${BUILD_PLATFORM}" ]] \
     || fail "The image ${loaded} from ${IMAGE_ARCHIVE} is not for ${BUILD_PLATFORM} (Docker reports '${platform:-no image for that platform}'). The running controller was not touched."
-  # Each label as JSON on a line of its own; one that is not plain is not shown.
+  # Each label as JSON on a line of its own; the display policy is shared with check_pulled_image.
   labels=$(dockerc image inspect ${inspect_platform_args[@]+"${inspect_platform_args[@]}"} \
       --format '{{with .Config}}{{json (index .Labels "org.opencontainers.image.version")}}{{println}}{{json (index .Labels "org.opencontainers.image.revision")}}{{end}}' \
       "${loaded}" 2>/dev/null) || labels=""
   version="" revision=""
   { IFS= read -r version; IFS= read -r revision; } <<<"${labels}" || true
-  if [[ "${version}" =~ ${PLAIN_JSON_STRING} ]]; then version=${version:1:${#version}-2}; else version=""; fi
-  if [[ "${revision}" =~ ${PLAIN_JSON_STRING} ]]; then revision=${revision:1:${#revision}-2}; else revision=""; fi
+  version=$(image_label_for_display "${version}")
+  revision=$(image_label_for_display "${revision}")
   echo "[load] ${IMAGE_DIGEST} for ${platform}, image ${loaded}: version ${version:-unknown}${revision:+, commit ${revision:0:12}}"
   DEPLOY_IMAGE=${loaded}
   image_platform_args=(--platform "${BUILD_PLATFORM}" --pull never --label "${RELEASE_IMAGE_LABEL}=${IMAGE_REF}")
