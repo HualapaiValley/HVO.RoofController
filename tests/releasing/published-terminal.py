@@ -2,8 +2,9 @@
 """Exact final terminal files, without credentials, controller, install/apply or host commands.
 
 Runs offline help/version/notices/nonterminal refusal, then first-page PTYs at 80x24 and
-120x32. All HOME/XDG/cache/temp/extraction paths are private. An empty PATH disables survey
-subprocesses; a clean non-root host with no Roof installation is required. Broader page and
+120x32. All HOME/XDG/cache/temp/extraction paths are private. PATH contains only an inert bash
+stub: clipboard detection reports unsupported and host survey commands stay unavailable.
+A clean non-root host with no Roof installation is required. Broader page and
 prompt coverage uses Terminal.Gui/fake-machine tests; CLI/emulator tmux smoke stays separate.
 """
 import argparse
@@ -33,6 +34,18 @@ TIMEOUT = 45
 
 def require(condition, message):
     if not condition: raise RuntimeError(message)
+
+
+def isolated_command_path(home):
+    # Terminal.Gui 2.5.0's macOS clipboard constructor starts bash without catching a missing
+    # executable. A stub returns command-not-found without executing its arguments or accessing
+    # the host clipboard. Do not expose the runner's real shell, utilities or survey commands.
+    commands = home / 'command-path'
+    commands.mkdir(mode=0o700)
+    shell = commands / 'bash'
+    shell.write_text('#!/bin/sh\nexit 127\n')
+    shell.chmod(0o700)
+    return commands
 
 
 def pty_start(program, args, env, cwd, columns, rows, installer, output):
@@ -90,11 +103,12 @@ def main():
         payload=check(program,args.rid)
         with tempfile.TemporaryDirectory(prefix='hvo-terminal-') as tmp:
             home=Path(tmp); home.chmod(0o700)
-            for folder in ['config','cache','state','data','tmp','extract','empty-path','work']:(home/folder).mkdir(mode=0o700)
+            for folder in ['config','cache','state','data','tmp','extract','work']:(home/folder).mkdir(mode=0o700)
+            commands = isolated_command_path(home)
             # Allowlist: no credentials, inherited Docker context, DOTNET_STARTUP_HOOKS or user config.
             env=dict(HOME=tmp,XDG_CONFIG_HOME=str(home/'config'),XDG_CACHE_HOME=str(home/'cache'),
                      XDG_STATE_HOME=str(home/'state'),XDG_DATA_HOME=str(home/'data'),TMPDIR=str(home/'tmp'),
-                     DOTNET_BUNDLE_EXTRACT_BASE_DIR=str(home/'extract'),PATH=str(home/'empty-path'),
+                     DOTNET_BUNDLE_EXTRACT_BASE_DIR=str(home/'extract'),PATH=str(commands),
                      TERM='xterm-256color',COLORTERM='truecolor',LANG='C.UTF-8',LC_ALL='C.UTF-8',
                      DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
             def run(label,argv,code,contains=None,exact=None):
@@ -120,7 +134,8 @@ def main():
             require(not any(f.startswith(('config/','data/','extract/','work/')) for f in files),
                     'smoke wrote configuration, install record, answers or extracted payload: '+str(files))
             # The installer deliberately writes its cancellation log. Nothing else is allowed.
-            allowed={'state/hvo-roof/install.log','Library/Logs/hvo-roof-install.log'} if installer else set()
+            allowed={'command-path/bash'}
+            if installer: allowed.update({'state/hvo-roof/install.log','Library/Logs/hvo-roof-install.log'})
             require(set(files)<=allowed,'unexpected private files: '+str(files))
             records.append(dict(program=name,rid=args.rid,sha256=payload['sha256'],private_files=files,
                                 notices_sha256=hashlib.sha256(notice).hexdigest(),pty_sizes=[[80,24],[120,32]]))
