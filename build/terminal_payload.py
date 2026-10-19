@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the FINAL release assembler's terminal programs (including macOS signature).
+"""Check the FINAL release assembler's terminal programs, after macOS signing.
 
 Validates bundle manifests, decoded dependency metadata, and the retained notice inventory.
 Does not execute a program. Runtime/notice delivery checks are published-terminal.py's job.
@@ -23,6 +23,11 @@ def check(path, rid, inventory=None):
         names = {e['path'] for e in bundle.entries}
         require(REQUIRED <= names, 'missing retained terminal assemblies')
         require(not any(EXCLUDED.search(n) for n in names), 'excluded highlighting/native member present')
+        # All six accepted terminal bundles have no native members. Any future native addition needs
+        # an explicit payload policy and notice review, even when its package is already inventoried.
+        native_members = [e['path'] for e in bundle.entries if e['type'] == 'NativeBinary']
+        require(not native_members,
+                'native bundle members require explicit payload and notice policy review: ' + ', '.join(native_members))
         # Validate every compressed stream, not just metadata; catches corrupt final packaging.
         for entry in bundle.entries:
             bundle.member(entry)
@@ -66,7 +71,7 @@ def check(path, rid, inventory=None):
         require(all(e['path'] in declared_assemblies for e in bundle.entries if e['type'] == 'Assembly'),
                 'assembly missing from dependency inventory')
         summary = bundle.summary()
-        summary.update(rid=rid, packages=sorted(packages), native_members=[e['path'] for e in bundle.entries if e['type']=='NativeBinary'])
+        summary.update(rid=rid, packages=sorted(packages), native_members=native_members)
         return summary
 
 

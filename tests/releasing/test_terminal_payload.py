@@ -67,6 +67,19 @@ class BundleTests(unittest.TestCase):
             self.path.write_bytes(make_bundle(extra=[(name,b'x',kind,False)]))
             with self.assertRaisesRegex(BundleError,'excluded'): terminal_payload.check(self.path,'linux-x64')
 
+    def test_ordinary_native_members_require_explicit_policy_and_notice_review(self):
+        for rid, name in [('linux-x64', 'libnotinventoried.so'), ('linux-arm64', 'libnotinventoried.so'),
+                          ('osx-arm64', 'libnotinventoried.dylib')]:
+            for declared in [False, True]:
+                with self.subTest(rid=rid, name=name, declared=declared):
+                    def dependency(d):
+                        if declared:
+                            d['targets'][d['runtimeTarget']['name']]['Terminal.Gui/2.5.0']['native'] = {name: {}}
+                    self.path.write_bytes(make_bundle(rid=rid, deps_edit=dependency,
+                                                     extra=[(name, b'synthetic native material', 2, False)]))
+                    with self.assertRaisesRegex(BundleError, 'native bundle members require explicit payload and notice policy review'):
+                        terminal_payload.check(self.path, rid)
+
     def test_dependency_only_exclusion_unknown_notice_and_wrong_rid(self):
         for name in ['Onigwrap/1.0.11','New.Dependency/1.0.0','Markdig/99.0.0']:
             self.path.write_bytes(make_bundle(deps_edit=lambda d:d['libraries'].update({name:{'type':'package'}})))
@@ -107,6 +120,28 @@ class BundleTests(unittest.TestCase):
 
 
 class FinalAssemblerTests(unittest.TestCase):
+    def test_production_assembler_rejects_ordinary_native_material_in_final_copied_programs(self):
+        from unittest.mock import patch
+        from test_release_assets import Release, run, release_assets
+        for program in ['hvo-roof', 'hvo-roof-install']:
+            for rid, name in [('linux-x64', 'libnotinventoried.so'), ('osx-arm64', 'libnotinventoried.dylib')]:
+                with self.subTest(program=program, rid=rid), tempfile.TemporaryDirectory() as tmp:
+                    fixture = Release(Path(tmp))
+                    copy = release_assets.shutil.copyfile
+                    destination = f'{program}-{rid}'
+                    def changed_copy(source, target, *args, **kwargs):
+                        result = copy(source, target, *args, **kwargs)
+                        if Path(target).name == destination:
+                            Path(target).write_bytes(make_bundle(prefix=Path(source).read_bytes()[:20], rid=rid,
+                                extra=[(name, b'synthetic native material', 2, False)]))
+                        return result
+                    with patch.object(release_assets.shutil, 'copyfile', side_effect=changed_copy):
+                        code, out, error = run(fixture.arguments())
+                    self.assertEqual(code, 1)
+                    self.assertIn('terminal payload check failed', error)
+                    self.assertIn('native bundle members require explicit payload and notice policy review', error)
+                    self.assertIn(name, error)
+
     def test_assembler_rejects_final_copied_member_even_when_input_was_clean(self):
         from unittest.mock import patch
         from test_release_assets import Release, run, release_assets

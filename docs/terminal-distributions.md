@@ -75,6 +75,10 @@ metadata-only dependencies and both native suffixes.
 it writes release metadata/checksums. `build/terminal_payload.py DIST` inventories all six final
 programs, requiring Terminal.Gui, Wcwidth and Markdig, rejecting excluded members and dependency
 metadata, and requiring an inventoried notice entry for every shipped package version.
+The current accepted closure permits **zero `NativeBinary` bundle entries**, irrespective of filename
+or dependency metadata. Future native additions require an explicit payload-policy and applicable
+notice review before this gate can admit them. Fixtures cover ordinary `.so` and `.dylib` additions,
+including native content injected into the final copy produced by the production release assembler.
 
 CI also exercises the complete release assembler with the six real terminal programs and inert
 fixtures for unrelated products; it retains only the final terminal files from that test assembly.
@@ -85,6 +89,10 @@ working and extraction directories are private. An empty PATH disables host surv
 no controller address or credential is configured. Smoke refuses root and installed Roof hosts.
 It permits the installer's cancellation log, and asserts no installation, saved answers,
 configuration or extracted payload was created. Child processes and waits are bounded.
+Before runtime execution on macOS, `codesign --verify --strict` verifies **both final downloaded files**.
+Their displayed identities must be exactly `io.github.hualapaivalley.hvo-roof` and
+`io.github.hualapaivalley.hvo-roof-install`, each with `Signature=adhoc`. Verification and signature
+details are retained with the per-host runtime evidence, including when a later check fails.
 
 `TerminalInstalledNoticeTests` uses a fake machine and the actual CLI/installer program-copy steps,
 including the kept-program swap used for rollback, then executes **only** `--third-party-notices`

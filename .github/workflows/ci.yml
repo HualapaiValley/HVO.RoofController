@@ -428,6 +428,21 @@ jobs:
         with:
           name: terminal-dist-${{ github.run_id }}
           path: ${{ runner.temp }}/terminal-dist
+      - name: Verify final macOS terminal signatures and identities
+        if: matrix.rid == 'osx-arm64'
+        timeout-minutes: 2
+        run: |
+          mkdir -p "$RUNNER_TEMP/terminal-evidence"
+          for program in hvo-roof hvo-roof-install; do
+            binary="$RUNNER_TEMP/terminal-dist/${program}-osx-arm64"
+            details="$RUNNER_TEMP/terminal-evidence/${program}-codesign.txt"
+            verification="$RUNNER_TEMP/terminal-evidence/${program}-codesign-verify.txt"
+            codesign --display --verbose=4 "$binary" > "$details" 2>&1
+            codesign --verify --strict --verbose=2 "$binary" > "$verification" 2>&1
+            grep -Fxq "Identifier=io.github.hualapaivalley.${program}" "$details"
+            grep -Fxq 'Signature=adhoc' "$details"
+            cat "$verification" "$details"
+          done
       - name: Run exact final programs offline on their supported host
         run: |
           chmod +x "$RUNNER_TEMP/terminal-dist/"*
