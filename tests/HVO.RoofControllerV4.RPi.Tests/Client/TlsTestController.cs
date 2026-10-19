@@ -83,6 +83,10 @@ internal sealed class TlsTestController : IAsyncDisposable
             }
         })));
         builder.Logging.ClearProviders();
+        // Results.Json initializes a writable options object's resolver. Complete that work before
+        // parallel requests can serialize a response and make the same options read-only.
+        var responseJson = RoofClientJson.Create();
+        responseJson.MakeReadOnly(populateMissingResolver: true);
         var hubKeys = new ConcurrentQueue<string>();
         builder.Services.AddSingleton(hubKeys);
         builder.Services.AddSignalR().AddJsonProtocol(json => json.PayloadSerializerOptions = RoofClientJson.Create());
@@ -120,10 +124,10 @@ internal sealed class TlsTestController : IAsyncDisposable
         });
         app.MapGet("api/v4.0/Auth/Me", () => Results.Json(
             new RoofCallerResponse(CallerName, RoofControllerApiContract.ViewerRole, RoofCredentialKind.ApiKey, null, null, null, false),
-            RoofClientJson.Options));
+            responseJson));
         app.MapPost("api/v4.0/RoofControl/Stop", () => Results.Json(
             RoofServiceMock.Snapshot(relayState: RoofRelayRegisterState.Verified),
-            RoofClientJson.Options));
+            responseJson));
         app.MapHub<StatusHub>(RoofStatusHubContract.Path, hub => hub.Transports = HttpTransportType.WebSockets);
 
         controller = new TlsTestController(app, CreateContext(certificate, intermediates), hubKeys);
