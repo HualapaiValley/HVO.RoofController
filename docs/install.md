@@ -1,5 +1,8 @@
 # Installing: hvo-roof-install
 
+Read the embedded third-party notices offline with `hvo-roof-install --third-party-notices`.
+See [terminal distributions and notices](terminal-distributions.md) for the payload policy and verification.
+
 `hvo-roof-install` is the installer (#61). It sets up the roof controller's pieces on a machine:
 
 - the controller;

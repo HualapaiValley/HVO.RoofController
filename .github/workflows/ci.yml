@@ -276,6 +276,28 @@ jobs:
             exit 1
           fi
 
+      # Inspect and execute the final copied/signed terminal programs, not intermediate publish folders (#172).
+      - name: Assemble and inspect final terminal distributions
+        run: |
+          python3 ../tests/releasing/assemble-terminal-release.py --cli hvo-roof --installer hvo-roof-install --output terminal-dist
+          python3 ../build/terminal_payload.py terminal-dist --output terminal-manifests.json
+
+      - name: Upload final terminal distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminal-dist-${{ github.run_id }}
+          path: src/terminal-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload terminal manifests
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminal-manifests-${{ github.run_id }}
+          path: src/terminal-manifests.json
+          if-no-files-found: error
+          retention-days: 14
+
       # HVO Roof.app (docs/mac.md): published for osx-arm64 and made into the bundle, signed ad hoc by rcodesign, and
       # published for linux-x64 to check that the program refuses missing settings (exit 78) before it opens a window.
       # The mac-app job runs the bundle on a Mac.
@@ -394,6 +416,63 @@ jobs:
           path: src/TestResults/**
           if-no-files-found: warn
           retention-days: 7
+
+  terminal-distributions:
+    needs: build-and-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, rid: linux-x64 }
+          - { runner: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { runner: macos-latest, rid: osx-arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: terminal-dist-${{ github.run_id }}
+          path: ${{ runner.temp }}/terminal-dist
+      - name: Verify final macOS terminal signatures and identities
+        if: matrix.rid == 'osx-arm64'
+        timeout-minutes: 2
+        run: |
+          mkdir -p "$RUNNER_TEMP/terminal-evidence"
+          for program in hvo-roof hvo-roof-install; do
+            binary="$RUNNER_TEMP/terminal-dist/${program}-osx-arm64"
+            details="$RUNNER_TEMP/terminal-evidence/${program}-codesign.txt"
+            verification="$RUNNER_TEMP/terminal-evidence/${program}-codesign-verify.txt"
+            codesign --display --verbose=4 "$binary" > "$details" 2>&1
+            codesign --verify --strict --verbose=2 "$binary" > "$verification" 2>&1
+            grep -Fxq "Identifier=io.github.hualapaivalley.${program}" "$details"
+            grep -Fxq 'Signature=adhoc' "$details"
+            cat "$verification" "$details"
+          done
+      - name: Run exact final programs offline on their supported host
+        run: |
+          chmod +x "$RUNNER_TEMP/terminal-dist/"*
+          python3 tests/releasing/published-terminal.py "$RUNNER_TEMP/terminal-dist" --rid "${{ matrix.rid }}" --output "$RUNNER_TEMP/terminal-evidence"
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
+        with:
+          dotnet-version: '10.0.402'
+      - name: Prove notices survive actual installer program-copy steps
+        env:
+          HVO_TERMINAL_DIST: ${{ runner.temp }}/terminal-dist
+        working-directory: src
+        run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --filter FullyQualifiedName~TerminalInstalledNoticeTests -- RunConfiguration.TreatNoTestsAsError=true
+      - name: Upload exact-file runtime evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminal-runtime-${{ matrix.rid }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/terminal-evidence/
+          if-no-files-found: warn
+          retention-days: 14
 
   # HVO Roof.app on a Mac (Apple silicon): its signature, and the program opening and drawing its window (--check) with
   # settings, and refusing without them. Nothing here reaches a controller: the settings name a closed port.

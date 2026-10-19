@@ -114,6 +114,24 @@ controlled emulated stream; no-frame, stale/offline/recovery and unsupported/fai
   scroll areas separately from Stop, with keyboard access. Nine focused cases pass, including C15 REST/failure
   behavior and a real 568×320 capture after a verified emulated Stop; the original assertions are retained.
 
+## Reviewed main integration after Web review
+
+Canonical main `e14f479196c88899b847737e418751ad9a68a8d2` (reviewed #172 / PR #177) was merged after
+Web head `aa2a22f27ffff3bfd166e85efa7b1e24e8124bc0`. The only conflict was CHANGELOG; both entries remain.
+The combined CI file, after removing the unchanged #174 dual-RID Web publish block, is byte-identical to reviewed
+main. Its exact final bundle/notice/native inventory, distribution matrix, strict macOS signature and supported-host
+checks remain intact. The reviewed inert Bash helper is also retained byte-for-byte.
+
+Integration checks pass: 120 release Python regressions (including inert-helper and signature-step test doubles),
+27 docs/published-Web guard tests, YAML parsing/step ordering/all three terminal RIDs, ShellCheck, whitespace and
+55 Markdown files with zero broken links. The foundation validator still passes all 187 rows, 11 routes,
+48 installer steps and 20 pinned primary role/source hashes. Logs are `/tmp/hvo-174/integration177-{releasing,docs,links}.log`.
+
+Web runtime source, tests, assets, captures and the entire matrix remain byte-identical to the reviewed Web head.
+The earlier build/test/publish/capture evidence therefore remains applicable; broad local runs were not repeated.
+Normal new CI validates the merged head. No hardware, Docker, publication or host-service operation was performed;
+#158 remains open and all unowned rows/S01 status are preserved.
+
 ## Reproducible captures and scope
 
 [Operator guide](../web.md#tests) documents `WebScreenshotTests` and `WEB_SCREENS_OUT`. They run the actual Web process

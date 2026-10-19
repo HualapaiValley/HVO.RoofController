@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
+  <!-- Roof uses ordinary views, including its own InstallerWizard, never Terminal.Gui's Code, Markdown,
+       Wizard or WizardStep. Mirror SkyMonitor bf5ef211's scoped exclusion (#172). Keep Markdig and the
+       other required dependencies. Tests execute these programs in-process with the same exclusion. -->
+  <ItemGroup Condition="'$(HvoTerminalProgram)' == 'true' or '$(MSBuildProjectName)' == 'HVO.RoofControllerV4.TerminalUi' or '@(ProjectReference->WithMetadataValue('Filename', 'HVO.RoofControllerV4.TerminalUi'))' != ''">
+    <PackageReference Include="TextMateSharp" ExcludeAssets="all" />
+    <PackageReference Include="TextMateSharp.Grammars" ExcludeAssets="all" />
+    <PackageReference Include="Onigwrap" ExcludeAssets="all" />
+  </ItemGroup>
   <!-- Self-contained outputs carry the patched runtime even with the pinned older SDK. -->
   <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0' and '$(SelfContained)' == 'true'">
     <RuntimeFrameworkVersion>10.0.13</RuntimeFrameworkVersion>
