@@ -377,11 +377,14 @@ public sealed class RoofIdentityStoreTests
         var path = directory.File("identity.json");
         string token;
         string pinToken;
+        // The store accepts hashes; PIN-format validation is covered by sign-in tests.
+        // A non-hex plaintext canary cannot collide with the public session IDs in this file.
+        const string pinCanary = "test-only-identity-pin-hash-canary";
         const string keySecret = "test-managed-key-not-a-real-secret-0001";
         using (var rig = new IdentityRig(path))
         {
             rig.Store.IsPersistent.Should().BeTrue();
-            await rig.AddUserAsync("alice", Operator, pin: TestSecrets.Pin);
+            await rig.AddUserAsync("alice", Operator, pin: pinCanary);
             rig.Store.AddManagedKey("ci", Operator, kiosk: false, RoofIdentityStore.HashHex(keySecret)).Succeeded.Should().BeTrue();
             token = rig.OpenSession("alice").Token;
             pinToken = rig.OpenSession("alice", RoofCredentialKind.Pin, rig.Kiosk).Token;
@@ -393,7 +396,7 @@ public sealed class RoofIdentityStoreTests
         }
 
         var text = await File.ReadAllTextAsync(path);
-        text.Should().NotContain(TestSecrets.Password).And.NotContain(TestSecrets.Pin).And.NotContain(token).And.NotContain(pinToken)
+        text.Should().NotContain(TestSecrets.Password).And.NotContain(pinCanary).And.NotContain(token).And.NotContain(pinToken)
             .And.NotContain(keySecret);
         Directory.GetFiles(directory.Path).Should().ContainSingle("a save leaves no temporary file behind");
 
@@ -406,6 +409,8 @@ public sealed class RoofIdentityStoreTests
         reopened.Store.TryValidateToken(pinToken, touch: true, out _, out _)
             .Should().BeTrue("after a restart, a PIN session starts a fresh idle period");
         (await reopened.Hasher.VerifyAsync(reopened.Store.Users[0].PasswordHash, TestSecrets.Password, CancellationToken.None))
+            .Should().Be(RoofSecretCheck.Succeeded);
+        (await reopened.Hasher.VerifyAsync(reopened.Store.Users[0].PinHash, pinCanary, CancellationToken.None))
             .Should().Be(RoofSecretCheck.Succeeded);
         reopened.StoreLogger.Contains(LogLevel.Information, "1 people, 1 managed API keys, 2 sessions").Should().BeTrue();
     }
