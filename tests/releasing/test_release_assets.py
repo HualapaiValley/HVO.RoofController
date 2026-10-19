@@ -21,6 +21,7 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+from bundle_fixture import make_bundle
 
 REPOSITORY = pathlib.Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("release_assets", REPOSITORY / "build" / "release-assets.py")
@@ -147,11 +148,11 @@ class Release:
         EMULATOR_IMAGE.write(self.emulator_archive)
         for runtime, program in (("linux-arm64", AARCH64), ("linux-x64", X86_64), ("osx-arm64", mach_o_arm64(b"cli"))):
             (self.cli / runtime).mkdir(parents=True)
-            (self.cli / runtime / "hvo-roof").write_bytes(program)
+            (self.cli / runtime / "hvo-roof").write_bytes(make_bundle(prefix=program, rid=runtime))
         for runtime, program in (("linux-arm64", elf(183, b"install")), ("linux-x64", elf(62, b"install")),
                                  ("osx-arm64", mach_o_arm64(b"install"))):
             (self.installer / runtime).mkdir(parents=True)
-            (self.installer / runtime / "hvo-roof-install").write_bytes(program)
+            (self.installer / runtime / "hvo-roof-install").write_bytes(make_bundle(prefix=program, rid=runtime))
         self.kiosk.mkdir()
         (self.kiosk / "hvo-roof-kiosk").write_bytes(elf(183, b"kiosk"))
         for name in ("hvo-roof-kiosk.service", "99-hvo-roof-kiosk-backlight.rules", "appsettings.Local.example.json"):
