@@ -1813,6 +1813,9 @@ fi
 # shellcheck source=tests/container/supervisor-cgroup-tests.sh
 source "${TESTS_DIR}/supervisor-cgroup-tests.sh"
 
+# shellcheck source=tests/container/supervisor-stop-boundary-tests.sh
+source "${TESTS_DIR}/supervisor-stop-boundary-tests.sh"
+
 tests=()
 if (( $# > 0 )); then
   tests=("$@")
