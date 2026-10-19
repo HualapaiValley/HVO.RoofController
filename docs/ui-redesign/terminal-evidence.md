@@ -175,3 +175,19 @@ flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 600s \
   dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
   --filter FullyQualifiedName~AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls
 ```
+
+## Hosted CI job budget cancellation
+
+At `184de4f`, [run 39201562307, job 117895607620](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39201562307/job/117895607620)
+was cancelled at **20m23s** with the annotation “The job has exceeded the maximum execution time of 20m0s”.
+The main test step passed **3,879 tests, four skips and zero failures in 302s**; the focused umask test also passed.
+Debug/Release builds, every CLI/kiosk/installer/Mac/native-auth publish, and the pre-upload terminal assembly,
+native-policy and notice checks succeeded. Cancellation occurred during `Upload hvo-roof-install`, which began
+at 19m58s; later normal uploads were skipped. This is cumulative job-budget evidence, not a functional test failure
+or a completed-run/platform-gate pass.
+
+Only `build-and-test.timeout-minutes` changes from **20 to 30** to accommodate the serial supported-RID publishes
+and expanded real workflow suite. Every check and every other job/step timeout, signature, native-policy, notice
+and byte check remains intact. The correction uses YAML/diff and existing CI-signature checks; it repeats no build,
+product suite, publish, motion or image work, and requests no manual CI rerun. #183 and #185/#186 through reviewed
+MAIN, final required Debug/Release suites and current-head hosted gates remain prerequisites.

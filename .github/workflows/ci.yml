@@ -29,7 +29,8 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Serial supported-RID publishes and expanded workflow tests share this bounded job budget.
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
     env:
