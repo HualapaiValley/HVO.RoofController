@@ -142,3 +142,36 @@ ETXTBSY, cross-program R2R equality, independent-host R2R discovery abort) stay 
 counted as a runtime pass. Final corrected checks use immutable `dist-trust-final`: the CLI retains its validated `981f2ea` bytes and the
 installer uses its newly completed `647a6a8` publish. Each program's source/copy hashes and managed/native evidence
 remain separate in the receipt; the prior immutable distributions and failed attempts remain intact.
+
+
+## Focused Admin settings catalogue acceptance
+
+`AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls` closes the independent actual-TUI evidence
+gap for the catalogue form kinds. It compares the independent real Admin API catalogue/settings with every group and
+key in the actual `RoofUiSettingsPage`, then navigates the real group/field lists by keyboard. All **7 groups and 42
+fields** are visited in truecolour, ANSI16, NO_COLOR and ASCII at both 80×24 and 120×32. The current catalogue publishes
+Boolean, Integer, String, Duration and Enum; it publishes no Number setting, so this proof adds no synthetic one.
+
+Every writable editor is opened and cancelled with its actual initial value and Tab/Enter actions; read-only states
+refuse an editor, secret controls stay blank/masked, nullable states are included, and a long/wide value's tail remains
+readable. Prompt bounds/hit areas and permanent Stop are checked, including actual F9 over an editor in every group.
+Invalid boolean and enum input are rejected. A boolean safety review is cancelled with the API version unchanged;
+a non-safety logging enum is saved through the real API and read back, with all other values/IsSet unchanged.
+The pre-existing nullable-duration and multipart-secret save/clear workflows retain all their assertions.
+
+The [focused receipt](terminal-settings-catalogue-validation.json) records **8/8 Release source cases** and **8/8 exact
+retained CLI bundled-IL/JIT cases**. The rebuilt private test host uses the existing final-bundle extraction/staging and
+`run_phase` helpers, explicit ReadyToRun=0, absolute dotnet and the reviewed inert PATH. Its five staged member hashes
+match the retained CLI `981f2ea` distribution (`c52aaa3a…fa42`), with no republish or native replay. Local raw proof is
+under `/tmp/hvo-176/settings-catalogue-{source-final,bundle}`; the normal exact-bundle CI catalogue now requires this
+method too. Independent API reads run off the GUI context because the in-process test handler captures it; initial
+cancelled attempts remain private and are not counted as passes. No production files or matrix statuses change.
+Shared S rows remain root-owned; #183 through reviewed MAIN and final required/hosted checks remain pending.
+
+The narrow source reproduction, from `src/`, is:
+
+```bash
+flock -w 600 -o /tmp/hvo-heavy-gate.lock timeout --kill-after=20s 600s \
+  dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
+  --filter FullyQualifiedName~AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls
+```

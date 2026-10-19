@@ -56,6 +56,7 @@ CONTRACT_REQUIRED = {
 REQUIRED = {
     'hvo-roof': ['EveryPageAndLongPrivatePrompt_KeepStopAndNewestResultVisible',
                  'ActualWorkflowCatalogue_RetainsItsApiAndPromptAssertions', 'Capabilities_AreExplicit',
+                 'AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls',
                  'RemainingIdentityAndHandEditPrompts_KeepActionsAndStopVisible',
                  'ExceptionallyLongStopDetails_AreBoundedReadableAndResetForTheNewestResult',
                  'LongCallerName_PreservesRoleAndFeedInTheHeader',

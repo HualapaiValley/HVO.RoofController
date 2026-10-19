@@ -284,6 +284,184 @@ public sealed class TerminalDesignTests
     [DataRow("truecolor,unicode", 120, 32)]
     [DataRow("ansi16,unicode", 120, 32)]
     [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("ansi16,ascii", 120, 32)]
+    public void AdminSettingsCatalogue_TraversesEveryGroupAndType_ThroughActualControls(string mode, int width, int height)
+    {
+        var roof = new SettingsApiTests.RoofDouble();
+        using var host = new RoofApiTestHost(roof.Mock);
+        roof.StartFrom(host);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var api = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        var catalogue = Task.Run(() => api.Settings.GetCatalogueAsync()).GetAwaiter().GetResult();
+        var original = Task.Run(() => api.Settings.GetAsync()).GetAwaiter().GetResult();
+        catalogue.Groups.Select(group => group.Name).Should().BeEquivalentTo(new[]
+        {
+            RoofSettingsContract.RoofGroup, RoofSettingsContract.ControllerGroup, RoofSettingsContract.CameraGroup,
+            RoofSettingsContract.SecurityGroup, RoofSettingsContract.IdentityGroup, RoofSettingsContract.LoggingGroup,
+            RoofSettingsContract.UiGroup
+        });
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = new TuiDriver(rig, width, height);
+        tui.WaitIdle("Admin status", () => tui.Ui.Caller?.Role == RoofControllerApiContract.AdminRole && tui.Ui.Status is not null);
+        tui.Press(Key.F2);
+        var page = (RoofUiSettingsPage)tui.Ui.CurrentPage;
+        tui.WaitIdle("actual API catalogue", () => page.Form is not null);
+        var form = page.Form!;
+        form.Groups.Select(group => group.Name).Should().Equal(catalogue.Groups.Select(group => group.Name));
+        form.Fields.Select(field => field.Key).Should().Equal(catalogue.Groups.SelectMany(group => group.Settings).Select(field => field.Key));
+        var groups = page.SubViews.OfType<FrameView>().Single(frame => frame.Title == "GROUPS").SubViews.OfType<ListView>().Single();
+        var fields = page.SubViews.OfType<FrameView>().Single(frame => frame.Title == "SETTING / VALUE").SubViews.OfType<ListView>().Single();
+        var seenTypes = new HashSet<RoofSettingType>();
+        var seenReadOnly = false;
+        var seenSecret = false;
+        var seenNullable = false;
+        var seenLong = false;
+        for (var groupIndex = 0; groupIndex < catalogue.Groups.Count; groupIndex++)
+        {
+            groups.SetFocus();
+            tui.Press(Key.Home);
+            for (var n = 0; n < groupIndex; n++) tui.Press(Key.CursorDown);
+            page.SelectedGroup!.Name.Should().Be(catalogue.Groups[groupIndex].Name);
+            tui.Screen.Should().Contain(catalogue.Groups[groupIndex].Title);
+            fields.SetFocus();
+            tui.Press(Key.Home);
+            var stopped = false;
+            foreach (var descriptor in catalogue.Groups[groupIndex].Settings)
+            {
+                var field = page.SelectedField!;
+                field.Key.Should().Be(descriptor.Key, "the real list is traversed using its keys");
+                field.CanWrite.Should().Be(original.Settings.Single(state => state.Key == field.Key).CanWrite);
+                seenTypes.Add(descriptor.Type);
+                seenNullable |= descriptor.Nullable;
+                tui.Screen.Should().Contain(field.Label);
+                Change();
+                if (!field.CanWrite)
+                {
+                    seenReadOnly = true;
+                    tui.Ui.Panel.Should().BeNull("read-only API states cannot open an editor");
+                    tui.Ui.Message.Should().Be($"{field.Label} cannot be changed: {field.ReadOnlyReason}");
+                    tui.Screen.Should().Contain("Stop roof (F9)");
+                }
+                else
+                {
+                    var panel = tui.Ui.Panel!;
+                    CheckPrompt(panel, "Save");
+                    if (descriptor.Secret)
+                    {
+                        seenSecret = true;
+                        panel.Fields.Should().HaveCount(2 * form.FindGroup(descriptor.Group)!.Secrets.Count);
+                        panel.Fields.Should().OnlyContain(input => input.Secret && input.Text.Length == 0);
+                    }
+                    else
+                    {
+                        panel.Fields.Should().ContainSingle().Which.Text.Should().Be(field.EditText);
+                        if (!seenLong && descriptor.Type == RoofSettingType.String)
+                        {
+                            const string tail = "CATALOGUE-TAIL";
+                            panel.Fields[0].Text = string.Concat(Enumerable.Repeat("屋根é", 40)) + tail;
+                            panel.Fields[0].SetFocus();
+                            tui.Press(Key.End);
+                            tui.Screen.Should().Contain(tail).And.Contain("[ Cancel ]");
+                            seenLong = true;
+                        }
+                    }
+                    if (!stopped)
+                    {
+                        tui.Press(Key.F9);
+                        tui.WaitIdle("Stop over catalogue editor", () => tui.Ui.StopResult != RoofStopText.Sending);
+                        tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
+                        tui.Ui.Panel.Should().BeSameAs(panel);
+                        stopped = true;
+                    }
+                    // Tab reaches both real actions; Enter on Cancel leaves every value/version untouched.
+                    panel.Fields[^1].SetFocus();
+                    foreach (var button in panel.Buttons)
+                    {
+                        for (var n = 0; n < 12 && !button.HasFocus; n++) tui.Press(Key.Tab);
+                        button.HasFocus.Should().BeTrue("every editor action is keyboard reachable");
+                    }
+                    tui.Press(Key.Enter);
+                    tui.Ui.Panel.Should().BeNull();
+                }
+                fields.SetFocus();
+                tui.Press(Key.CursorDown);
+            }
+        }
+        seenTypes.Should().BeEquivalentTo(catalogue.Groups.SelectMany(group => group.Settings).Select(field => field.Type).Distinct());
+        seenReadOnly.Should().BeTrue(); seenSecret.Should().BeTrue(); seenNullable.Should().BeTrue(); seenLong.Should().BeTrue();
+
+        // Parse a boolean through the real editor, review its safety change, then cancel without sending it.
+        var flag = form.Fields.First(field => field.CanWrite && field.Setting.Type == RoofSettingType.Boolean && field.Setting.Safety == RoofSettingSafety.Always);
+        page.Select(flag.Key); Change();
+        var booleanPanel = tui.Ui.Panel!;
+        booleanPanel.Fields[0].Text = "not-a-boolean";
+        booleanPanel.Press("Save");
+        tui.Ui.Panel.Should().BeSameAs(booleanPanel);
+        booleanPanel.Error.Should().Be("Enter true or false.");
+        CheckPrompt(booleanPanel, "Save");
+        var flagText = flag.Value!.Value.GetBoolean() ? "false" : "true";
+        booleanPanel.Fields[0].Text = flagText;
+        booleanPanel.Press("Save");
+        var review = tui.Ui.Panel!;
+        review.Prompt.Title.Should().Be("Safety-critical change");
+        review.Prompt.Message.Should().Contain(flag.Label).And.Contain(flagText).And.Contain("SAFETY-CRITICAL");
+        CheckPrompt(review, "Confirm and send");
+        tui.Press(Key.Esc);
+        tui.Ui.Panel.Should().BeNull();
+        Task.Run(() => api.Settings.GetAsync()).GetAwaiter().GetResult().Version.Should().Be(original.Version, "all editors/reviews were cancelled");
+
+        // An enum is validated and normalized by the real form, then persisted through the actual API.
+        var choice = form.Fields.First(field => field.CanWrite && field.Setting.Type == RoofSettingType.Enum && field.Setting.AllowedValues!.Contains("Error"));
+        page.Select(choice.Key); Change();
+        var enumPanel = tui.Ui.Panel!;
+        enumPanel.Fields[0].Text = "not-a-log-level";
+        enumPanel.Press("Save");
+        tui.Ui.Panel.Should().BeSameAs(enumPanel);
+        enumPanel.Error.Should().Be("Enter one of: " + string.Join(", ", choice.Setting.AllowedValues!) + ".");
+        CheckPrompt(enumPanel, "Save");
+        enumPanel.Fields[0].Text = "Error";
+        enumPanel.Fields[0].SetFocus();
+        tui.Press(Key.Enter);
+        tui.WaitIdle("enum saved through API", () => page.Form!.Version == original.Version + 1);
+        page.Form!.FindField(choice.Key)!.DisplayValue.Should().Be("Error");
+        var after = Task.Run(() => api.Settings.GetAsync()).GetAwaiter().GetResult();
+        after.Settings.Single(field => field.Key == choice.Key).Value!.Value.GetString().Should().Be("Error");
+        after.Settings.Where(field => field.Key != choice.Key).Select(field => new { field.Key, Value = field.Value?.GetRawText(), field.IsSet })
+            .Should().BeEquivalentTo(original.Settings.Where(field => field.Key != choice.Key).Select(field => new { field.Key, Value = field.Value?.GetRawText(), field.IsSet }));
+        tui.Screen.Should().Contain("Stop roof (F9)").And.Contain("[ Change ]");
+        TestContext.WriteLine($"Actual API catalogue: {catalogue.Groups.Count} groups, {form.Fields.Count()} fields; types {string.Join(",", seenTypes.Order())}; read-only/secret/nullable/long; boolean review cancelled, enum saved. {mode} {width}x{height}.");
+
+        void Change()
+        {
+            page.SubViews.OfType<Button>().Single(button => button.Text == "Change").SetFocus();
+            tui.Press(Key.Enter);
+        }
+
+        void CheckPrompt(RoofUiPanel panel, string action)
+        {
+            var screen = tui.Screen;
+            screen.Should().Contain("[ " + action + " ]").And.Contain("[ Cancel ]").And.Contain("Stop roof (F9)");
+            tui.Ui.StopButton.Enabled.Should().BeTrue();
+            panel.FrameToScreen().Bottom.Should().BeLessThanOrEqualTo(tui.Ui.StopButton.FrameToScreen().Y);
+            foreach (var button in panel.Buttons)
+            {
+                var bounds = button.FrameToScreen();
+                bounds.Right.Should().BeLessThanOrEqualTo(width);
+                bounds.Bottom.Should().BeLessThanOrEqualTo(tui.Ui.StopButton.FrameToScreen().Y);
+                tui.Ui.Window.GetViewsUnderLocation(bounds.Location, ViewportSettingsFlags.None).Should().Contain(button);
+            }
+        }
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
     [DataRow("nocolor,ascii", 120, 32)]
     public void RemainingIdentityAndHandEditPrompts_KeepActionsAndStopVisible(string mode, int width, int height)
     {
