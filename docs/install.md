@@ -52,6 +52,14 @@ not saved in answers or install records. `--plan` remains read-only. Setup reche
 readiness and stops before application changes on failure or an OS reboot-required marker.
 For restore on a new OS, install its prerequisites manually first.
 
+When upgrading a recorded Linux controller, recovery preparation also precedes approved kiosk
+package work, including `apt-get update`: the target release must read the stores, and the
+upgrade backup must be taken or verified and synced to disk first. This applies when installing
+over an older recorded release with an answers file or the wizard. If recovery preparation
+refuses a state contract or backup, package work does not start. Approving setup in the wizard
+can therefore take the upgrade backup while still on the review page; the later install keeps
+that same backup. A routine `upgrade` does not grant package consent.
+
 Splash remains a separate explicit choice: it requires Python 3 and a supported Raspberry
 Pi OS Debian boot layout. Its reviewed plan includes official Plymouth/Pillow packages,
 boot-file backups and rebuilding initramfs. It is unsupported on the Ubuntu Parallels rig;

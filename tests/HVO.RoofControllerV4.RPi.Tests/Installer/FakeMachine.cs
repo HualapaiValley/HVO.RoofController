@@ -327,6 +327,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
     public ConcurrentQueue<CommandLine> Ran { get; } = new();
 
+    /// <summary>Observes a command before it runs, including the state before a package mutation.</summary>
+    public Action<CommandLine>? BeforeCommand { get; set; }
+
     /// <summary>What the machine can download, by URL: the release's release.json on GitHub, unless a test takes it away.</summary>
     public Dictionary<string, string> Downloads { get; } = new(StringComparer.Ordinal);
 
@@ -974,6 +977,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     public Task<CommandResult> RunAsync(CommandLine command, CancellationToken cancellationToken = default)
     {
         Ran.Enqueue(command);
+        BeforeCommand?.Invoke(command);
         var arguments = command.Arguments;
         CommandResult? result = command.Program switch
         {
