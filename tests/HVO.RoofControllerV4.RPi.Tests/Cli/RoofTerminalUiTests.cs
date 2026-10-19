@@ -71,6 +71,24 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    [DataRow(RoofRelayRegisterState.Verified, RoofStopText.AcknowledgedVerified)]
+    [DataRow(RoofRelayRegisterState.Unknown, RoofStopText.Acknowledged)]
+    public void StopAcknowledgement_PreservesTheActualVerificationMessage_InTheRgbScheme(RoofRelayRegisterState state, string message)
+    {
+        var roof = RoofServiceMock.Create();
+        roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => RoofServiceMock.Snapshot(relayState: state));
+        using var host = RoofClientApiTests.CreateHost(roof);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+        using var tui = Started(rig);
+        tui.Press(Key.F9);
+        tui.WaitIdle("the actual Stop response", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Ui.StopResult.Should().Be(message);
+        ShouldHaveColours(tui.ColoursOf(message), RoofUiPalette.Success, RoofUiPalette.Background);
+        if (state == RoofRelayRegisterState.Unknown) tui.Ui.StopResult.Should().NotContain("verified");
+    }
+
+    [TestMethod]
     public void TheStopButton_SendsStop_AndSaysSoAtOnce()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -119,7 +137,7 @@ public sealed class RoofTerminalUiTests
         tui.Ui.StopResult.Should().Be(RoofStopText.Failed("No controller address is configured."));
         tui.Ui.StopButton.Enabled.Should().BeTrue();
         ShouldHaveColours(tui.ColoursOf("No controller is configured"), RoofUiPalette.WarningText, RoofUiPalette.WarningBackground);
-        ShouldHaveColours(tui.ColoursOf(tui.Ui.StopResult[..30]), RoofUiPalette.DangerText, RoofUiPalette.Background);
+        ShouldHaveColours(tui.ColoursOf(tui.Ui.StopResult[..30]), RoofUiPalette.Danger, RoofUiPalette.Background);
     }
 
     [TestMethod]
@@ -135,7 +153,7 @@ public sealed class RoofTerminalUiTests
         tui.WaitIdle("the Stop answer", () => tui.Ui.StopResult != RoofStopText.Sending);
 
         tui.Ui.StopResult.Should().Be(RoofStopText.KeyRefused);
-        ShouldHaveColours(tui.ColoursOf(RoofStopText.KeyRefused[..30]), RoofUiPalette.DangerText, RoofUiPalette.Background, "a refused Stop is an error");
+        ShouldHaveColours(tui.ColoursOf(RoofStopText.KeyRefused[..30]), RoofUiPalette.Danger, RoofUiPalette.Background, "a refused Stop is an error");
         ShouldHaveColours(tui.ColoursOf("No status: the controller refused"), RoofUiPalette.DangerText, RoofUiPalette.DangerBackground);
         host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
     }
@@ -182,10 +200,10 @@ public sealed class RoofTerminalUiTests
         using var tui = Started(rig);
         var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
 
-        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop is the web UI's yellow button");
+        ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop retains the canonical red action pair");
         tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Bold);
-        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open is green, as on the web UI");
-        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close is red, as on the web UI (disabled while the roof is closed)");
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open uses the canonical raised action surface");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close uses the raised action surface (disabled while the roof is closed)");
         ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
         ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Background, "the page is HVO Dark's");
         ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web UI's navigation bar");
@@ -198,7 +216,7 @@ public sealed class RoofTerminalUiTests
 
         tui.Press(Key.F9);
         tui.WaitIdle("the Stop answer", () => tui.Ui.StopResult != RoofStopText.Sending);
-        ShouldHaveColours(tui.ColoursOf(RoofStopText.AcknowledgedVerified), RoofUiPalette.SuccessText, RoofUiPalette.Background);
+        ShouldHaveColours(tui.ColoursOf(RoofStopText.AcknowledgedVerified), RoofUiPalette.Success, RoofUiPalette.Background);
     }
 
     [TestMethod]
@@ -233,10 +251,10 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
-    [DataRow(RoofStopOutcome.Sent, RoofUiPalette.InfoText)]
-    [DataRow(RoofStopOutcome.Acknowledged, RoofUiPalette.SuccessText)]
-    [DataRow(RoofStopOutcome.RelayUnverified, RoofUiPalette.WarningText)]
-    [DataRow(RoofStopOutcome.Failed, RoofUiPalette.DangerText)]
+    [DataRow(RoofStopOutcome.Sent, RoofUiPalette.Info)]
+    [DataRow(RoofStopOutcome.Acknowledged, RoofUiPalette.Success)]
+    [DataRow(RoofStopOutcome.RelayUnverified, RoofUiPalette.Warning)]
+    [DataRow(RoofStopOutcome.Failed, RoofUiPalette.Danger)]
     public void EachStopResult_HasTheWebUisColourForIt(RoofStopOutcome outcome, string colour)
         => ShouldHaveColours(RoofUiTheme.HvoDark.ForStop(outcome).Normal, colour, RoofUiPalette.Background);
 
@@ -256,7 +274,7 @@ public sealed class RoofTerminalUiTests
         tui.Ui.StopButton.ShadowStyle.Should().Be(ShadowStyles.None, "Terminal.Gui draws a shadow in black");
         page.OpenButton.ShadowStyle.Should().Be(ShadowStyles.None);
 
-        tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Reverse, "Stop stands out without its yellow");
+        tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Reverse, "Stop stands out without its red");
         tui.ColoursOf(" Open ").Style.Should().HaveFlag(TextStyle.Bold).And.NotHaveFlag(TextStyle.Reverse);
         tui.ColoursOf(" Close ").Style.Should().HaveFlag(TextStyle.Faint, "Close is disabled while the roof is closed");
 

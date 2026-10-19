@@ -36,7 +36,7 @@ public sealed class KioskSettingsPage : UserControl
     private readonly KioskSettingsPanel _panel;
     private readonly KioskConsole _console;
     private readonly KioskMetrics _metrics;
-    private bool _symbols;
+    private int _keyPage;
 
     public KioskSettingsPage(KioskSettingsPanel panel, KioskConsole console, KioskMetrics metrics)
     {
@@ -58,7 +58,7 @@ public sealed class KioskSettingsPage : UserControl
         {
             // While a value is typed, the editor's first line names the setting, and the room is the keyboard's: all of
             // it fits on the smallest screen without scrolling.
-            page.Children.Add(KioskTheme.Label("Settings", _metrics.Large, weight: FontWeight.SemiBold));
+            page.Children.Add(KioskTheme.Label("Settings", _metrics.Large, KioskTheme.Accent, weight: FontWeight.SemiBold));
         }
 
         foreach (var status in KioskPageParts.Status(_panel.Busy, _panel.Message, _metrics))
@@ -193,7 +193,8 @@ public sealed class KioskSettingsPage : UserControl
                 button.MinWidth = _metrics.Touch * 1.6;
                 if (string.Equals(field.EditText, choice, StringComparison.OrdinalIgnoreCase) || (choice == KioskSettingsPanel.NoValue && field.EditText.Length == 0))
                 {
-                    KioskTheme.Colour(button, RoofUiPalette.Accent, RoofUiPalette.Text);
+                    KioskTheme.Colour(button, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
+                    KioskTheme.Selected(button, true);
                 }
 
                 choices.Children.Add(button);
@@ -315,19 +316,19 @@ public sealed class KioskSettingsPage : UserControl
         return row;
     }
 
-    /// <summary>Four rows, so the keypad fits under the value on the smallest screen; a duration's units are a fifth column.</summary>
+    /// <summary>Three bounded rows; duration units are kept on the same touch page as the digits.</summary>
     private Control Keypad(RoofSettingsFormField field) => field.Setting.Type == RoofSettingType.Duration
-        ? Keys(5, ["7", "8", "9", "⌫", "ms", "4", "5", "6", "Clear", "s", "1", "2", "3", "-", "m", "0", ".", ":", "", "h"])
-        : Keys(4, ["7", "8", "9", "⌫", "4", "5", "6", "Clear", "1", "2", "3", "-", "0", ".", ":"]);
+        ? Keys(7, ["7", "8", "9", "⌫", "ms", "4", "5", "6", "Clear", "s", "1", "2", "3", "-", "m", "0", ".", ":", "", "h"])
+        : Keys(5, ["7", "8", "9", "⌫", "4", "5", "6", "Clear", "1", "2", "3", "-", "0", ".", ":"]);
 
     private Control Keyboard()
     {
-        var keys = new List<string>(_symbols ? Symbols : Letters);
+        var keys = new List<string>(_keyPage switch { 0 => Letters.Take(14), 1 => Letters.Skip(14), 2 => Symbols.Take(14), _ => Symbols.Skip(14) });
         var grid = Keys(7, keys);
         var shift = KioskTheme.TouchButton(_panel.Shift ? "⇧ ON" : "⇧", "editor-key-shift", _metrics, _panel.ToggleShift);
-        var page = KioskTheme.TouchButton(_symbols ? "abc" : "123", "editor-key-page", _metrics, () =>
+        var page = KioskTheme.TouchButton(_keyPage == 0 || _keyPage == 2 ? "More" : _keyPage == 1 ? "123" : "abc", "editor-key-page", _metrics, () =>
         {
-            _symbols = !_symbols;
+            _keyPage = (_keyPage + 1) % 4;
             Update();
         });
         var space = KioskTheme.TouchButton("Space", "editor-key-space", _metrics, () => _panel.Type(" "));

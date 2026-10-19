@@ -19,13 +19,12 @@ The existing [RoofUiPalette](../../src/HVO.RoofControllerV4.Client/RoofUiPalette
 SkyMonitor assemblies. The contract file can be checked by adapter tests; runtime JSON parsing or unused framework
 components are not needed. Add bounded palette members/aliases only when a consumer uses them.
 
-The `roof_palette_member` field maps the canonical role onto an existing member where available; `surface-raised`
-needs an explicit mapping during migration. Legacy `Badge`, `MutedWeak`, `FocusRing` and Bootstrap action constants
-need a call-site audit: use surface/raised/muted/accent semantics, retain an alias only where compatibility requires it,
-and test contrast before deleting any specialized treatment. These are migration tasks, not values already applied.
-At the #171 foundation baseline, nine Roof role values matched, ten differed and surface-raised was absent; Stop was amber.
-#171 changed no runtime palette. #174 applies every canonical role and the red Stop action to Web; native/terminal
-adoption is tracked in their own matrix rows rather than inferred from Web.
+The `roof_palette_member` field maps each canonical role onto its shared member; `surface-raised` maps to
+`SurfaceRaised` after #175. #175 audits legacy `Badge`, `MutedWeak` and `FocusRing`: compatible aliases resolve to
+raised surface, muted and accent. Directional actions use raised surface/text; Stop uses danger-background/danger-text,
+including keyboard focus. Native and the existing terminal RGB adapter consume all migrated values. #174 applies all
+20 canonical roles independently in Web-owned CSS. #171 itself changed no runtime palette; explicit terminal
+ANSI-16/capability parity retains its independent implementation gate.
 Coordinate adapter migrations so a palette change does not silently recolour only some supported UIs.
 
 ## Role pairing and contrast
@@ -37,9 +36,7 @@ Coordinate adapter migrations so a palette change does not silently recolour onl
   warning-text and info-text map to ANSI **Black**, for Green, Yellow and Cyan notice backgrounds respectively.
   Putting them alone on the page's Black fallback makes text disappear. Danger-text uses White on Red.
   The `notice_pairs` mapping is normative across all adapters.
-- [RoofUiTheme's Stop feedback](../../src/HVO.RoofControllerV4.TerminalUi/RoofUiTheme.cs) currently uses InfoText,
-  SuccessText and WarningText over page Background. During terminal migration, switch standalone feedback to
-  info/success/warning, or use the complete notice pair. Test **Sent, both Acknowledged message cases,
+- [RoofUiTheme's Stop feedback](../../src/HVO.RoofControllerV4.TerminalUi/RoofUiTheme.cs) uses the standalone info/success/warning/danger tones over page Background after #175. Test **Sent, both Acknowledged message cases,
   RelayUnverified and Failed** independently in ANSI-16 as well as truecolour/NO_COLOR. Copying new constants into
   those old schemes is unsafe.
 - Aim for at least 4.5:1 for normal text and 3:1 for large text and identifying control/focus boundaries in actual
@@ -94,8 +91,8 @@ Use existing platform helpers; introduce only controls actually used by a migrat
 
 The owner's landscape 10-inch 1920x1200 display is provisional. Reconcile effective mode, rotation, scale and physical
 metrics using the existing configuration/display model and headless fixtures. Do not infer 12mm from resolution
-alone. Preserve smaller supported layouts and Mac resizable keyboard/window behavior. Current KioskShell uses a
-ScrollViewer; no-page-scrolling is a **pending migration**, not an existing guarantee. PIN/commissioning and long
+alone. Preserve smaller supported layouts and Mac resizable keyboard/window behavior. #175 replaces kiosk page scrolling with measured pages for readings, notices, About and people; private PIN entry has
+its own bounded step. Desktop administration retains scrolling inside the permanent shell. PIN/commissioning and long
 fault/offline notices must satisfy the same fit requirement as Roof. Mac may adapt desktop overflow while keeping
 Stop visible; its rights do not inherit kiosk PIN restrictions.
 
