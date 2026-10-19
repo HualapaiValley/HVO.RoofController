@@ -38,20 +38,28 @@ main dashboards look finished.
 
 ## Theme removal inputs
 
-This is a **pending removal checklist**, not edits made by #171. Exact direct references were searched in tracked and
+Web/#174 owns the removal and active [Web stylesheet](../../src/HVO.RoofControllerV4.Web/wwwroot/css/hvo-dark.css).
+The project, solution GUID/configuration rows, Docker copies, workflow filters and coverage dependency are removed.
+The original project-tree link below is pinned to the foundation baseline; it is historical evidence, not an active
+path. [Web delivery evidence](web-evidence.md) records actual builds, published assets/notices and browser captures.
+The retained Bootstrap/Icon font licences stay with their Web assets; the unused OpenSans files were not referenced
+by the baseline stylesheet and are removed. No native or terminal runtime input is removed by that change.
+
+This was the **pending removal checklist** recorded by #171; the table retains its required proof, not a claim that
+source inspection alone establishes published output. Exact direct references were searched in tracked and
 hidden repository files at the baseline; validate again after platform work. Historical mention in this foundation,
 release notes or CHANGELOG is not a runtime dependency and should not be silently erased.
 
 | Input | Required action / proof |
 | --- | --- |
-| [Theme project tree](../../src/HVO.WebSite.Themes/README.md) | Delete project, CSS and obsolete OpenSans assets after enumerating consumers. Prove required fonts/icons/assets owned by Web still ship with their notices; do not blindly copy unrelated CameraAgent styles. |
+| [Theme project tree](https://github.com/HualapaiValley/HVO.RoofController/blob/2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3/src/HVO.WebSite.Themes/README.md) | Delete project, CSS and obsolete OpenSans assets after enumerating consumers. Prove required fonts/icons/assets owned by Web still ship with their notices; do not blindly copy unrelated CameraAgent styles. |
 | [Solution](../../src/HVO.RoofController.sln) | Remove project entry **and its GUID configuration rows**, not only the path. Debug and Release solution builds must pass. |
 | [Web project](../../src/HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj) | Remove ProjectReference; Web publishes with its own required CSS/fonts/icons and scoped assets. No replacement RCL/package. |
 | [App](../../src/HVO.RoofControllerV4.Web/Components/App.razor), [app.css](../../src/HVO.RoofControllerV4.Web/wwwroot/css/app.css) | Replace `_content/HVO.WebSite.Themes` asset URL and ownership comment; validate fingerprinted asset mapping and every CSS import/url, including font/data references. |
 | [Dockerfile](../../src/HVO.RoofControllerV4.RPi/Dockerfile) | Remove both project-file restore-stage COPY and full-source COPY for the RCL. Preserve Web restore-before-COPY correctness and publish assets. Controller image is shared by physical and emulator deployment paths. |
 | [Image workflow](../../.github/workflows/pi-image.yml), [emulator image workflow](../../.github/workflows/emulator-image.yml) | Remove obsolete theme path triggers from push and PR filters; retain Web/Client/Terminal/native inputs where needed. Actions remain SHA pinned. |
 | [Coverage settings](../../src/coverage.runsettings), [palette tests](../../tests/HVO.RoofControllerV4.RPi.Tests/Client/RoofUiPaletteTests.cs) | Remove obsolete assembly include; repoint parity tests from old RCL CSS and old Stop Bootstrap assumptions to Web-owned stylesheet + canonical tokens, including notice pairs/ANSI roles. |
-| [Published web asset check](../../build/check-web-assets.sh), [CI](../../.github/workflows/ci.yml) | Current asset check verifies Blazor bootstrap/auth only. Extend it to fetch Web-owned theme/required assets from actual published output and assert correct MIME/content, no obsolete `_content` dependency. Source builds alone miss Docker publish asset errors. |
+| [Published web asset check](../../build/check-web-assets.sh), [CI](../../.github/workflows/ci.yml) | At the foundation baseline, the asset check verified Blazor bootstrap/auth only. #174 extends it to fetch Web-owned theme/required assets from actual published output and assert correct MIME/content, with no obsolete `_content` dependency. Source builds alone miss Docker publish asset errors; local publish/HTTP proof and the remaining image-CI gate are recorded in Web evidence. |
 | [Release workflow](../../.github/workflows/release.yml), [asset builder](../../build/release-assets.py), [release compose](../../build/release-compose.py) | No direct RCL string was found here, but follow CI's image/artifact inputs to release archives/manifest. Validate required assets in real publish/image outputs; do not assert packaging unaffected merely because string search is empty. No tag/release publication needed for validation. |
 | [Development compose](../../src/docker-compose.yml), [deployment compose](../../src/HVO.RoofControllerV4.RPi/docker-compose.yaml), [deployment docs](../deployment.md) | No direct RCL reference found; confirm build-context/image paths and published Web remain correct. Deployment behavior and physical hardware are outside redesign validation. |
 | [Client palette](../../src/HVO.RoofControllerV4.Client/RoofUiPalette.cs), [Client guide](../../src/HVO.RoofControllerV4.Client/README.md), [TerminalUi theme](../../src/HVO.RoofControllerV4.TerminalUi/RoofUiTheme.cs) | Remove old theme ownership/amber-Stop/automatic-nearest-colour descriptions when implementing their new adapters; preserve shared names where practical. |

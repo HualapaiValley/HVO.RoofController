@@ -14,15 +14,17 @@ as the merged README specifies. Do not composite them again over another platfor
 
 The existing [RoofUiPalette](../../src/HVO.RoofControllerV4.Client/RoofUiPalette.cs) already supplies
 [RoofUiTheme](../../src/HVO.RoofControllerV4.TerminalUi/RoofUiTheme.cs) and
-[KioskTheme](../../src/HVO.RoofControllerV4.Screens/KioskTheme.cs). Retain this structure. Web will own its CSS after
-[theme removal](delivery.md#theme-removal-inputs). There is no replacement shared theme package and no dependency on
+[KioskTheme](../../src/HVO.RoofControllerV4.Screens/KioskTheme.cs). Retain this structure. Web owns [its canonical stylesheet](../../src/HVO.RoofControllerV4.Web/wwwroot/css/hvo-dark.css) after
+[theme removal](delivery.md#theme-removal-inputs) in #174. There is no replacement shared theme package and no dependency on
 SkyMonitor assemblies. The contract file can be checked by adapter tests; runtime JSON parsing or unused framework
 components are not needed. Add bounded palette members/aliases only when a consumer uses them.
 
-The `roof_palette_member` field maps the canonical role onto an existing member where available; `surface-raised` maps to `SurfaceRaised` after #175. #175 audits legacy `Badge`, `MutedWeak` and `FocusRing`: their compatible aliases now resolve to raised surface,
-muted and accent. Directional actions use raised surface/text; Stop uses danger-background/danger-text, including
-keyboard focus. Native and the existing terminal RGB adapter consume all migrated values. #171 itself changed no
-runtime palette; Web and explicit terminal ANSI-16/capability parity retain their independent implementation gates.
+The `roof_palette_member` field maps each canonical role onto its shared member; `surface-raised` maps to
+`SurfaceRaised` after #175. #175 audits legacy `Badge`, `MutedWeak` and `FocusRing`: compatible aliases resolve to
+raised surface, muted and accent. Directional actions use raised surface/text; Stop uses danger-background/danger-text,
+including keyboard focus. Native and the existing terminal RGB adapter consume all migrated values. #174 applies all
+20 canonical roles independently in Web-owned CSS. #171 itself changed no runtime palette; explicit terminal
+ANSI-16/capability parity retains its independent implementation gate.
 Coordinate adapter migrations so a palette change does not silently recolour only some supported UIs.
 
 ## Role pairing and contrast

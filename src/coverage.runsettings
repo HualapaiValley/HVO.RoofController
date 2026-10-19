@@ -7,7 +7,7 @@
 					<Format>cobertura</Format>
 					<!-- Coverlet filters are [assembly]type; instrument only this repo's product assemblies,
 					     not HVO.* NuGet dependencies (HVO.Core, HVO.Iot.Devices, HVO.Enterprise.*). -->
-					<Include>[HVO.RoofControllerV4.*]*,[HVO.WebSite.Themes]*</Include>
+					<Include>[HVO.RoofControllerV4.*]*</Include>
 					<!-- Exclude all test assemblies and generated test hosts -->
 					<Exclude>[*.Tests]*</Exclude>
 					<SkipAutoProps>true</SkipAutoProps>

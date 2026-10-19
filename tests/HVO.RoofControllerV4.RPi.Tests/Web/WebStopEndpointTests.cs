@@ -520,7 +520,8 @@ public sealed partial class WebStopEndpointTests
 
         var assets = AssetPattern().Matches(html).Select(asset => asset.Groups[1].Value).ToList();
 
-        assets.Should().Contain(asset => asset.Contains("hvo-dark", StringComparison.Ordinal))
+        html.Should().NotContain("_content/HVO.WebSite.Themes");
+        assets.Should().Contain(asset => asset.StartsWith("css/hvo-dark.", StringComparison.Ordinal))
             .And.Contain(asset => asset.Contains("js/stop", StringComparison.Ordinal))
             .And.Contain(asset => asset.Contains("css/app", StringComparison.Ordinal));
         foreach (var asset in assets)
@@ -531,7 +532,7 @@ public sealed partial class WebStopEndpointTests
         }
 
         using var theme = await browser.GetAsync("/" + assets.Single(asset => asset.Contains("hvo-dark", StringComparison.Ordinal)));
-        (await theme.Content.ReadAsStringAsync()).Should().Contain(":root[data-theme=\"hvo-dark\"]").And.Contain("--hvo-body-bg");
+        (await theme.Content.ReadAsStringAsync()).Should().Contain("--roof-background: #05070d;").And.Contain("--hvo-body-bg");
     }
 
     private static readonly DateTimeOffset Start = new(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);

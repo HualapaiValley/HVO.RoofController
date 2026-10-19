@@ -28,6 +28,7 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
     private bool _paused;
     private string _state = "connecting";
     private string? _detail;
+    private string? _controlMessage;
     private DateTimeOffset? _lastFrameUtc;
 
     /// <summary>The camera's number on the camera server.</summary>
@@ -130,7 +131,31 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
         }
     }
 
-    private Task Fullscreen() => InvokePlayerAsync("fullscreen");
+    private async Task Fullscreen()
+    {
+        var player = _player;
+        if (player is null || _disposed)
+        {
+            return;
+        }
+
+        _controlMessage = null;
+        try
+        {
+            if (!await player.InvokeAsync<bool>("fullscreen"))
+            {
+                _controlMessage = "Fullscreen could not open in this browser. The roof controls and Stop are unaffected.";
+            }
+        }
+        catch (Exception ex) when (IsDisconnection(ex))
+        {
+        }
+        catch (JSException ex)
+        {
+            Logger.LogWarning(ex, "Camera fullscreen could not open");
+            _controlMessage = "Fullscreen could not open in this browser. The roof controls and Stop are unaffected.";
+        }
+    }
 
     private Task Snapshot() => InvokePlayerAsync("snapshot");
 
@@ -138,8 +163,10 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
     {
         if (_recording)
         {
-            await InvokePlayerAsync("stopRecord");
-            _recording = false;
+            if (await InvokePlayerAsync("stopRecord"))
+            {
+                _recording = false;
+            }
             return;
         }
 
@@ -149,9 +176,14 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
             return;
         }
 
+        _controlMessage = null;
         try
         {
             _recording = await player.InvokeAsync<bool>("startRecord");
+            if (!_recording)
+            {
+                _controlMessage = "Recording could not start in this browser. The roof controls and Stop are unaffected.";
+            }
         }
         catch (Exception ex) when (IsDisconnection(ex))
         {
@@ -159,6 +191,7 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
         catch (JSException ex)
         {
             Logger.LogWarning(ex, "Camera recording could not start");
+            _controlMessage = "Recording could not start in this browser. Try reconnecting the stream. The roof controls and Stop are unaffected.";
         }
     }
 
@@ -170,6 +203,7 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
             return false;
         }
 
+        _controlMessage = null;
         try
         {
             await player.InvokeVoidAsync(command);
@@ -182,6 +216,7 @@ public partial class CameraStream : ComponentBase, IAsyncDisposable
         catch (JSException ex)
         {
             Logger.LogWarning(ex, "Camera command {Command} failed", command);
+            _controlMessage = "Camera control failed. Try reconnecting the stream. The roof controls and Stop are unaffected.";
             return false;
         }
     }

@@ -7,7 +7,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 
 /// <summary>
 /// The buttons a person taps are big enough, and far enough apart, to hit with a finger on every screen the web UI is
-/// tested on: at least 44 x 44 CSS pixels (the size WCAG 2.5.5, Apple and Google give for a touch target), and at least
+/// tested on: at least 48 x 48 CSS pixels (the size WCAG 2.5.5, Apple and Google give for a touch target), and at least
 /// 8 CSS pixels from the buttons next to them. Measured as the browser lays the page out, so a later style that shrinks
 /// a button on one screen fails here.
 /// </summary>
@@ -17,7 +17,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 public sealed class WebTouchTargetBrowserTests
 {
     /// <summary>The smallest width and height of a button, in CSS pixels.</summary>
-    public const double MinimumSize = 44;
+    public const double MinimumSize = 48;
 
     /// <summary>The least room between neighbouring buttons, in CSS pixels.</summary>
     public const double MinimumGap = 8;

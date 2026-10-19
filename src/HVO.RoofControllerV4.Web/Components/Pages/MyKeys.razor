@@ -3,8 +3,13 @@
 @inherits WebClientPage
 
 <PageTitle>My API keys · HVO Roof Controller</PageTitle>
-<h1>My API keys</h1>
+<PageHeading Title="My API keys" Description="Create scoped access for your account and retire keys you no longer use." />
 <PageMessage Message="Message" />
+
+@if (Busy && !_enabled)
+{
+    <p class="web-muted" role="status" data-testid="owned-keys-loading">Reading personal keys…</p>
+}
 
 @if (_enabled)
 {
@@ -19,6 +24,7 @@
             <button type="button" class="btn btn-primary" @onclick="() => _secret = null">Done</button>
         </section>
     }
+    <div class="web-key-workspace">
     <section class="web-card">
         <h2>Create a key</h2>
         <label for="owned-name" class="form-label">Name</label>
@@ -35,9 +41,13 @@
     </section>
     <section class="web-card">
         <h2>Your keys</h2>
+        @if (_keys.Length == 0)
+        {
+            <p class="web-muted" data-testid="owned-keys-empty">No personal keys. Create one only for an application that needs access.</p>
+        }
         @foreach (var key in _keys)
         {
-            <div class="mb-3" data-testid="owned-key">
+            <div class="web-owned-key" data-testid="owned-key">
                 <strong>@key.Name</strong> · @string.Join(", ", key.Scopes) · expires @RoofStatusText.Time(key.ExpiresUtc)
                 @if (key.Revoked)
                 {
@@ -50,6 +60,7 @@
             </div>
         }
     </section>
+    </div>
 }
 
 @code {

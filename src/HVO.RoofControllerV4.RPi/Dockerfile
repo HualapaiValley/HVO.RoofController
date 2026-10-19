@@ -37,7 +37,6 @@ COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO
 COPY ["src/HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj", "HVO.RoofControllerV4.RPi/"]
 COPY ["src/HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj", "HVO.RoofControllerV4.Web/"]
-COPY ["src/HVO.WebSite.Themes/HVO.WebSite.Themes.csproj", "HVO.WebSite.Themes/"]
 
 # Map the target platform to a .NET runtime identifier (linux-arm64 for the Raspberry Pi 5).
 RUN case "$TARGETARCH" in \
@@ -58,7 +57,6 @@ RUN for project in HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Web; do \
 # Copy the remainder of the needed sources and publish
 COPY ["src/HVO.RoofControllerV4.Common/", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Client/", "HVO.RoofControllerV4.Client/"]
-COPY ["src/HVO.WebSite.Themes/", "HVO.WebSite.Themes/"]
 COPY ["src/HVO.RoofControllerV4.RPi/", "HVO.RoofControllerV4.RPi/"]
 COPY ["src/HVO.RoofControllerV4.Web/", "HVO.RoofControllerV4.Web/"]
 

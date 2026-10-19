@@ -64,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Redesign the roof terminal interface and installer with bounded work panels, a permanent red Stop/result area in
   the roof UI, shared scrollable forms, exact ANSI16 and terminal-default/ASCII fallbacks, and grapheme-aware tables.
   Installer Back, cancellation, private inputs and plan/apply boundaries retain their existing behavior (#176, #158).
+- Redesign every Web route and inline workflow with the approved responsive HVO Dark layout, canonical colours,
+  grouped panels and fields, 48px controls and 320px reflow. Web now owns its styles, icon fonts and notices; remove
+  the obsolete `HVO.WebSite.Themes` project and unused OpenSans assets (#174).
 - Redesign the kiosk and Mac screens with the approved HVO hierarchy, permanent red Stop, bounded kiosk readings/notices/people
   pages, private PIN steps, clearer password administration and startup recovery. Preserve 12 mm targets, consumed wake input,
   Operator-only PIN policy and all shared Stop messages, including acknowledgement without register-verification evidence.
@@ -126,6 +129,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   blocked, and nothing is removed, until Docker answers (#130).
 
 ### Fixed
+
+- Keep the permanent red direct-REST Stop visible in browser camera fullscreen and red under keyboard focus. Preserve
+  its actual verified-register or verification-unavailable acknowledgement and failure messages. Inline editors now
+  focus their fields, associate validation errors and return focus after Escape/Cancel. Camera operation failures
+  now show separate feedback without presenting a live stream as offline, and a failed recording stop remains
+  available to retry. Reconnect Stop stays initially visible in short landscape views while explanations scroll
+  independently (#174).
 
 - Exclude unused terminal highlighting/native assets and carry retained third-party notices inside the standalone and installed installer/CLI (`--third-party-notices`); validate final release payloads and supported-host terminal startup (#172).
 - Corrected the kiosk guide's PIN-access instructions: PIN unlock permits roof operation, while settings and

@@ -155,6 +155,54 @@ public sealed class WebCameraStreamTests
         module.Verify(m => m.DisposeAsync(), Times.Never, "the circuit is gone, so the call cannot reach the browser");
     }
 
+    [TestMethod]
+    [DataRow("startRecord", "Start recording", "Recording could not start")]
+    [DataRow("fullscreen", "Fullscreen", "Fullscreen could not open")]
+    public async Task AnUnavailableCameraOperation_IsExplained_WithoutCallingTheLiveStreamOffline(string command, string button, string message)
+    {
+        await using var context = CreateContext(out _, out var player);
+        player.Setup<bool>(command).SetResult(false);
+        var cut = context.Render<CameraStream>();
+        await cut.WaitForAssertionAsync(() => cut.Find("button[title=Pause]").HasAttribute("disabled").Should().BeFalse());
+        await cut.Instance.OnStreamStateChanged("live", null, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cut.Click($"button[title='{button}']");
+        await cut.WaitForAssertionAsync(() => cut.Find("[data-testid=camera-control-message]").TextContent.Should().Contain(message));
+        cut.Find(Status).TextContent.Should().Be("Live");
+        cut.FindAll(Overlay).Count.Should().Be(0);
+        cut.Click("button[title='Reconnect stream']");
+        await cut.WaitForAssertionAsync(() => cut.FindAll("[data-testid=camera-control-message]").Count.Should().Be(0));
+        player.VerifyInvoke("restart");
+    }
+
+    [TestMethod]
+    public async Task AFailedSnapshot_ShowsAnOperationError_AndPreservesTheLiveFrame()
+    {
+        await using var context = CreateContext(out _, out var player);
+        player.SetupVoid("snapshot").SetException(new JSException("fixture operation failure"));
+        var cut = context.Render<CameraStream>();
+        await cut.WaitForAssertionAsync(() => cut.Find("button[title=Pause]").HasAttribute("disabled").Should().BeFalse());
+        await cut.Instance.OnStreamStateChanged("live", null, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cut.Click("button[title=Snapshot]");
+        await cut.WaitForAssertionAsync(() => cut.Find("[data-testid=camera-control-message]").TextContent.Should().Contain("Camera control failed"));
+        cut.Find(Status).TextContent.Should().Be("Live");
+        cut.Find("button[title=Snapshot]").HasAttribute("disabled").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task AFailedRecordingStop_KeepsTheStopRecordingActionAvailable()
+    {
+        await using var context = CreateContext(out _, out var player);
+        player.Setup<bool>("startRecord").SetResult(true);
+        player.SetupVoid("stopRecord").SetException(new JSException("fixture operation failure"));
+        var cut = context.Render<CameraStream>();
+        await cut.WaitForAssertionAsync(() => cut.Find("button[title=Pause]").HasAttribute("disabled").Should().BeFalse());
+        cut.Click("button[title='Start recording']");
+        await cut.WaitForAssertionAsync(() => cut.Find("button[title='Stop recording']").GetAttribute("aria-pressed").Should().Be("true"));
+        cut.Click("button[title='Stop recording']");
+        await cut.WaitForAssertionAsync(() => cut.Find("[data-testid=camera-control-message]").TextContent.Should().Contain("Camera control failed"));
+        cut.Find("button[title='Stop recording']").HasAttribute("disabled").Should().BeFalse();
+    }
+
     private static (Mock<IJSObjectReference> Player, Mock<IJSObjectReference> Module) RenderWithAPlayerWhoseDisposeThrows(
         BunitContext context, Exception failure)
     {

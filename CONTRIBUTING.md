@@ -118,6 +118,19 @@ Releases are cut as [docs/releasing.md](docs/releasing.md) describes: a version 
 release PR (the CHANGELOG section and the upgrade notes), then a tag on `main`. A person
 checks the draft release and publishes it.
 
+## Web design and assets
+
+The Web project owns its [HVO Dark tokens](src/HVO.RoofControllerV4.Web/wwwroot/css/hvo-dark.css), layout and icon
+fonts. Mirror every role in the [source-pinned design contract](docs/ui-redesign/design-contract.md); the shared Client
+palette and native/terminal adapters have their own owners. There is no theme Razor Class Library or replacement theme
+package. Preserve the Bootstrap and Bootstrap Icons notices when changing their files. The obsolete unreferenced
+OpenSans fonts are removed; Web uses the system sans-serif stack without downloading a font.
+
+Validate a real Web publish with `python3 build/check-web-publish.py <publish-directory>`; a successful build alone
+cannot prove that fingerprinted styles, scoped components, fonts and notices ship. The image CI also fetches these
+assets from its published process. Capture the actual controlled Web app with the headless workflow in
+[Web tests](docs/web.md#tests), and keep every owned W row's evidence precise.
+
 ## Coding Standards
 
 See [AGENTS.md](AGENTS.md) for the architecture, the safety systems, coding standards and
