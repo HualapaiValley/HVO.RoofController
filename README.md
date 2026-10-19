@@ -143,6 +143,9 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 | `HVO.WebSite.Themes` | CSS theme (Razor Class Library) |
 | `HVO.RoofControllerV4.RPi.Tests` | Unit, API, simulation and emulated-plant tests (`tests/`) |
 
+The [UI redesign foundation](docs/ui-redesign/README.md) tracks every current screen/workflow, the pinned colour
+contract and pending platform delivery/validation for #158. It does not change the running interfaces.
+
 ## Quick Start
 
 For development:
