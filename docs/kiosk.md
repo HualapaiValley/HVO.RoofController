@@ -2,7 +2,9 @@
 
 The kiosk (`hvo-roof-kiosk`, `HVO.RoofControllerV4.Kiosk`) is the roof controller's touchscreen at the roof: a
 Raspberry Pi touch display on the controller's Pi, showing the roof full screen from boot. Anyone at the roof can
-watch it and press Stop. To open or close the roof, or to change settings, a person unlocks it with their name and PIN.
+watch it and press Stop. To open or close the roof, a person unlocks it with their name and PIN. PIN sessions permit
+roof operation only, including for an Admin; settings and administration use the web UI, CLI/TUI or password-authenticated
+Mac app ([interface rights](authentication-interfaces.md)).
 
 Like [`hvo-roof`](cli.md) and the [web UI](web.md), it is a client of the controller: it calls the REST API and
 follows the live status hub with its own device key, and never drives the HAT itself. The controller decides what the
