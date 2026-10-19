@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Keep the permanent red direct-REST Stop visible in native camera fullscreen and red under keyboard focus. Preserve
+- Keep the permanent red direct-REST Stop visible in browser camera fullscreen and red under keyboard focus. Preserve
   its actual verified-register or verification-unavailable acknowledgement and failure messages. Inline editors now
   focus their fields, associate validation errors and return focus after Escape/Cancel. Camera operation failures
   now show separate feedback without presenting a live stream as offline, and a failed recording stop remains
