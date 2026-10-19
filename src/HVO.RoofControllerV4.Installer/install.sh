@@ -161,12 +161,13 @@ EOF
     fi
   }
 
-  # trusted_folder <folder>: prints <folder>'s physical path (every link in it followed) when that folder, and every
-  # folder above it up to /, is a real folder (not a link) that is root's or yours and that no one else can write to
-  # unless it is sticky (as /tmp is: there no one else can rename or remove what root or you own). No one else can then
-  # rename the folder this script makes in it, or put another in its place, between the check of the installer it
-  # downloads there and the installer's start as root. Fails, printing nothing, otherwise. (-O is bash's own test that
-  # you own a file: the tests fake id.)
+  # trusted_folder <folder>: resolves all links first, then checks the physical directory and ancestors upward to /.
+  # At inspection each must be a directory, not a link, owned by root or this effective user, without group/other write
+  # bits unless sticky (as /tmp is). Links in the supplied spelling are resolved, not refused. Prints the physical path
+  # when these checks pass; otherwise fails, printing nothing. (-O tests effective ownership: the tests fake id.)
+  # These catch ordinary misconfiguration under the 2026-10-17 single-user-host decision (#147; docs/install.md,
+  # Temporary files). Root and the deploying account are assumed to control TMPDIR and its ancestry; no hostile local
+  # account is expected. ACL access (F7) and concurrent ancestor replacement (F8) remain unchecked and accepted.
   trusted_folder() {
     local physical folder
     physical=$(cd -- "$1" 2>/dev/null && pwd -P) || return 1
@@ -185,7 +186,8 @@ EOF
     printf '%s\n' "${physical}"
   }
 
-  # own_folder <folder>: <folder> is still the folder this script made: a real folder (not a link), yours, mode 0700.
+  # own_folder <folder>: checks the current path for a non-link directory, effective ownership and mode 0700. No held
+  # handle or device/inode comparison: a same-owner 0700 replacement also passes (accepted F9, #147).
   own_folder() {
     [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -n "$(find "$1" -maxdepth 0 -perm 0700 2>/dev/null)" ]
   }
@@ -259,9 +261,9 @@ EOF
     local base_url="https://github.com/${repository}/releases/download/v${release_version}"
     local release_page="https://github.com/${repository}/releases/tag/v${release_version}"
     local asset="hvo-roof-install-${rid}" work installer expected actual status=0 parent
-    # The download goes in a new folder of this script's own, made by its physical path in a TMPDIR only you and root
-    # can change (trusted_folder), so the installer that runs as root is the one checked. Only that folder is removed,
-    # and only while it is still the one made, and only what this script put in it.
+    # Download under this script's TMPDIR (or /tmp) as its current account, using trusted_folder's assumptions. A later
+    # sudo hand-over does not change this download path. Cleanup uses own_folder's current owner/mode/path checks,
+    # removes the two known filenames, then tries rmdir; it does not establish the original directory's identity.
     parent=$(trusted_folder "${TMPDIR:-/tmp}") \
       || die "TMPDIR (${TMPDIR:-/tmp}) is not a folder only you and root can change: it is not there, or it or a folder above it is someone else's, or writable by others and not sticky, so someone else could change the installer after it is checked and before it runs as root. Nothing was made in it. Set TMPDIR to a folder that is, such as /tmp, then run this again."
     work=$(mktemp -d "${parent%/}/hvo-roof-install.XXXXXXXX") || die "Could not make a folder in ${parent} for the download."
@@ -331,7 +333,9 @@ EOF
       *) false ;;
     esac || die "${asset} says its version is '${built}', and this is release ${release_version}: nothing was installed."
 
-    # The hand-over. The installer reads the terminal, since this script's standard input is the download: with none
+    # The hand-over. User-role installs keep this account and TMPDIR; system-role installs use sudo when needed, whose
+    # policy may keep or discard TMPDIR. The installer checks the base in its resulting environment/effective account.
+    # The installer reads the terminal, since this script's standard input is the download: with none
     # (cron, CI) it reads nothing, and refuses a question it would have asked.
     # rollback's --release is the release before, not this one: it is given, or the installer downloads it.
     local -a arguments=(${passed[@]+"${passed[@]}"})

@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   other special member, or JSON that gives a name twice). Docker loads only a private copy that the installer or the
   deploy script has checked, never the file itself, so the archive needs room for a copy in `TMPDIR`; the load can
   point the image's own `<repository>:<tag>` at it, and no other name. The installer, the deploy script and
-  `install.sh` make their folders only in a `TMPDIR` that no one but root (or the user who runs them) can change, and
-  refuse another before anything changes; each removes only the folders it made, and only what it put there. The installer trusts a container's release
+  `install.sh` check the physical `TMPDIR` ancestry's owners and Unix modes before creating private work folders;
+  cleanup checks the saved path's current owner/mode under the [temporary-folder trust model](docs/install.md#temporary-files).
+  The installer trusts a container's release
   label only for an image with one of those IDs. See
   [The release it installs](docs/install.md#the-release-it-installs) (#127).
 - Resource limits for the controller's container: a CPU, a memory (no swap) and a process limit, by default 1 vCPU,
@@ -116,6 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Installation and deployment documentation now states the accepted single-user temporary-folder assumptions, the
+  remaining ACL, ancestor-replacement and cleanup-identity gaps, and role-specific sudo/`TMPDIR` handling. Runtime
+  behavior is unchanged (#147).
 - Upgrades prepare recovery before approved kiosk package setup, including the wizard's approval action:
   state compatibility and the durable upgrade backup are checked before any apt command. A refused backup or
   state contract leaves packages unchanged, and the install keeps the same backup (#146).
