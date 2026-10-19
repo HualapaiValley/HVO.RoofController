@@ -160,9 +160,7 @@ public sealed class KioskRenderTests
             pieces[0].TextLayout.TextLines.Should().Contain(line => line.HasCollapsed, "the name ends in an ellipsis");
             pieces[1].TextLayout.TextLines.Should().NotContain(line => line.HasCollapsed, "the role is shown whole");
             var unlocked = KioskWording.Kiosk.SignedIn(name, RoofControllerApiContract.OperatorRole);
-            screen.Window.GetVisualDescendants().OfType<TextBlock>()
-                .Where(block => block.IsEffectivelyVisible && block.Text?.EndsWith(unlocked, StringComparison.Ordinal) == true)
-                .Should().ContainSingle("the whole name is in the notice");
+            DocumentContains(screen, KioskPage.Notices, unlocked);
         });
     }
 
@@ -222,9 +220,7 @@ public sealed class KioskRenderTests
             title.Bounds.Width.Should().BeGreaterThanOrEqualTo(header.Bounds.Width / 2 - 1, "the name keeps at least half the header");
         }
 
-        screen.Window.GetVisualDescendants().OfType<TextBlock>()
-            .Where(block => block.IsEffectivelyVisible && block.Text?.Contains(controller, StringComparison.Ordinal) == true && block != title)
-            .Should().NotBeEmpty("the status card's Controller row shows the name whole");
+        DocumentContains(screen, KioskPage.Readings, controller);
     }
 
     [TestMethod]
@@ -242,7 +238,8 @@ public sealed class KioskRenderTests
 
         await OnUiAsync(() =>
         {
-            screen.Visible("fault-banner").Should().BeTrue();
+            screen.Text("safety-summary").Should().Contain("Fault latched");
+            DocumentContains(screen, KioskPage.Readings, "Fault:");
             screen.Shell.RoofPage.ClearFault.IsEffectivelyEnabled.Should().BeTrue();
             screen.Shell.RoofPage.Open.IsEffectivelyEnabled.Should().BeFalse();
         });
@@ -264,7 +261,8 @@ public sealed class KioskRenderTests
 
         await OnUiAsync(() =>
         {
-            screen.Text("feed-banner").Should().StartWith("STALE: ");
+            screen.Text("safety-summary").Should().StartWith("STALE: ");
+            DocumentContains(screen, KioskPage.Readings, "STALE:");
             screen.Text("status-time").Should().StartWith("Last known state");
             screen.Shell.RoofPage.Open.IsEffectivelyEnabled.Should().BeFalse();
         });
@@ -286,7 +284,8 @@ public sealed class KioskRenderTests
 
         await OnUiAsync(() =>
         {
-            screen.Text("feed-banner").Should().Be(KioskText.DescribeUnreachable(null));
+            screen.Text("safety-summary").Should().Contain("unreachable");
+            DocumentContains(screen, KioskPage.Readings, KioskText.DescribeUnreachable(null));
             screen.Text("stop-message").Should().StartWith("Stop failed: ");
             screen.Text("position").Should().Be("Unknown");
         });
@@ -305,6 +304,8 @@ public sealed class KioskRenderTests
         await UntilAsync(() => screen.Shell.PinPad.Users.Count == 2, "the people with a PIN");
         await OnUiAsync(() =>
         {
+            screen.Visible($"pin-user-{KioskHarness.Operator}").Should().BeTrue();
+            screen.Visible($"pin-user-{KioskHarness.Admin}").Should().BeTrue();
             screen.Shell.PinPad.Select(KioskHarness.Operator);
             foreach (var digit in "123")
             {
@@ -316,8 +317,7 @@ public sealed class KioskRenderTests
 
         await OnUiAsync(() =>
         {
-            screen.Visible($"pin-user-{KioskHarness.Operator}").Should().BeTrue();
-            screen.Visible($"pin-user-{KioskHarness.Admin}").Should().BeTrue();
+            screen.Visible("pin-person").Should().BeTrue("people selection has its own bounded step");
             screen.Text("pin-masked").Should().Be("●●●");
             screen.OffScreen(name => name.StartsWith("pin-", StringComparison.Ordinal) && !name.StartsWith("pin-user-", StringComparison.Ordinal))
                 .Should().BeEmpty("the PIN, its keys, Unlock and Cancel are on the screen without scrolling (the list of people may scroll)");
@@ -514,4 +514,23 @@ public sealed class KioskRenderTests
         harness.Calls(nameof(IRoofControllerServiceV4.Stop)).Should().Be(1, "a touch on Stop the screen still showed stops the roof");
         harness.Console.View.IsBlank.Should().BeFalse("the touch woke the screen too");
     }
+    private static void DocumentContains(KioskScreen screen, KioskPage page, string expected)
+    {
+        var before = screen.Shell.Page;
+        screen.Shell.ShowPage(page);
+        screen.Window.UpdateLayout();
+        var pager = screen.Window.GetVisualDescendants().OfType<KioskPager>().Single(p => p.IsEffectivelyVisible);
+        pager.Move(-pager.CurrentPage);
+        var text = new List<string>();
+        for (var i = 0; i < pager.PageCount; i++)
+        {
+            screen.Window.UpdateLayout();
+            text.AddRange(pager.GetVisualDescendants().OfType<TextBlock>().Where(b => b.IsEffectivelyVisible).Select(b => b.Text ?? string.Empty));
+            pager.Move(1);
+        }
+        string.Join(" ", text).Should().Contain(expected, "the complete value is reachable in the bounded detail pages");
+        screen.Shell.ShowPage(before);
+        screen.Window.UpdateLayout();
+    }
+
 }

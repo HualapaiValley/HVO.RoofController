@@ -66,6 +66,6 @@ public sealed record KioskMetrics
     /// <summary>The width of the Stop column at the right of every screen.</summary>
     public double StopWidth { get; }
 
-    /// <summary>The width of the navigation rail at the left.</summary>
+    /// <summary>The minimum width of a button in the bottom navigation bar.</summary>
     public double NavWidth { get; }
 }

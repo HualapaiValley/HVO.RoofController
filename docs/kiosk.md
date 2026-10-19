@@ -14,7 +14,7 @@ Avalonia controls, in HVO Dark, the observatory's web theme, as the web UI and t
 
 The installer sets it up on the controller's Pi ([Install](#install)).
 
-![The kiosk while the roof opens: the rail of pages, the badges (live status, the lease, who unlocked it), the position and the controls, the notices, and Stop at the right](images/kiosk/opening-1280x720.png)
+![The kiosk while the roof opens: bounded pages, the badges (live status, the lease, who unlocked it), the position and controls, with red Stop at the right](images/kiosk/opening-1280x720.png)
 
 ## Emulated rig orientation
 
@@ -48,14 +48,14 @@ confirms the correction after a coordinated restart.
 
 ## The screen
 
-- **The rail** at the left: Roof, and Unlock. Once unlocked: Roof and Lock. Administration belongs in the CLI/TUI or web UI.
+- **Navigation** along the bottom: Roof, Readings, Notices, About and Unlock (Lock while unlocked). Administration belongs in the CLI/TUI or web UI.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the kiosk renews it (`Renewing lease (6 s left)`), and
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
-- **Banners** under the header: the mode banner when the controller is not driving the observatory roof as in normal
-  use (for example `EMULATED HAT: …`), a stale or unreachable status, a latched fault, relays that could not be
-  verified, and safety inputs that could not be read.
-- **Stop roof** at the right of every page ([Stop](#stop)), with its answer under it.
+- **Safety summary** under the header: connecting, simulation/safety-mode warning, stale/refused/unreachable status,
+  latched fault or unhealthy I/O. **Readings** retains every full warning before the controller-backed status values;
+  Previous/Next pages keep long answers reachable without shrinking text or touch targets.
+- **Stop roof** in permanent red at the right of every page ([Stop](#stop)), enabled through focus, PIN entry and errors. Long answers have a **Full result** page; it preserves the complete shared controller response.
 - Every button is at least 12 mm in both directions, and the text scales with it, so it can be used with gloves and
   read from a step back. The sizes come from `PixelsPerMillimetre`: 8.2 for the Raspberry Pi Touch Display 2
   (1280x720 in landscape), about 5.2 for the first 7-inch touch display (800x480).
@@ -72,13 +72,13 @@ Open, Close and Clear fault are hidden:
 `Locked: unlock the kiosk with a PIN to open or close the roof. Stop is always available.`
 
 **Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key).
-A person chooses their name and types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
+People are paginated. Choosing a name opens a separate keypad step; **Person** returns to the list. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
 ([Lockout](security.md#signing-in)). When no one has a PIN yet, the page says how to give one:
 `hvo-roof users set <name> --pin` or `hvo-roof pins set <name>` ([cli.md](cli.md#commands)), or the web UI's People
 page.
 
-![The PIN page: the names, the keypad and the dots for the PIN typed so far](images/kiosk/pin-1280x720.png)
+![The private PIN step: the chosen person, full-size keys and masked digits](images/kiosk/pin-1280x720.png)
 
 **Lock** ends the person's PIN session at the controller, then locks. The kiosk also locks by itself:
 
@@ -94,7 +94,7 @@ When the kiosk locks while the roof moves on its command, it stops renewing the 
 
 ## Unlocked
 
-What an unlocked kiosk offers depends on the person's role, as the controller gives it. A Viewer cannot have a PIN.
+Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have a PIN. About explains this policy; no PIN grants host, service or terminal privileges (#153 remains separate).
 
 ### Roof
 
@@ -145,7 +145,7 @@ The status is current only while the hub delivers it, as in every client.
 ## The screen timeout
 
 The screen goes black after the controller's `RoofControllerUi:KioskScreenTimeout` without a touch (5 minutes by
-default, at most 4 hours; 0 keeps it on). An operator may change it, from the kiosk or any client. The kiosk reads it
+default, at most 4 hours; 0 keeps it on). An operator may change it in a password-authenticated Mac, web or CLI session. The kiosk reads it
 at start and every 5 minutes. The screen stays on while the roof moves, while a command or Stop is on its way, and while
 the kiosk holds a lease, and comes on when the roof starts or stops moving, when the controller restarts, and on a
 safety alert.
@@ -379,15 +379,15 @@ Nothing here needs the Pi, the display or the roof.
   root on an arm64 runner with systemd (`InstallerKioskSystemTests`), and checks that it starts (the display and the
   touchscreen stay the assumptions above).
 - **The renders** (`KioskRenderTests`) draw each screen headless (Avalonia's headless platform with Skia) at 1280x720
-  and 800x480, and check that nothing overlaps, that no text is cut off but for the three texts shortened on purpose (a
-  controller name longer than half the header, which the Controller row shows whole; a long name on its pill; the end
+  and 800x480. `KioskRedesignTests` adds 1920x1200 at explicit densities 8.2 and 9.0, long simultaneous warnings, every bounded page, private input and Stop outcomes. They check that nothing overlaps, that no text is cut off but for the three texts shortened on purpose (a
+  controller name longer than half the header, which Readings shows whole; a long name on its pill; the end
   of a long value being typed), that every button is at least 12 mm, and that Stop is shown in
   full on every screen and stops the roof even when touched as the screen blanks. The pictures on this page are those renders; CI keeps them as the `kiosk-renders`
   artifact. To refresh them, from `src/`:
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests"
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests"
   for f in ../docs/images/kiosk/*.png; do cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; done
   ```
 
@@ -500,3 +500,27 @@ Choose **About**, even while locked or offline, to read this kiosk's installed b
 
 See [First-install kiosk PIN commissioning](kiosk-commissioning.md) for eligibility, mandatory replacement,
 retirement, persistence and rollback. Existing installations receive no temporary access automatically.
+
+## Bounded native redesign
+
+There is no kiosk page scrolling at the supported landscape fixtures: 800×480 at 5.2 pixels/mm, 1280×720 at 8.2,
+and provisional 1920×1200 at explicitly configured 8.2 or 9.0. The resolution does not establish a physical size.
+`VideoMode` selects the unrotated DRM pixel mode, `Rotation` determines its orientation, and `PixelsPerMillimetre`
+independently sets touch/text metrics (DRM scale remains 1). A portrait mode such as 1200×1920 rotated 90° gives a
+1920×1200 layout; configure density from the intended panel configuration rather than deriving it from that resolution.
+
+Roof groups position/commanded motion and motion actions into separate panels. Larger layouts also show a compact
+readings grid. Readings retains the full status, including input freshness, relay-register evidence and controller name;
+Notices holds recent complete messages. Both use measured Previous/Next pages. PIN loading, failures and empty-user
+recovery use the same bounded documents, while Choose/Confirm keeps setup locked until a fresh personal-PIN login.
+The first touch/key on a blank screen only wakes it. Stop continues to use the viewer key while locked.
+
+Headless acceptance and capture commands, exact role provenance and remaining platform gates are recorded in
+[the native redesign evidence](ui-redesign/native-evidence.md). These are controlled API/fake-plant captures, never a
+connection to the observatory controller.
+
+![Provisional 1920×1200 landscape fixture with explicitly configured density, controller-backed readings, separate motion controls and permanent red Stop](images/kiosk/roof-1920x1200.png)
+
+![Bounded Readings on the 800×480 fixture](images/kiosk/readings-800x480.png)
+
+![Complete recent Notices with touch pagination on the 800×480 fixture](images/kiosk/notices-800x480.png)

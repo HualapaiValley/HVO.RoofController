@@ -8,8 +8,8 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
-/// The kiosk's roof page: the roof's position and what it was commanded to do, its limits, and the controller's status
-/// rows; with Open, Close and Clear fault while an operator unlocked the kiosk. The buttons stay the same controls while
+/// The kiosk's bounded overview: position and commanded motion, compact readings when space permits,
+/// and Open, Close and Clear fault while an operator unlocked the kiosk. The buttons stay the same controls while
 /// the status changes, so a press is never lost to an update.
 /// </summary>
 public sealed class KioskRoofPage : UserControl
@@ -27,10 +27,7 @@ public sealed class KioskRoofPage : UserControl
     private readonly Control _commands;
     private readonly TextBlock _hint;
     private readonly TextBlock _blocked;
-    private readonly StackPanel _notices;
-    private readonly Grid _rows;
-    private readonly Border _rowsCard;
-    private IReadOnlyList<KioskNotice>? _shownNotices;
+    private readonly Grid _facts;
 
     public KioskRoofPage(KioskConsole console, KioskMetrics metrics)
     {
@@ -49,51 +46,30 @@ public sealed class KioskRoofPage : UserControl
         _statusTime = KioskTheme.Label(string.Empty, metrics.Small, KioskTheme.Muted);
         _statusTime.Name = "status-time";
 
-        var state = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,*"),
-            RowDefinitions = new RowDefinitions("Auto,Auto"),
-            ColumnSpacing = metrics.Gap * 2
-        };
-        state.Children.Add(_positionLabel);
-        state.Children.Add(Place(_position, 1, 0));
-        state.Children.Add(Place(_commandedLabel, 0, 1));
-        state.Children.Add(Place(_commanded, 1, 1));
-
-        Open = KioskTheme.TouchButton("Open", "open", metrics, () => _ = console.OpenAsync());
-        KioskTheme.Colour(Open, RoofUiPalette.OpenButton, RoofUiPalette.OpenButtonText);
-        Close = KioskTheme.TouchButton("Close", "close", metrics, () => _ = console.CloseAsync());
-        KioskTheme.Colour(Close, RoofUiPalette.CloseButton, RoofUiPalette.CloseButtonText);
+        _facts = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), RowDefinitions = new RowDefinitions("Auto,Auto,Auto"), ColumnSpacing = metrics.Gap * 2, RowSpacing = metrics.Gap * 2, Margin = new Thickness(0, metrics.Gap * 2, 0, 0) };
+        SizeChanged += (_, _) => _facts.IsVisible = Bounds.Height >= metrics.Touch * 6;
+        var state = new StackPanel { Spacing = metrics.Gap, Children = { _positionLabel, _position, _commandedLabel, _commanded, _chips, _statusTime, _facts } };
+        Open = KioskTheme.TouchButton("↑  Open roof", "open", metrics, () => _ = console.OpenAsync());
+        Close = KioskTheme.TouchButton("↓  Close roof", "close", metrics, () => _ = console.CloseAsync());
         ClearFault = KioskTheme.TouchButton("Clear fault", "clear-fault", metrics, () => _ = console.ClearFaultAsync());
         foreach (var button in new[] { Open, Close, ClearFault })
         {
-            button.FontSize = metrics.Large;
-            button.MinWidth = metrics.Touch * 2;
+            button.HorizontalAlignment = HorizontalAlignment.Stretch;
             button.FontWeight = FontWeight.SemiBold;
         }
-
-        _commands = new WrapPanel { ItemSpacing = metrics.Gap * 2, LineSpacing = metrics.Gap * 2, Children = { Open, Close, ClearFault } };
+        _commands = new StackPanel { Spacing = metrics.Gap, Children = { Open, Close, ClearFault } };
         _hint = KioskTheme.Label(string.Empty, metrics.Font, KioskTheme.MutedWeak);
         _hint.Name = "hint";
-        _blocked = KioskTheme.Label(string.Empty, metrics.Font, KioskTheme.Muted);
+        _blocked = KioskTheme.Label(string.Empty, metrics.Small, KioskTheme.Muted);
         _blocked.Name = "blocked";
-        _notices = new StackPanel { Name = "notices", Spacing = metrics.Gap };
-        _rows = new Grid { Name = "status-rows", ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = metrics.Gap * 3, RowSpacing = metrics.Gap / 2 };
-        _rowsCard = KioskTheme.Card(_rows, metrics);
-
-        Content = new StackPanel
+        var controls = new StackPanel { Spacing = metrics.Gap, Children =
         {
-            Spacing = metrics.Gap * 2,
-            Children =
-            {
-                KioskTheme.Card(new StackPanel { Spacing = metrics.Gap, Children = { state, _chips, _statusTime } }, metrics),
-                _commands,
-                _hint,
-                _blocked,
-                _notices,
-                _rowsCard
-            }
-        };
+            KioskTheme.Label("Motion controls", metrics.Font, KioskTheme.Accent, FontWeight.SemiBold), _commands, _hint, _blocked
+        }};
+        var layout = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = metrics.Gap * 2 };
+        layout.Children.Add(KioskTheme.Card(state, metrics));
+        layout.Children.Add(Place(KioskTheme.Card(controls, metrics), 0, 1));
+        Content = layout;
     }
 
     public Button Open { get; }
@@ -121,23 +97,31 @@ public sealed class KioskRoofPage : UserControl
         };
 
         _chips.Children.Clear();
+        if (status is { IsWatchdogActive: true, WatchdogSecondsRemaining: { } watchdog })
+            _chips.Children.Add(Chip($"Watchdog: {RoofStatusText.Seconds(watchdog)} left", true));
+        _statusTime.Text = status is null ? KioskText.NoStatusYet
+            : stale ? $"Last known state: {RoofStatusText.Time(status.SnapshotUtc)}"
+            : $"Status at {RoofStatusText.Time(status.SnapshotUtc)}";
+        _statusTime.Foreground = stale ? KioskTheme.Tone(KioskNoticeLevel.Warning) : KioskTheme.Muted;
+
+        _facts.Children.Clear();
         if (status is not null)
         {
-            // While the inputs cannot be read, the controller reports the limits from the last read that worked.
-            var lastRead = status.InputsHealthy ? string.Empty : " (last read)";
-            _chips.Children.Add(Chip($"Open limit{lastRead}: {RoofStatusText.DescribeInput(status.IsOpenLimitActive)}", status.IsOpenLimitActive == true));
-            _chips.Children.Add(Chip($"Closed limit{lastRead}: {RoofStatusText.DescribeInput(status.IsClosedLimitActive)}", status.IsClosedLimitActive == true));
-            if (status.IsWatchdogActive && status.WatchdogSecondsRemaining is { } watchdog)
+            var values = new[]
             {
-                _chips.Children.Add(Chip($"Watchdog: {RoofStatusText.Seconds(watchdog)} left", true));
+                ("Open limit", RoofStatusText.DescribeInput(status.IsOpenLimitActive)),
+                ("Closed limit", RoofStatusText.DescribeInput(status.IsClosedLimitActive)),
+                ("Drive running", RoofStatusText.DescribeInput(status.IsAtSpeed)),
+                ("Drive fault", RoofStatusText.DescribeInput(status.IsDriveFaultActive)),
+                ("Safety inputs", RoofStatusText.DescribeInputs(status)),
+                ("Relay read-back", RoofStatusText.DescribeRelays(status))
+            };
+            for (var i = 0; i < values.Length; i++)
+            {
+                var fact = new StackPanel { Children = { KioskTheme.Label(values[i].Item1, _metrics.Small, KioskTheme.Muted), KioskTheme.Label(values[i].Item2, _metrics.Font) } };
+                _facts.Children.Add(Place(fact, i / 2, i % 2));
             }
         }
-
-        _statusTime.Text = status is null ? KioskText.NoStatusYet
-            : stale ? $"Last known state, as of {RoofStatusText.Time(status.SnapshotUtc)}. It may not be the roof's state now."
-            : $"Status at {RoofStatusText.Time(status.SnapshotUtc)}";
-        _statusTime.Foreground = stale ? KioskTheme.Colours(KioskNoticeLevel.Warning).Foreground : KioskTheme.Muted;
-
         _commands.IsVisible = view.IsOperator;
         Open.IsEnabled = view.OpenBlock is null;
         Close.IsEnabled = view.CloseBlock is null;
@@ -148,33 +132,14 @@ public sealed class KioskRoofPage : UserControl
             : string.Empty;
         _hint.IsVisible = _hint.Text.Length > 0;
 
-        _blocked.Text = view.Busy ?? (view.IsOperator && view.IsStarted ? RoofCommandRules.DescribeMotionBlocks(view.OpenBlock, view.CloseBlock) : null) ?? string.Empty;
+        _blocked.Text = view.Busy ?? (view.IsOperator && view.IsStarted
+            ? view.IsStale || view.IsUnreachable ? "Live status required."
+                : status is not null && RoofCommandRules.HasFault(status) ? "Fault must be cleared. See Readings."
+                : RoofCommandRules.DescribeMotionBlocks(view.OpenBlock, view.CloseBlock)
+            : null) ?? string.Empty;
+        if (_blocked.Text.Length > 100) _blocked.Text = "Motion unavailable. Readings has details.";
         _blocked.IsVisible = _blocked.Text.Length > 0;
 
-        if (!ReferenceEquals(_shownNotices, view.Notices))
-        {
-            _shownNotices = view.Notices;
-            _notices.Children.Clear();
-            foreach (var notice in view.Notices)
-            {
-                _notices.Children.Add(KioskTheme.Banner($"{RoofStatusText.Time(notice.At)}  {notice.Text}", notice.Level, _metrics, "notice"));
-            }
-        }
-
-        _rows.Children.Clear();
-        _rows.RowDefinitions.Clear();
-        _rowsCard.IsVisible = status is not null;
-        if (status is not null)
-        {
-            var row = 0;
-            foreach (var (label, value) in RoofStatusText.DescribeRows(status))
-            {
-                _rows.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-                _rows.Children.Add(Place(KioskTheme.Label(label, _metrics.Small, KioskTheme.Muted), row, 0));
-                _rows.Children.Add(Place(KioskTheme.Label(value, _metrics.Small), row, 1));
-                row++;
-            }
-        }
     }
 
     private static IBrush PositionBrush(RoofStatusResponse? status) => status?.Status switch

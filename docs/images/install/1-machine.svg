@@ -1,94 +1,91 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="864" height="594" viewBox="0 0 864.00 594.00" role="img" aria-label="hvo-roof-install">
 <g font-family="ui-monospace, SFMono-Regular, 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="14" xml:space="preserve" style="white-space: pre">
-<rect x="0" y="0" width="864.00" height="594.00" rx="8" fill="#05070d"/>
+<rect x="0" y="0" width="864.00" height="594.00" rx="8" fill="#000000"/>
 <rect x="0" y="0" width="864.00" height="30" rx="8" fill="#323233"/>
 <rect x="0" y="22" width="864.00" height="8" fill="#323233"/>
 <circle cx="16" cy="15.0" r="6" fill="#ff5f57"/>
 <circle cx="36" cy="15.0" r="6" fill="#febc2e"/>
 <circle cx="56" cy="15.0" r="6" fill="#28c840"/>
 <text x="432.00" y="20.0" fill="#cccccc" text-anchor="middle" font-size="13">hvo-roof-install</text>
-<rect x="20.40" y="60" width="823.60" height="18.4" fill="#0e1628"/>
-<rect x="37.20" y="78" width="101.20" height="18.4" fill="#2563eb"/>
-<rect x="20.40" y="528" width="67.60" height="18.4" fill="#1c2028"/>
-<rect x="20.40" y="546" width="823.60" height="18.4" fill="#1c2028"/>
-<rect x="826.80" y="168.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="186.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="204.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="222.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="240.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="258.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="276.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="294.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="312.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="330.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="348.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="366.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="384.00" width="8.70" height="18.30" fill="#3b82f6"/>
-<rect x="826.80" y="402.00" width="8.70" height="18.30" fill="#3b82f6"/>
+<rect x="37.20" y="78" width="101.20" height="18.4" fill="#3b8eea"/>
+<rect x="826.80" y="168.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="186.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="204.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="222.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="240.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="258.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="276.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="294.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="312.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="330.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="348.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="366.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="384.00" width="8.70" height="18.30" fill="#3b8eea"/>
+<rect x="826.80" y="402.00" width="8.70" height="18.30" fill="#3b8eea"/>
 <rect x="87.60" y="537.00" width="4.50" height="9.30" fill="#000000"/>
 <rect x="196.80" y="537.00" width="4.50" height="9.30" fill="#000000"/>
-<line x1="16.20" y1="50.40" x2="16.20" y2="573.60" stroke="#abb0b7" stroke-width="1.2"/>
-<line x1="15.60" y1="51.00" x2="25.20" y2="51.00" stroke="#abb0b7" stroke-width="1.2"/>
-<line x1="234.00" y1="51.00" x2="848.40" y2="51.00" stroke="#abb0b7" stroke-width="1.2"/>
-<line x1="24.60" y1="41.40" x2="24.60" y2="60.60" stroke="#abb0b7" stroke-width="1.2"/>
-<line x1="234.60" y1="41.40" x2="234.60" y2="60.60" stroke="#abb0b7" stroke-width="1.2"/>
-<line x1="847.80" y1="50.40" x2="847.80" y2="573.60" stroke="#abb0b7" stroke-width="1.2"/>
-<line x1="33.00" y1="77.40" x2="33.00" y2="96.60" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="28.20" y1="87.00" x2="33.60" y2="87.00" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="141.60" y1="87.00" x2="835.80" y2="87.00" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="142.20" y1="77.40" x2="142.20" y2="96.60" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="24.60" y1="95.40" x2="24.60" y2="510.60" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="839.40" y1="95.40" x2="839.40" y2="510.60" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="28.20" y1="519.00" x2="835.80" y2="519.00" stroke="#2d333d" stroke-width="1.2"/>
-<line x1="15.60" y1="573.00" x2="848.40" y2="573.00" stroke="#abb0b7" stroke-width="1.2"/>
-<path d="M28.80,87.00 Q24.60,87.00 24.60,96.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
-<path d="M835.20,87.00 Q839.40,87.00 839.40,96.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
-<path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
-<path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#2d333d" stroke-width="1.2"/>
-<text x="28.80" y="55.50" fill="#abb0b7" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
-<text x="20.40" y="73.50" fill="#f8fafc" textLength="210.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 1 of 6: This machine</text>
-<text x="37.20" y="91.50" fill="#f8fafc" textLength="100.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">This machine</text>
-<text x="28.80" y="109.50" fill="#f8fafc" textLength="798.00" lengthAdjust="spacingAndGlyphs">The installer looked at this machine and changed nothing. Next chooses what to install; nothing</text>
-<text x="28.80" y="127.50" fill="#f8fafc" textLength="336.00" lengthAdjust="spacingAndGlyphs">is installed before you review the plan.</text>
-<text x="28.80" y="163.50" fill="#f8fafc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Machine:</text>
-<text x="138.00" y="163.50" fill="#f8fafc" textLength="436.80" lengthAdjust="spacingAndGlyphs">roofpi (linux-arm64, Debian GNU/Linux 12 (bookworm))</text>
-<text x="826.80" y="163.50" fill="#f8fafc">▲</text>
-<text x="28.80" y="181.50" fill="#f8fafc" textLength="92.40" lengthAdjust="spacingAndGlyphs">Running as:</text>
-<text x="138.00" y="181.50" fill="#f8fafc" textLength="33.60" lengthAdjust="spacingAndGlyphs">root</text>
-<text x="28.80" y="199.50" fill="#f8fafc" textLength="25.20" lengthAdjust="spacingAndGlyphs">Pi:</text>
-<text x="138.00" y="199.50" fill="#f8fafc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Raspberry Pi 5 Model B Rev 1.0</text>
-<text x="28.80" y="217.50" fill="#f8fafc" textLength="546.00" lengthAdjust="spacingAndGlyphs">HAT devices: /dev/i2c-1, /dev/gpiomem, the thermal sensor present</text>
-<text x="28.80" y="235.50" fill="#f8fafc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Docker:</text>
-<text x="138.00" y="235.50" fill="#f8fafc" textLength="184.80" lengthAdjust="spacingAndGlyphs">27.3.1, Compose 2.29.7</text>
-<text x="138.00" y="253.50" fill="#f8fafc" textLength="646.80" lengthAdjust="spacingAndGlyphs">enforces memory limits yes, CPU yes, processes yes, swap yes; reports 4 CPUs,</text>
-<text x="138.00" y="271.50" fill="#f8fafc" textLength="126.00" lengthAdjust="spacingAndGlyphs">8192m of memory</text>
-<text x="28.80" y="289.50" fill="#f8fafc" textLength="75.60" lengthAdjust="spacingAndGlyphs">Recorded:</text>
-<text x="138.00" y="289.50" fill="#f8fafc" textLength="462.00" lengthAdjust="spacingAndGlyphs">nothing in the machine's record; nothing in your record</text>
-<text x="28.80" y="307.50" fill="#f8fafc" textLength="50.40" lengthAdjust="spacingAndGlyphs">Found:</text>
-<text x="138.00" y="307.50" fill="#f8fafc" textLength="361.20" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof, set up without the installer</text>
-<text x="28.80" y="325.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Container:</text>
-<text x="138.00" y="325.50" fill="#f8fafc" textLength="613.20" lengthAdjust="spacingAndGlyphs">roof-controller: running, 4.0.0, the real HAT (made by the deploy script)</text>
-<text x="28.80" y="343.50" fill="#f8fafc" textLength="680.40" lengthAdjust="spacingAndGlyphs">Certificate: roofpi, until 2027-11-02, issued by HVO Roof CA (roofpi, 2026-10-01)</text>
-<text x="28.80" y="361.50" fill="#f8fafc" textLength="25.20" lengthAdjust="spacingAndGlyphs">CA:</text>
-<text x="138.00" y="361.50" fill="#f8fafc" textLength="420.00" lengthAdjust="spacingAndGlyphs">HVO Roof CA (roofpi, 2026-10-01), until 2036-09-28</text>
-<text x="28.80" y="397.50" fill="#f8fafc" textLength="747.60" lengthAdjust="spacingAndGlyphs">Physical controller: only on the intended Raspberry Pi, enable I2C with sudo raspi-config</text>
-<text x="28.80" y="415.50" fill="#f8fafc" textLength="772.80" lengthAdjust="spacingAndGlyphs">nonint do_i2c 0 if needed, reboot, then rerun the installer. Missing GPIO or thermal devices</text>
-<text x="28.80" y="433.50" fill="#f8fafc" textLength="546.00" lengthAdjust="spacingAndGlyphs">are not fixed by enabling I2C. Elsewhere choose the emulated rig.</text>
-<text x="826.80" y="433.50" fill="#f8fafc">░</text>
-<text x="28.80" y="451.50" fill="#f8fafc" textLength="806.40" lengthAdjust="spacingAndGlyphs">Kiosk: a connected DRM display and console boot are required. If a desktop owns it, explicitly ░</text>
-<text x="28.80" y="469.50" fill="#f8fafc" textLength="688.80" lengthAdjust="spacingAndGlyphs">select sudo systemctl set-default multi-user.target and reboot before retrying. No</text>
-<text x="826.80" y="469.50" fill="#f8fafc">░</text>
-<text x="28.80" y="487.50" fill="#f8fafc" textLength="386.40" lengthAdjust="spacingAndGlyphs">display-manager change or reboot is automatic.</text>
-<text x="826.80" y="487.50" fill="#f8fafc">░</text>
-<text x="28.80" y="505.50" fill="#f8fafc" textLength="722.40" lengthAdjust="spacingAndGlyphs">Splash: optional on Raspberry Pi OS or Ubuntu with GRUB. Requires Python 3; install it</text>
-<text x="826.80" y="505.50" fill="#f8fafc">▼</text>
-<text x="20.40" y="541.50" fill="#aeb9c8" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
-<text x="112.80" y="541.50" fill="#f8fafc" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
-<text x="20.40" y="559.50" fill="#3b82f6" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
-<text x="70.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Next</text>
-<text x="121.20" y="559.50" fill="#aeb9c8" textLength="25.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">Esc</text>
-<text x="154.80" y="559.50" fill="#aeb9c8" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Back</text>
-<text x="205.20" y="559.50" fill="#3b82f6" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>
-<text x="238.80" y="559.50" fill="#abb0b7" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
+<line x1="16.20" y1="50.40" x2="16.20" y2="573.60" stroke="#e5e5e5" stroke-width="1.2"/>
+<line x1="15.60" y1="51.00" x2="25.20" y2="51.00" stroke="#e5e5e5" stroke-width="1.2"/>
+<line x1="234.00" y1="51.00" x2="848.40" y2="51.00" stroke="#e5e5e5" stroke-width="1.2"/>
+<line x1="24.60" y1="41.40" x2="24.60" y2="60.60" stroke="#e5e5e5" stroke-width="1.2"/>
+<line x1="234.60" y1="41.40" x2="234.60" y2="60.60" stroke="#e5e5e5" stroke-width="1.2"/>
+<line x1="847.80" y1="50.40" x2="847.80" y2="573.60" stroke="#e5e5e5" stroke-width="1.2"/>
+<line x1="33.00" y1="77.40" x2="33.00" y2="96.60" stroke="#666666" stroke-width="1.2"/>
+<line x1="28.20" y1="87.00" x2="33.60" y2="87.00" stroke="#666666" stroke-width="1.2"/>
+<line x1="141.60" y1="87.00" x2="835.80" y2="87.00" stroke="#666666" stroke-width="1.2"/>
+<line x1="142.20" y1="77.40" x2="142.20" y2="96.60" stroke="#666666" stroke-width="1.2"/>
+<line x1="24.60" y1="95.40" x2="24.60" y2="510.60" stroke="#666666" stroke-width="1.2"/>
+<line x1="839.40" y1="95.40" x2="839.40" y2="510.60" stroke="#666666" stroke-width="1.2"/>
+<line x1="28.20" y1="519.00" x2="835.80" y2="519.00" stroke="#666666" stroke-width="1.2"/>
+<line x1="15.60" y1="573.00" x2="848.40" y2="573.00" stroke="#e5e5e5" stroke-width="1.2"/>
+<path d="M28.80,87.00 Q24.60,87.00 24.60,96.00" fill="none" stroke="#666666" stroke-width="1.2"/>
+<path d="M835.20,87.00 Q839.40,87.00 839.40,96.00" fill="none" stroke="#666666" stroke-width="1.2"/>
+<path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#666666" stroke-width="1.2"/>
+<path d="M839.40,510.00 Q839.40,519.00 835.20,519.00" fill="none" stroke="#666666" stroke-width="1.2"/>
+<text x="28.80" y="55.50" fill="#e5e5e5" textLength="201.60" lengthAdjust="spacingAndGlyphs">HVO Roof installer 4.0.0</text>
+<text x="20.40" y="73.50" fill="#ffffff" textLength="210.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Step 1 of 6: This machine</text>
+<text x="37.20" y="91.50" fill="#ffffff" textLength="100.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">This machine</text>
+<text x="28.80" y="109.50" fill="#ffffff" textLength="798.00" lengthAdjust="spacingAndGlyphs">The installer looked at this machine and changed nothing. Next chooses what to install; nothing</text>
+<text x="28.80" y="127.50" fill="#ffffff" textLength="336.00" lengthAdjust="spacingAndGlyphs">is installed before you review the plan.</text>
+<text x="28.80" y="163.50" fill="#ffffff" textLength="67.20" lengthAdjust="spacingAndGlyphs">Machine:</text>
+<text x="138.00" y="163.50" fill="#ffffff" textLength="436.80" lengthAdjust="spacingAndGlyphs">roofpi (linux-arm64, Debian GNU/Linux 12 (bookworm))</text>
+<text x="826.80" y="163.50" fill="#ffffff">▲</text>
+<text x="28.80" y="181.50" fill="#ffffff" textLength="92.40" lengthAdjust="spacingAndGlyphs">Running as:</text>
+<text x="138.00" y="181.50" fill="#ffffff" textLength="33.60" lengthAdjust="spacingAndGlyphs">root</text>
+<text x="28.80" y="199.50" fill="#ffffff" textLength="25.20" lengthAdjust="spacingAndGlyphs">Pi:</text>
+<text x="138.00" y="199.50" fill="#ffffff" textLength="252.00" lengthAdjust="spacingAndGlyphs">Raspberry Pi 5 Model B Rev 1.0</text>
+<text x="28.80" y="217.50" fill="#ffffff" textLength="546.00" lengthAdjust="spacingAndGlyphs">HAT devices: /dev/i2c-1, /dev/gpiomem, the thermal sensor present</text>
+<text x="28.80" y="235.50" fill="#ffffff" textLength="58.80" lengthAdjust="spacingAndGlyphs">Docker:</text>
+<text x="138.00" y="235.50" fill="#ffffff" textLength="184.80" lengthAdjust="spacingAndGlyphs">27.3.1, Compose 2.29.7</text>
+<text x="138.00" y="253.50" fill="#ffffff" textLength="646.80" lengthAdjust="spacingAndGlyphs">enforces memory limits yes, CPU yes, processes yes, swap yes; reports 4 CPUs,</text>
+<text x="138.00" y="271.50" fill="#ffffff" textLength="126.00" lengthAdjust="spacingAndGlyphs">8192m of memory</text>
+<text x="28.80" y="289.50" fill="#ffffff" textLength="75.60" lengthAdjust="spacingAndGlyphs">Recorded:</text>
+<text x="138.00" y="289.50" fill="#ffffff" textLength="462.00" lengthAdjust="spacingAndGlyphs">nothing in the machine's record; nothing in your record</text>
+<text x="28.80" y="307.50" fill="#ffffff" textLength="50.40" lengthAdjust="spacingAndGlyphs">Found:</text>
+<text x="138.00" y="307.50" fill="#ffffff" textLength="361.20" lengthAdjust="spacingAndGlyphs">/etc/hvo-roof, set up without the installer</text>
+<text x="28.80" y="325.50" fill="#ffffff" textLength="84.00" lengthAdjust="spacingAndGlyphs">Container:</text>
+<text x="138.00" y="325.50" fill="#ffffff" textLength="613.20" lengthAdjust="spacingAndGlyphs">roof-controller: running, 4.0.0, the real HAT (made by the deploy script)</text>
+<text x="28.80" y="343.50" fill="#ffffff" textLength="680.40" lengthAdjust="spacingAndGlyphs">Certificate: roofpi, until 2027-11-02, issued by HVO Roof CA (roofpi, 2026-10-01)</text>
+<text x="28.80" y="361.50" fill="#ffffff" textLength="25.20" lengthAdjust="spacingAndGlyphs">CA:</text>
+<text x="138.00" y="361.50" fill="#ffffff" textLength="420.00" lengthAdjust="spacingAndGlyphs">HVO Roof CA (roofpi, 2026-10-01), until 2036-09-28</text>
+<text x="28.80" y="397.50" fill="#ffffff" textLength="747.60" lengthAdjust="spacingAndGlyphs">Physical controller: only on the intended Raspberry Pi, enable I2C with sudo raspi-config</text>
+<text x="28.80" y="415.50" fill="#ffffff" textLength="772.80" lengthAdjust="spacingAndGlyphs">nonint do_i2c 0 if needed, reboot, then rerun the installer. Missing GPIO or thermal devices</text>
+<text x="28.80" y="433.50" fill="#ffffff" textLength="546.00" lengthAdjust="spacingAndGlyphs">are not fixed by enabling I2C. Elsewhere choose the emulated rig.</text>
+<text x="826.80" y="433.50" fill="#ffffff">░</text>
+<text x="28.80" y="451.50" fill="#ffffff" textLength="806.40" lengthAdjust="spacingAndGlyphs">Kiosk: a connected DRM display and console boot are required. If a desktop owns it, explicitly ░</text>
+<text x="28.80" y="469.50" fill="#ffffff" textLength="688.80" lengthAdjust="spacingAndGlyphs">select sudo systemctl set-default multi-user.target and reboot before retrying. No</text>
+<text x="826.80" y="469.50" fill="#ffffff">░</text>
+<text x="28.80" y="487.50" fill="#ffffff" textLength="386.40" lengthAdjust="spacingAndGlyphs">display-manager change or reboot is automatic.</text>
+<text x="826.80" y="487.50" fill="#ffffff">░</text>
+<text x="28.80" y="505.50" fill="#ffffff" textLength="722.40" lengthAdjust="spacingAndGlyphs">Splash: optional on Raspberry Pi OS or Ubuntu with GRUB. Requires Python 3; install it</text>
+<text x="826.80" y="505.50" fill="#ffffff">▼</text>
+<text x="20.40" y="541.50" fill="#e5e5e5" textLength="67.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">⟦ Back ⟧</text>
+<text x="112.80" y="541.50" fill="#ffffff" textLength="84.00" lengthAdjust="spacingAndGlyphs">⟦► Next ◄⟧</text>
+<text x="20.40" y="559.50" fill="#3b8eea" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">Enter</text>
+<text x="70.80" y="559.50" fill="#e5e5e5" textLength="33.60" lengthAdjust="spacingAndGlyphs">Next</text>
+<text x="121.20" y="559.50" fill="#e5e5e5" textLength="25.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">Esc</text>
+<text x="154.80" y="559.50" fill="#e5e5e5" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Back</text>
+<text x="205.20" y="559.50" fill="#3b8eea" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">F10</text>
+<text x="238.80" y="559.50" fill="#e5e5e5" textLength="33.60" lengthAdjust="spacingAndGlyphs">Quit</text>
 </g>
 </svg>

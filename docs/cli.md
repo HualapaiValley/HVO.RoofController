@@ -421,9 +421,11 @@ and the Settings page's header then says the file was edited by hand.
 ### Colours
 
 The interface uses HVO Dark, the web UI's theme (`RoofUiPalette` in the client library), so it looks like the
-[web UI](web.md): light text on the dark page background, the focused control in the accent blue, **Stop yellow**, Open
-green and Close red, a stale status in the theme's warning colours, and an error in its danger colours. Terminal.Gui
-draws the theme's colours in true colour, or as the nearest of 256 or 16 colours when that is all the terminal has.
+[web UI](web.md): light text on the dark page background, the focused control in the accent blue, **Stop red in every focus state**, Open
+and Close on raised surfaces, a stale status in the theme's warning colours, and an error in its danger colours. Terminal.Gui
+draws the theme's RGB colours, retaining its current nearest-colour fallback. The staged palette migration (#175)
+uses standalone status tones for Stop results, preserving both acknowledgement messages. Exact Sky ANSI-16 emission,
+capability detection and the complete terminal/installer redesign remain #176; these captures establish RGB styling.
 
 With `NO_COLOR` set (see [no-color.org](https://no-color.org)), the interface uses the terminal's own colours instead.
 Stop and the focused control are in reverse video, input fields are underlined, disabled controls are faint, and a

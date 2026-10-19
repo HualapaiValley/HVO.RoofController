@@ -30,7 +30,7 @@ public sealed class KioskSystemPage : UserControl
     public void Update()
     {
         var page = new StackPanel { Spacing = _metrics.Gap * 2 };
-        page.Children.Add(KioskTheme.Label("System", _metrics.Large, weight: FontWeight.SemiBold));
+        page.Children.Add(KioskTheme.Label("System", _metrics.Large, KioskTheme.Accent, weight: FontWeight.SemiBold));
         foreach (var status in KioskPageParts.Status(_panel.Busy, _panel.Message, _metrics))
         {
             page.Children.Add(status);
@@ -39,7 +39,7 @@ public sealed class KioskSystemPage : UserControl
         if (_panel.Question is { } question)
         {
             page.Children.Add(KioskPageParts.Question(question, _metrics, _panel.Dismiss));
-            Content = page;
+            Content = KioskTheme.Card(page, _metrics);
             return;
         }
 
@@ -74,7 +74,7 @@ public sealed class KioskSystemPage : UserControl
             page.Children.Add(KioskTheme.Card(checks, _metrics));
         }
 
-        Content = page;
+        Content = KioskTheme.Card(page, _metrics);
     }
 
     private Grid Rows(IEnumerable<(string Label, string Value)> rows)

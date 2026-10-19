@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Redesign the kiosk and Mac screens with the approved HVO hierarchy, permanent red Stop, bounded kiosk readings/notices/people
+  pages, private PIN steps, clearer password administration and startup recovery. Preserve 12 mm targets, consumed wake input,
+  Operator-only PIN policy and all shared Stop messages, including acknowledgement without register-verification evidence.
+  Align the shared palette and existing terminal RGB schemes with the 20 final Sky roles; terminal capability/layout work remains
+  separate (#175, refs #158).
+
 - Compose starts verify the supervisor's own cgroup v2 CPU quota, memory, zero swap and PID limits against the
   configured expectations. Missing, unlimited, unreadable, malformed or different limits, cgroup v1 and unverifiable
   placement refuse both applications (exit 2). The supervisor still turns every relay off and verifies the register,
