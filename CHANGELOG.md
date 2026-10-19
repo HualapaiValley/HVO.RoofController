@@ -130,6 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Allow password-protected and passwordless PKCS#12 certificate imports for Mac rigs to be saved with the installer's
+  private file password, retaining the certificate's key and public chain (#187).
 - Keep the permanent red direct-REST Stop visible in browser camera fullscreen and red under keyboard focus. Preserve
   its actual verified-register or verification-unavailable acknowledgement and failure messages. Inline editors now
   focus their fields, associate validation errors and return focus after Escape/Cancel. Camera operation failures
