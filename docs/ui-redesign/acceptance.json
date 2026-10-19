@@ -1,0 +1,346 @@
+{
+  "issue": 158,
+  "date": "2026-10-19",
+  "acceptedMain": "c0c41b87d443861523ec9d7eccdc8448658c2d30",
+  "terminalHead": "90ab3e14fed0309fe98fc76476491607dcf6b91e",
+  "testedCombinedSource": "7d75b32f5d67eab8469604f234f9739d5cea52b4",
+  "surfaceRows": 187,
+  "installerSteps": 48,
+  "sharedClientClassOutcomes": {
+    "debug": {
+      "RoofUiPaletteTests": {
+        "Passed": 3
+      },
+      "RoofStatusTextTests": {
+        "Passed": 17
+      },
+      "RoofStatusFeedTests": {
+        "Passed": 8
+      },
+      "RoofStopTests": {
+        "Passed": 15
+      },
+      "RoofCommandRulesTests": {
+        "Passed": 14
+      },
+      "RoofSettingsClientTests": {
+        "Passed": 49
+      }
+    },
+    "release": {
+      "RoofUiPaletteTests": {
+        "Passed": 3
+      },
+      "RoofStatusTextTests": {
+        "Passed": 17
+      },
+      "RoofStatusFeedTests": {
+        "Passed": 8
+      },
+      "RoofStopTests": {
+        "Passed": 15
+      },
+      "RoofCommandRulesTests": {
+        "Passed": 14
+      },
+      "RoofSettingsClientTests": {
+        "Passed": 49
+      }
+    }
+  },
+  "localRequiredSuites": {
+    "Debug": {
+      "total": 3914,
+      "executed": 3910,
+      "passed": 3910,
+      "failed": 0,
+      "existingOptInNotExecuted": 4,
+      "newRegularFileCasesPassed": 12,
+      "buildWarnings": 0,
+      "buildErrors": 0,
+      "inheritedUmask": "0002",
+      "filter": "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak",
+      "matchingNoBuild": true,
+      "defaultParallelism": true
+    },
+    "Release": {
+      "total": 3914,
+      "executed": 3910,
+      "passed": 3910,
+      "failed": 0,
+      "existingOptInNotExecuted": 4,
+      "newRegularFileCasesPassed": 12,
+      "buildWarnings": 0,
+      "buildErrors": 0,
+      "inheritedUmask": "0002",
+      "filter": "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak",
+      "matchingNoBuild": true,
+      "defaultParallelism": true
+    }
+  },
+  "hosted": {
+    "run": 39219606084,
+    "success": 18,
+    "optionalSkips": [
+      "soak",
+      "kiosk-soak"
+    ],
+    "runtimeArtifacts": {
+      "linux-x64": {
+        "artifact": 12171389575,
+        "tests": [
+          {
+            "program": "cli",
+            "phase": "contracts",
+            "total": 371,
+            "executed": 371,
+            "passed": 371,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 371
+            }
+          },
+          {
+            "program": "cli",
+            "phase": "render",
+            "total": 147,
+            "executed": 147,
+            "passed": 147,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 147
+            }
+          },
+          {
+            "program": "installer",
+            "phase": "contracts",
+            "total": 880,
+            "executed": 880,
+            "passed": 880,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 880
+            }
+          },
+          {
+            "program": "installer",
+            "phase": "render",
+            "total": 84,
+            "executed": 84,
+            "passed": 84,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 84
+            }
+          }
+        ],
+        "nativePrograms": 2,
+        "nativeModes": 4,
+        "nativeSizes": 2,
+        "nativeAndManagedHashesMatch": true
+      },
+      "linux-arm64": {
+        "artifact": 12171994602,
+        "tests": [
+          {
+            "program": "cli",
+            "phase": "contracts",
+            "total": 371,
+            "executed": 371,
+            "passed": 371,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 371
+            }
+          },
+          {
+            "program": "cli",
+            "phase": "render",
+            "total": 147,
+            "executed": 147,
+            "passed": 147,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 147
+            }
+          },
+          {
+            "program": "installer",
+            "phase": "contracts",
+            "total": 880,
+            "executed": 880,
+            "passed": 880,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 880
+            }
+          },
+          {
+            "program": "installer",
+            "phase": "render",
+            "total": 84,
+            "executed": 84,
+            "passed": 84,
+            "failed": 0,
+            "outcomes": {
+              "Passed": 84
+            }
+          }
+        ],
+        "nativePrograms": 2,
+        "nativeModes": 4,
+        "nativeSizes": 2,
+        "nativeAndManagedHashesMatch": true
+      },
+      "osx-arm64": {
+        "artifact": 12172990890,
+        "tests": [
+          {
+            "program": "cli",
+            "phase": "contracts",
+            "total": 371,
+            "passed": 371,
+            "failed": 0
+          },
+          {
+            "program": "cli",
+            "phase": "render",
+            "total": 147,
+            "passed": 147,
+            "failed": 0
+          },
+          {
+            "program": "installer",
+            "phase": "contracts",
+            "total": 880,
+            "passed": 880,
+            "failed": 0,
+            "allOriginalRealNonfileRefusalsPassed": 3,
+            "newRegularFileCasesPassed": 12
+          },
+          {
+            "program": "installer",
+            "phase": "render",
+            "total": 84,
+            "passed": 84,
+            "failed": 0
+          }
+        ],
+        "nativePrograms": 2,
+        "nativeModes": 4,
+        "nativeSizes": 2,
+        "nativeAndManagedHashesMatch": true
+      }
+    },
+    "macFileGuard": {
+      "artifact": 12172221742,
+      "passed": 12
+    },
+    "macCertificateImport": {
+      "artifact": 12172226660,
+      "passed": 3
+    },
+    "manifestArtifact": 12171637959,
+    "strictMacSignatureAndIdentity": "PASS",
+    "installedAndRollbackCopyNotices": "PASS"
+  },
+  "finalPrograms": [
+    {
+      "program": "hvo-roof-install",
+      "rid": "linux-x64",
+      "sha256": "dddd06360c6162d075048a5acfb489a49e66e8ce73ca0ad6439e66a8361e1755",
+      "bundleEntries": 228,
+      "nativeMembers": 0,
+      "managedMembers": {
+        "Terminal.Gui.dll": "3f314c42af815c1e1aef1ed5a6cb70a5c7aef1e3837c65559eafef490d764dab",
+        "HVO.RoofControllerV4.Client.dll": "ea34c21fa611abc4bad63dbc8db714cc76168237e8140a412b6fb47d0727fd46",
+        "HVO.RoofControllerV4.Common.dll": "04816641dc0e9bcf761059e8203148785c160a27750d79880eea57520530ca28",
+        "HVO.RoofControllerV4.TerminalUi.dll": "d3c4601e5292da0e33c3854dac92b857e5f3487d0b56d212a3af3c26b293ccf1",
+        "hvo-roof-install.dll": "8638c67ec16366c91a974485b3416cf0e3aafa8de59827d99ada5152ec225f66"
+      }
+    },
+    {
+      "program": "hvo-roof",
+      "rid": "linux-x64",
+      "sha256": "c448811f0946fb0ea87a5a7071f38a9532f51238e5ab60a440f663e6a7223ee1",
+      "bundleEntries": 228,
+      "nativeMembers": 0,
+      "managedMembers": {
+        "Terminal.Gui.dll": "4d53af3f61c4bdcd86abadd925468468bb17b11a9a616359226a593d61f34f36",
+        "HVO.RoofControllerV4.Client.dll": "2472e4d51a21eebb14cea5c922f1f478f8af61ec34f631e020b9ebdbacf01b1b",
+        "HVO.RoofControllerV4.Common.dll": "14191c8a57f347ca79bc23190d1297e8fe65938771868358072e23506d5d67c3",
+        "HVO.RoofControllerV4.TerminalUi.dll": "d90c1aaea0aafffb8c937cf78daf9101fd7d7893ea35a46edeef901363d0bad0",
+        "hvo-roof.dll": "86b82251a1549fac27c068449d7c355884d4c2e136f3979398ddf6b12f79e530"
+      }
+    },
+    {
+      "program": "hvo-roof-install",
+      "rid": "linux-arm64",
+      "sha256": "65461bfa7f36b19e064dfede151d40eb18223bc3d59bb0dd9dfd130c6c72589d",
+      "bundleEntries": 228,
+      "nativeMembers": 0,
+      "managedMembers": {
+        "Terminal.Gui.dll": "2a5d0835b6c2998b649bdb20100e6d1184e1c841a59d1811762c72a374eb1b6a",
+        "HVO.RoofControllerV4.Client.dll": "c4c6e53a50d39e81e80cbf8587175608a636301a0e35e308c5657ab4cdf40e85",
+        "HVO.RoofControllerV4.Common.dll": "b7f4fe815dab5a08246b001fbf4c2251b975f6cd9392da61463a7fa71efe8c5e",
+        "HVO.RoofControllerV4.TerminalUi.dll": "0a35714aebd5e4964b2dfb32afd673cb1befaad482f07185fd945260922b15e7",
+        "hvo-roof-install.dll": "2be14d56203926e05dde009c6a6fe1cba733f8583b97ce47b890858ed8505801"
+      }
+    },
+    {
+      "program": "hvo-roof",
+      "rid": "linux-arm64",
+      "sha256": "30beaa085dd50dfa730d8c85033ce5e945e3e2a3033e076e26360a81570ba210",
+      "bundleEntries": 228,
+      "nativeMembers": 0,
+      "managedMembers": {
+        "Terminal.Gui.dll": "de93b905a44e05dd9c9e4a260f49330ece70ec01a1151b31e2a6f23cc2c8655f",
+        "HVO.RoofControllerV4.Client.dll": "e8f1e1a8493cfb3d51cd429ce551cf1ec4bb354a2cced03a87c492737f2806f6",
+        "HVO.RoofControllerV4.Common.dll": "def43b6beca0fdfa18cafa7a84031d76ea96aae3f4b3b8646d5d96c61f2abbb8",
+        "HVO.RoofControllerV4.TerminalUi.dll": "d4f1eca354809e0671f2b631142a6d95b43126f3ebd986e33c519c13099b084b",
+        "hvo-roof.dll": "8fd1bab8aaba4e4c18680e880f840fc9eeabaa6cdfd4e311baa1fc5d66111e67"
+      }
+    },
+    {
+      "program": "hvo-roof-install",
+      "rid": "osx-arm64",
+      "sha256": "b24826b609e12e24b7000e262940de0d12b2170862fc3bc63887774236d7faa2",
+      "bundleEntries": 228,
+      "nativeMembers": 0,
+      "managedMembers": {
+        "Terminal.Gui.dll": "627b7217f6213764c971dbb3976ad060730cff6953cc8eb715670ce14d371931",
+        "HVO.RoofControllerV4.Client.dll": "55d27a7bc8f8e34966d6d6ae28ba7954d119dd5a844b101d1b9e9f54f8c30f5d",
+        "HVO.RoofControllerV4.Common.dll": "8acd694b3cdc82584c9fda0959b8fdf0cbd416a101f5769920437854ac4dfe33",
+        "HVO.RoofControllerV4.TerminalUi.dll": "be6829463b56902919d64eb45a9268b6f8ebdcae5688316c7938b6b31e4d0a6b",
+        "hvo-roof-install.dll": "1987122637ced1bab6a8cd0e853ae8b60eca8caf9b035d8a415969521df97239"
+      }
+    },
+    {
+      "program": "hvo-roof",
+      "rid": "osx-arm64",
+      "sha256": "6645d79b19856506c85f9259b617916a73a420f6d7a8bd1affa295d29b638c93",
+      "bundleEntries": 228,
+      "nativeMembers": 0,
+      "managedMembers": {
+        "Terminal.Gui.dll": "cb372e1af3a5c8e496be48d5013c20eddffeb67fd1f918e0cfef650185b04717",
+        "HVO.RoofControllerV4.Client.dll": "37642afcb7eb77ba48a767f1e24a2ab429e4916ec8b3046a6fcb3e97fce1e9df",
+        "HVO.RoofControllerV4.Common.dll": "351f8e11cbdd13d94d53ca6c6ffdbf2f49ec83cb9ce52ec991e4e65442c39bec",
+        "HVO.RoofControllerV4.TerminalUi.dll": "605eb3aa5c2c0651fb792d384639db44e889ae7d6adbf832c7068b9918d710b9",
+        "hvo-roof.dll": "1e5699c6abab5f243f24b4c5b66992b8cba7b9d7de5ed30a2d55f4b1a77050dd"
+      }
+    }
+  ],
+  "independentOpenIssues": [
+    96,
+    153,
+    76,
+    89,
+    32
+  ],
+  "limits": [
+    "Native ReadyToRun PTY/emulator proof and complementary exact bundled-IL/JIT test-host proof are distinct.",
+    "Representative captured scenarios and shared component/state tests compose per-row acceptance; no full class/state Cartesian-product capture claim.",
+    "Historical failed attempts and earlier binary limitations remain in platform evidence.",
+    "No release, tag, deployment, host apply or real roof motion was performed for this acceptance."
+  ]
+}

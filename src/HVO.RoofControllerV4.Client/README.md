@@ -152,7 +152,8 @@ Stop uses the danger notice foreground/background, retaining red under focus. Op
 Notice text is paired with its notice background; standalone Stop feedback uses the standalone status tone, preserving
 both shared acknowledgement messages. An Acknowledged enum alone makes no register-verification claim.
 
-`RoofUiPaletteTests` checks every role/action against `docs/ui-redesign/tokens.json`. During the independent Web
-migration (#174), it explicitly checks the legacy source still exists when the Web-owned file is absent; as soon as
-that file is present it requires all 20 Web roles and the new asset URL. Exact terminal ANSI-16 emission, capability
-selection and full terminal/installer redesign remain #176; the present RGB migration does not claim that parity.
+`RoofUiPaletteTests` checks every role/action against `docs/ui-redesign/tokens.json` and requires all 20 Web-owned
+CSS roles and the new asset URL. The legacy theme RCL is removed. Both terminal programs share explicit truecolour,
+named ANSI-16, terminal-default and ASCII capability selection, including `HVO_TERMINAL` overrides and nonempty
+`NO_COLOR` precedence. [Final acceptance](../../docs/ui-redesign/acceptance.md#shared-contracts) records palette,
+status/feed, Stop and catalogue proof across the actual adapters and supported published programs.

@@ -23,8 +23,9 @@ The `roof_palette_member` field maps each canonical role onto its shared member;
 `SurfaceRaised` after #175. #175 audits legacy `Badge`, `MutedWeak` and `FocusRing`: compatible aliases resolve to
 raised surface, muted and accent. Directional actions use raised surface/text; Stop uses danger-background/danger-text,
 including keyboard focus. Native and the existing terminal RGB adapter consume all migrated values. #174 applies all
-20 canonical roles independently in Web-owned CSS. #171 itself changed no runtime palette; explicit terminal
-ANSI-16/capability parity retains its independent implementation gate.
+20 canonical roles independently in Web-owned CSS. #176 implements explicit terminal
+ANSI-16/capability parity. #171 itself changed no runtime palette. [Final acceptance](acceptance.md#shared-contracts)
+records the integrated adapter and shared-contract proof.
 Coordinate adapter migrations so a palette change does not silently recolour only some supported UIs.
 
 ## Role pairing and contrast
@@ -98,7 +99,9 @@ Stop visible; its rights do not inherit kiosk PIN restrictions.
 
 ## Terminal capability contract
 
-Mirror the merged Sky semantics with Roof's own implementation in the terminal slice. Roof currently supports nonempty NO_COLOR and delegates colour quantization to Terminal.Gui; explicit ANSI16 emission, capability detection and complete ASCII mode are migration gaps:
+Both terminal programs implement the merged Sky semantics through Roof's shared terminal adapter (#176).
+Explicit ANSI-16 emission, capability detection, defaults and complete ASCII controls are covered by the
+[final published-program and driver evidence](acceptance.md#terminal-and-installer):
 
 | Mode | Detection / expectation |
 | --- | --- |
@@ -106,7 +109,7 @@ Mirror the merged Sky semantics with Roof's own implementation in the terminal s
 | ANSI-16 | Default otherwise, including `TERM=xterm-256color` without COLORTERM; emit the exact named 16-colour fallbacks, not nearest 256-colour/24-bit escapes. `Gray` is standard white 7, `DarkGray` bright black 8, `White` bright white 15. |
 | NO_COLOR | Nonempty `NO_COLOR`, or `TERM=dumb`: terminal defaults; bold titles/notices, underlined inputs/keys, reverse focus/selected/primary and faint disabled. Empty NO_COLOR is not a request. |
 | ASCII | First nonempty `LC_ALL`, then `LC_CTYPE`, then `LANG` is not UTF-8, or TERM is dumb/vt100: `+`, `-`, `\|` frames, ASCII checkbox/choice/arrow equivalents. No hidden non-ASCII border/check glyph in a stock widget. |
-| Explicit override | Mirror `HVO_TERMINAL=truecolor,ansi16,nocolor,ascii,unicode` comma-list semantics; nonempty NO_COLOR wins. Detection/override support is a future Roof implementation requirement, not an already shipped option. |
+| Explicit override | `HVO_TERMINAL=truecolor,ansi16,nocolor,ascii,unicode` comma-list semantics; nonempty NO_COLOR wins. Overrides and detection use the same shared adapter in both programs. |
 
 Every notice has `[INFO]`, `[OK]`, `[WARNING]` or `[ERROR]`/`[REFUSED]`; choices `(*)`/`( )`, toggles `[x]`/`[ ]`,
 current tab brackets and labels keep all information without colour. Tab/Enter navigate/activate, Esc closes a prompt;

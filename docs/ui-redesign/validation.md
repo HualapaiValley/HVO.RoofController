@@ -5,7 +5,9 @@
 This foundation inspected source at `2e4f1fbfac1216d508fc47913179e3c9b0a4cfb3`, full #171 and #158 body/comments,
 root guidance and PR template. It fetched/read all four approved prototype sources and both final merged Sky primary
 files through `gh api` (no local Sky checkout). [Token data](tokens.json) records byte hashes. The matrix traces existing
-surfaces to source strings and deliberately labels all production redesign work pending.
+surfaces to source strings; at that historical checkpoint all production redesign work was pending.
+[Final acceptance](acceptance.md) separately records completed platform implementation and verification.
+The historical foundation checks below do not stand in for those runtime results.
 
 Local foundation checks on 2026-10-19 passed: 187 surface rows, 11 Razor routes, 48 concrete installer plan-step
 outputs and all 20 pinned semantic roles validated; repository documentation links had zero broken targets; all 17
@@ -56,7 +58,8 @@ unreadable body. The enum alone does not prove register verification; read-back 
 The existing [RoofStopTests](../../tests/HVO.RoofControllerV4.RPi.Tests/Client/RoofStopTests.cs) definitions
 `AnAcceptedStop_ClaimsOnlyWhatTheRelayRegisterShowed` and
 `AnAcceptedStopWhoseAnswerCannotBeRead_IsAcknowledged_WithoutARelayClaim` provide the source-traced regression cases.
-These definitions were inspected, not executed for this documentation correction. Exercise both message cases in
+The foundation inspected these definitions without executing them. Both now execute in the final combined suites;
+[shared-contract acceptance](acceptance.md#shared-contracts) maps actual adapter proof. Exercise both message cases in
 each adapter's applicable states and colour modes alongside Sent, RelayUnverified and Failed, without changing the enum.
 
 | Profile | Existing source/test workflow to extend | Required new evidence |
@@ -75,6 +78,12 @@ mirror styling constants. Reproduce documentation images using each platform's e
 A prototype's HTML interactions never count as a production regression test.
 
 ## Completion gate for #158
+
+The [final acceptance record](acceptance.md) applies this gate to merged main `c0c41b87d443861523ec9d7eccdc8448658c2d30`.
+Matrix status/evidence fields are reconciled without changing any requirement, access/state profile or source anchor.
+Historical failed attempts remain in platform evidence. The reconciliation itself is docs/data only; its own normal CI
+checks still gate merging and closure of #158.
+
 
 Every current/new matrix row must be verified with durable evidence; theme-removal and terminal-payload obligations
 must be met; documentation/screenshots and user-visible CHANGELOG entries must match shipped behavior. Reconcile
