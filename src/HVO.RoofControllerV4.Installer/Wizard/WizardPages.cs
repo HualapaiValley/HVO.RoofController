@@ -689,9 +689,9 @@ internal sealed class ClientPage : WizardPage
 {
     private static readonly string[] TrustLabels =
     [
-        "Its private CA: fetched from it, and trusted once you check its fingerprint",
-        "Its self-signed certificate, pinned to its fingerprint",
-        "As this machine trusts any website: a certificate of your own, or plain HTTP"
+        "Private CA: fetch, compare and confirm its fingerprint",
+        "Pin its self-signed certificate fingerprint",
+        "System HTTPS trust, or plain HTTP"
     ];
 
     private const int ByCa = 0;

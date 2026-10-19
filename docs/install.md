@@ -564,7 +564,7 @@ rate, and whether other machines may use it (over HTTPS only).
     you do, and a changed address needs its CA fetched again.
   - **Its self-signed certificate:** give the certificate's SHA-256 fingerprint, from the same places. Each
     connection is pinned to it.
-  - **As this machine trusts any website:** a certificate of your own from a CA this machine already trusts, or
+  - **System HTTPS trust, or plain HTTP:** a certificate of your own from a CA this machine already trusts, or
     plain HTTP.
 - **The keychain** (on a Mac, with the CA): trust the CA in your login keychain too, so Safari and Chrome open the web
   UI without a warning.

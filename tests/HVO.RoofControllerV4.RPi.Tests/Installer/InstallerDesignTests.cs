@@ -125,6 +125,7 @@ public sealed class InstallerDesignTests
         var fetch = page.FetchButton!;
         fetch.HasFocus.Should().BeTrue("Tab from the address reaches its action");
         driver.Screen.Should().Contain("[ Fetch its CA ]");
+        foreach (var label in page.Trust!.Labels!) driver.Screen.Should().Contain(label, "every trust choice is readable at the minimum width");
         var bounds = fetch.FrameToScreen();
         var pageBounds = page.FrameToScreen();
         bounds.X.Should().BeGreaterThanOrEqualTo(pageBounds.X);
