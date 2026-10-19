@@ -1,0 +1,191 @@
+{
+  "combined_source_head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+  "reviewed_main": "2c4deb45ed36e1ed32dec44988d738833f317e4e",
+  "integration": {
+    "pre_merge_head": "637f0e1450fbec11dcab159ce44ca48d8382f574",
+    "reviewed_main": "2c4deb45ed36e1ed32dec44988d738833f317e4e",
+    "merge_base": "ac581a2c6141c8997dd6e98782744aba051e613e",
+    "single_sided_or_identical_paths_verified": 84,
+    "both_changed_paths": [
+      ".github/workflows/ci.yml",
+      "CHANGELOG.md"
+    ],
+    "conflicts": [],
+    "protected_raw_rows_exact_main": 98,
+    "owned_raw_rows_exact_previous_head": 89,
+    "installer_steps_exact_previous_head": true,
+    "ci_exact_previous_plus_reviewed_additions": [
+      {
+        "job": "installer-mac",
+        "step": "Import PKCS12 certificates for Mac rigs"
+      },
+      {
+        "job": "installer-mac",
+        "step": "Upload Mac certificate import evidence"
+      }
+    ],
+    "ci_budget_minutes": 30,
+    "cli_terminal_client_common_sources_unchanged": true,
+    "installer_import_source_exact_main": true,
+    "limits": [
+      "Prior647 installer binary lacks187; old exact-bundle fixture evidence stays historical",
+      "New merged installer final artifacts require normal hosted all-RID checks"
+    ],
+    "combined_source_head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+    "clean_after_merge": true,
+    "tracked_owned_rows_status_unchanged": true,
+    "protected_rows_sha256": "4792330bcc2ff0c1c525e64c29b335399017fd636225692cfd6c63d17e03ea6d",
+    "owned_rows_sha256": "ee77ea43153604b1da5cc522e913e55ea357bda33176eb7b2e098309826e2a81",
+    "installer_steps_sha256": "34ecc450ba673e2fae0ae652ecf9233cb4c5b563836fac3355835fe5861f0aee"
+  },
+  "results": {
+    "debug": {
+      "build": {
+        "head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+        "kind": "build",
+        "configuration": "Debug",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "warnings": [
+          "0"
+        ],
+        "errors": [
+          "0"
+        ],
+        "diagnostic_codes": []
+      },
+      "required_tests": {
+        "head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+        "kind": "test",
+        "configuration": "Debug",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "counters": {
+          "total": "3902",
+          "executed": "3898",
+          "passed": "3898",
+          "failed": "0",
+          "error": "0",
+          "timeout": "0",
+          "aborted": "0",
+          "inconclusive": "0",
+          "passedButRunAborted": "0",
+          "notRunnable": "0",
+          "notExecuted": "0",
+          "disconnected": "0",
+          "warning": "0",
+          "completed": "0",
+          "inProgress": "0",
+          "pending": "0"
+        },
+        "failed_bare_methods": [],
+        "trx_sha256": "68bedfed6330303fc307ff2154df5163ebba4814bcc529f1406863349481ad6d",
+        "actual_result_outcomes": {
+          "Passed": 3898,
+          "NotExecuted": 4
+        },
+        "nonexecuted_bare_methods": [
+          "FinalPrograms_KeepOfflineNotices_AfterInstallationAndRollbackCopyPaths",
+          "TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem",
+          "TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing",
+          "TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing"
+        ]
+      }
+    },
+    "release": {
+      "build": {
+        "head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+        "kind": "build",
+        "configuration": "Release",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "warnings": [
+          "0"
+        ],
+        "errors": [
+          "0"
+        ],
+        "diagnostic_codes": []
+      },
+      "required_tests": {
+        "head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+        "kind": "test",
+        "configuration": "Release",
+        "exit_code": 0,
+        "default_parallelism_preserved": true,
+        "inherited_process_umask_octal": "0002",
+        "counters": {
+          "total": "3902",
+          "executed": "3898",
+          "passed": "3898",
+          "failed": "0",
+          "error": "0",
+          "timeout": "0",
+          "aborted": "0",
+          "inconclusive": "0",
+          "passedButRunAborted": "0",
+          "notRunnable": "0",
+          "notExecuted": "0",
+          "disconnected": "0",
+          "warning": "0",
+          "completed": "0",
+          "inProgress": "0",
+          "pending": "0"
+        },
+        "failed_bare_methods": [],
+        "trx_sha256": "a7aedd5fa808a0f5788e7d6367769738ca35ee02c5e94665b14625106f4beb11",
+        "actual_result_outcomes": {
+          "Passed": 3898,
+          "NotExecuted": 4
+        },
+        "nonexecuted_bare_methods": [
+          "FinalPrograms_KeepOfflineNotices_AfterInstallationAndRollbackCopyPaths",
+          "TheKeychainsListingAndTrustSettings_AreReadAsMacOsWritesThem",
+          "TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing",
+          "TheMacApp_IsInstalledWithoutQuarantine_WithItsKeyAndSettings_AndOpens_AndASecondRunChangesNothing"
+        ]
+      }
+    }
+  },
+  "required_filter": "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak",
+  "test_build_policy": "--no-build after matching solution configuration build; default parallelism and assertions retained",
+  "bounds": {
+    "build_seconds": 300,
+    "required_suite_seconds": 900,
+    "flock_wait_seconds": 600,
+    "kill_after_seconds": 30
+  },
+  "invalid_attempt": {
+    "classification": "invalid private runner context; not product test evidence",
+    "head": "23acc238f0af5f66132f60a70c1d01b77373b581",
+    "imposed_umask_octal": "0077",
+    "actual_inherited_umask_octal": "0002",
+    "cause": "private log protection incorrectly changed the full suite child umask",
+    "correction": "remove global mutation; explicit0600 log under private0700 output; preserve actual inherited002",
+    "source_or_assertion_changed": false,
+    "failed_bare_methods": [
+      "AChange_IsSavedToTheSettingsFile_AndSurvivesARestart",
+      "AWrittenFile_ReadsBackWithItsMetadata_AndTheSameHash",
+      "Answers_InstallTheController_ThenASecondRunChangesNothing",
+      "TheMacApp_IsInstalledWithoutQuarantine_WithItsCaKeyAndSettings_ThenChecked_AndASecondRunChangesNothing",
+      "ThePi_IsLeftWithTheFilesThePlanNamed_EachWithItsModeAndOwner_AndNoSecretShown"
+    ]
+  },
+  "invalid_attempt_trx_sha256": "a657c501c23703d4d03f1906aafe2413ba5e5802d193d773e2de2ac8806fd4e4",
+  "historical_fixture_proof": {
+    "source_release_passed": 23,
+    "retained_installer_bundled_il_jit_passed": 23,
+    "retained_installer_runtime_source": "647a6a88ad17fd8419358bc9fbb4ed3651b2d478",
+    "includes187": false
+  },
+  "limits": [
+    "Linux host source-suite evidence; no local supported-RID or new macOS all-contracts claim",
+    "Old647 installer bundle lacks187; historical fixture/JIT proof remains separate",
+    "Current-head all-RID final-artifact/native/strict-signature/notice checks require normal hosted CI",
+    "No CLI republish or separate native/motion/capture replay or extra broad suites",
+    "Final evidence commit changes documentation only; tested runtime source remains combined_source_head",
+    "Every98protectedN/W/Srow and89ownedT/C/Irow plus48installersteps preserved without status promotion"
+  ]
+}

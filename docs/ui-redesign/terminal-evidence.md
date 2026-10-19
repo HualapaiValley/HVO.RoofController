@@ -230,3 +230,34 @@ contract environment. These are Linux host proofs. The compile-only and initial 
 prior attempts. Production sources, artifact/signature/notice checks, matrix statuses and captures do not change; no
 publish, native replay or motion is repeated. Reviewed #187/#183 integration, final required Debug/Release suites and
 normal current-head supported-RID/macOS execution remain merge gates.
+
+
+## Final reviewed MAIN integration and required validation
+
+Combined source head `23acc238f0af5f66132f60a70c1d01b77373b581` merges reviewed canonical MAIN
+`2c4deb45ed36e1ed32dec44988d738833f317e4e`, including Web #183/#174, fixture #186/#185 and Mac import #188/#187.
+The import fix is exactly MAIN's two exportable-load attempts; global key storage and Linux controller crypto policy
+remain unchanged. The merge is conflict-free. Its exact union retains all prior final-bundle, ZERO NativeBinary,
+notices, scoped PATH and strict signature checks, plus the two reviewed Mac-import evidence steps and 30-minute
+build job budget. All **98 N/W/S raw rows** match MAIN; **89 owned rows and 48 installer steps** match the previous
+head without status promotion. [The final receipt](terminal-final-combined-validation.json) includes hashes and union proof.
+
+Matching full solution Debug and Release builds pass with **zero warnings and errors**. Separate bounded required
+runs, each `--no-build` after its matching build, pass **Debug 3898 and Release 3898**, with
+**zero failures and 4/4 existing opt-in nonexecuted cases**. The exact filter is
+`TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak`; default parallelism, assertions and inherited
+process umask `002` remain intact. Each build has a 300-second bound; each test run has 900 seconds, a separate
+`flock -w 600 -o /tmp/hvo-heavy-gate.lock` window and `timeout --kill-after=30s`. Raw logs/TRX stay private;
+only safe counters, bare nonexecuted method names and TRX hashes appear in the receipt.
+
+An initial private runner incorrectly set process umask `077` while protecting logs, producing five permission-mode
+failures. That attempt and its TRX remain separate as **invalid runner context**, not product test evidence. The
+corrected runner preserves inherited `002` and creates logs explicitly as 0600 under private 0700 output roots;
+no source, assertion, filter or parallelism change was used for the one corrected-context Debug run.
+
+The earlier **23 source + 23 exact retained-installer IL/JIT** fixture checks retain their original scope. That
+`647a6a8` installer binary **does not contain #187**. No old binary, prior macOS CLI 518-case pass or main-branch
+three-case import proof is presented as the combined candidate's new macOS all-contracts result. Normal current-head
+supported-RID, final distributed-byte/native, macOS strict signature and notice gates remain pending before merge.
+No CLI republish or separate motion/capture replay is run. The final evidence commit changes docs only; #158
+and shared matrix acceptance remain root-owned, and PR184 stays draft for final review and hosted checks.
