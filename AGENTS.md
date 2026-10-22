@@ -336,9 +336,19 @@ Every change, by a person or an agent, goes the same way:
 
    Auto-merge does **not** turn itself off when someone with write access pushes. So before any further push,
    turn it off with `gh pr merge <n> -R HualapaiValley/HVO.RoofController --disable-auto`. Get the new head reviewed, then finalize again.
-7. **Clean up.** After the merge, remove everything the change used: its worktree and local branch (GitHub deletes
-   the remote branch), scratch directories, review checkouts, and any containers, images, volumes, emulators or test
-   processes you started. Keep something only when a follow-up needs it, and say what and why on the issue.
+7. **Clean up.** After the merge, remove the change's disposable resources: those created only for it and used by
+   nothing else. That means its worktree and local branch (GitHub deletes the remote branch), its scratch
+   directories and review checkouts, and containers, images, volumes, emulators or test processes started only for
+   its own tests.
+
+   Never remove these, even if you started them:
+   - a deployed or installed controller and its state;
+   - the real roof's configuration;
+   - another person's or task's worktree, container or emulator;
+   - release artifacts.
+
+   When ownership is unclear, leave the resource and say so on the issue. Keep a disposable resource only when a
+   follow-up needs it, and say what and why on the issue.
 
 ### Reviews
 
