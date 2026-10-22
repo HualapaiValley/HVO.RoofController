@@ -542,7 +542,7 @@ internal static class BackupCommands
         }
 
         var path = Path.GetFullPath(output, machine.CurrentDirectory);
-        if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
+        if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).Append(KioskSteps.StateFolder).Append(KioskSteps.CacheFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
         {
             throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the backup somewhere else.");
         }

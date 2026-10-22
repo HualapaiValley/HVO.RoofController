@@ -1589,6 +1589,8 @@ changes nothing; `--release DIR` reads the release from a folder.
   its network, each with its image when no other container uses it;
 - the kiosk's service, its program and the udev rule for the screen's backlight;
 - `hvo-roof` and the Mac app, with the copies kept beside them;
+- the `.NET` extraction folders that earlier releases left under `~/.net` (`hvo-roof` and every `hvo-roof-*` beside it),
+  in root's home for a system install and in yours for yours;
 - the installer itself, last.
 
 The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and
@@ -1601,8 +1603,9 @@ it was uninstalled, and keeps the choices, so an install that follows can offer 
 apt packages and the install log stay too. It shows what it will remove and asks first; `--yes` goes ahead without
 asking, and `--plan` only shows it. Running it again changes nothing.
 
-`--purge` removes the data too: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the kiosk's `/etc/hvo-roof-kiosk` and
-`/opt/hvo-roof-kiosk`, and the record. As yourself, it removes the Mac app's settings and device key and
+`--purge` removes the data too: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the kiosk's `/etc/hvo-roof-kiosk`,
+`/opt/hvo-roof-kiosk`, its `/var/lib/hvo-roof-kiosk` (the native libraries it unpacks) and `/var/cache/hvo-roof-kiosk`,
+and the record. As yourself, it removes the Mac app's settings and device key and
 `~/.config/hvo-roof`. The folder holding the record goes last, with the record the last thing in it, then the
 installer, so a purge stopped part way can be run again. A controller deployed here that the uninstall does not stop
 (one deployed by hand after an uninstall) refuses a purge, which would remove its files from under it: remove it with

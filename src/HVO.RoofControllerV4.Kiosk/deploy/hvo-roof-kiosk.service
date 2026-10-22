@@ -22,9 +22,12 @@ RestartSec=5
 RestartPreventExitStatus=78
 # SIGTERM: the kiosk locks (ends the PIN session at the controller) before it exits.
 TimeoutStopSec=30
-# The single-file program unpacks its native libraries here; fontconfig keeps its cache here too.
+# The single-file program unpacks its native libraries under its state folder, so `uninstall --purge` removes them with
+# the rest (never under ~/.net). /var/lib/hvo-roof is the controller's data, so the kiosk has a folder of its own.
+StateDirectory=hvo-roof-kiosk
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/hvo-roof-kiosk/.net
+# fontconfig keeps its cache here.
 CacheDirectory=hvo-roof-kiosk
-Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/cache/hvo-roof-kiosk
 Environment=XDG_CACHE_HOME=/var/cache/hvo-roof-kiosk
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 NoNewPrivileges=true

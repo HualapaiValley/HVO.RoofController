@@ -37,6 +37,12 @@ public static class KioskSteps
     public const string SettingsFile = ProgramFolder + "/appsettings.Local.json";
     public const string ConfigurationFolder = "/etc/hvo-roof-kiosk";
     public const string DeviceKeyFile = ConfigurationFolder + "/device-key";
+
+    /// <summary>The kiosk's state folder (its StateDirectory): the native libraries it unpacks, under <c>.net</c>.</summary>
+    public const string StateFolder = "/var/lib/hvo-roof-kiosk";
+
+    /// <summary>The kiosk's cache (its CacheDirectory, fontconfig's cache), and the folder earlier releases unpacked into.</summary>
+    public const string CacheFolder = "/var/cache/hvo-roof-kiosk";
     public const string BacklightRuleFile = "/etc/udev/rules.d/99-hvo-roof-kiosk-backlight.rules";
 
     /// <summary>The release's kiosk: its asset's kind and platform in release.json.</summary>

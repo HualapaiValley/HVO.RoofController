@@ -134,6 +134,12 @@ def main():
                 if exact is not None:require(result.stdout==exact and not result.stderr,f'{name} {label}: embedded notices differ')
                 return result
             run('help',['--help'],0,'--third-party-notices')
+            # Without the extraction override, a published program unpacks nothing under ~/.net (#96): the terminal
+            # programs carry no native library to extract, and the rest of the run keeps the override.
+            bare = {key: value for key, value in env.items() if key != 'DOTNET_BUNDLE_EXTRACT_BASE_DIR'}
+            subprocess.run([program, '--version'], env=bare, cwd=home/'work', stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=TIMEOUT, check=True)
+            require(not (home/'.net').exists(), f'{name} left an extraction folder under ~/.net')
             version = run('version',['--version'],0)
             require(re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+[^\s]*\s*', version.stdout.decode('utf-8')) is not None, 'invalid version output')
             run('notices',['--third-party-notices'],0,exact=notice)
