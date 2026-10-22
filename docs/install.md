@@ -1531,7 +1531,9 @@ written whole or not at all, and on disk (synced, with its folder and any folder
 is done. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
 SHA-256, the host and the release, and the files of the controller's stores that were not there (`absent`). `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
 only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs
-up or a purge removes, `/opt/hvo-roof-kiosk` included. Before it keeps the archive, it reads it back as a restore
+up, a purge removes (`/opt/hvo-roof-kiosk` included) or an uninstall removes (`.net/hvo-roof*` in any home). For a named
+destination it resolves the parent folder's symbolic links and checks that physical path too, so an alias into one of
+these folders is refused. Before it keeps the archive, it reads it back as a restore
 would: one a restore could not read is not kept, and the backup fails.
 
 - Each file and folder keeps its permission bits, without setuid, setgid or the sticky bit: the install that follows a
@@ -1589,7 +1591,15 @@ changes nothing; `--release DIR` reads the release from a folder.
   its network, each with its image when no other container uses it;
 - the kiosk's service, its program and the udev rule for the screen's backlight;
 - `hvo-roof` and the Mac app, with the copies kept beside them;
+- the `.NET` extraction folders that earlier releases left under `~/.net` (`hvo-roof` and every `hvo-roof-*` beside it):
+  for a system install in every home on the machine (root's, every account's that `getent passwd` lists, the kiosk
+  account's among them, and the home of the person who ran `sudo`), and for yours in yours. A `.net`, or a folder in it,
+  that is a symbolic link is left alone, and `.net` goes when nothing else is left in it;
 - the installer itself, last.
+
+For a system uninstall, account discovery must succeed and return valid records. A failed, empty or malformed
+`getent passwd` result refuses the uninstall before removal. If discovery fails when checked again during removal,
+the record and installer stay so the uninstall can be run again after the account database or `getent` is repaired.
 
 The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and
 `uninstall` again carries on once the roof is idle. The deploy script stops only a running controller: one that is
@@ -1601,8 +1611,9 @@ it was uninstalled, and keeps the choices, so an install that follows can offer 
 apt packages and the install log stay too. It shows what it will remove and asks first; `--yes` goes ahead without
 asking, and `--plan` only shows it. Running it again changes nothing.
 
-`--purge` removes the data too: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the kiosk's `/etc/hvo-roof-kiosk` and
-`/opt/hvo-roof-kiosk`, and the record. As yourself, it removes the Mac app's settings and device key and
+`--purge` removes the data too: `/etc/hvo-roof`, `/var/lib/hvo-roof`, the kiosk's `/etc/hvo-roof-kiosk`,
+`/opt/hvo-roof-kiosk`, its `/var/lib/hvo-roof-kiosk` (the native libraries it unpacks) and `/var/cache/hvo-roof-kiosk`,
+and the record. As yourself, it removes the Mac app's settings and device key and
 `~/.config/hvo-roof`. The folder holding the record goes last, with the record the last thing in it, then the
 installer, so a purge stopped part way can be run again. A controller deployed here that the uninstall does not stop
 (one deployed by hand after an uninstall) refuses a purge, which would remove its files from under it: remove it with
