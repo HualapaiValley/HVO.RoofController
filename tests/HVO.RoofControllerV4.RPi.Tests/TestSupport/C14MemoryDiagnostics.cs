@@ -20,7 +20,7 @@ internal sealed class C14MemoryDiagnostics : IDisposable
     // Runtime and allocator settings that change what C14 measures. The runtime reads each DOTNET_ name also as COMPlus_.
     private static readonly string[] RuntimeSettingNames =
     [
-        "TieredCompilation", "TieredPGO", "TC_QuickJitForLoops", "TC_CallCountThreshold", "ReadyToRun",
+        "TieredCompilation", "TieredPGO", "TC_QuickJit", "TC_QuickJitForLoops", "TC_CallCountThreshold", "ReadyToRun",
         "gcServer", "gcConcurrent", "GCHeapCount", "GCHeapHardLimit", "GCgen0size", "GCConserveMemory",
         "GCDynamicAdaptationMode"
     ];
@@ -28,8 +28,9 @@ internal sealed class C14MemoryDiagnostics : IDisposable
     private static readonly string[] AllocatorSettingNames =
         ["MALLOC_ARENA_MAX", "MALLOC_TRIM_THRESHOLD_", "MALLOC_MMAP_THRESHOLD_", "MALLOC_TOP_PAD_"];
 
-    // Runtime values are hexadecimal by default; allocator values are decimal. Anything else is withheld.
-    private static readonly Regex PlainNumber = new("^(?:0[xX])?[0-9A-Fa-f]{1,16}$", RegexOptions.CultureInvariant);
+    // Runtime values can be hexadecimal; allocator values are decimal. Anything else is withheld.
+    private static readonly Regex RuntimeNumber = new(@"\A(?:0[xX])?[0-9A-Fa-f]{1,16}\z", RegexOptions.CultureInvariant);
+    private static readonly Regex AllocatorNumber = new(@"\A[0-9]{1,16}\z", RegexOptions.CultureInvariant);
     private readonly string directory;
     private readonly Func<string, TextReader> openProc;
     private readonly Action<string> attach;
@@ -205,7 +206,8 @@ internal sealed class C14MemoryDiagnostics : IDisposable
         foreach (var name in names)
         {
             if (environmentVariable(name) is { } value)
-                settings[name] = PlainNumber.IsMatch(value) ? value : "[value withheld]";
+                settings[name] = (name.StartsWith("MALLOC_", StringComparison.Ordinal) ? AllocatorNumber : RuntimeNumber).IsMatch(value)
+                    ? value : "[value withheld]";
         }
 
         return settings;

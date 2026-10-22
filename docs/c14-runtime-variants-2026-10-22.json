@@ -1,0 +1,1367 @@
+{
+  "schemaVersion": 1,
+  "runs": {
+    "baseline-a": {
+      "runtime": {
+        "framework": ".NET 10.0.13",
+        "version": "10.0.13",
+        "coreLibVersion": "10.0.13-servicing.26504.104+4099f83977f4d29604a9aeb971fb0a7bc1d5f699",
+        "processArchitecture": "X64",
+        "osArchitecture": "X64",
+        "os": "Linux",
+        "osVersion": "6.17.0.1022",
+        "processorCount": 4,
+        "isServerGC": true,
+        "latencyMode": "Interactive",
+        "largeObjectHeapCompactionMode": "Default"
+      },
+      "build": {
+        "sdkVersion": "10.0.402",
+        "configuration": "Debug",
+        "targetFramework": ".NETCoreApp,Version=v10.0",
+        "version": "4.1.1-dev+1719b416a5ca461c34eba757f20305eaa06d1a6e"
+      },
+      "requestedRuntimeSettings": null,
+      "durationSeconds": 7200,
+      "elapsedSeconds": 7205.8322839,
+      "warmUpSeconds": 1800,
+      "cycles": 874,
+      "checks": [
+        {
+          "name": "Every cycle ended as commanded",
+          "passed": true,
+          "detail": "874 cycles: each move ended at its limit with LimitSwitchReached, 174 mid-travel Stops with NormalStop, and every Stop verified all relays off"
+        },
+        {
+          "name": "Limit events match the cycles one for one",
+          "passed": true,
+          "detail": "closed cleared 874, open reached 874, open cleared 874, closed reached 874; 874 cycles"
+        },
+        {
+          "name": "Only limit arrivals stopped the roof for safety",
+          "passed": true,
+          "detail": "LimitSwitchReached 1748"
+        },
+        {
+          "name": "No fault latch, Error or Critical log entry",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "No plant invariant broken",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "Status answered, and statusVersion only increased",
+          "passed": true,
+          "detail": "7023 polls, 0 failed, 0 regressions"
+        },
+        {
+          "name": "Ready, with healthy and fresh input and relay reads, at every sample",
+          "passed": true,
+          "detail": "111 samples; oldest input read 0.00 s, oldest relay read 0.05 s"
+        },
+        {
+          "name": "Stop latency did not drift",
+          "passed": true,
+          "detail": "1748 Stops, slowest 154 ms; by quarter: median 77 ms, 77 ms, 77 ms, 77 ms, 99th percentile 138 ms, 153 ms, 138 ms, 138 ms"
+        },
+        {
+          "name": "Working set grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "205.4 MB to 222.8 MB (+8.4%), trend +7.8% over 01:29:10"
+        },
+        {
+          "name": "Managed heap grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "16.4 MB to 13.0 MB (-20.7%), trend +2.4% over 01:29:10"
+        },
+        {
+          "name": "Threads and file descriptors flat after the warm-up",
+          "passed": true,
+          "detail": "threads 36 to 37, file descriptors 452 to 454"
+        },
+        {
+          "name": "The camera streamed through the proxy, and every stream closed",
+          "passed": true,
+          "detail": "61 streams, 1463 frames, 0 failed, 0 still open 10 s after the soak"
+        },
+        {
+          "name": "The exporter kept trying the collector that never answers",
+          "passed": true,
+          "detail": "1364 connections accepted and never answered, 2 still held"
+        }
+      ],
+      "passed": true,
+      "workingSet": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5350.3578466,
+        "startMiB": 205.44140625,
+        "endMiB": 222.76953125,
+        "growthPercent": 8.434582549008423,
+        "trendPercent": 7.803139533551781,
+        "passed": true
+      },
+      "managedHeap": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5350.3578466,
+        "startMiB": 16.449310302734375,
+        "endMiB": 13.048965454101562,
+        "growthPercent": -20.671656051546258,
+        "trendPercent": 2.35249655001582,
+        "passed": true
+      },
+      "settledJitMethodIncrease": 1556,
+      "series": [
+        {
+          "fromMinute": 0,
+          "samples": 14,
+          "workingSetMiB": 194.265625,
+          "managedMiB": 15.287761688232422,
+          "gcCommittedMiB": 23.630859375,
+          "anonymousMiB": 50.162109375,
+          "jitMethods": 17681.5
+        },
+        {
+          "fromMinute": 15,
+          "samples": 14,
+          "workingSetMiB": 198.34765625,
+          "managedMiB": 16.202983856201172,
+          "gcCommittedMiB": 23.12890625,
+          "anonymousMiB": 53.7421875,
+          "jitMethods": 18390.5
+        },
+        {
+          "fromMinute": 30,
+          "samples": 13,
+          "workingSetMiB": 208.7109375,
+          "managedMiB": 16.440338134765625,
+          "gcCommittedMiB": 23.41796875,
+          "anonymousMiB": 63.1171875,
+          "jitMethods": 18926
+        },
+        {
+          "fromMinute": 45,
+          "samples": 14,
+          "workingSetMiB": 211.533203125,
+          "managedMiB": 12.939220428466797,
+          "gcCommittedMiB": 23.517578125,
+          "anonymousMiB": 65.697265625,
+          "jitMethods": 19191.0
+        },
+        {
+          "fromMinute": 60,
+          "samples": 14,
+          "workingSetMiB": 219.201171875,
+          "managedMiB": 16.473724365234375,
+          "gcCommittedMiB": 23.833984375,
+          "anonymousMiB": 72.341796875,
+          "jitMethods": 19868.0
+        },
+        {
+          "fromMinute": 75,
+          "samples": 13,
+          "workingSetMiB": 220.12890625,
+          "managedMiB": 15.198081970214844,
+          "gcCommittedMiB": 23.68359375,
+          "anonymousMiB": 73.265625,
+          "jitMethods": 19878
+        },
+        {
+          "fromMinute": 90,
+          "samples": 14,
+          "workingSetMiB": 221.111328125,
+          "managedMiB": 14.765174865722656,
+          "gcCommittedMiB": 24.2109375,
+          "anonymousMiB": 74.23828125,
+          "jitMethods": 19893.0
+        },
+        {
+          "fromMinute": 105,
+          "samples": 14,
+          "workingSetMiB": 221.212890625,
+          "managedMiB": 16.49622344970703,
+          "gcCommittedMiB": 23.4765625,
+          "anonymousMiB": 74.314453125,
+          "jitMethods": 19909.0
+        },
+        {
+          "fromMinute": 120,
+          "samples": 1,
+          "workingSetMiB": 222.328125,
+          "managedMiB": 13.048965454101562,
+          "gcCommittedMiB": 23.60546875,
+          "anonymousMiB": 75.234375,
+          "jitMethods": 20118
+        }
+      ],
+      "mappingSnapshots": {
+        "settled": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 28.765625,
+            "mainHeap": 1.7421875,
+            "runtimeDoublemapper": 41.62890625,
+            "otherAnonymous": 25.66796875,
+            "otherMappings": 106.875
+          }
+        },
+        "final": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 44.08984375,
+            "mainHeap": 2.125,
+            "runtimeDoublemapper": 43.0546875,
+            "otherAnonymous": 25.73828125,
+            "otherMappings": 107.3203125
+          }
+        }
+      },
+      "sha256": {
+        "soak-summary.json": "8e4e82ebd69fdbef02eeae0f0f1a15ad589850a3784b31ba83b0463dc54ffdf6",
+        "soak-environment.json": "038e83dc49f26c474ee9aedb383126180a76839bb6879f82b999ff361449ca88",
+        "soak-memory.jsonl": "467242630186bf4cf32a4b742e87dab5afedd593dbe2489e2cc08b54846b00c8",
+        "soak-smaps-settled.txt": "bd3dd7f8787eff36619f02588f396333349ed47025104abb2101dc9d88716452",
+        "soak-smaps-final.txt": "693b0d1bc5022f35cdc036c47b5ca8e5f6a0d13a4d70c8b8abbeaedd8a2c5b49"
+      }
+    },
+    "baseline-b": {
+      "runtime": {
+        "framework": ".NET 10.0.13",
+        "version": "10.0.13",
+        "coreLibVersion": "10.0.13-servicing.26504.104+4099f83977f4d29604a9aeb971fb0a7bc1d5f699",
+        "processArchitecture": "X64",
+        "osArchitecture": "X64",
+        "os": "Linux",
+        "osVersion": "6.17.0.1022",
+        "processorCount": 4,
+        "isServerGC": true,
+        "latencyMode": "Interactive",
+        "largeObjectHeapCompactionMode": "Default"
+      },
+      "build": {
+        "sdkVersion": "10.0.402",
+        "configuration": "Debug",
+        "targetFramework": ".NETCoreApp,Version=v10.0",
+        "version": "4.1.1-dev+1719b416a5ca461c34eba757f20305eaa06d1a6e"
+      },
+      "requestedRuntimeSettings": null,
+      "durationSeconds": 7200,
+      "elapsedSeconds": 7207.2612484,
+      "warmUpSeconds": 1800,
+      "cycles": 874,
+      "checks": [
+        {
+          "name": "Every cycle ended as commanded",
+          "passed": true,
+          "detail": "874 cycles: each move ended at its limit with LimitSwitchReached, 174 mid-travel Stops with NormalStop, and every Stop verified all relays off"
+        },
+        {
+          "name": "Limit events match the cycles one for one",
+          "passed": true,
+          "detail": "closed cleared 874, open reached 874, open cleared 874, closed reached 874; 874 cycles"
+        },
+        {
+          "name": "Only limit arrivals stopped the roof for safety",
+          "passed": true,
+          "detail": "LimitSwitchReached 1748"
+        },
+        {
+          "name": "No fault latch, Error or Critical log entry",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "No plant invariant broken",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "Status answered, and statusVersion only increased",
+          "passed": true,
+          "detail": "7021 polls, 0 failed, 0 regressions"
+        },
+        {
+          "name": "Ready, with healthy and fresh input and relay reads, at every sample",
+          "passed": true,
+          "detail": "111 samples; oldest input read 0.00 s, oldest relay read 0.05 s"
+        },
+        {
+          "name": "Stop latency did not drift",
+          "passed": true,
+          "detail": "1748 Stops, slowest 154 ms; by quarter: median 77 ms, 77 ms, 77 ms, 77 ms, 99th percentile 139 ms, 138 ms, 139 ms, 139 ms"
+        },
+        {
+          "name": "Working set grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "213.8 MB to 228.7 MB (+7.0%), trend +5.5% over 01:29:11"
+        },
+        {
+          "name": "Managed heap grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "12.8 MB to 12.9 MB (+0.7%), trend +6.7% over 01:29:11"
+        },
+        {
+          "name": "Threads and file descriptors flat after the warm-up",
+          "passed": true,
+          "detail": "threads 39 to 37, file descriptors 454 to 456"
+        },
+        {
+          "name": "The camera streamed through the proxy, and every stream closed",
+          "passed": true,
+          "detail": "61 streams, 1463 frames, 0 failed, 0 still open 10 s after the soak"
+        },
+        {
+          "name": "The exporter kept trying the collector that never answers",
+          "passed": true,
+          "detail": "1365 connections accepted and never answered, 2 still held"
+        }
+      ],
+      "passed": true,
+      "workingSet": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5351.612576,
+        "startMiB": 213.7890625,
+        "endMiB": 228.6796875,
+        "growthPercent": 6.965101406906632,
+        "trendPercent": 5.5070401248766565,
+        "passed": true
+      },
+      "managedHeap": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5351.612576,
+        "startMiB": 12.829483032226562,
+        "endMiB": 12.91729736328125,
+        "growthPercent": 0.6844728726333354,
+        "trendPercent": 6.665996219652387,
+        "passed": true
+      },
+      "settledJitMethodIncrease": 1552,
+      "series": [
+        {
+          "fromMinute": 0,
+          "samples": 14,
+          "workingSetMiB": 197.62109375,
+          "managedMiB": 16.52051544189453,
+          "gcCommittedMiB": 27.931640625,
+          "anonymousMiB": 54.337890625,
+          "jitMethods": 17637.5
+        },
+        {
+          "fromMinute": 15,
+          "samples": 14,
+          "workingSetMiB": 205.646484375,
+          "managedMiB": 14.195663452148438,
+          "gcCommittedMiB": 24.83984375,
+          "anonymousMiB": 61.017578125,
+          "jitMethods": 18354.0
+        },
+        {
+          "fromMinute": 30,
+          "samples": 13,
+          "workingSetMiB": 217.66015625,
+          "managedMiB": 12.842529296875,
+          "gcCommittedMiB": 25.5546875,
+          "anonymousMiB": 72.34765625,
+          "jitMethods": 18896
+        },
+        {
+          "fromMinute": 45,
+          "samples": 14,
+          "workingSetMiB": 219.265625,
+          "managedMiB": 14.764961242675781,
+          "gcCommittedMiB": 25.6015625,
+          "anonymousMiB": 73.767578125,
+          "jitMethods": 19158.5
+        },
+        {
+          "fromMinute": 60,
+          "samples": 14,
+          "workingSetMiB": 224.78125,
+          "managedMiB": 14.787242889404297,
+          "gcCommittedMiB": 25.67578125,
+          "anonymousMiB": 78.5,
+          "jitMethods": 19796.5
+        },
+        {
+          "fromMinute": 75,
+          "samples": 13,
+          "workingSetMiB": 225.03125,
+          "managedMiB": 12.896697998046875,
+          "gcCommittedMiB": 25.28515625,
+          "anonymousMiB": 78.46875,
+          "jitMethods": 19846
+        },
+        {
+          "fromMinute": 90,
+          "samples": 14,
+          "workingSetMiB": 225.212890625,
+          "managedMiB": 14.626506805419922,
+          "gcCommittedMiB": 25.474609375,
+          "anonymousMiB": 78.638671875,
+          "jitMethods": 19864.5
+        },
+        {
+          "fromMinute": 105,
+          "samples": 14,
+          "workingSetMiB": 225.556640625,
+          "managedMiB": 14.588787078857422,
+          "gcCommittedMiB": 25.529296875,
+          "anonymousMiB": 78.974609375,
+          "jitMethods": 19877.0
+        },
+        {
+          "fromMinute": 120,
+          "samples": 1,
+          "workingSetMiB": 230.453125,
+          "managedMiB": 12.953559875488281,
+          "gcCommittedMiB": 25.4765625,
+          "anonymousMiB": 83.65625,
+          "jitMethods": 20086
+        }
+      ],
+      "mappingSnapshots": {
+        "settled": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 35.37890625,
+            "mainHeap": 1.91015625,
+            "runtimeDoublemapper": 41.609375,
+            "otherAnonymous": 23.30859375,
+            "otherMappings": 106.58984375
+          }
+        },
+        "final": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 54.81640625,
+            "mainHeap": 1.94140625,
+            "runtimeDoublemapper": 43.046875,
+            "otherAnonymous": 23.6171875,
+            "otherMappings": 107.03125
+          }
+        }
+      },
+      "sha256": {
+        "soak-summary.json": "8af15c8b6a055ee34883b1d513053589cca17cfeb7b307f0206dc197f158b2f0",
+        "soak-environment.json": "6f966bdcec38ea1abef5ac9a36fe2d024c09494c34ce5b32db7d14b0f5298f47",
+        "soak-memory.jsonl": "142c7ae843c65f38a7c6e70a92acc9201b50b15d5f2ac8365f2d0836dcaf0abc",
+        "soak-smaps-settled.txt": "9a6c9a8ced94b9140a1243c8e1b417793a1b1d12528af150cb9f63241d894ed7",
+        "soak-smaps-final.txt": "5b7dd9970d0ff9825e3c04ac6766a5598fca66311003782e2570401f8524cfd4"
+      }
+    },
+    "tiering-off-a": {
+      "runtime": {
+        "framework": ".NET 10.0.13",
+        "version": "10.0.13",
+        "coreLibVersion": "10.0.13-servicing.26504.104+4099f83977f4d29604a9aeb971fb0a7bc1d5f699",
+        "processArchitecture": "X64",
+        "osArchitecture": "X64",
+        "os": "Linux",
+        "osVersion": "6.17.0.1022",
+        "processorCount": 4,
+        "isServerGC": true,
+        "latencyMode": "Interactive",
+        "largeObjectHeapCompactionMode": "Default"
+      },
+      "build": {
+        "sdkVersion": "10.0.402",
+        "configuration": "Debug",
+        "targetFramework": ".NETCoreApp,Version=v10.0",
+        "version": "4.1.1-dev+1719b416a5ca461c34eba757f20305eaa06d1a6e"
+      },
+      "requestedRuntimeSettings": null,
+      "durationSeconds": 7200,
+      "elapsedSeconds": 7201.7158928,
+      "warmUpSeconds": 1800,
+      "cycles": 873,
+      "checks": [
+        {
+          "name": "Every cycle ended as commanded",
+          "passed": true,
+          "detail": "873 cycles: each move ended at its limit with LimitSwitchReached, 174 mid-travel Stops with NormalStop, and every Stop verified all relays off"
+        },
+        {
+          "name": "Limit events match the cycles one for one",
+          "passed": true,
+          "detail": "closed cleared 873, open reached 873, open cleared 873, closed reached 873; 873 cycles"
+        },
+        {
+          "name": "Only limit arrivals stopped the roof for safety",
+          "passed": true,
+          "detail": "LimitSwitchReached 1746"
+        },
+        {
+          "name": "No fault latch, Error or Critical log entry",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "No plant invariant broken",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "Status answered, and statusVersion only increased",
+          "passed": true,
+          "detail": "7011 polls, 0 failed, 0 regressions"
+        },
+        {
+          "name": "Ready, with healthy and fresh input and relay reads, at every sample",
+          "passed": true,
+          "detail": "111 samples; oldest input read 0.00 s, oldest relay read 0.08 s"
+        },
+        {
+          "name": "Stop latency did not drift",
+          "passed": true,
+          "detail": "1746 Stops, slowest 170 ms; by quarter: median 78 ms, 78 ms, 78 ms, 78 ms, 99th percentile 139 ms, 139 ms, 139 ms, 140 ms"
+        },
+        {
+          "name": "Working set grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "178.6 MB to 173.5 MB (-2.8%), trend -2.5% over 01:29:04"
+        },
+        {
+          "name": "Managed heap grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "16.6 MB to 16.7 MB (+0.3%), trend -6.2% over 01:29:04"
+        },
+        {
+          "name": "Threads and file descriptors flat after the warm-up",
+          "passed": true,
+          "detail": "threads 37 to 37, file descriptors 456 to 456"
+        },
+        {
+          "name": "The camera streamed through the proxy, and every stream closed",
+          "passed": true,
+          "detail": "60 streams, 1438 frames, 0 failed, 0 still open 10 s after the soak"
+        },
+        {
+          "name": "The exporter kept trying the collector that never answers",
+          "passed": true,
+          "detail": "1362 connections accepted and never answered, 1 still held"
+        }
+      ],
+      "passed": true,
+      "workingSet": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5344.6946803,
+        "startMiB": 178.5546875,
+        "endMiB": 173.4765625,
+        "growthPercent": -2.84401662655874,
+        "trendPercent": -2.497303896342944,
+        "passed": true
+      },
+      "managedHeap": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5344.6946803,
+        "startMiB": 16.610618591308594,
+        "endMiB": 16.668556213378906,
+        "growthPercent": 0.3487987021785451,
+        "trendPercent": -6.184133752693444,
+        "passed": true
+      },
+      "settledJitMethodIncrease": 1,
+      "series": [
+        {
+          "fromMinute": 0,
+          "samples": 14,
+          "workingSetMiB": 176.904296875,
+          "managedMiB": 16.529644012451172,
+          "gcCommittedMiB": 28.82421875,
+          "anonymousMiB": 43.958984375,
+          "jitMethods": 5851.0
+        },
+        {
+          "fromMinute": 15,
+          "samples": 14,
+          "workingSetMiB": 173.787109375,
+          "managedMiB": 14.10980224609375,
+          "gcCommittedMiB": 24.423828125,
+          "anonymousMiB": 40.861328125,
+          "jitMethods": 5862.0
+        },
+        {
+          "fromMinute": 30,
+          "samples": 13,
+          "workingSetMiB": 178.5546875,
+          "managedMiB": 16.607040405273438,
+          "gcCommittedMiB": 29.59765625,
+          "anonymousMiB": 45.5703125,
+          "jitMethods": 5862
+        },
+        {
+          "fromMinute": 45,
+          "samples": 14,
+          "workingSetMiB": 175.6796875,
+          "managedMiB": 16.626789093017578,
+          "gcCommittedMiB": 26.634765625,
+          "anonymousMiB": 42.701171875,
+          "jitMethods": 5862.0
+        },
+        {
+          "fromMinute": 60,
+          "samples": 14,
+          "workingSetMiB": 173.439453125,
+          "managedMiB": 16.611454010009766,
+          "gcCommittedMiB": 24.044921875,
+          "anonymousMiB": 40.40625,
+          "jitMethods": 5863.0
+        },
+        {
+          "fromMinute": 75,
+          "samples": 13,
+          "workingSetMiB": 173.3828125,
+          "managedMiB": 16.365219116210938,
+          "gcCommittedMiB": 24.09765625,
+          "anonymousMiB": 40.48046875,
+          "jitMethods": 5863
+        },
+        {
+          "fromMinute": 90,
+          "samples": 14,
+          "workingSetMiB": 174.146484375,
+          "managedMiB": 16.65475845336914,
+          "gcCommittedMiB": 24.673828125,
+          "anonymousMiB": 41.162109375,
+          "jitMethods": 5863.0
+        },
+        {
+          "fromMinute": 105,
+          "samples": 13,
+          "workingSetMiB": 173.34375,
+          "managedMiB": 15.891380310058594,
+          "gcCommittedMiB": 23.9296875,
+          "anonymousMiB": 40.359375,
+          "jitMethods": 5863
+        },
+        {
+          "fromMinute": 120,
+          "samples": 2,
+          "workingSetMiB": 171.107421875,
+          "managedMiB": 16.743412017822266,
+          "gcCommittedMiB": 21.748046875,
+          "anonymousMiB": 38.216796875,
+          "jitMethods": 5863.0
+        }
+      ],
+      "mappingSnapshots": {
+        "settled": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 11.890625,
+            "mainHeap": 3.203125,
+            "runtimeDoublemapper": 29.5234375,
+            "otherAnonymous": 21.91015625,
+            "otherMappings": 106.734375
+          }
+        },
+        "final": {
+          "arenaShapedHeaps": 30,
+          "rssMiB": {
+            "arenaShapedAnonymous": 11.74609375,
+            "mainHeap": 3.203125,
+            "runtimeDoublemapper": 29.5234375,
+            "otherAnonymous": 19.29296875,
+            "otherMappings": 106.734375
+          }
+        }
+      },
+      "sha256": {
+        "soak-summary.json": "d4c24c32671ebbb76331a152603ca989e7ce4168b2996ec19150e55939711993",
+        "soak-environment.json": "629e6e28904ffe84a825f14b19221ec090d8f9cb8721c170395f20d94e99a316",
+        "soak-memory.jsonl": "ff3d0ba43e4ed2a27b582b5890c3d55e570f8ce924fad1f75516ac7fb0a93b7d",
+        "soak-smaps-settled.txt": "9870e6b1e1a81d08c53792acb1eda914d91134aca38195d7574acb30598f1618",
+        "soak-smaps-final.txt": "1f699a54e09a5b9e812edc02362dae24420e8c60759df9fcceb92a4e72299620"
+      }
+    },
+    "tiering-off-b": {
+      "runtime": {
+        "framework": ".NET 10.0.13",
+        "version": "10.0.13",
+        "coreLibVersion": "10.0.13-servicing.26504.104+4099f83977f4d29604a9aeb971fb0a7bc1d5f699",
+        "processArchitecture": "X64",
+        "osArchitecture": "X64",
+        "os": "Linux",
+        "osVersion": "7.0.0.1017",
+        "processorCount": 4,
+        "isServerGC": true,
+        "latencyMode": "Interactive",
+        "largeObjectHeapCompactionMode": "Default"
+      },
+      "build": {
+        "sdkVersion": "10.0.402",
+        "configuration": "Debug",
+        "targetFramework": ".NETCoreApp,Version=v10.0",
+        "version": "4.1.1-dev+1719b416a5ca461c34eba757f20305eaa06d1a6e"
+      },
+      "requestedRuntimeSettings": null,
+      "durationSeconds": 7200,
+      "elapsedSeconds": 7205.5717921,
+      "warmUpSeconds": 1800,
+      "cycles": 873,
+      "checks": [
+        {
+          "name": "Every cycle ended as commanded",
+          "passed": true,
+          "detail": "873 cycles: each move ended at its limit with LimitSwitchReached, 174 mid-travel Stops with NormalStop, and every Stop verified all relays off"
+        },
+        {
+          "name": "Limit events match the cycles one for one",
+          "passed": true,
+          "detail": "closed cleared 873, open reached 873, open cleared 873, closed reached 873; 873 cycles"
+        },
+        {
+          "name": "Only limit arrivals stopped the roof for safety",
+          "passed": true,
+          "detail": "LimitSwitchReached 1746"
+        },
+        {
+          "name": "No fault latch, Error or Critical log entry",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "No plant invariant broken",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "Status answered, and statusVersion only increased",
+          "passed": true,
+          "detail": "7019 polls, 0 failed, 0 regressions"
+        },
+        {
+          "name": "Ready, with healthy and fresh input and relay reads, at every sample",
+          "passed": true,
+          "detail": "111 samples; oldest input read 0.00 s, oldest relay read 0.08 s"
+        },
+        {
+          "name": "Stop latency did not drift",
+          "passed": true,
+          "detail": "1746 Stops, slowest 171 ms; by quarter: median 78 ms, 78 ms, 78 ms, 77 ms, 99th percentile 139 ms, 139 ms, 139 ms, 139 ms"
+        },
+        {
+          "name": "Working set grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "176.8 MB to 175.4 MB (-0.8%), trend -1.7% over 01:29:08"
+        },
+        {
+          "name": "Managed heap grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "16.5 MB to 13.0 MB (-20.9%), trend -14.6% over 01:29:08"
+        },
+        {
+          "name": "Threads and file descriptors flat after the warm-up",
+          "passed": true,
+          "detail": "threads 38 to 37, file descriptors 456 to 456"
+        },
+        {
+          "name": "The camera streamed through the proxy, and every stream closed",
+          "passed": true,
+          "detail": "61 streams, 1462 frames, 0 failed, 0 still open 10 s after the soak"
+        },
+        {
+          "name": "The exporter kept trying the collector that never answers",
+          "passed": true,
+          "detail": "1364 connections accepted and never answered, 2 still held"
+        }
+      ],
+      "passed": true,
+      "workingSet": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5348.2410452,
+        "startMiB": 176.765625,
+        "endMiB": 175.375,
+        "growthPercent": -0.7867055599752497,
+        "trendPercent": -1.684057250876002,
+        "passed": true
+      },
+      "managedHeap": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5348.2410452,
+        "startMiB": 16.490768432617188,
+        "endMiB": 13.049369812011719,
+        "growthPercent": -20.868637108497058,
+        "trendPercent": -14.5708325367387,
+        "passed": true
+      },
+      "settledJitMethodIncrease": 2,
+      "series": [
+        {
+          "fromMinute": 0,
+          "samples": 14,
+          "workingSetMiB": 178.09765625,
+          "managedMiB": 16.329021453857422,
+          "gcCommittedMiB": 28.3984375,
+          "anonymousMiB": 42.82421875,
+          "jitMethods": 5860.0
+        },
+        {
+          "fromMinute": 15,
+          "samples": 14,
+          "workingSetMiB": 174.71484375,
+          "managedMiB": 13.23104476928711,
+          "gcCommittedMiB": 24.6171875,
+          "anonymousMiB": 39.384765625,
+          "jitMethods": 5863.0
+        },
+        {
+          "fromMinute": 30,
+          "samples": 13,
+          "workingSetMiB": 176.83984375,
+          "managedMiB": 16.481887817382812,
+          "gcCommittedMiB": 26.8046875,
+          "anonymousMiB": 41.484375,
+          "jitMethods": 5871
+        },
+        {
+          "fromMinute": 45,
+          "samples": 14,
+          "workingSetMiB": 177.59375,
+          "managedMiB": 16.477588653564453,
+          "gcCommittedMiB": 27.599609375,
+          "anonymousMiB": 42.302734375,
+          "jitMethods": 5873.0
+        },
+        {
+          "fromMinute": 60,
+          "samples": 13,
+          "workingSetMiB": 177.2109375,
+          "managedMiB": 16.510818481445312,
+          "gcCommittedMiB": 27.05078125,
+          "anonymousMiB": 41.87109375,
+          "jitMethods": 5873
+        },
+        {
+          "fromMinute": 75,
+          "samples": 14,
+          "workingSetMiB": 175.203125,
+          "managedMiB": 16.39675521850586,
+          "gcCommittedMiB": 24.810546875,
+          "anonymousMiB": 39.8515625,
+          "jitMethods": 5873.0
+        },
+        {
+          "fromMinute": 90,
+          "samples": 14,
+          "workingSetMiB": 175.609375,
+          "managedMiB": 13.018733978271484,
+          "gcCommittedMiB": 25.197265625,
+          "anonymousMiB": 40.2578125,
+          "jitMethods": 5873.0
+        },
+        {
+          "fromMinute": 105,
+          "samples": 13,
+          "workingSetMiB": 175.68359375,
+          "managedMiB": 13.049369812011719,
+          "gcCommittedMiB": 25.26171875,
+          "anonymousMiB": 40.33203125,
+          "jitMethods": 5873
+        },
+        {
+          "fromMinute": 120,
+          "samples": 2,
+          "workingSetMiB": 176.15625,
+          "managedMiB": 16.322166442871094,
+          "gcCommittedMiB": 25.66015625,
+          "anonymousMiB": 40.8046875,
+          "jitMethods": 5873.0
+        }
+      ],
+      "mappingSnapshots": {
+        "settled": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 11.71875,
+            "mainHeap": 2.95703125,
+            "runtimeDoublemapper": 29.52734375,
+            "otherAnonymous": 21.71875,
+            "otherMappings": 109.09765625
+          }
+        },
+        "final": {
+          "arenaShapedHeaps": 31,
+          "rssMiB": {
+            "arenaShapedAnonymous": 11.98828125,
+            "mainHeap": 2.95703125,
+            "runtimeDoublemapper": 29.52734375,
+            "otherAnonymous": 22.5859375,
+            "otherMappings": 109.09765625
+          }
+        }
+      },
+      "sha256": {
+        "soak-summary.json": "9953966b282161ad90720c1e0cedfb7d8ed699e1065b7500f35ccabc53fb2212",
+        "soak-environment.json": "c26eb7db4204ce07cfd714cd391352cd57bc2dae5d313f9636976d124a102b76",
+        "soak-memory.jsonl": "dbdcb7938b76636ba746b7d4afdf09b739f82686c4a852fb185a0c87ff2d9b10",
+        "soak-smaps-settled.txt": "d095a4df0a45aed005da5de14213aa0808bddc3ffe220c80297b92efb872d552",
+        "soak-smaps-final.txt": "95cff66fc5a68502a6f7c21b95e5c295b892659edb3024ac0adbc9b720cfd84c"
+      }
+    },
+    "arena2-a": {
+      "runtime": {
+        "framework": ".NET 10.0.13",
+        "version": "10.0.13",
+        "coreLibVersion": "10.0.13-servicing.26504.104+4099f83977f4d29604a9aeb971fb0a7bc1d5f699",
+        "processArchitecture": "X64",
+        "osArchitecture": "X64",
+        "os": "Linux",
+        "osVersion": "7.0.0.1017",
+        "processorCount": 4,
+        "isServerGC": true,
+        "latencyMode": "Interactive",
+        "largeObjectHeapCompactionMode": "Default"
+      },
+      "build": {
+        "sdkVersion": "10.0.402",
+        "configuration": "Debug",
+        "targetFramework": ".NETCoreApp,Version=v10.0",
+        "version": "4.1.1-dev+1719b416a5ca461c34eba757f20305eaa06d1a6e"
+      },
+      "requestedRuntimeSettings": null,
+      "durationSeconds": 7200,
+      "elapsedSeconds": 7206.738963,
+      "warmUpSeconds": 1800,
+      "cycles": 874,
+      "checks": [
+        {
+          "name": "Every cycle ended as commanded",
+          "passed": true,
+          "detail": "874 cycles: each move ended at its limit with LimitSwitchReached, 174 mid-travel Stops with NormalStop, and every Stop verified all relays off"
+        },
+        {
+          "name": "Limit events match the cycles one for one",
+          "passed": true,
+          "detail": "closed cleared 874, open reached 874, open cleared 874, closed reached 874; 874 cycles"
+        },
+        {
+          "name": "Only limit arrivals stopped the roof for safety",
+          "passed": true,
+          "detail": "LimitSwitchReached 1748"
+        },
+        {
+          "name": "No fault latch, Error or Critical log entry",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "No plant invariant broken",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "Status answered, and statusVersion only increased",
+          "passed": true,
+          "detail": "7021 polls, 0 failed, 0 regressions"
+        },
+        {
+          "name": "Ready, with healthy and fresh input and relay reads, at every sample",
+          "passed": true,
+          "detail": "111 samples; oldest input read 0.00 s, oldest relay read 0.05 s"
+        },
+        {
+          "name": "Stop latency did not drift",
+          "passed": true,
+          "detail": "1748 Stops, slowest 169 ms; by quarter: median 77 ms, 77 ms, 77 ms, 77 ms, 99th percentile 138 ms, 153 ms, 139 ms, 138 ms"
+        },
+        {
+          "name": "Working set grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "189.0 MB to 192.8 MB (+2.0%), trend +1.9% over 01:29:10"
+        },
+        {
+          "name": "Managed heap grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "16.4 MB to 15.6 MB (-5.2%), trend -5.2% over 01:29:10"
+        },
+        {
+          "name": "Threads and file descriptors flat after the warm-up",
+          "passed": true,
+          "detail": "threads 38 to 38, file descriptors 452 to 456"
+        },
+        {
+          "name": "The camera streamed through the proxy, and every stream closed",
+          "passed": true,
+          "detail": "61 streams, 1463 frames, 0 failed, 0 still open 10 s after the soak"
+        },
+        {
+          "name": "The exporter kept trying the collector that never answers",
+          "passed": true,
+          "detail": "1364 connections accepted and never answered, 1 still held"
+        }
+      ],
+      "passed": true,
+      "workingSet": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5350.9741946,
+        "startMiB": 188.984375,
+        "endMiB": 192.83203125,
+        "growthPercent": 2.0359652749069865,
+        "trendPercent": 1.9171420902382739,
+        "passed": true
+      },
+      "managedHeap": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5350.9741946,
+        "startMiB": 16.438674926757812,
+        "endMiB": 15.582672119140625,
+        "growthPercent": -5.2072494372635925,
+        "trendPercent": -5.192112278737274,
+        "passed": true
+      },
+      "settledJitMethodIncrease": 1564,
+      "series": [
+        {
+          "fromMinute": 0,
+          "samples": 14,
+          "workingSetMiB": 189.208984375,
+          "managedMiB": 16.349308013916016,
+          "gcCommittedMiB": 25.568359375,
+          "anonymousMiB": 43.1953125,
+          "jitMethods": 17636.5
+        },
+        {
+          "fromMinute": 15,
+          "samples": 14,
+          "workingSetMiB": 187.125,
+          "managedMiB": 16.4322509765625,
+          "gcCommittedMiB": 22.611328125,
+          "anonymousMiB": 40.46484375,
+          "jitMethods": 18325.0
+        },
+        {
+          "fromMinute": 30,
+          "samples": 13,
+          "workingSetMiB": 189.5390625,
+          "managedMiB": 16.441864013671875,
+          "gcCommittedMiB": 24.40625,
+          "anonymousMiB": 42.16796875,
+          "jitMethods": 18880
+        },
+        {
+          "fromMinute": 45,
+          "samples": 14,
+          "workingSetMiB": 189.5625,
+          "managedMiB": 16.478370666503906,
+          "gcCommittedMiB": 24.470703125,
+          "anonymousMiB": 42.123046875,
+          "jitMethods": 19147.0
+        },
+        {
+          "fromMinute": 60,
+          "samples": 14,
+          "workingSetMiB": 191.529296875,
+          "managedMiB": 16.478389739990234,
+          "gcCommittedMiB": 24.267578125,
+          "anonymousMiB": 43.201171875,
+          "jitMethods": 19703.0
+        },
+        {
+          "fromMinute": 75,
+          "samples": 13,
+          "workingSetMiB": 191.7734375,
+          "managedMiB": 16.484832763671875,
+          "gcCommittedMiB": 24.05859375,
+          "anonymousMiB": 43.25390625,
+          "jitMethods": 19843
+        },
+        {
+          "fromMinute": 90,
+          "samples": 14,
+          "workingSetMiB": 193.130859375,
+          "managedMiB": 16.487361907958984,
+          "gcCommittedMiB": 25.6328125,
+          "anonymousMiB": 44.6953125,
+          "jitMethods": 19858.5
+        },
+        {
+          "fromMinute": 105,
+          "samples": 14,
+          "workingSetMiB": 192.3203125,
+          "managedMiB": 16.452987670898438,
+          "gcCommittedMiB": 24.53125,
+          "anonymousMiB": 43.880859375,
+          "jitMethods": 19866.0
+        },
+        {
+          "fromMinute": 120,
+          "samples": 1,
+          "workingSetMiB": 193.5703125,
+          "managedMiB": 13.377876281738281,
+          "gcCommittedMiB": 25.2890625,
+          "anonymousMiB": 44.81640625,
+          "jitMethods": 20074
+        }
+      ],
+      "mappingSnapshots": {
+        "settled": {
+          "arenaShapedHeaps": 1,
+          "rssMiB": {
+            "arenaShapedAnonymous": 5.13671875,
+            "mainHeap": 12.82421875,
+            "runtimeDoublemapper": 41.58203125,
+            "otherAnonymous": 22.03515625,
+            "otherMappings": 108.60546875
+          }
+        },
+        "final": {
+          "arenaShapedHeaps": 1,
+          "rssMiB": {
+            "arenaShapedAnonymous": 6.8359375,
+            "mainHeap": 12.82421875,
+            "runtimeDoublemapper": 43.015625,
+            "otherAnonymous": 22.67578125,
+            "otherMappings": 109.01953125
+          }
+        }
+      },
+      "sha256": {
+        "soak-summary.json": "18e3c8396e043731e133d8788c5eca40a5c086f3863831a975b6bdd1dc22e54a",
+        "soak-environment.json": "a92a4bd434f2eb219f5cb1907c69f0e05b35e77689429ed329e72c27426f0e95",
+        "soak-memory.jsonl": "7c61e78a6c6f1ef3be7de35a3173dc6f5c174bb271c8f69149cbacc8e201efc0",
+        "soak-smaps-settled.txt": "300985773743001263b4fd638dbd2d601f49d462ef3bb349e5de0b172147a94c",
+        "soak-smaps-final.txt": "3468f142c1287e0017a4022f40fde97a29f4d1e9d9d0c3073228215b1c77a88d"
+      }
+    },
+    "arena2-b": {
+      "runtime": {
+        "framework": ".NET 10.0.13",
+        "version": "10.0.13",
+        "coreLibVersion": "10.0.13-servicing.26504.104+4099f83977f4d29604a9aeb971fb0a7bc1d5f699",
+        "processArchitecture": "X64",
+        "osArchitecture": "X64",
+        "os": "Linux",
+        "osVersion": "6.17.0.1022",
+        "processorCount": 4,
+        "isServerGC": true,
+        "latencyMode": "Interactive",
+        "largeObjectHeapCompactionMode": "Default"
+      },
+      "build": {
+        "sdkVersion": "10.0.402",
+        "configuration": "Debug",
+        "targetFramework": ".NETCoreApp,Version=v10.0",
+        "version": "4.1.1-dev+1719b416a5ca461c34eba757f20305eaa06d1a6e"
+      },
+      "requestedRuntimeSettings": null,
+      "durationSeconds": 7200,
+      "elapsedSeconds": 7202.2545935,
+      "warmUpSeconds": 1800,
+      "cycles": 873,
+      "checks": [
+        {
+          "name": "Every cycle ended as commanded",
+          "passed": true,
+          "detail": "873 cycles: each move ended at its limit with LimitSwitchReached, 174 mid-travel Stops with NormalStop, and every Stop verified all relays off"
+        },
+        {
+          "name": "Limit events match the cycles one for one",
+          "passed": true,
+          "detail": "closed cleared 873, open reached 873, open cleared 873, closed reached 873; 873 cycles"
+        },
+        {
+          "name": "Only limit arrivals stopped the roof for safety",
+          "passed": true,
+          "detail": "LimitSwitchReached 1746"
+        },
+        {
+          "name": "No fault latch, Error or Critical log entry",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "No plant invariant broken",
+          "passed": true,
+          "detail": "none"
+        },
+        {
+          "name": "Status answered, and statusVersion only increased",
+          "passed": true,
+          "detail": "7015 polls, 0 failed, 0 regressions"
+        },
+        {
+          "name": "Ready, with healthy and fresh input and relay reads, at every sample",
+          "passed": true,
+          "detail": "111 samples; oldest input read 0.00 s, oldest relay read 0.08 s"
+        },
+        {
+          "name": "Stop latency did not drift",
+          "passed": true,
+          "detail": "1746 Stops, slowest 155 ms; by quarter: median 78 ms, 78 ms, 78 ms, 78 ms, 99th percentile 139 ms, 140 ms, 139 ms, 140 ms"
+        },
+        {
+          "name": "Working set grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "191.9 MB to 193.8 MB (+1.0%), trend +1.9% over 01:29:05"
+        },
+        {
+          "name": "Managed heap grew less than 10% after the warm-up",
+          "passed": true,
+          "detail": "13.2 MB to 13.3 MB (+0.5%), trend +9.9% over 01:29:05"
+        },
+        {
+          "name": "Threads and file descriptors flat after the warm-up",
+          "passed": true,
+          "detail": "threads 38 to 37, file descriptors 454 to 456"
+        },
+        {
+          "name": "The camera streamed through the proxy, and every stream closed",
+          "passed": true,
+          "detail": "60 streams, 1439 frames, 0 failed, 0 still open 10 s after the soak"
+        },
+        {
+          "name": "The exporter kept trying the collector that never answers",
+          "passed": true,
+          "detail": "1364 connections accepted and never answered, 2 still held"
+        }
+      ],
+      "passed": true,
+      "workingSet": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5345.8251099,
+        "startMiB": 191.94140625,
+        "endMiB": 193.84375,
+        "growthPercent": 0.9911064981582108,
+        "trendPercent": 1.9268214344064956,
+        "passed": true
+      },
+      "managedHeap": {
+        "assessed": true,
+        "samples": 83,
+        "spanSeconds": 5345.8251099,
+        "startMiB": 13.217620849609375,
+        "endMiB": 13.284034729003906,
+        "growthPercent": 0.5024647033697748,
+        "trendPercent": 9.929660175650914,
+        "passed": true
+      },
+      "settledJitMethodIncrease": 1525,
+      "series": [
+        {
+          "fromMinute": 0,
+          "samples": 14,
+          "workingSetMiB": 193.26171875,
+          "managedMiB": 16.36575698852539,
+          "gcCommittedMiB": 29.369140625,
+          "anonymousMiB": 49.1953125,
+          "jitMethods": 17609.5
+        },
+        {
+          "fromMinute": 15,
+          "samples": 14,
+          "workingSetMiB": 191.236328125,
+          "managedMiB": 15.282623291015625,
+          "gcCommittedMiB": 26.24609375,
+          "anonymousMiB": 46.568359375,
+          "jitMethods": 18347.0
+        },
+        {
+          "fromMinute": 30,
+          "samples": 13,
+          "workingSetMiB": 191.703125,
+          "managedMiB": 13.222908020019531,
+          "gcCommittedMiB": 27.3828125,
+          "anonymousMiB": 46.33203125,
+          "jitMethods": 18892
+        },
+        {
+          "fromMinute": 45,
+          "samples": 14,
+          "workingSetMiB": 191.068359375,
+          "managedMiB": 13.203628540039062,
+          "gcCommittedMiB": 25.01171875,
+          "anonymousMiB": 45.52734375,
+          "jitMethods": 19142.0
+        },
+        {
+          "fromMinute": 60,
+          "samples": 14,
+          "workingSetMiB": 195.67578125,
+          "managedMiB": 13.22873306274414,
+          "gcCommittedMiB": 26.828125,
+          "anonymousMiB": 49.33984375,
+          "jitMethods": 19805.5
+        },
+        {
+          "fromMinute": 75,
+          "samples": 13,
+          "workingSetMiB": 198.09375,
+          "managedMiB": 16.504531860351562,
+          "gcCommittedMiB": 28.90625,
+          "anonymousMiB": 51.26953125,
+          "jitMethods": 19848
+        },
+        {
+          "fromMinute": 90,
+          "samples": 14,
+          "workingSetMiB": 194.013671875,
+          "managedMiB": 15.397457122802734,
+          "gcCommittedMiB": 24.81640625,
+          "anonymousMiB": 47.373046875,
+          "jitMethods": 19860.5
+        },
+        {
+          "fromMinute": 105,
+          "samples": 13,
+          "workingSetMiB": 194.27734375,
+          "managedMiB": 14.239364624023438,
+          "gcCommittedMiB": 25.08984375,
+          "anonymousMiB": 47.6328125,
+          "jitMethods": 19874
+        },
+        {
+          "fromMinute": 120,
+          "samples": 2,
+          "workingSetMiB": 193.84375,
+          "managedMiB": 14.358402252197266,
+          "gcCommittedMiB": 24.484375,
+          "anonymousMiB": 47.0078125,
+          "jitMethods": 20048.0
+        }
+      ],
+      "mappingSnapshots": {
+        "settled": {
+          "arenaShapedHeaps": 1,
+          "rssMiB": {
+            "arenaShapedAnonymous": 5.0,
+            "mainHeap": 12.9296875,
+            "runtimeDoublemapper": 41.625,
+            "otherAnonymous": 25.73828125,
+            "otherMappings": 106.6484375
+          }
+        },
+        "final": {
+          "arenaShapedHeaps": 1,
+          "rssMiB": {
+            "arenaShapedAnonymous": 8.0,
+            "mainHeap": 12.9296875,
+            "runtimeDoublemapper": 43.0234375,
+            "otherAnonymous": 22.796875,
+            "otherMappings": 107.09375
+          }
+        }
+      },
+      "sha256": {
+        "soak-summary.json": "ae9a1462138dc57bd12bc5a4f5bd743dff255f975fce2b7526889f6fbdcca043",
+        "soak-environment.json": "9b3dd5a894f37458a3e69218ffcc78b4422057e22a11d55672b175b46795f558",
+        "soak-memory.jsonl": "446d55ada9255d72ff8f877ad5a724cb8e49f88f8809a99be462593f20addc85",
+        "soak-smaps-settled.txt": "7be9afd50318cf79ed931e83f70714f09044d67d51f3a296eb133791586ed37e",
+        "soak-smaps-final.txt": "671976410336994c82bf81ef681e232736b22fa5f0380bb1647322e6019b09a8"
+      }
+    }
+  }
+}

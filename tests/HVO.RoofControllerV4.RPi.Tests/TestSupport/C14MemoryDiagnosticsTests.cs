@@ -141,6 +141,23 @@ public sealed class C14MemoryDiagnosticsTests
     }
 
     [TestMethod]
+    [DataRow("DOTNET_TieredCompilation", "1\n")]
+    [DataRow("COMPlus_gcServer", "")]
+    [DataRow("DOTNET_TC_QuickJit", "true")]
+    [DataRow("MALLOC_ARENA_MAX", "deadbeef")]
+    [DataRow("MALLOC_TRIM_THRESHOLD_", "0x100")]
+    [DataRow("MALLOC_TOP_PAD_", "12345678901234567")]
+    public void NonNumericRuntimeSettingsAreWithheld(string name, string value)
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        using (new C14MemoryDiagnostics(directory.Path, openProc: _ => throw new PlatformNotSupportedException(),
+                   environmentVariable: key => key == name ? value : null)) { }
+
+        using var document = JsonDocument.Parse(File.ReadAllText(directory.File(C14MemoryDiagnostics.EnvironmentFile)));
+        document.RootElement.GetProperty("runtimeSettings").GetProperty(name).GetString().Should().Be("[value withheld]");
+    }
+
+    [TestMethod]
     public void AnInterruptedMappingReadKeepsTheSample_ClosesItsReader_AndDeletesItsPartialFile()
     {
         using var directory = new WebTestSupport.TempDirectory();
