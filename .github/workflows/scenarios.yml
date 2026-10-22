@@ -53,6 +53,7 @@ env:
 
 jobs:
   scenarios:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -108,6 +109,7 @@ jobs:
           retention-days: 7
 
   browser:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -156,6 +158,7 @@ jobs:
           retention-days: 7
 
   container-scenarios:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -191,6 +194,7 @@ jobs:
   # and (#72) backed up, purged and restored, then the pinned 4.1.1 source baseline bootstrapped with the new release script, rolled back and
   # bootstrapped again. The whole history is fetched for that fixed transition regression.
   installer-rig:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -237,6 +241,11 @@ jobs:
     if: github.workflow == 'Scenarios' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    # TEMPORARY (#159): runtime variants of the same soak, side by side on one commit. Reverted before review.
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline-a, baseline-b, tiering-off-a, tiering-off-b, arena2-a, arena2-b]
     defaults:
       run:
         working-directory: src
@@ -277,13 +286,17 @@ jobs:
           dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
 
       - name: C14 soak
-        run: >
-          dotnet test "$TEST_PROJECT"
-          --no-build -c Debug -v minimal
-          --filter "TestCategory=Soak"
-          --logger "trx;LogFileName=soak.trx"
-          --results-directory TestResults
-          -- RunConfiguration.TreatNoTestsAsError=true
+        env:
+          SOAK_VARIANT: ${{ matrix.variant }}
+        run: |
+          case "$SOAK_VARIANT" in
+            tiering-off-*) export DOTNET_TieredCompilation=0 ;;
+            arena2-*) export MALLOC_ARENA_MAX=2 ;;
+          esac
+          echo "variant $SOAK_VARIANT: DOTNET_TieredCompilation=${DOTNET_TieredCompilation:-unset} MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-unset}"
+          dotnet test "$TEST_PROJECT" --no-build -c Debug -v minimal --filter "TestCategory=Soak" \
+            --logger "trx;LogFileName=soak.trx" --results-directory TestResults \
+            -- RunConfiguration.TreatNoTestsAsError=true
 
       # The invariant checks and timing table are written even when a check fails; diagnostics survive an interruption.
       - name: Soak summary
@@ -299,7 +312,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: soak-results-${{ github.run_id }}
+          name: soak-results-${{ matrix.variant }}-${{ github.run_id }}
           path: |
             soak-results/**
             src/TestResults/**
@@ -311,7 +324,7 @@ jobs:
   # acknowledged, a restart is not one reconnect, or the heap or the threads grow after the warm-up.
   kiosk-soak:
     # As the C14 soak: not when a release calls this workflow.
-    if: github.workflow == 'Scenarios' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.workflow == 'Scenarios' && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
