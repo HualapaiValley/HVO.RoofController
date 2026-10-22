@@ -52,7 +52,35 @@ env:
   TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
 
 jobs:
+  # Which of the jobs below this pull request's changes can affect, as in ci.yml (build/ci-changes.py, docs/ci-runners.md
+  # "Jobs a pull request can skip"). Anything but a pull request into main, or a diff that cannot be worked out, runs
+  # every job: the jobs compare an output with 'false', so a missing one runs them.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scenarios: ${{ steps.changes.outputs.scenarios }}
+      browser: ${{ steps.changes.outputs.browser }}
+      container_scenarios: ${{ steps.changes.outputs.container_scenarios }}
+      installer_rig: ${{ steps.changes.outputs.installer_rig }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        with:
+          # The merge commit tested and its parents; the script fetches the base if it is not one of them.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Changes since the base
+        id: changes
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: build/ci-changes.py --base "$BASE_SHA" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
   scenarios:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.scenarios != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -108,6 +136,8 @@ jobs:
           retention-days: 7
 
   browser:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.browser != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -156,6 +186,8 @@ jobs:
           retention-days: 7
 
   container-scenarios:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.container_scenarios != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -191,6 +223,10 @@ jobs:
   # and (#72) backed up, purged and restored, then the pinned 4.1.1 source baseline bootstrapped with the new release script, rolled back and
   # bootstrapped again. The whole history is fetched for that fixed transition regression.
   installer-rig:
+    # A matrix job skipped as a whole reports one check, without the matrix values, so the two required checks would wait
+    # for ever: when no change can affect it, each leg runs and skips its steps instead.
+    needs: changes
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -199,13 +235,21 @@ jobs:
     timeout-minutes: 75
     env:
       RIG_RESULTS_DIR: ${{ github.workspace }}/rig-scenario-results
+      RUN_RIG: ${{ needs.changes.outputs.installer_rig != 'false' }}
     steps:
+      - name: No change can affect the rig scenario
+        if: env.RUN_RIG != 'true'
+        run: |
+          echo "Skipped: no change in this pull request can affect the rig scenario (docs/ci-runners.md)." >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_RIG == 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Setup .NET
+        if: env.RUN_RIG == 'true'
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
@@ -214,17 +258,18 @@ jobs:
           dotnet-version: '10.0.402'
 
       - name: Install by install.sh, again, hvo-roof, motion, change, renew, names, back up, restore, upgrade, roll back
+        if: env.RUN_RIG == 'true'
         run: tests/installer/rig-scenario.sh
 
       - name: Summary
-        if: always()
+        if: always() && env.RUN_RIG == 'true'
         run: |
           if [ -f "$RIG_RESULTS_DIR/rig-scenario.md" ]; then
             cat "$RIG_RESULTS_DIR/rig-scenario.md" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload results
-        if: always()
+        if: always() && env.RUN_RIG == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rig-scenario-results-${{ matrix.runner }}-${{ github.run_id }}
