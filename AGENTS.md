@@ -295,8 +295,9 @@ merging. In a workflow:
   say so in the pull request.
 - **Docs and screenshots** change in the same pull request as the behaviour they describe.
 - **Merging.** Merge commits only, never a squash or a rebase. Branch protection enforces only 13 of the checks: not
-  `terminal-distributions` or the image workflows. So turn on auto-merge only after review has converged and every
-  applicable workflow has passed on the head ([Pull request lifecycle](#pull-request-lifecycle), step 6). Then check
+  `terminal-distributions` or the image workflows, and it requires the `hvo/reviewed-head` status. So merge only after
+  review has converged and every applicable workflow has passed on the head
+  ([Pull request lifecycle](#pull-request-lifecycle), step 6). Then check
   that the issue closed; if not, close it with a comment naming the pull request. GitHub deletes the remote branch;
   remove your local branch and worktree.
 
@@ -328,14 +329,21 @@ Every change, by a person or an agent, goes the same way:
    output, the setting or the linked page.
    Push all of a round's corrections at once, then ask for the rereview. After three rereviews, remaining
    non-blocking findings go to the follow-up issue. A blocking finding is never deferred.
-6. **Finalize.** Once the review is clean and nothing is left to correct, mark the pull request ready with
-   `gh pr ready <n> -R HualapaiValley/HVO.RoofController`. Wait until every applicable workflow on the reviewed head has passed, including the ones
-   protection doesn't require (`gh pr checks <n> -R HualapaiValley/HVO.RoofController`). Then turn on auto-merge pinned to that head:
-   `gh pr merge <n> -R HualapaiValley/HVO.RoofController --auto --merge --match-head-commit <sha>`. If `gh` answers that required checks are
-   "expected", run it again a minute later.
+6. **Finalize.** Branch protection requires the `hvo/reviewed-head` commit status on the exact head being merged.
+   That status is the merge gate, published only on a head whose review converged. The operator's tooling
+   (`hvo finalize`) does the following in one command. By hand:
+   1. Once the review is clean and nothing is left to correct, mark the pull request ready:
+      `gh pr ready <n> -R HualapaiValley/HVO.RoofController`.
+   2. Wait until every applicable workflow on the reviewed head has passed, including the ones protection doesn't
+      require (`gh pr checks <n> -R HualapaiValley/HVO.RoofController`).
+   3. Publish the gate on exactly that head: `gh api repos/HualapaiValley/HVO.RoofController/statuses/<sha>
+      -f state=success -f context=hvo/reviewed-head -f description="Review converged on this head"`.
+   4. Merge with a merge commit pinned to that head: `gh pr merge <n> -R HualapaiValley/HVO.RoofController --merge --match-head-commit <sha>`.
 
-   Auto-merge does **not** turn itself off when someone with write access pushes. So before any further push,
-   turn it off with `gh pr merge <n> -R HualapaiValley/HVO.RoofController --disable-auto`. Get the new head reviewed, then finalize again.
+   If a workflow fails, return the pull request to draft (`gh pr ready <n> -R HualapaiValley/HVO.RoofController --undo`) before correcting it.
+   Auto-merge does **not** turn itself off when someone with write access pushes, and a new commit lacks the status.
+   So before any further push, turn auto-merge off (`gh pr merge <n> -R HualapaiValley/HVO.RoofController --disable-auto`) and return the pull request
+   to draft. Get the new head reviewed, then finalize again.
 7. **Clean up.** After the merge, remove the change's disposable resources: those created only for it and used by
    nothing else. That means its worktree and local branch (GitHub deletes the remote branch), its scratch
    directories and review checkouts, and containers, images, volumes, emulators or test processes started only for
