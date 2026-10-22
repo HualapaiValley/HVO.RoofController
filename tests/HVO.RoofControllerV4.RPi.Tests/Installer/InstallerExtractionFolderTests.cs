@@ -1,72 +1,145 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FluentAssertions;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Plan;
-using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
-using HVO.RoofControllerV4.Installer.Survey;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 
-/// <summary>The <c>~/.net</c> folders earlier releases left, and the kiosk's folders that uninstall takes, on the fake machine.</summary>
+/// <summary>
+/// The <c>~/.net</c> folders earlier releases' programs unpacked into, and the kiosk's own folders, after an uninstall on
+/// the fake machine (#96).
+/// </summary>
 [TestClass]
 [UnsupportedOSPlatform("windows")]
 public sealed class InstallerExtractionFolderTests
 {
-    private static InstallRecord KioskRecord() => new()
+    private const string KioskHome = "/home/hvo-kiosk";
+
+    // What earlier releases left: the installed installer, the release asset run before it installed itself, hvo-roof and
+    // the kiosk, in root's home, the home of the person who ran sudo, and the kiosk account's.
+    private static readonly string[] Ours =
+    [
+        "/root/.net/hvo-roof-install",
+        "/root/.net/hvo-roof-install-linux-arm64",
+        "/root/.net/hvo-roof",
+        "/home/pi/.net/hvo-roof-install",
+        $"{KioskHome}/.net/hvo-roof-kiosk"
+    ];
+
+    // The controller and the kiosk installed with sudo by pi, with folders of ours and others' under each ~/.net.
+    private static async Task<FakeMachine> PiWithLegacyFoldersAsync()
     {
-        Scope = InstallScope.System,
-        Roles = [InstallRole.Kiosk],
-        Version = "4.0.0",
-        InstallerVersion = "4.0.0",
-        Kiosk = new KioskSettings()
-    };
+        var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        pi.Environment["SUDO_USER"] = "pi";
+        pi.UserHomes[KioskSteps.User] = KioskHome;
+        foreach (var folder in Ours)
+        {
+            pi.Write($"{folder}/0123abcd/libonigwrap.so", "x");
+        }
+
+        pi.Write("/root/.net/someone-else/0123abcd/keep.so", "x")
+            .Write("/root/.net/hvo-roofer/0123abcd/keep.so", "x");
+        return pi;
+    }
 
     [TestMethod]
-    public async Task Uninstall_RemovesOurLegacyExtractionFolders_InRootsHome_AndNoOthers()
+    public async Task APurge_LeavesNoNetFolderOfOurs_InRootsTheSudoCallersOrTheKioskAccountsHome()
     {
-        using var pi = new FakeMachine().WithPi();
-        pi.Write("/root/.net/hvo-roof-install/abc/libonigwrap.so", "x")
-            .Write("/root/.net/hvo-roof-install-linux-arm64/abc/libonigwrap.so", "x")
-            .Write("/root/.net/hvo-roof-kiosk/abc/libSkiaSharp.so", "x")
-            .Write("/root/.net/hvo-roof/abc/libonigwrap.so", "x")
-            .Write("/root/.net/someone-else/keep.so", "x");
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Write($"{KioskSteps.StateFolder}/.net/hvo-roof-kiosk/0123abcd/libSkiaSharp.so", "x")
+            .Write($"{KioskSteps.CacheFolder}/fontconfig/cache", "x");
 
-        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
-        var targets = PlanBuilder.BuildUninstall(pi.Machine, survey, KioskRecord(), purge: false).Steps
-            .OfType<RemovalStep>().Select(step => step.Target).ToList();
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
 
-        targets.Should().Contain(["/root/.net/hvo-roof", "/root/.net/hvo-roof-install", "/root/.net/hvo-roof-install-linux-arm64", "/root/.net/hvo-roof-kiosk"]);
-        targets.Should().NotContain("/root/.net/someone-else");
+        run.ExitCode.Should().Be(0, run.ToString());
+        Ours.Where(pi.Exists).Should().BeEmpty();
+        pi.Exists(KioskSteps.StateFolder).Should().BeFalse();
+        pi.Exists(KioskSteps.CacheFolder).Should().BeFalse();
+
+        // .net goes only when nothing else is left in it; others' folders stay, whatever their names begin with.
+        pi.Exists("/home/pi/.net").Should().BeFalse();
+        pi.Exists($"{KioskHome}/.net").Should().BeFalse();
+        pi.Exists("/root/.net/someone-else/0123abcd/keep.so").Should().BeTrue();
+        pi.Exists("/root/.net/hvo-roofer/0123abcd/keep.so").Should().BeTrue();
         pi.Unexpected.Should().BeEmpty();
     }
 
     [TestMethod]
-    public void Purge_RemovesTheKioskStateAndCache()
+    public async Task AnUninstall_WithoutPurge_RemovesThemToo_AndItsPlanSaysSo()
     {
-        using var pi = new FakeMachine().WithPi();
+        using var pi = await PiWithLegacyFoldersAsync();
 
-        var purged = PlanBuilder.PurgedFolders(pi.Machine, KioskRecord(), ControllerLayout.System).Select(folder => folder.Folder).ToList();
+        var plan = await pi.RunAsync("uninstall", "--plan");
+        var run = await pi.RunAsync("uninstall", "--yes");
 
-        purged.Should().Contain([KioskSteps.StateFolder, KioskSteps.CacheFolder]);
-        purged.Should().NotContain(folder => folder.Contains("/.net", StringComparison.Ordinal));
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        plan.ToString().Should().Contain("~/.net/hvo-roof*").And.Contain("/home/pi/.net/hvo-roof-install").And.Contain($"{KioskHome}/.net/hvo-roof-kiosk");
+        run.ExitCode.Should().Be(0, run.ToString());
+        Ours.Where(pi.Exists).Should().BeEmpty();
+        pi.Exists("/root/.net/someone-else/0123abcd/keep.so").Should().BeTrue();
+        pi.Unexpected.Should().BeEmpty();
     }
 
     [TestMethod]
-    public async Task Uninstall_AsPerson_RemovesTheirOwnLegacyFolders_NotRoots()
+    public async Task ANetFolder_ThatIsALink_IsNotFollowed()
     {
-        using var pi = new FakeMachine().WithPi().AsPerson();
-        var home = pi.Machine.Home;
-        pi.Write(Path.Join(home, ".net", "hvo-roof-install", "abc", "libonigwrap.so"), "x")
-            .Write("/root/.net/hvo-roof-install/abc/libonigwrap.so", "x");
-        var record = new InstallRecord { Scope = InstallScope.User, Roles = [], Version = "4.0.0", InstallerVersion = "4.0.0" };
+        using var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        pi.Environment["SUDO_USER"] = "pi";
 
-        var survey = await MachineSurveyor.SurveyAsync(pi.Machine);
-        var targets = PlanBuilder.BuildUninstall(pi.Machine, survey, record, purge: false).Steps
-            .OfType<RemovalStep>().Select(step => step.Target).ToList();
+        // ~/.net pointing at /etc: followed, /etc/hvo-roof would look like hvo-roof's folder.
+        pi.Folder("/home/pi");
+        Directory.CreateSymbolicLink(pi.OnDisk("/home/pi/.net"), pi.OnDisk("/etc"));
 
-        targets.Should().Contain(Path.Join(home, ".net", "hvo-roof-install"));
-        targets.Should().NotContain("/root/.net/hvo-roof-install");
-        pi.Unexpected.Should().BeEmpty();
+        var run = await pi.RunAsync("uninstall", "--yes");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Exists("/etc/hvo-roof/secrets").Should().BeTrue();
+        new DirectoryInfo(pi.OnDisk("/home/pi/.net")).LinkTarget.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task AFolderOfOurs_ThatIsALink_OrHoldsOne_IsNotFollowed()
+    {
+        using var pi = await InstallerLifecycleTests.InstalledPiAsync();
+        pi.Folder("/root/.net/hvo-roof-kiosk/0123abcd");
+        Directory.CreateSymbolicLink(pi.OnDisk("/root/.net/hvo-roof-install"), pi.OnDisk("/etc/hvo-roof"));
+        Directory.CreateSymbolicLink(pi.OnDisk("/root/.net/hvo-roof-kiosk/0123abcd/escape"), pi.OnDisk("/etc/hvo-roof"));
+
+        var run = await pi.RunAsync("uninstall", "--yes");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Exists("/etc/hvo-roof/secrets").Should().BeTrue();
+        pi.Exists("/root/.net/hvo-roof-kiosk").Should().BeFalse();
+        new DirectoryInfo(pi.OnDisk("/root/.net/hvo-roof-install")).LinkTarget.Should().NotBeNull();
+    }
+
+    [TestMethod]
+    public async Task APersonsUninstall_RemovesTheirOwnFolders_AndLeavesRootsAlone()
+    {
+        using var laptop = new FakeMachine(architecture: Architecture.X64, root: false, hostName: "laptop", userName: "roy");
+        (await laptop.RunAsync("--answers", laptop.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Cli], Client = FakeMachine.ClientAnswers }))).ExitCode.Should().Be(0);
+        laptop.Write("/home/roy/.net/hvo-roof/0123abcd/libonigwrap.so", "x")
+            .Write("/home/roy/.net/hvo-roof-install/0123abcd/libonigwrap.so", "x")
+            .Write("/root/.net/hvo-roof-install/0123abcd/libonigwrap.so", "x");
+
+        var run = await laptop.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "laptop");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        laptop.Exists("/home/roy/.net").Should().BeFalse();
+        laptop.Exists("/root/.net/hvo-roof-install/0123abcd/libonigwrap.so").Should().BeTrue();
+        laptop.Unexpected.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void OnlyOurProgramsFolders_AreOurs()
+    {
+        LegacyExtractionStep.IsOurs("hvo-roof").Should().BeTrue();
+        LegacyExtractionStep.IsOurs("hvo-roof-install-linux-arm64").Should().BeTrue();
+        LegacyExtractionStep.IsOurs("hvo-roof-kiosk").Should().BeTrue();
+        LegacyExtractionStep.IsOurs("hvo-roofer").Should().BeFalse();
+        LegacyExtractionStep.IsOurs("hvo-sky").Should().BeFalse();
+        LegacyExtractionStep.IsOurs("HVO-ROOF").Should().BeFalse();
     }
 }

@@ -434,10 +434,7 @@ public static class PlanBuilder
 
         // Earlier releases unpacked the programs' native libraries under ~/.net, which nothing removed: every uninstall takes
         // those folders, not only a purge.
-        foreach (var legacy in LegacyExtractionFolders(machine, record.Scope))
-        {
-            steps.Add(new RemovalStep(legacy, "a .NET extraction folder an earlier release left", StepKind.Folder));
-        }
+        steps.Add(new LegacyExtractionStep(record.Scope));
 
         var recordPath = InstallPaths.RecordFor(record.Scope, machine);
         if (!purge)
@@ -515,28 +512,6 @@ public static class PlanBuilder
         }
 
         return folders;
-    }
-
-    /// <summary>
-    /// The <c>~/.net</c> folders the programs left in <paramref name="scope"/>'s home (root's for a system install, the
-    /// person's otherwise): <c>hvo-roof</c> and every <c>hvo-roof-*</c> beside it, which covers the installer, hvo-roof, the
-    /// kiosk and their versions and assets.
-    /// </summary>
-    public static IReadOnlyList<string> LegacyExtractionFolders(InstallerMachine machine, InstallScope scope)
-    {
-        ArgumentNullException.ThrowIfNull(machine);
-        var net = Path.Join(scope == InstallScope.System ? "/root" : machine.Home, ".net");
-        var onDisk = machine.OnDisk(net);
-        if (!Directory.Exists(onDisk))
-        {
-            return [];
-        }
-
-        return [.. Directory.EnumerateDirectories(onDisk)
-            .Select(path => Path.GetFileName(path) ?? string.Empty)
-            .Where(name => name == "hvo-roof" || name.StartsWith("hvo-roof-", StringComparison.Ordinal))
-            .Select(name => Path.Join(net, name))
-            .Order(StringComparer.Ordinal)];
     }
 
     // The controller as the record has it, for the steps that change it without installing it: its settings (with nothing

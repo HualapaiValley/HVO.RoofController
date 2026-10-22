@@ -297,6 +297,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The machine's users, by name: the groups each is in (their own first).</summary>
     public Dictionary<string, List<string>> Users { get; } = new(StringComparer.Ordinal) { ["root"] = ["root"], ["pi"] = ["pi", "sudo", "video"] };
 
+    /// <summary>The users' homes, as <c>getent passwd</c> gives them: <c>/nonexistent</c> for a user not listed.</summary>
+    public Dictionary<string, string> UserHomes { get; } = new(StringComparer.Ordinal) { ["root"] = "/root", ["pi"] = "/home/pi" };
+
     /// <summary>The machine's groups, by name.</summary>
     public HashSet<string> Groups { get; } = new(StringComparer.Ordinal) { "root", "pi", "sudo", "video", "input", "render", "nogroup" };
 
@@ -1069,7 +1072,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 Packages.UnionWith(arguments.Skip(3));
             }),
             "getent" when arguments is ["passwd", var name] => Users.ContainsKey(name)
-                ? Answer($"{name}:x:999:999::/nonexistent:/usr/sbin/nologin")
+                ? Answer($"{name}:x:999:999::{UserHomes.GetValueOrDefault(name, "/nonexistent")}:/usr/sbin/nologin")
                 : new CommandResult(2, string.Empty, string.Empty),
             "id" when arguments is ["-nG", var name] => Users.TryGetValue(name, out var groups)
                 ? Answer(string.Join(' ', groups))

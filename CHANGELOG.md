@@ -131,8 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Stop the kiosk unpacking its native libraries under `~/.net`: they go under its own state folder, which `uninstall --purge`
-  removes with its cache. Uninstall now removes the `~/.net/hvo-roof*` folders earlier releases left in root's home or
-  yours (#96).
+  removes with its cache. Uninstall now removes the `~/.net/hvo-roof*` folders earlier releases left in root's home, the
+  sudo caller's and the kiosk account's, or in yours for your own install (#96).
 - Report macOS socket paths as non-regular files when the installer refuses to read a state store, retaining the
   existing refusal before reading and Linux error handling (#189).
 - Allow password-protected and passwordless PKCS#12 certificate imports for Mac rigs to be saved with the installer's

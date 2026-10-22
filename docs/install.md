@@ -1589,8 +1589,10 @@ changes nothing; `--release DIR` reads the release from a folder.
   its network, each with its image when no other container uses it;
 - the kiosk's service, its program and the udev rule for the screen's backlight;
 - `hvo-roof` and the Mac app, with the copies kept beside them;
-- the `.NET` extraction folders that earlier releases left under `~/.net` (`hvo-roof` and every `hvo-roof-*` beside it),
-  in root's home for a system install and in yours for yours;
+- the `.NET` extraction folders that earlier releases left under `~/.net` (`hvo-roof` and every `hvo-roof-*` beside it):
+  for a system install in root's home, the home of the person who ran `sudo` and the kiosk account's, and for yours in
+  yours. A `.net`, or a folder in it, that is a symbolic link is left alone, and `.net` goes when nothing else is left in
+  it;
 - the installer itself, last.
 
 The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and
