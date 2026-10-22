@@ -556,7 +556,9 @@ also writes contributor diagnostics to the same results directory. These do not 
 - `soak-environment.json` records the executing runtime and CoreLib versions, process/OS architecture, GC mode,
   processor count, and the SDK version and configuration that built the tests. The build SDK and executing runtime
   are separate facts; a different SDK is a possible confounder, not evidence of a cause. No environment or command
-  line dump is collected.
+  line dump is collected. Schema 2 also records explicitly allowlisted runtime/allocator variables that were set,
+  publishing only numeric values and withholding other values. These record requested settings, not their effective
+  precedence; absent names were unset.
 - `soak-memory.jsonl` appends and flushes each `sample` record to disk during the run, before mapping snapshots.
   `originalSample` repeats the original resource/health observation; its managed bytes still come from
   `GC.GetTotalMemory(forceFullCollection: true)`, followed by the original working-set and other observations in
@@ -577,6 +579,11 @@ also writes contributor diagnostics to the same results directory. These do not 
   its phase and availability. A failed copy removes its partial file. An interrupted run keeps completed, flushed
   rows and snapshots even if it never reaches the existing end-of-run summaries. The files are test attachments
   and are included in the workflow's existing results upload.
+
+The workflow's C14 test step sets `MALLOC_ARENA_MAX=2` to bound glibc arena retention in the combined test process,
+with tiered compilation and all criteria unchanged. Fewer arenas can increase allocation contention. This harness
+environment does not measure the deployed controller's default allocator configuration. The controlled experiment,
+limitations and reproduction are in the [C14 memory investigation](c14-memory-investigation.md).
 
 Interpret these as observations of the **whole test process**, including controller, emulator, camera, exporter and
 harness. GC commitment is backing store rather than resident pages; working set minus GC committed bytes is not a
