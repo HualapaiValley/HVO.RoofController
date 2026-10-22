@@ -3,7 +3,9 @@ using System.Runtime.Versioning;
 using FluentAssertions;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
+using HVO.RoofControllerV4.Installer.Machine;
 using HVO.RoofControllerV4.Installer.Plan;
+using HVO.RoofControllerV4.Installer.Record;
 using HVO.RoofControllerV4.Installer.Roles;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Installer;
@@ -120,6 +122,128 @@ public sealed class InstallerExtractionFolderTests
         pi.Exists("/var/lib/hvo-roof").Should().BeTrue();
         backup.ExitCode.Should().Be((int)InstallerExitCode.Refused, backup.ToString());
         backup.Error.Should().Contain("is in /home/astro/.net/hvo-roof-kiosk, which uninstall removes");
+    }
+
+    [TestMethod]
+    [DataRow("/root/.net/hvo-roof-install", false)]
+    [DataRow("/root/.net/hvo-roof-install", true)]
+    [DataRow("/var/lib/hvo-roof", false)]
+    public async Task APurge_RefusesABackupThroughAnAliasIntoARemovedFolder_BeforeRemovingAnything(string target, bool nested)
+    {
+        using var pi = await PiWithLegacyFoldersAsync();
+        Directory.CreateSymbolicLink(pi.OnDisk("/root/safety-backups"), pi.OnDisk(target));
+        var parent = nested ? "/root/safety-backups/nested" : "/root/safety-backups";
+        pi.Folder(parent);
+
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--backup", $"{parent}/safety-copy.tar.gz", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        Ours.Where(pi.Exists).Should().BeEquivalentTo(Ours);
+        pi.Exists($"{parent}/safety-copy.tar.gz").Should().BeFalse();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
+        pi.Exists("/etc/hvo-roof/secrets").Should().BeTrue();
+        pi.Exists("/var/lib/hvo-roof").Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task ABackup_ThroughAnAliasToASafeFolder_IsReadableAfterPurge()
+    {
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Folder("/srv/keep/nested");
+        Directory.CreateSymbolicLink(pi.OnDisk("/root/safety-backups"), pi.OnDisk("/srv/keep"));
+
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--backup", "/root/safety-backups/nested/safety-copy.tar.gz", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        var backup = await BackupCommands.ReadAsync(pi.Machine, "/srv/keep/nested/safety-copy.tar.gz", CancellationToken.None);
+        backup.Entries.Should().NotBeEmpty();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeFalse();
+        Ours.Where(pi.Exists).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task ABackup_NamingTheDefaultFolder_StillRefusesASymbolicLink()
+    {
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Folder("/srv/keep").Folder("/var/backups");
+        Directory.CreateSymbolicLink(pi.OnDisk(BackupCommands.DefaultFolder), pi.OnDisk("/srv/keep"));
+
+        var run = await pi.RunAsync("backup", "--output", $"{BackupCommands.DefaultFolder}/safety-copy.tar.gz");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        pi.Exists("/srv/keep/safety-copy.tar.gz").Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow(127, "")]
+    [DataRow(0, "")]
+    [DataRow(0, "malformed:account:entry\n")]
+    [DataRow(0, "root:x:0:0::/root:/bin/bash\nmalformed:account:entry\n")]
+    public async Task APurge_RefusesIncompleteAccountDiscovery_AndCanBeRetried(int exitCode, string output)
+    {
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Environment.Remove("SUDO_USER");
+        pi.AccountEnumeration = new CommandResult(exitCode, output, string.Empty);
+        var record = pi.Read(InstallPaths.SystemRecord);
+
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        Ours.Where(pi.Exists).Should().BeEquivalentTo(Ours);
+        pi.Read(InstallPaths.SystemRecord).Should().Be(record);
+        pi.Exists(InstallPaths.Installer(InstallScope.System, pi.Machine)).Should().BeTrue();
+        pi.Exists("/etc/hvo-roof/secrets").Should().BeTrue();
+        pi.Exists("/var/lib/hvo-roof").Should().BeTrue();
+
+        pi.AccountEnumeration = null;
+        var retry = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+        retry.ExitCode.Should().Be(0, retry.ToString());
+        Ours.Where(pi.Exists).Should().BeEmpty();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task APurge_KeptResumable_WhenAccountDiscoveryFailsDuringRemoval()
+    {
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Environment.Remove("SUDO_USER");
+        var lookups = 0;
+        pi.BeforeCommand = command =>
+        {
+            if (command.Program == "getent" && command.Arguments is ["passwd"] && ++lookups == 2)
+            {
+                pi.AccountEnumeration = new CommandResult(127, string.Empty, string.Empty);
+            }
+        };
+
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
+        pi.Exists(InstallPaths.SystemInstaller).Should().BeTrue();
+        Ours.Where(pi.Exists).Should().BeEquivalentTo(Ours);
+
+        pi.BeforeCommand = null;
+        pi.AccountEnumeration = null;
+        var retry = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+        retry.ExitCode.Should().Be(0, retry.ToString());
+        Ours.Where(pi.Exists).Should().BeEmpty();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task APurge_IncludesAnAccountWhoseHomeIsTheRootFolder()
+    {
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Users["system"] = ["system"];
+        pi.UserHomes["system"] = "/";
+        pi.Write("/.net/hvo-roof/0123abcd/libonigwrap.so", "x");
+
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Exists("/.net").Should().BeFalse();
+        Ours.Where(pi.Exists).Should().BeEmpty();
     }
 
     [TestMethod]

@@ -24,7 +24,7 @@ public sealed class LegacyExtractionStep(InstallScope scope) : PlanStep
 
     /// <summary>
     /// The folder of ours under a <c>.net</c> that the full path <paramref name="path"/> is, or is in; null when it is in
-    /// none. Read from the path's spelling, as a backup's destination is checked: a backup kept there would go with it.
+    /// none. Examines the supplied path components; backup validation checks both the named and resolved paths.
     /// </summary>
     public static string? FolderHolding(string path)
     {
@@ -108,19 +108,26 @@ public sealed class LegacyExtractionStep(InstallScope scope) : PlanStep
             }
         }
 
-        return [.. homes.Where(home => home.Length > 1 && home.StartsWith('/')).Distinct(StringComparer.Ordinal)];
+        return [.. homes.Where(home => home.StartsWith('/')).Select(Path.GetFullPath).Distinct(StringComparer.Ordinal)];
     }
 
-    // The homes in the account database (getent passwd): every account's, or the one user's. None when it cannot be asked.
+    // The homes in the account database (getent passwd): every account's, or the one user's. Incomplete discovery must
+    // refuse the uninstall before it removes anything, and on recheck retain the record and installer for a retry.
     private static async Task<IReadOnlyList<string>> AccountHomesAsync(InstallerMachine machine, string? user, CancellationToken cancellationToken)
     {
         var lookup = await machine.Commands.RunAsync(
             user is null ? new CommandLine("getent", "passwd") : new CommandLine("getent", "passwd", user), cancellationToken).ConfigureAwait(false);
-        return lookup.Succeeded
-            ? [.. lookup.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(line => line.Split(':'))
-                .Where(fields => fields.Length == 7 && (user is null || fields[0] == user) && fields[5].StartsWith('/'))
-                .Select(fields => fields[5])]
-            : [];
+        var accounts = lookup.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.Split(':')).ToArray();
+        if (!lookup.Succeeded || accounts.Length == 0
+            || accounts.Any(fields => fields.Length != 7 || fields[0].Length == 0
+                || (user is not null && fields[0] != user) || !fields[5].StartsWith('/')))
+        {
+            throw new InstallerRefusedException(
+                "The account homes could not be discovered completely: getent passwd must succeed and return valid account records. "
+                + "Check the account database and getent, then run uninstall again. The install record and installer are kept for a retry.");
+        }
+
+        return [.. accounts.Select(fields => fields[5])];
     }
 }

@@ -300,6 +300,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The users' homes, as <c>getent passwd</c> gives them (for one user, or for every user in <see cref="Users"/>): <c>/nonexistent</c> for a user not listed.</summary>
     public Dictionary<string, string> UserHomes { get; } = new(StringComparer.Ordinal) { ["root"] = "/root", ["pi"] = "/home/pi" };
 
+    /// <summary>An override for listing all accounts with <c>getent passwd</c>; null lists <see cref="Users"/>.</summary>
+    public CommandResult? AccountEnumeration { get; set; }
+
     /// <summary>The machine's groups, by name.</summary>
     public HashSet<string> Groups { get; } = new(StringComparer.Ordinal) { "root", "pi", "sudo", "video", "input", "render", "nogroup" };
 
@@ -1074,7 +1077,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             "getent" when arguments is ["passwd", var name] => Users.ContainsKey(name)
                 ? Answer(PasswdLine(name))
                 : new CommandResult(2, string.Empty, string.Empty),
-            "getent" when arguments is ["passwd"] => Answer(string.Concat(Users.Keys.Select(name => PasswdLine(name) + "\n"))),
+            "getent" when arguments is ["passwd"] => AccountEnumeration ?? Answer(string.Concat(Users.Keys.Select(name => PasswdLine(name) + "\n"))),
             "id" when arguments is ["-nG", var name] => Users.TryGetValue(name, out var groups)
                 ? Answer(string.Join(' ', groups))
                 : new CommandResult(1, string.Empty, $"id: '{name}': no such user\n"),

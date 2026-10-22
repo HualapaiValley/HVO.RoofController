@@ -542,15 +542,7 @@ internal static class BackupCommands
         }
 
         var path = Path.GetFullPath(output, machine.CurrentDirectory);
-        if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).Append(KioskSteps.StateFolder).Append(KioskSteps.CacheFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
-        {
-            throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the backup somewhere else.");
-        }
-
-        if (LegacyExtractionStep.FolderHolding(path) is { } extraction)
-        {
-            throw new InstallerRefusedException($"{path} is in {extraction}, which uninstall removes: keep the backup somewhere else.");
-        }
+        RefuseRemovedOutput(path);
 
         if (machine.FileExists(path) || machine.DirectoryExists(path))
         {
@@ -563,13 +555,34 @@ internal static class BackupCommands
             throw new InstallerRefusedException($"{parent} is not there: make it first, or give a file in a folder that is.");
         }
 
+        // A stable alias can hide a destination inside a folder uninstall deletes. Check and use the physical folder,
+        // including every ancestor's links, before writing anything; path replacement is outside the host assumptions.
+        var namedParent = parent;
+        parent = machine.ResolveFolder(parent);
+        path = Path.Join(parent, Path.GetFileName(path));
+        RefuseRemovedOutput(path);
+
         // The backups' own folder is held to its rule, whoever names a file in it.
-        if (parent == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
+        if ((namedParent == DefaultFolder || parent == DefaultFolder)
+            && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
         {
             throw new InstallerRefusedException($"{problem}. Nothing was written.");
         }
 
         return path;
+    }
+
+    private static void RefuseRemovedOutput(string path)
+    {
+        if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).Append(KioskSteps.StateFolder).Append(KioskSteps.CacheFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
+        {
+            throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the backup somewhere else.");
+        }
+
+        if (LegacyExtractionStep.FolderHolding(path) is { } extraction)
+        {
+            throw new InstallerRefusedException($"{path} is in {extraction}, which uninstall removes: keep the backup somewhere else.");
+        }
     }
 
     private static bool Within(string path, string root)

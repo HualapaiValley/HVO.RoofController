@@ -318,6 +318,21 @@ public sealed class InstallerMachine
     /// <summary>True when <paramref name="path"/> is a folder itself, not a symbolic link (to a folder or anything else).</summary>
     public bool IsFolderNotLink(string path) => Inspect(OnDisk(path)) is { IsFolder: true, IsLink: false };
 
+    /// <summary>
+    /// Resolves every symbolic link in an existing folder's path and returns its physical path on this machine.
+    /// Throws when the folder cannot be resolved; does not check ownership or prevent concurrent path replacement.
+    /// </summary>
+    public string ResolveFolder(string path)
+    {
+        var onDisk = RealPath(OnDisk(path));
+        if (onDisk is null || !Directory.Exists(onDisk))
+        {
+            throw new InstallerRefusedException($"{path} cannot be resolved to a folder: check the path and its permissions, then run it again.");
+        }
+
+        return OnMachine(onDisk);
+    }
+
     public void SetMode(string path, UnixFileMode mode) => File.SetUnixFileMode(OnDisk(path), mode);
 
     /// <summary>
