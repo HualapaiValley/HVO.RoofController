@@ -1531,7 +1531,8 @@ written whole or not at all, and on disk (synced, with its folder and any folder
 is done. Its first entry, `hvo-roof-backup.json`, lists every file with its mode, owner and
 SHA-256, the host and the release, and the files of the controller's stores that were not there (`absent`). `--output FILE` names it; without it, it goes in `/var/backups/hvo-roof`, a folder
 only root opens, as `hvo-roof-<host>-<UTC time>.tar.gz`. It never replaces a file, and never goes in a folder it backs
-up or a purge removes, `/opt/hvo-roof-kiosk` included. Before it keeps the archive, it reads it back as a restore
+up, a purge removes (`/opt/hvo-roof-kiosk` included) or an uninstall removes (`.net/hvo-roof*` in any home). Before it
+keeps the archive, it reads it back as a restore
 would: one a restore could not read is not kept, and the backup fails.
 
 - Each file and folder keeps its permission bits, without setuid, setgid or the sticky bit: the install that follows a
@@ -1590,9 +1591,9 @@ changes nothing; `--release DIR` reads the release from a folder.
 - the kiosk's service, its program and the udev rule for the screen's backlight;
 - `hvo-roof` and the Mac app, with the copies kept beside them;
 - the `.NET` extraction folders that earlier releases left under `~/.net` (`hvo-roof` and every `hvo-roof-*` beside it):
-  for a system install in root's home, the home of the person who ran `sudo` and the kiosk account's, and for yours in
-  yours. A `.net`, or a folder in it, that is a symbolic link is left alone, and `.net` goes when nothing else is left in
-  it;
+  for a system install in every home on the machine (root's, every account's that `getent passwd` lists, the kiosk
+  account's among them, and the home of the person who ran `sudo`), and for yours in yours. A `.net`, or a folder in it,
+  that is a symbolic link is left alone, and `.net` goes when nothing else is left in it;
 - the installer itself, last.
 
 The controller goes first. When it does not stop, nothing else is removed: the kiosk goes on showing the roof, and

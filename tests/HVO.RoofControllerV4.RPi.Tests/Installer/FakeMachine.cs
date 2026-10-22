@@ -297,7 +297,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     /// <summary>The machine's users, by name: the groups each is in (their own first).</summary>
     public Dictionary<string, List<string>> Users { get; } = new(StringComparer.Ordinal) { ["root"] = ["root"], ["pi"] = ["pi", "sudo", "video"] };
 
-    /// <summary>The users' homes, as <c>getent passwd</c> gives them: <c>/nonexistent</c> for a user not listed.</summary>
+    /// <summary>The users' homes, as <c>getent passwd</c> gives them (for one user, or for every user in <see cref="Users"/>): <c>/nonexistent</c> for a user not listed.</summary>
     public Dictionary<string, string> UserHomes { get; } = new(StringComparer.Ordinal) { ["root"] = "/root", ["pi"] = "/home/pi" };
 
     /// <summary>The machine's groups, by name.</summary>
@@ -1072,8 +1072,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
                 Packages.UnionWith(arguments.Skip(3));
             }),
             "getent" when arguments is ["passwd", var name] => Users.ContainsKey(name)
-                ? Answer($"{name}:x:999:999::{UserHomes.GetValueOrDefault(name, "/nonexistent")}:/usr/sbin/nologin")
+                ? Answer(PasswdLine(name))
                 : new CommandResult(2, string.Empty, string.Empty),
+            "getent" when arguments is ["passwd"] => Answer(string.Concat(Users.Keys.Select(name => PasswdLine(name) + "\n"))),
             "id" when arguments is ["-nG", var name] => Users.TryGetValue(name, out var groups)
                 ? Answer(string.Join(' ', groups))
                 : new CommandResult(1, string.Empty, $"id: '{name}': no such user\n"),
@@ -1149,6 +1150,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             string.Concat(known.Select(name => $"{name} installed\n")),
             string.Concat(unknown.Select(name => $"dpkg-query: no packages found matching {name}\n")));
     }
+
+    // The user's line in the account database, as getent passwd prints it.
+    private string PasswdLine(string name) => $"{name}:x:999:999::{UserHomes.GetValueOrDefault(name, "/nonexistent")}:/usr/sbin/nologin";
 
     // useradd: --user-group makes a group named for the user, and refuses when one is there already.
     private CommandResult AddUser(string name, bool makeGroup)

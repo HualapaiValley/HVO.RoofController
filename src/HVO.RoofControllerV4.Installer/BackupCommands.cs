@@ -547,6 +547,11 @@ internal static class BackupCommands
             throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the backup somewhere else.");
         }
 
+        if (LegacyExtractionStep.FolderHolding(path) is { } extraction)
+        {
+            throw new InstallerRefusedException($"{path} is in {extraction}, which uninstall removes: keep the backup somewhere else.");
+        }
+
         if (machine.FileExists(path) || machine.DirectoryExists(path))
         {
             throw new InstallerRefusedException($"{path} is there already: a backup never replaces a file. Give a new file's name.");

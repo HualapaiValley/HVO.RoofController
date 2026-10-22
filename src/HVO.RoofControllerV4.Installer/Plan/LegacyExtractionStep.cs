@@ -6,10 +6,10 @@ namespace HVO.RoofControllerV4.Installer.Plan;
 /// <summary>
 /// The folders under <c>~/.net</c> that earlier releases' single-file programs unpacked their native libraries into, which
 /// nothing removed (#96): <c>hvo-roof</c> and every <c>hvo-roof-*</c> beside it (.NET names the folder after the program's
-/// file), removed by every uninstall. For a system install, in root's home, the home of the person who ran sudo and the
-/// kiosk account's; for a person's install, in theirs. A <c>.net</c>, or a folder in it, that is a symbolic link is left
-/// alone, never followed, so root never deletes through a link someone put in a home. <c>.net</c> itself goes when this
-/// step leaves it empty.
+/// file), removed by every uninstall. For a system install, in every home on the machine (root's, whoever installed it,
+/// the kiosk account's, anyone else's); for a person's install, in theirs. A <c>.net</c>, or a folder in it,
+/// that is a symbolic link is left alone, never followed, so root never deletes through a link someone put in a home.
+/// <c>.net</c> itself goes when this step leaves it empty.
 /// </summary>
 public sealed class LegacyExtractionStep(InstallScope scope) : PlanStep
 {
@@ -21,6 +21,25 @@ public sealed class LegacyExtractionStep(InstallScope scope) : PlanStep
 
     /// <summary>True for the name of a folder our programs unpack into under <c>~/.net</c>.</summary>
     public static bool IsOurs(string name) => name == "hvo-roof" || name.StartsWith("hvo-roof-", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The folder of ours under a <c>.net</c> that the full path <paramref name="path"/> is, or is in; null when it is in
+    /// none. Read from the path's spelling, as a backup's destination is checked: a backup kept there would go with it.
+    /// </summary>
+    public static string? FolderHolding(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var parts = path.Split('/');
+        for (var i = 0; i + 1 < parts.Length; i++)
+        {
+            if (parts[i] == ".net" && IsOurs(parts[i + 1]))
+            {
+                return string.Join('/', parts[..(i + 2)]);
+            }
+        }
+
+        return null;
+    }
 
     public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
@@ -72,38 +91,36 @@ public sealed class LegacyExtractionStep(InstallScope scope) : PlanStep
         }
     }
 
-    // The homes to look in: the installer's own, and for a system install root's, the sudo caller's and the kiosk account's.
+    // The homes to look in: the installer's own, and for a system install (Linux's alone) every home on the machine, since
+    // whoever installed it need not be the one uninstalling it, nor the only one who ran our programs: every account's in
+    // the account database, and the sudo caller's, which a network directory may answer for when asked by name though it
+    // leaves the account out of the full list.
     private async Task<IReadOnlyList<string>> HomesAsync(InstallerMachine machine, CancellationToken cancellationToken)
     {
-        var mac = machine.Os == InstallerOs.MacOS;
         var homes = new List<string> { machine.Home };
         if (scope == InstallScope.System)
         {
-            homes.Add(await HomeOfAsync(machine, "root", cancellationToken).ConfigureAwait(false) ?? (mac ? "/var/root" : "/root"));
-            if (machine.IsRoot && machine.Environment("SUDO_USER") is { Length: > 0 } user && user != "root" && !user.Contains('/', StringComparison.Ordinal))
+            homes.Add("/root");
+            homes.AddRange(await AccountHomesAsync(machine, null, cancellationToken).ConfigureAwait(false));
+            if (machine.IsRoot && machine.Environment("SUDO_USER") is { Length: > 0 } user && !user.Contains('/', StringComparison.Ordinal))
             {
-                homes.Add(await HomeOfAsync(machine, user, cancellationToken).ConfigureAwait(false) ?? (mac ? $"/Users/{user}" : $"/home/{user}"));
-            }
-
-            if (await HomeOfAsync(machine, KioskSteps.User, cancellationToken).ConfigureAwait(false) is { } kiosk)
-            {
-                homes.Add(kiosk);
+                homes.AddRange(await AccountHomesAsync(machine, user, cancellationToken).ConfigureAwait(false));
             }
         }
 
         return [.. homes.Where(home => home.Length > 1 && home.StartsWith('/')).Distinct(StringComparer.Ordinal)];
     }
 
-    // The account's home in the account database (Linux); null when there is no such account or no database to ask.
-    private static async Task<string?> HomeOfAsync(InstallerMachine machine, string user, CancellationToken cancellationToken)
+    // The homes in the account database (getent passwd): every account's, or the one user's. None when it cannot be asked.
+    private static async Task<IReadOnlyList<string>> AccountHomesAsync(InstallerMachine machine, string? user, CancellationToken cancellationToken)
     {
-        if (machine.Os != InstallerOs.Linux)
-        {
-            return null;
-        }
-
-        var lookup = await machine.Commands.RunAsync(new CommandLine("getent", "passwd", user), cancellationToken).ConfigureAwait(false);
-        var fields = lookup.Output.Trim().Split(':');
-        return lookup.Succeeded && fields.Length == 7 && fields[0] == user && fields[5].StartsWith('/') ? fields[5] : null;
+        var lookup = await machine.Commands.RunAsync(
+            user is null ? new CommandLine("getent", "passwd") : new CommandLine("getent", "passwd", user), cancellationToken).ConfigureAwait(false);
+        return lookup.Succeeded
+            ? [.. lookup.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(line => line.Split(':'))
+                .Where(fields => fields.Length == 7 && (user is null || fields[0] == user) && fields[5].StartsWith('/'))
+                .Select(fields => fields[5])]
+            : [];
     }
 }

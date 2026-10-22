@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FluentAssertions;
+using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Plan;
 using HVO.RoofControllerV4.Installer.Roles;
@@ -83,6 +84,45 @@ public sealed class InstallerExtractionFolderTests
     }
 
     [TestMethod]
+    public async Task APurge_RunAsRootItself_LeavesNoNetFolderOfOurs_InAnyHome()
+    {
+        // No sudo to name the person who installed it, and a hvo-roof someone else on the machine ran (review F2).
+        using var pi = await PiWithLegacyFoldersAsync();
+        pi.Environment.Remove("SUDO_USER");
+        pi.Users["astro"] = ["astro"];
+        pi.UserHomes["astro"] = "/home/astro";
+        pi.Write("/home/astro/.net/hvo-roof/0123abcd/libonigwrap.so", "x");
+
+        var run = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        Ours.Where(pi.Exists).Should().BeEmpty();
+        pi.Exists("/home/astro/.net").Should().BeFalse();
+        pi.Exists("/root/.net/someone-else/0123abcd/keep.so").Should().BeTrue();
+        pi.Unexpected.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task ABackup_IsRefused_InAFolderUninstallRemoves_BeforeAPurgeRemovesAnything()
+    {
+        // The purge's own backup, which the uninstall after it would have deleted (review F1).
+        using var pi = await PiWithLegacyFoldersAsync();
+        const string Inside = "/root/.net/hvo-roof-install";
+
+        var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--backup", $"{Inside}/safety-copy.tar.gz", "--confirm", "roofpi");
+        var backup = await pi.RunAsync("backup", "--output", "/home/astro/.net/hvo-roof-kiosk/b.tar.gz");
+
+        purge.ExitCode.Should().Be((int)InstallerExitCode.Refused, purge.ToString());
+        purge.Error.Should().Contain($"is in {Inside}, which uninstall removes");
+        pi.Exists($"{Inside}/safety-copy.tar.gz").Should().BeFalse();
+        Ours.Where(pi.Exists).Should().BeEquivalentTo(Ours);
+        pi.Exists("/etc/hvo-roof/secrets").Should().BeTrue();
+        pi.Exists("/var/lib/hvo-roof").Should().BeTrue();
+        backup.ExitCode.Should().Be((int)InstallerExitCode.Refused, backup.ToString());
+        backup.Error.Should().Contain("is in /home/astro/.net/hvo-roof-kiosk, which uninstall removes");
+    }
+
+    [TestMethod]
     public async Task ANetFolder_ThatIsALink_IsNotFollowed()
     {
         using var pi = await InstallerLifecycleTests.InstalledPiAsync();
@@ -141,5 +181,17 @@ public sealed class InstallerExtractionFolderTests
         LegacyExtractionStep.IsOurs("hvo-roofer").Should().BeFalse();
         LegacyExtractionStep.IsOurs("hvo-sky").Should().BeFalse();
         LegacyExtractionStep.IsOurs("HVO-ROOF").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void APath_IsInAFolderOfOurs_OnlyUnderADotNet()
+    {
+        LegacyExtractionStep.FolderHolding("/root/.net/hvo-roof-install/b.tar.gz").Should().Be("/root/.net/hvo-roof-install");
+        LegacyExtractionStep.FolderHolding("/home/pi/.net/hvo-roof").Should().Be("/home/pi/.net/hvo-roof");
+        LegacyExtractionStep.FolderHolding("/srv/.net/hvo-roof-kiosk/0123abcd/b.tar.gz").Should().Be("/srv/.net/hvo-roof-kiosk");
+        LegacyExtractionStep.FolderHolding("/root/.net/hvo-roofer/b.tar.gz").Should().BeNull();
+        LegacyExtractionStep.FolderHolding("/root/.net/b.tar.gz").Should().BeNull();
+        LegacyExtractionStep.FolderHolding("/root/hvo-roof/b.tar.gz").Should().BeNull();
+        LegacyExtractionStep.FolderHolding("/var/backups/hvo-roof/hvo-roof-pi.tar.gz").Should().BeNull();
     }
 }
