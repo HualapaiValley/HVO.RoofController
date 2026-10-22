@@ -106,6 +106,41 @@ public sealed class C14MemoryDiagnosticsTests
     }
 
     [TestMethod]
+    public void TheEnvironmentRecordsOnlyAllowlistedRuntimeSettings_AndOnlyPlainNumbers()
+    {
+        using var directory = new WebTestSupport.TempDirectory();
+        var environment = new Dictionary<string, string>
+        {
+            ["DOTNET_TieredCompilation"] = "0",
+            ["COMPlus_TieredPGO"] = "0",
+            ["DOTNET_GCgen0size"] = "0x4000000",
+            ["MALLOC_ARENA_MAX"] = "2",
+            ["DOTNET_gcServer"] = "/sensitive-path",
+            ["DOTNET_SOME_TOKEN"] = "1",
+            ["HOSTNAME"] = "sensitive-host",
+            ["GITHUB_ACTIONS"] = "true"
+        };
+        using (new C14MemoryDiagnostics(directory.Path, openProc: _ => throw new PlatformNotSupportedException(),
+                   environmentVariable: name => environment.GetValueOrDefault(name))) { }
+
+        var text = File.ReadAllText(directory.File(C14MemoryDiagnostics.EnvironmentFile));
+        using var document = JsonDocument.Parse(text);
+        document.RootElement.GetProperty("schemaVersion").GetInt32().Should().Be(2);
+        document.RootElement.GetProperty("githubActions").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("runtimeSettings").EnumerateObject().Select(p => (p.Name, p.Value.GetString()))
+            .Should().Equal(
+                ("COMPlus_TieredPGO", "0"), ("DOTNET_GCgen0size", "0x4000000"), ("DOTNET_TieredCompilation", "0"),
+                ("DOTNET_gcServer", "[value withheld]"), ("MALLOC_ARENA_MAX", "2"));
+        text.Should().NotContain("sensitive").And.NotContain("TOKEN");
+
+        using var unset = new WebTestSupport.TempDirectory();
+        using (new C14MemoryDiagnostics(unset.Path, openProc: _ => throw new PlatformNotSupportedException(),
+                   environmentVariable: _ => null)) { }
+        using var empty = JsonDocument.Parse(File.ReadAllText(unset.File(C14MemoryDiagnostics.EnvironmentFile)));
+        empty.RootElement.GetProperty("runtimeSettings").EnumerateObject().Should().BeEmpty("an absent name was not set");
+    }
+
+    [TestMethod]
     public void AnInterruptedMappingReadKeepsTheSample_ClosesItsReader_AndDeletesItsPartialFile()
     {
         using var directory = new WebTestSupport.TempDirectory();

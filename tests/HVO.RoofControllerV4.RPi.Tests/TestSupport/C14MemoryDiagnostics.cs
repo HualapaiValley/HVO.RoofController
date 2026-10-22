@@ -16,18 +16,35 @@ internal sealed class C14MemoryDiagnostics : IDisposable
     internal const string SamplesFile = "soak-memory.jsonl";
     internal const string EnvironmentFile = "soak-environment.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    // Runtime and allocator settings that change what C14 measures. The runtime reads each DOTNET_ name also as COMPlus_.
+    private static readonly string[] RuntimeSettingNames =
+    [
+        "TieredCompilation", "TieredPGO", "TC_QuickJitForLoops", "TC_CallCountThreshold", "ReadyToRun",
+        "gcServer", "gcConcurrent", "GCHeapCount", "GCHeapHardLimit", "GCgen0size", "GCConserveMemory",
+        "GCDynamicAdaptationMode"
+    ];
+
+    private static readonly string[] AllocatorSettingNames =
+        ["MALLOC_ARENA_MAX", "MALLOC_TRIM_THRESHOLD_", "MALLOC_MMAP_THRESHOLD_", "MALLOC_TOP_PAD_"];
+
+    // Runtime values are hexadecimal by default; allocator values are decimal. Anything else is withheld.
+    private static readonly Regex PlainNumber = new("^(?:0[xX])?[0-9A-Fa-f]{1,16}$", RegexOptions.CultureInvariant);
     private readonly string directory;
     private readonly Func<string, TextReader> openProc;
     private readonly Action<string> attach;
+    private readonly Func<string, string?> environmentVariable;
     private readonly FileStream stream;
     private readonly StreamWriter writer;
     private bool firstSettled;
     private int sampleIndex;
 
-    internal C14MemoryDiagnostics(string directory, Action<string>? attach = null, Func<string, TextReader>? openProc = null)
+    internal C14MemoryDiagnostics(string directory, Action<string>? attach = null, Func<string, TextReader>? openProc = null,
+        Func<string, string?>? environmentVariable = null)
     {
         this.directory = directory;
         this.attach = attach ?? (_ => { });
+        this.environmentVariable = environmentVariable ?? Environment.GetEnvironmentVariable;
         this.openProc = openProc ?? (OperatingSystem.IsLinux()
             ? name => File.OpenText("/proc/self/" + name)
             : _ => throw new PlatformNotSupportedException());
@@ -148,13 +165,13 @@ internal sealed class C14MemoryDiagnostics : IDisposable
         stream.Flush(flushToDisk: true);
     }
 
-    private static object EnvironmentInfo()
+    private object EnvironmentInfo()
     {
         var assembly = typeof(C14MemoryDiagnostics).Assembly;
         var metadata = assembly.GetCustomAttributes<AssemblyMetadataAttribute>().ToDictionary(a => a.Key, a => a.Value);
         return new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
             startedUtc = DateTimeOffset.UtcNow,
             runtime = new
             {
@@ -174,9 +191,24 @@ internal sealed class C14MemoryDiagnostics : IDisposable
                 targetFramework = assembly.GetCustomAttribute<System.Runtime.Versioning.TargetFrameworkAttribute>()?.FrameworkName,
                 version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             },
-            // Explicitly allowlisted booleans only: no environment, arguments, hostnames or directory dumps.
-            githubActions = Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true"
+            // Explicitly allowlisted names and plain numbers only: no environment, arguments, hostnames or directory dumps.
+            runtimeSettings = RuntimeSettings(),
+            githubActions = environmentVariable("GITHUB_ACTIONS") == "true"
         };
+    }
+
+    /// <summary>The allowlisted settings that are set, each with its value when that is a plain number; an absent name was not set.</summary>
+    private SortedDictionary<string, string> RuntimeSettings()
+    {
+        var settings = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var names = RuntimeSettingNames.SelectMany(name => new[] { "DOTNET_" + name, "COMPlus_" + name }).Concat(AllocatorSettingNames);
+        foreach (var name in names)
+        {
+            if (environmentVariable(name) is { } value)
+                settings[name] = PlainNumber.IsMatch(value) ? value : "[value withheld]";
+        }
+
+        return settings;
     }
 
     public void Dispose() => writer.Dispose();
