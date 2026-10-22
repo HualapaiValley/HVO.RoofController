@@ -50,7 +50,7 @@ probability. The temporary matrix and dispatch-only job exclusions are removed f
 
 | Variant | Working set, first → last five medians (MiB) | Endpoint | Trend | Managed endpoint / trend | JIT methods added, settled period |
 |---|---:|---:|---:|---:|---:|
-| baseline-a | 205.44 → 222.77 | +8.44% | +7.80% | −20.67% / +2.35% | 1,556 |
+| baseline-a | 205.44 → 222.77 | +8.43% | +7.80% | −20.67% / +2.35% | 1,556 |
 | baseline-b | 213.79 → 228.68 | +6.97% | +5.51% | +0.68% / +6.67% | 1,552 |
 | tiering-off-a | 178.55 → 173.48 | −2.84% | −2.50% | +0.35% / −6.18% | 1 |
 | tiering-off-b | 176.77 → 175.38 | −0.79% | −1.68% | −20.87% / −14.57% | 2 |
