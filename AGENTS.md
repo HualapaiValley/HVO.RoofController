@@ -327,6 +327,9 @@ Every change, by a person or an agent, goes the same way:
    `gh pr ready <n>`, then `gh pr merge <n> --auto --merge --match-head-commit <sha>`. If `gh` answers that
    required checks are "expected", the checks hadn't registered yet; run it again a minute later. Any new push
    turns auto-merge off, and the new head needs review again before it goes back on.
+7. **Clean up.** After the merge, remove everything the change used: its worktree and local branch (GitHub deletes
+   the remote branch), scratch directories, review checkouts, and any containers, images, volumes, emulators or test
+   processes you started. Keep something only when a follow-up needs it, and say what and why on the issue.
 
 ### Reviews
 
