@@ -294,9 +294,11 @@ merging. In a workflow:
   same pull request, with the issue's number. A change only contributors see (tests, CI, contributor docs) needs none;
   say so in the pull request.
 - **Docs and screenshots** change in the same pull request as the behaviour they describe.
-- **Merging.** Merge commits only, never a squash or a rebase. When review has converged (below), turn on auto-merge,
-  and GitHub merges once every required check passes. Then check that the issue closed; if not, close it with a
-  comment naming the pull request. GitHub deletes the remote branch; remove your local branch and worktree.
+- **Merging.** Merge commits only, never a squash or a rebase. Branch protection enforces only 13 of the checks: not
+  `terminal-distributions` or the image workflows. So turn on auto-merge only after review has converged and every
+  applicable workflow has passed on the head ([Pull request lifecycle](#pull-request-lifecycle), step 6). Then check
+  that the issue closed; if not, close it with a comment naming the pull request. GitHub deletes the remote branch;
+  remove your local branch and worktree.
 
 ### Pull request lifecycle
 
@@ -306,9 +308,11 @@ Every change, by a person or an agent, goes the same way:
 2. **Check it locally.** Run the build and tests in [Building and testing](#building-and-testing) that the change can
    affect before asking for review. For anything touching the motor, relays, limits, interlocks or the installer,
    run the hardware-free scenarios in [Testing without hardware](#testing-without-hardware) too.
-3. **Independent review.** The reviewer is someone other than the author: a person, or an agent on a different
-   model from the one that wrote the change. They review the exact range, read-only. An initial review covers the
-   whole pull request. A rereview covers only the commits since the last reviewed head and checks every earlier
+3. **Independent review.** Ask for it once CI on the draft has passed ([CONTRIBUTING.md](CONTRIBUTING.md)). The
+   reviewer is someone other than the author: a person, or an agent on a different model from the one that wrote
+   the change. Read-only means the reviewer changes no code, branch or pull request state. The review is posted as
+   [Reviews](#reviews) describes, by the reviewer when they can comment on GitHub, otherwise verbatim by the author.
+   An initial review covers the whole pull request. A rereview covers only the commits since the last reviewed head and checks every earlier
    finding by its ID. The review gives:
    - a verdict, `CLEAN` or `CHANGES_REQUIRED`;
    - its findings `F1`, `F2`, … (numbered on across rounds), each with a severity (Critical, High, Medium, Low),
@@ -319,14 +323,19 @@ Every change, by a person or an agent, goes the same way:
    authentication), wrong behaviour against a documented contract, a broken install, upgrade or rollback, broken
    CI or release, and unmet acceptance criteria. Everything else is non-blocking. Fix it if it's cheap and in
    scope; otherwise collect it in one follow-up issue per pull request.
-5. **Corrections.** For each finding you accept, first add a test that fails on the reviewed head, then fix it.
+5. **Corrections.** For each finding you accept about executable behaviour, first add a test that fails on the
+   reviewed head, then fix it. A documentation finding is verified against its source instead: the code, a command's
+   output, the setting or the linked page.
    Push all of a round's corrections at once, then ask for the rereview. After three rereviews, remaining
    non-blocking findings go to the follow-up issue. A blocking finding is never deferred.
-6. **Finalize.** Once the review is clean and nothing is left to correct, mark the pull request ready and turn on
-   auto-merge pinned to the reviewed head:
-   `gh pr ready <n>`, then `gh pr merge <n> --auto --merge --match-head-commit <sha>`. If `gh` answers that
-   required checks are "expected", the checks hadn't registered yet; run it again a minute later. Any new push
-   turns auto-merge off, and the new head needs review again before it goes back on.
+6. **Finalize.** Once the review is clean and nothing is left to correct, mark the pull request ready with
+   `gh pr ready <n> -R HualapaiValley/HVO.RoofController`. Wait until every applicable workflow on the reviewed head has passed, including the ones
+   protection doesn't require (`gh pr checks <n> -R HualapaiValley/HVO.RoofController`). Then turn on auto-merge pinned to that head:
+   `gh pr merge <n> -R HualapaiValley/HVO.RoofController --auto --merge --match-head-commit <sha>`. If `gh` answers that required checks are
+   "expected", run it again a minute later.
+
+   Auto-merge does **not** turn itself off when someone with write access pushes. So before any further push,
+   turn it off with `gh pr merge <n> -R HualapaiValley/HVO.RoofController --disable-auto`. Get the new head reviewed, then finalize again.
 7. **Clean up.** After the merge, remove everything the change used: its worktree and local branch (GitHub deletes
    the remote branch), scratch directories, review checkouts, and any containers, images, volumes, emulators or test
    processes you started. Keep something only when a follow-up needs it, and say what and why on the issue.
