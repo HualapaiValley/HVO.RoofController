@@ -423,7 +423,7 @@ internal static class BackupCommands
 
     // What the path is (as stat names it: "regular file", "directory", "symbolic link", …) and who owns it, without
     // following a link (or, with follow, of what a link names); null when it is not there.
-    private static async Task<(string Kind, string? Owner)?> StatAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, bool follow = false)
+    internal static async Task<(string Kind, string? Owner)?> StatAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, bool follow = false)
     {
         var result = await machine.Commands.RunAsync(
             follow ? new CommandLine("stat", "-L", "-c", "%F|%U:%G", "--", path) : new CommandLine("stat", "-c", "%F|%U:%G", "--", path),

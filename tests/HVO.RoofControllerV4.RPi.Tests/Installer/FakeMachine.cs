@@ -708,14 +708,18 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
 
     public FakeMachine Write(string path, string content)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(OnDisk(path))!);
+        // Model ordinary root-owned system paths independently of the host's umask. Existing permissions are kept,
+        // including unsafe modes a test deliberately supplied, so trust regressions cannot be repaired by the fixture.
+        Folder(Path.GetDirectoryName(path)!);
+        var exists = File.Exists(OnDisk(path));
         File.WriteAllText(OnDisk(path), content);
+        if (!exists) File.SetUnixFileMode(OnDisk(path), Modes.File);
         return this;
     }
 
     public FakeMachine Folder(string path)
     {
-        Directory.CreateDirectory(OnDisk(path));
+        if (!Directory.Exists(OnDisk(path))) Machine.CreateDirectory(path, Modes.Folder);
         return this;
     }
 

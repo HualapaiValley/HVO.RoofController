@@ -133,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Refuse unsafe kiosk handoff/helper and unit paths before service activation: existing files and every parent must
+  be root-owned, writable only by root and free of symbolic links, even when helper content is unchanged. Kiosk
+  startup and handoff diagnostics explicitly stay in the journal while tty1 supplies input (#153).
 - Stop the kiosk unpacking its native libraries under `~/.net`: they go under its own state folder, which `uninstall --purge`
   removes with its cache. Uninstall now removes the `~/.net/hvo-roof*` folders earlier releases left, from every home on
   the machine for a system install or from yours for your own. Backups are refused in folders uninstall removes, including

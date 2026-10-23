@@ -27,6 +27,27 @@ gate = module('display_gate', 'display-gate.py')
 
 
 class SplashTests(unittest.TestCase):
+    def test_kiosk_tty_input_keeps_startup_and_handoff_diagnostics_in_journal(self):
+        analyze = Path('/usr/bin/systemd-analyze')
+        if not analyze.exists():
+            self.skipTest('Offline systemd unit parser is unavailable on this platform')
+        units = self.root / 'diagnostic-units'
+        units.mkdir()
+        # Resolve the shipped policy without starting a process, using a harmless executable for verification.
+        kiosk = (FOLDER.parent / 'hvo-roof-kiosk.service').read_text().replace(
+            '/opt/hvo-roof-kiosk/hvo-roof-kiosk', '/usr/bin/true')
+        (units / 'hvo-roof-kiosk.service').write_text(kiosk)
+        env = {**os.environ, 'SYSTEMD_UNIT_PATH': str(units) + ':', 'SYSTEMD_LOG_LEVEL': 'debug'}
+        result = subprocess.run([str(analyze), 'verify', '--man=no', '--generators=no',
+                                 'hvo-roof-kiosk.service'], env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = '\n'.join(line.strip() for line in (result.stdout + result.stderr).splitlines()
+                             if line.strip().startswith(('StandardInput:', 'StandardOutput:', 'StandardError:', 'TTYPath:')))
+        self.assertIn('StandardInput: tty', resolved)
+        self.assertIn('TTYPath: /dev/tty1', resolved)
+        self.assertIn('StandardOutput: journal', resolved)
+        self.assertIn('StandardError: journal', resolved)
+
     def test_terminal_handoff_and_managed_splash_have_no_systemd_ordering_cycle(self):
         analyze = Path('/usr/bin/systemd-analyze')
         if not analyze.exists():

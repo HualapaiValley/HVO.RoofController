@@ -201,7 +201,13 @@ its restart. Invalid settings (78) also prevent restart. An unexpected clean exi
 main process's successful exit 80 activates the login handoff. The handoff uses fixed host commands and touches
 no controller service, container or credentials. Its root-owned script is installed program code, outside data
 backups and independent of the executable so an older program can be rolled back without understanding a new
-handoff argument. A handoff failure is reported in `journalctl -u hvo-roof-kiosk`.
+handoff argument. The installer checks the helper, both units and every parent directory: existing paths must be
+root-owned, without group/other write permission or symbolic links. It refuses an unsafe installation, including
+an unchanged helper owned by another user, and leaves its existing data and keys alone. A Linux administrator must
+secure or move aside the unsafe paths before reinstalling. The same checks guard service activation during
+certificate renewal and rollback; a restore reinstalls the helper from program resources, never backup data.
+TTY input stays on tty1, while stdout and stderr explicitly go to the journal, including startup refusals and
+handoff failures: `journalctl -u hvo-roof-kiosk`.
 From a separately authenticated recovery login (for example SSH), use `sudo systemctl start hvo-roof-terminal.service`
 to restore the login or `sudo systemctl start hvo-roof-kiosk.service` to restore the locked UI. A Linux administrator
 can also restart the kiosk after correcting invalid settings. Controller Restart in password-authenticated clients
@@ -336,10 +342,15 @@ The steps the installer takes, for a Pi set up without it:
    always installs the rule, which does nothing without it). The rule acts on the `add` event the boot sends, so
    apply it now with one (`udevadm trigger` sends `change` unless told):
 
+   Before installing by hand, ensure `/opt/hvo-roof-kiosk`, `/etc/systemd/system` and their parents are ordinary
+   root-owned directories writable only by root, and any existing helper or unit is an ordinary root-owned file
+   writable only by root. Move unsafe paths aside without discarding existing settings or keys; use the installer
+   to verify these requirements before activation.
+
    ```bash
-   sudo install -m 644 hvo-roof-kiosk.service /etc/systemd/system/
-   sudo install -m 644 hvo-roof-terminal.service /etc/systemd/system/
-   sudo install -m 644 terminal-handoff.sh /opt/hvo-roof-kiosk/
+   sudo install -o root -g root -m 644 hvo-roof-kiosk.service /etc/systemd/system/
+   sudo install -o root -g root -m 644 hvo-roof-terminal.service /etc/systemd/system/
+   sudo install -o root -g root -m 644 terminal-handoff.sh /opt/hvo-roof-kiosk/
    sudo install -m 644 99-hvo-roof-kiosk-backlight.rules /etc/udev/rules.d/
    sudo udevadm trigger --action=add --subsystem-match=backlight
    sudo systemctl daemon-reload

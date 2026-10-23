@@ -76,6 +76,9 @@ public sealed class InstallerLifecycleTests
         pi.Read(KioskSteps.Program).Should().Be(Encoding.UTF8.GetString(FakeMachine.KioskProgram(NewVersion)));
         pi.Read(KioskSteps.PreviousProgram).Should().Be(Encoding.UTF8.GetString(FakeMachine.KioskProgram("4.0.0")));
         pi.KioskStarts.Should().Be(2, "the kiosk is started again to run the new program");
+        pi.Read(KioskSteps.TerminalHandoffFile).Should().Be(KioskSteps.Resource("terminal-handoff.sh"));
+        pi.Owners[KioskSteps.TerminalHandoffFile].Should().Be("root:root");
+        pi.Mode(KioskSteps.TerminalHandoffFile).Should().Be(Modes.File);
 
         var record = Record(pi);
         record.Version.Should().Be(NewVersion);
@@ -783,6 +786,9 @@ public sealed class InstallerLifecycleTests
         pi.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(running => running.Version == "4.0.0" && running.State == "running");
         pi.Containers[ControllerRollbackStep.PreviousContainer].Should().Match<FakeContainer>(kept => kept.Version == NewVersion && kept.State == "exited");
         pi.Read(KioskSteps.Program).Should().Be(Encoding.UTF8.GetString(FakeMachine.KioskProgram("4.0.0")));
+        pi.Read(KioskSteps.TerminalHandoffFile).Should().Be(KioskSteps.Resource("terminal-handoff.sh"));
+        pi.Owners[KioskSteps.TerminalHandoffFile].Should().Be("root:root");
+        pi.Mode(KioskSteps.TerminalHandoffFile).Should().Be(Modes.File);
         pi.Read(InstallPaths.SystemInstaller).Should().Be(Encoding.UTF8.GetString(FakeMachine.InstallerProgram("4.0.0", "linux-arm64")));
 
         var record = Record(pi);
@@ -798,6 +804,28 @@ public sealed class InstallerLifecycleTests
         again.ExitCode.Should().Be(0, again.ToString());
         again.Output.Should().Contain($"rolled back from {NewVersion} already");
         pi.DeployOptions.Count(options => options == "--rollback").Should().Be(1);
+    }
+
+    [TestMethod]
+    [DataRow("rollback")]
+    [DataRow("upgrade")]
+    [DataRow("cert")]
+    public async Task KioskLifecycle_RefusesAnUntrustedHandoff_BeforeActivatingTheUnit(string command)
+    {
+        using var pi = command == "rollback" ? await UpgradedPiAsync() : await InstalledPiAsync();
+        if (command == "upgrade") pi.WithRelease(NewVersion, latest: true);
+        pi.Owners[KioskSteps.TerminalHandoffFile] = "untrusted:untrusted";
+        var starts = pi.KioskStarts;
+        var key = pi.Read(KioskSteps.DeviceKeyFile);
+        pi.Replies = _ => true;
+
+        var run = command == "cert" ? await pi.RunAsync("cert", "--renew") : await pi.RunAsync(command);
+
+        run.ExitCode.Should().NotBe(0);
+        run.ToString().Should().Contain("privileged kiosk handoff cannot trust");
+        pi.KioskStarts.Should().Be(starts);
+        pi.Owners[KioskSteps.TerminalHandoffFile].Should().Be("untrusted:untrusted");
+        pi.Read(KioskSteps.DeviceKeyFile).Should().Be(key);
     }
 
     [TestMethod]

@@ -215,6 +215,9 @@ public sealed class InstallerBackupTests
         pi.Read(ManagedSecret).Should().Be(managed);
         pi.ApiKeyValues().Should().BeEquivalentTo(keys);
         pi.Read(KioskSteps.DeviceKeyFile).Should().Be(deviceKey);
+        pi.Read(KioskSteps.TerminalHandoffFile).Should().Be(KioskSteps.Resource("terminal-handoff.sh"));
+        pi.Owners[KioskSteps.TerminalHandoffFile].Should().Be("root:root", "restore reinstalls the helper as program code");
+        pi.Mode(KioskSteps.TerminalHandoffFile).Should().Be(Modes.File);
         pi.Read(Ca).Should().Be(ca);
         File.ReadAllBytes(pi.OnDisk(Certificate)).Should().Equal(certificate, "the certificate is for this machine's names still");
         foreach (var (path, mode) in modes)
