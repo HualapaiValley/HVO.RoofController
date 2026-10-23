@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Kiosk **Terminal → Exit UI to terminal**: a verified operator PIN and confirmation close only the UI, release
+  display/input ownership, and expose a fresh ordinary Linux login. Returning through the Linux-authorized service
+  start locks the kiosk again; controller availability and normal operator-lease expiry are preserved (#153).
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
 - Offline installs and restores: each release carries the controller and HAT emulator images as offline archives for

@@ -1,0 +1,20 @@
+# Fresh Linux authentication, independent of any getty@tty1 autologin override.
+[Unit]
+Description=HVO kiosk local Linux login
+Conflicts=hvo-roof-kiosk.service getty@tty1.service
+After=hvo-roof-kiosk.service getty@tty1.service
+ConditionPathExists=/dev/tty1
+
+[Service]
+Type=simple
+ExecStart=/sbin/agetty --noclear --login-program /bin/login tty1 linux
+Restart=always
+RestartSec=1
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+SendSIGHUP=yes
+KillMode=control-group

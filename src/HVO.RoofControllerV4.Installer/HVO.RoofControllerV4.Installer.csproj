@@ -40,6 +40,8 @@
   <!-- The kiosk's unit, backlight rule and example settings, as the release's kiosk folder has them. -->
   <ItemGroup>
     <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/hvo-roof-kiosk.service" Link="Plan/Kiosk/hvo-roof-kiosk.service" LogicalName="kiosk/hvo-roof-kiosk.service" />
+    <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/hvo-roof-terminal.service" Link="Plan/Kiosk/hvo-roof-terminal.service" LogicalName="kiosk/hvo-roof-terminal.service" />
+    <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/terminal-handoff.sh" Link="Plan/Kiosk/terminal-handoff.sh" LogicalName="kiosk/terminal-handoff.sh" />
     <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/99-hvo-roof-kiosk-backlight.rules" Link="Plan/Kiosk/99-hvo-roof-kiosk-backlight.rules" LogicalName="kiosk/99-hvo-roof-kiosk-backlight.rules" />
     <EmbeddedResource Include="../HVO.RoofControllerV4.Kiosk/deploy/appsettings.Local.example.json" Link="Plan/Kiosk/appsettings.Local.example.json" LogicalName="kiosk/appsettings.Local.example.json" />
   </ItemGroup>

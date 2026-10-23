@@ -69,6 +69,10 @@ public sealed class InstallerKioskTests
         options.Rotation.Should().Be(90, "the rest of the example's settings are kept");
 
         pi.Read(MachineSurveyor.KioskUnitFile).Should().Be(KioskSteps.Resource("hvo-roof-kiosk.service"));
+        pi.Read(KioskSteps.TerminalUnitFile).Should().Be(KioskSteps.Resource("hvo-roof-terminal.service"));
+        pi.Mode(KioskSteps.TerminalUnitFile).Should().Be(Modes.File);
+        pi.Read(KioskSteps.TerminalHandoffFile).Should().Be(KioskSteps.Resource("terminal-handoff.sh"));
+        pi.Mode(KioskSteps.TerminalHandoffFile).Should().Be(Modes.File);
         pi.Read(KioskSteps.BacklightRuleFile).Should().Be(KioskSteps.Resource("99-hvo-roof-kiosk-backlight.rules"));
         pi.Kiosk.Should().Be((true, true));
         pi.KioskStarts.Should().Be(1);

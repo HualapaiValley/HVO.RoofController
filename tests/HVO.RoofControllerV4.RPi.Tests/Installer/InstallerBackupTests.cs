@@ -74,6 +74,7 @@ public sealed class InstallerBackupTests
         var entries = Entries(pi, DefaultBackup);
         entries[0].Name.Should().Be(BackupCommands.ManifestName, "the manifest comes first");
         var names = entries.Select(entry => "/" + entry.Name).ToList();
+        names.Should().NotContain(KioskSteps.TerminalHandoffFile, "the root-run handoff is installed program code, never restored data");
         names.Should().Contain([InstallPaths.SystemRecord, Ca, Certificate, KioskSteps.DeviceKeyFile, KioskSteps.SettingsFile, "/etc/hvo-roof/ca", "/var/lib/hvo-roof/identity", ManagedSecret]);
         names.Should().Contain(name => name.StartsWith("/etc/hvo-roof/secrets/", StringComparison.Ordinal));
         names.Should().Contain(name => name.StartsWith("/etc/hvo-roof/ca/", StringComparison.Ordinal), "the CA's key");

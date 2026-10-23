@@ -234,7 +234,7 @@ jobs:
           mkdir kiosk-artifact
           cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk kiosk-artifact/
           # Splash resources are embedded in the installer, not standalone kiosk assets.
-          cp HVO.RoofControllerV4.Kiosk/deploy/{hvo-roof-kiosk.service,99-hvo-roof-kiosk-backlight.rules,appsettings.Local.example.json} kiosk-artifact/
+          cp HVO.RoofControllerV4.Kiosk/deploy/{hvo-roof-kiosk.service,hvo-roof-terminal.service,terminal-handoff.sh,99-hvo-roof-kiosk-backlight.rules,appsettings.Local.example.json} kiosk-artifact/
           installs=$(grep -oP '^\s*sudo install -m [0-7]+ \K[^ ]+(?= )' ../docs/kiosk.md)
           test -n "$installs"
           for file in $installs; do

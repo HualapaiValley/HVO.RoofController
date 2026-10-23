@@ -895,6 +895,8 @@ public sealed class InstallerLifecycleTests
             $"ghcr.io/hualapaivalley/roof-controller:4.0.0@{FakeMachine.ControllerDigest}");
         pi.Kiosk.Should().Be((false, false));
         pi.Exists(MachineSurveyor.KioskUnitFile).Should().BeFalse();
+        pi.Exists(KioskSteps.TerminalUnitFile).Should().BeFalse();
+        pi.Exists(KioskSteps.TerminalHandoffFile).Should().BeFalse();
         pi.Exists(KioskSteps.BacklightRuleFile).Should().BeFalse();
         pi.Exists(KioskSteps.Program).Should().BeFalse();
         pi.Exists(KioskSteps.PreviousProgram).Should().BeFalse();

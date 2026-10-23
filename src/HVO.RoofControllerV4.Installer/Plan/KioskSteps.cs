@@ -44,6 +44,10 @@ public static class KioskSteps
     /// <summary>The kiosk's cache (its CacheDirectory, fontconfig's cache), and the folder earlier releases unpacked into.</summary>
     public const string CacheFolder = "/var/cache/hvo-roof-kiosk";
     public const string BacklightRuleFile = "/etc/udev/rules.d/99-hvo-roof-kiosk-backlight.rules";
+    /// <summary>The dedicated ordinary Linux login, independent of getty autologin overrides.</summary>
+    public const string TerminalUnitFile = "/etc/systemd/system/hvo-roof-terminal.service";
+    /// <summary>The root-owned fixed handoff script, kept with program code and outside data backups.</summary>
+    public const string TerminalHandoffFile = ProgramFolder + "/terminal-handoff.sh";
 
     /// <summary>The release's kiosk: its asset's kind and platform in release.json.</summary>
     public const string AssetKind = "kiosk";
@@ -53,7 +57,7 @@ public static class KioskSteps
     public const string HideCursorSetting = "vt.global_cursor_default=0";
 
     /// <summary>The display and input libraries, and fontconfig (docs/kiosk.md).</summary>
-    public static IReadOnlyList<string> Packages { get; } = ["libdrm2", "libgbm1", "libegl1", "libgles2", "libinput10", "libfontconfig1"];
+    public static IReadOnlyList<string> Packages { get; } = ["libdrm2", "libgbm1", "libegl1", "libgles2", "libinput10", "libfontconfig1", "kbd"];
 
     /// <summary>The display (and the backlight, with the udev rule), the touchscreen, and the GPU.</summary>
     public static IReadOnlyList<string> Groups { get; } = ["video", "input", "render"];
@@ -85,6 +89,8 @@ public static class KioskSteps
         var key = new KioskDeviceKeyStep(layout, kioskKey);
         var settings = new KioskSettingsStep(layout, controller, certificate, kiosk);
         var unit = new KioskFileStep(MachineSurveyor.KioskUnitFile, "hvo-roof-kiosk.service", "the kiosk's systemd unit");
+        var terminalUnit = new KioskFileStep(TerminalUnitFile, "hvo-roof-terminal.service", "the kiosk's unauthenticated Linux login");
+        var handoff = new KioskFileStep(TerminalHandoffFile, "terminal-handoff.sh", "the kiosk's fixed post-exit login handoff");
         var rule = new KioskFileStep(BacklightRuleFile, "99-hvo-roof-kiosk-backlight.rules", "lets the kiosk turn the screen's backlight off and on");
         var steps = new List<PlanStep>
         {
@@ -96,8 +102,10 @@ public static class KioskSteps
             key,
             settings,
             unit,
+            terminalUnit,
+            handoff,
             rule,
-            new KioskServiceStep(layout, controller, [program, key, settings, unit, rule], unit, rule, authority)
+            new KioskServiceStep(layout, controller, [program, key, settings, unit, terminalUnit, handoff, rule], unit, rule, authority)
         };
 
         if (kiosk.HideCursor)
@@ -716,7 +724,7 @@ public sealed class KioskServiceStep(
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (_needsReload || (unit is not null && context.HasApplied(unit)))
+        if (_needsReload || inputs.OfType<KioskFileStep>().Any(context.HasApplied))
         {
             await KioskSteps.Run(context, "reload systemd's units", new CommandLine("systemctl", "daemon-reload"), cancellationToken).ConfigureAwait(false);
         }

@@ -46,10 +46,13 @@ internal sealed class KioskScreen : IAsyncDisposable
     public static Task<KioskScreen> ShowAsync(KioskHarness harness, int width, int height, double pixelsPerMillimetre)
         => ShowAsync(harness.Console, width, height, pixelsPerMillimetre);
 
-    public static Task<KioskScreen> ShowAsync(KioskConsole console, int width, int height, double pixelsPerMillimetre) => OnUiAsync(() =>
+    public static Task<KioskScreen> ShowAsync(KioskConsole console, int width, int height, double pixelsPerMillimetre, KioskTerminalExit? terminalExit = null) => OnUiAsync(() =>
     {
         var metrics = new KioskMetrics(pixelsPerMillimetre);
-        var shell = new KioskShell(console, metrics);
+        // PIN renders represent the installed direct-display host, including its terminal navigation. No host
+        // command is run by a headless screen. Desktop/password renders have no Linux terminal handoff.
+        terminalExit ??= console.Wording.SignIn == KioskSignIn.Pin ? new KioskTerminalExit(console, () => Task.FromResult(false)) : null;
+        var shell = new KioskShell(console, metrics, terminalExit);
         var window = new Window
         {
             Width = width,
