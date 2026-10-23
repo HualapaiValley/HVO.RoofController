@@ -44,6 +44,10 @@ public static class KioskSteps
     /// <summary>The kiosk's cache (its CacheDirectory, fontconfig's cache), and the folder earlier releases unpacked into.</summary>
     public const string CacheFolder = "/var/cache/hvo-roof-kiosk";
     public const string BacklightRuleFile = "/etc/udev/rules.d/99-hvo-roof-kiosk-backlight.rules";
+    /// <summary>The dedicated ordinary Linux login, independent of getty autologin overrides.</summary>
+    public const string TerminalUnitFile = "/etc/systemd/system/hvo-roof-terminal.service";
+    /// <summary>The root-owned fixed handoff script, kept with program code and outside data backups.</summary>
+    public const string TerminalHandoffFile = ProgramFolder + "/terminal-handoff.sh";
 
     /// <summary>The release's kiosk: its asset's kind and platform in release.json.</summary>
     public const string AssetKind = "kiosk";
@@ -53,7 +57,7 @@ public static class KioskSteps
     public const string HideCursorSetting = "vt.global_cursor_default=0";
 
     /// <summary>The display and input libraries, and fontconfig (docs/kiosk.md).</summary>
-    public static IReadOnlyList<string> Packages { get; } = ["libdrm2", "libgbm1", "libegl1", "libgles2", "libinput10", "libfontconfig1"];
+    public static IReadOnlyList<string> Packages { get; } = ["libdrm2", "libgbm1", "libegl1", "libgles2", "libinput10", "libfontconfig1", "kbd"];
 
     /// <summary>The display (and the backlight, with the udev rule), the touchscreen, and the GPU.</summary>
     public static IReadOnlyList<string> Groups { get; } = ["video", "input", "render"];
@@ -85,6 +89,8 @@ public static class KioskSteps
         var key = new KioskDeviceKeyStep(layout, kioskKey);
         var settings = new KioskSettingsStep(layout, controller, certificate, kiosk);
         var unit = new KioskFileStep(MachineSurveyor.KioskUnitFile, "hvo-roof-kiosk.service", "the kiosk's systemd unit");
+        var terminalUnit = new KioskFileStep(TerminalUnitFile, "hvo-roof-terminal.service", "the kiosk's unauthenticated Linux login");
+        var handoff = new KioskFileStep(TerminalHandoffFile, "terminal-handoff.sh", "the kiosk's fixed post-exit login handoff");
         var rule = new KioskFileStep(BacklightRuleFile, "99-hvo-roof-kiosk-backlight.rules", "lets the kiosk turn the screen's backlight off and on");
         var steps = new List<PlanStep>
         {
@@ -96,8 +102,10 @@ public static class KioskSteps
             key,
             settings,
             unit,
+            terminalUnit,
+            handoff,
             rule,
-            new KioskServiceStep(layout, controller, [program, key, settings, unit, rule], unit, rule, authority)
+            new KioskServiceStep(layout, controller, [program, key, settings, unit, terminalUnit, handoff, rule], unit, rule, authority)
         };
 
         if (kiosk.HideCursor)
@@ -146,6 +154,46 @@ public static class KioskSteps
             ?? throw new InstallerException($"The installer was built without the kiosk's {name}.");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
+    }
+
+    // As for the backup store, inspect each component without following links, from / downward, before reading a
+    // child. Never repair an unsafe existing tree: it may contain someone else's data or already-open writable files.
+    internal static async Task<string?> TrustedPathProblemAsync(InstallerMachine machine, string path, bool allowMissing, CancellationToken cancellationToken)
+    {
+        var parents = new Stack<string>();
+        for (var folder = Path.GetDirectoryName(path); folder is not null; folder = Path.GetDirectoryName(folder))
+            parents.Push(folder);
+
+        foreach (var entry in parents.Append(path))
+        {
+            if (await BackupCommands.StatAsync(machine, entry, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
+            {
+                if (allowMissing) continue;
+                return $"{entry} is missing: reinstall the kiosk before starting its privileged handoff";
+            }
+
+            var directory = entry != path;
+            if (directory ? kind != "directory" : kind is not ("regular file" or "regular empty file"))
+                return $"{entry} is a {kind}: the privileged kiosk handoff requires ordinary files under folders, without symbolic links. Move the unsafe path aside, then reinstall the kiosk";
+
+            if (owner?.StartsWith("root:", StringComparison.Ordinal) != true || machine.GetMode(entry) is not { } mode ||
+                (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+                return $"{entry} is not owned and writable only by root: the privileged kiosk handoff cannot trust it. Have a Linux administrator secure or move aside the unsafe path, then reinstall the kiosk; its existing contents were not changed";
+        }
+
+        return null;
+    }
+
+    // Also used by certificate renewal and program rollback, which retain the installed units and handoff script.
+    internal static async Task<string?> HandoffProblemAsync(InstallerMachine machine, bool activating, CancellationToken cancellationToken)
+    {
+        if (await TrustedPathProblemAsync(machine, MachineSurveyor.KioskUnitFile, !activating, cancellationToken).ConfigureAwait(false) is { } unitProblem)
+            return unitProblem;
+        var required = activating && machine.ReadText(MachineSurveyor.KioskUnitFile)?.Contains("ExecStopPost=", StringComparison.Ordinal) == true;
+        foreach (var path in new[] { TerminalHandoffFile, TerminalUnitFile })
+            if (await TrustedPathProblemAsync(machine, path, !required, cancellationToken).ConfigureAwait(false) is { } problem)
+                return problem;
+        return null;
     }
 
     /// <summary>Runs <paramref name="command"/>, and throws with its last words when it fails.</summary>
@@ -626,21 +674,25 @@ public sealed class KioskFileStep(string path, string resource, string purpose) 
 
     public override string Purpose => purpose;
 
-    public override Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
+    public override async Task<StepCheck> CheckAsync(InstallContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (await KioskSteps.TrustedPathProblemAsync(context.Machine, path, allowMissing: true, cancellationToken).ConfigureAwait(false) is { } problem)
+            return new StepCheck(StepChange.Blocked, problem);
         var current = context.Machine.ReadText(path);
         var mode = context.Machine.GetMode(path);
-        return Task.FromResult(
+        return
             current is null ? new StepCheck(StepChange.Create, Modes.Octal(Modes.File))
             : current != KioskSteps.Resource(resource) ? new StepCheck(StepChange.Change, "this release's")
             : mode is { } found && found != Modes.File ? new StepCheck(StepChange.Change, $"{Modes.Octal(found)} → {Modes.Octal(Modes.File)}")
-            : StepCheck.Unchanged(Modes.Octal(Modes.File)));
+            : StepCheck.Unchanged(Modes.Octal(Modes.File));
     }
 
-    public override Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
+    public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (await KioskSteps.TrustedPathProblemAsync(context.Machine, path, allowMissing: true, cancellationToken).ConfigureAwait(false) is { } problem)
+            throw new InstallerRefusedException(problem);
         var folder = Path.GetDirectoryName(path)!;
         if (!context.Machine.DirectoryExists(folder))
         {
@@ -648,8 +700,10 @@ public sealed class KioskFileStep(string path, string resource, string purpose) 
         }
 
         context.Machine.WriteAtomically(path, KioskSteps.Resource(resource), Modes.File);
+        await Ownership.SetAsync(context, path, "root:root", cancellationToken).ConfigureAwait(false);
+        if (await KioskSteps.TrustedPathProblemAsync(context.Machine, path, allowMissing: false, cancellationToken).ConfigureAwait(false) is { } writtenProblem)
+            throw new InstallerRefusedException(writtenProblem);
         context.Log.Write($"Wrote {path}.");
-        return Task.CompletedTask;
     }
 }
 
@@ -679,6 +733,8 @@ public sealed class KioskServiceStep(
     {
         ArgumentNullException.ThrowIfNull(context);
         var machine = context.Machine;
+        if (await KioskSteps.HandoffProblemAsync(machine, activating: false, cancellationToken).ConfigureAwait(false) is { } problem)
+            return new StepCheck(StepChange.Blocked, problem);
         var enabled = await Systemctl(machine, cancellationToken, "is-enabled", Target).ConfigureAwait(false);
         var active = await Systemctl(machine, cancellationToken, "is-active", Target).ConfigureAwait(false);
         _enabled = enabled == "enabled";
@@ -716,7 +772,10 @@ public sealed class KioskServiceStep(
     public override async Task ApplyAsync(InstallContext context, StepCheck check, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (_needsReload || (unit is not null && context.HasApplied(unit)))
+        // Recheck after every earlier step, before loading/enabling/restarting a unit with a root-run hook.
+        if (await KioskSteps.HandoffProblemAsync(context.Machine, activating: true, cancellationToken).ConfigureAwait(false) is { } problem)
+            throw new InstallerRefusedException(problem);
+        if (_needsReload || inputs.OfType<KioskFileStep>().Any(context.HasApplied))
         {
             await KioskSteps.Run(context, "reload systemd's units", new CommandLine("systemctl", "daemon-reload"), cancellationToken).ConfigureAwait(false);
         }

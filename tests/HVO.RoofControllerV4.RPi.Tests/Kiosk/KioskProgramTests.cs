@@ -516,11 +516,11 @@ public sealed partial class KioskProgramTests
     [GeneratedRegex("ACTION==\"(?<action>[a-z]+)\"")]
     private static partial Regex RuleActionPattern();
 
-    [GeneratedRegex("^ *sudo install -m [0-7]+ (?<source>[^ ]+) [^ ]+$", RegexOptions.Multiline)]
+    [GeneratedRegex("^ *sudo install (?:-o root -g root )?-m [0-7]+ (?<source>[^ ]+) [^ ]+$", RegexOptions.Multiline)]
     private static partial Regex InstallPattern();
 
     /// <summary>A file a command reads: an install's source, or <c>-in</c>'s file.</summary>
-    [GeneratedRegex("(?:^ *sudo install -m [0-7]+ | -in )(?<file>[^ \n]+)", RegexOptions.Multiline)]
+    [GeneratedRegex("(?:^ *sudo install (?:-o root -g root )?-m [0-7]+ | -in )(?<file>[^ \n]+)", RegexOptions.Multiline)]
     private static partial Regex ReadPattern();
 
     /// <summary>The directory the install steps run in: the program beside the deploy files (CI's artifact, or what the page publishes and copies).</summary>

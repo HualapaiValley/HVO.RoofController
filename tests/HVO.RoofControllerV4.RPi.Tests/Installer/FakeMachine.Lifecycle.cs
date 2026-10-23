@@ -392,6 +392,7 @@ internal sealed partial class FakeMachine
             "docker" when arguments is ["image", "rm", var image] => Docker(() => RemoveImage(image)),
             "docker" when arguments is ["network", "rm", var network] => Docker(() => RemoveNetwork(network)),
             "systemctl" when arguments is ["stop", MachineSurveyor.KioskUnit] => Answer(string.Empty, after: () => Kiosk = Kiosk with { Active = false }),
+            "systemctl" when arguments is ["stop", "hvo-roof-terminal.service"] => Answer(string.Empty),
             "systemctl" when arguments is ["disable", MachineSurveyor.KioskUnit] => Exists(MachineSurveyor.KioskUnitFile)
                 ? Answer($"Removed \"/etc/systemd/system/graphical.target.wants/{MachineSurveyor.KioskUnit}\".", after: () => Kiosk = Kiosk with { Enabled = false })
                 : new CommandResult(1, string.Empty, $"Failed to disable unit: Unit file {MachineSurveyor.KioskUnit} does not exist.\n"),

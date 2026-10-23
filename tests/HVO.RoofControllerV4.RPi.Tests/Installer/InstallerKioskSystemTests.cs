@@ -34,7 +34,7 @@ public sealed class InstallerKioskSystemTests
     private const string Version = "4.0.0";
 
     // The folders and files this test makes, and removes when it ends.
-    private static readonly string[] Made = ["/etc/hvo-roof", "/opt/hvo-roof-kiosk", "/etc/hvo-roof-kiosk"];
+    private static readonly string[] Made = ["/etc/hvo-roof", "/opt/hvo-roof-kiosk", "/etc/hvo-roof-kiosk", "/etc/systemd/system/hvo-roof-kiosk.service.d"];
 
     [TestMethod]
     public async Task TheKiosk_IsInstalled_AndStartedBySystemd_AndASecondRunChangesNothing()
@@ -53,6 +53,17 @@ public sealed class InstallerKioskSystemTests
         var work = Directory.CreateTempSubdirectory("hvo-kiosk-install-");
         try
         {
+            // This opt-in CI host has no display/VT. Exercise installation and process startup with null console
+            // descriptors; the production unit's real TTY policy is checked by the headless handoff fixtures.
+            Directory.CreateDirectory(Made[^1]);
+            File.WriteAllText(Path.Combine(Made[^1], "headless-test.conf"), """
+                [Service]
+                StandardInput=null
+                TTYPath=/dev/null
+                TTYReset=no
+                TTYVHangup=no
+                TTYVTDisallocate=no
+                """);
             var release = MakeRelease(work.FullName, File.ReadAllBytes(program!));
             var layout = ControllerLayout.For(machine);
             var controller = new ControllerSettings();
@@ -121,7 +132,7 @@ public sealed class InstallerKioskSystemTests
         finally
         {
             Run("systemctl", "disable", "--now", MachineSurveyor.KioskUnit);
-            foreach (var file in new[] { MachineSurveyor.KioskUnitFile, KioskSteps.BacklightRuleFile })
+            foreach (var file in new[] { MachineSurveyor.KioskUnitFile, KioskSteps.TerminalUnitFile, KioskSteps.BacklightRuleFile })
             {
                 File.Delete(file);
             }

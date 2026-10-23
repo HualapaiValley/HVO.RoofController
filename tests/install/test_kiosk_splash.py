@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -26,6 +27,67 @@ gate = module('display_gate', 'display-gate.py')
 
 
 class SplashTests(unittest.TestCase):
+    def test_kiosk_tty_input_keeps_startup_and_handoff_diagnostics_in_journal(self):
+        analyze = Path('/usr/bin/systemd-analyze')
+        if not analyze.exists():
+            self.skipTest('Offline systemd unit parser is unavailable on this platform')
+        units = self.root / 'diagnostic-units'
+        units.mkdir()
+        # Resolve the shipped policy without starting a process, using a harmless executable for verification.
+        kiosk = (FOLDER.parent / 'hvo-roof-kiosk.service').read_text().replace(
+            '/opt/hvo-roof-kiosk/hvo-roof-kiosk', '/usr/bin/true')
+        (units / 'hvo-roof-kiosk.service').write_text(kiosk)
+        env = {**os.environ, 'SYSTEMD_UNIT_PATH': str(units) + ':', 'SYSTEMD_LOG_LEVEL': 'debug'}
+        result = subprocess.run([str(analyze), 'verify', '--man=no', '--generators=no',
+                                 'hvo-roof-kiosk.service'], env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = '\n'.join(line.strip() for line in (result.stdout + result.stderr).splitlines()
+                             if line.strip().startswith(('StandardInput:', 'StandardOutput:', 'StandardError:', 'TTYPath:')))
+        self.assertIn('StandardInput: tty', resolved)
+        self.assertIn('TTYPath: /dev/tty1', resolved)
+        self.assertIn('StandardOutput: journal', resolved)
+        self.assertIn('StandardError: journal', resolved)
+
+    def test_terminal_handoff_and_managed_splash_have_no_systemd_ordering_cycle(self):
+        analyze = Path('/usr/bin/systemd-analyze')
+        if not analyze.exists():
+            self.skipTest('Offline systemd unit parser is unavailable on this platform')
+        files, _, _ = setup.desired(self.config, self.root)
+        units = self.root / 'unit-fixture'
+        units.mkdir()
+        for name, body in files.items():
+            if name.startswith('/etc/systemd/system/'):
+                target = units / name.removeprefix('/etc/systemd/system/')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                content = body.decode()
+                # Only parser/ordering acceptance: these host commands are never run or installed.
+                content = content.replace('/usr/local/libexec/hvo-roof-splash-handoff', '/usr/bin/true')
+                content = content.replace('/usr/local/libexec/hvo-roof-display-gate', '/usr/bin/true')
+                target.write_text(content)
+        deploy = FOLDER.parent
+        kiosk = (deploy / 'hvo-roof-kiosk.service').read_text().replace(
+            '/opt/hvo-roof-kiosk/hvo-roof-kiosk', '/usr/bin/true')
+        # Check the union of boot/handoff ordering edges. The real units are exclusive; removing only Conflicts
+        # in this offline graph lets one synthetic target load every ordering edge in the same transaction.
+        def ordering_only(content):
+            return '\n'.join(line for line in content.splitlines() if not line.startswith('Conflicts=')) + '\n'
+        kiosk = ordering_only(kiosk)
+        (units / 'hvo-roof-kiosk.service').write_text(kiosk)
+        (units / 'hvo-roof-terminal.service').write_text(ordering_only((deploy / 'hvo-roof-terminal.service').read_text()))
+        required = ('hvo-roof-kiosk.service hvo-roof-terminal.service hvo-roof-display-gate.service '
+                    'getty@tty1.service plymouth-quit.service')
+        (units / 'hvo-test-terminal.target').write_text('[Unit]\nRequires=' + required + '\n')
+        env = {**os.environ, 'SYSTEMD_UNIT_PATH': str(units) + ':'}
+        args = [str(analyze), 'verify', '--man=no', '--generators=no', 'hvo-test-terminal.target']
+        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Prove this fixture detects the incompatible order rather than merely accepting any unit text.
+        (units / 'hvo-roof-kiosk.service').write_text(kiosk.replace(
+            'Before=getty@tty1.service', 'After=getty@tty1.service'))
+        incompatible = subprocess.run(args, env=env, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(incompatible.returncode, 0)
+        self.assertIn('cycle', incompatible.stderr.lower())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
