@@ -528,6 +528,11 @@ jobs:
       - name: Build the tests
         run: dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release -v minimal
 
+      # Hosted runners expose /opt for tool installation. Give this disposable fixture the trusted parent
+      # required by a production kiosk; do not change the installer guard or any existing tool-cache contents.
+      - name: Prepare trusted kiosk install parent
+        run: sudo install -d -o root -g root -m 0755 /opt
+
       # As root, as the installer runs for the kiosk. The test is skipped without HVO_KIOSK_INSTALL, so the summary must
       # show it passed, not skipped.
       - name: Install the kiosk
