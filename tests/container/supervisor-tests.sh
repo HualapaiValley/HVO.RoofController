@@ -884,7 +884,7 @@ test_the_deploy_script_reads_the_supervisors_state_file() {
   [[ -n "${reader}" ]] || { fail_test "supervised_process() is not in ${DEPLOY_SCRIPT}"; return; }
   eval "${reader}"
   # What the deploy script runs (dockerc exec <container> cat <file>), answered with the supervisor's own file.
-  # shellcheck disable=SC2317 # called by supervised_process, which eval defines
+  # shellcheck disable=SC2317,SC2329 # called by supervised_process, which eval defines
   dockerc() {
     [[ "$1 $3 $4" == "exec cat /run/hvo-roof/supervisor.json" ]] && cat "${WORK}/run/supervisor.json"
   }
