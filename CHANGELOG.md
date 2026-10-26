@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Kiosk **Terminal → Exit UI to terminal**: a verified operator PIN and confirmation close only the UI, release
+  display/input ownership, and expose a fresh ordinary Linux login. Returning through the Linux-authorized service
+  start locks the kiosk again; controller availability and normal operator-lease expiry are preserved (#153).
 - First-install kiosk PIN commissioning for one explicitly enrolled human Linux owner: temporary setup-only access,
   mandatory Choose/Confirm, and fresh personal-PIN login capped at Operator. Existing installations are unchanged.
 - Offline installs and restores: each release carries the controller and HAT emulator images as offline archives for
@@ -130,6 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Refuse unsafe kiosk handoff/helper and unit paths before service activation: existing files and every parent must
+  be root-owned, writable only by root and free of symbolic links, even when helper content is unchanged. Kiosk
+  startup and handoff diagnostics explicitly stay in the journal while tty1 supplies input (#153).
+- Stop the kiosk unpacking its native libraries under `~/.net`: they go under its own state folder, which `uninstall --purge`
+  removes with its cache. Uninstall now removes the `~/.net/hvo-roof*` folders earlier releases left, from every home on
+  the machine for a system install or from yours for your own. Backups are refused in folders uninstall removes, including
+  through symbolic links, and incomplete account discovery refuses uninstall while keeping it resumable (#96).
 - Report macOS socket paths as non-regular files when the installer refuses to read a state store, retaining the
   existing refusal before reading and Linux error handling (#189).
 - Allow password-protected and passwordless PKCS#12 certificate imports for Mac rigs to be saved with the installer's

@@ -48,7 +48,7 @@ confirms the correction after a coordinated restart.
 
 ## The screen
 
-- **Navigation** along the bottom: Roof, Readings, Notices, About and Unlock (Lock while unlocked). Administration belongs in the CLI/TUI or web UI.
+- **Navigation** along the bottom: Roof, Readings, Notices, About, Terminal and Unlock (Lock while unlocked). Administration belongs in the CLI/TUI or web UI. Terminal appears only in the systemd-managed direct-display kiosk.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the kiosk renews it (`Renewing lease (6 s left)`), and
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
@@ -165,6 +165,60 @@ the same words as every other client.
   failed, with `Use the stop control at the roof.` Nothing else claims that Stop arrived.
 - Stop wins: an Open or Close accepted after a Stop was sent is stopped again.
 
+## Exit UI to terminal and return
+
+Choose **Terminal → Exit UI to terminal**, read the bounded pages, then **Confirm exit**. An unlocked operator
+PIN is required (an administrator's PIN is still capped at Operator). The kiosk checks that the same session is
+still valid at the controller immediately before exiting. A locked/device-only session, viewer, expired/revoked
+session or unavailable controller cannot authorize exit. **Cancel**, Escape, or leaving Terminal keeps the UI
+running; errors keep the UI available. **Stop roof** stays visible and enabled through the flow.
+
+This closes only the kiosk process. It neither reboots Linux nor restarts the controller, and sends no roof-motion
+or implicit Stop command. Its PIN session ends and lease renewal stops. With the operator lease enabled, ordinary
+lease expiry stops a moving roof; with it disabled, closing a client adds no stop policy. Use **Stop roof** before
+exit when a stop is wanted.
+
+After the kiosk process has ended, systemd runs a fixed handoff: it queues `hvo-roof-terminal.service` and selects
+tty1. The process boundary releases all DRM/libinput file descriptors and workers; Avalonia 12.1.3 does not expose
+a disposal API for these backends. Terminal reset, hangup and VT deallocation restore the text console. The dedicated
+terminal unit runs `agetty` with ordinary `/bin/login`, without autologin, independently of any `getty@tty1` override.
+The UI's role or PIN grants no Linux login or sudo rights. A keyboard and a separately authorized Linux account
+are needed to use the terminal; no shell is preauthenticated or privileged by this action.
+
+To return, sign in to Linux and run:
+
+```bash
+sudo systemctl start hvo-roof-kiosk.service
+```
+
+Linux's existing sudo policy authorizes this command. The kiosk replaces the tty1 login with a hangup, reacquires
+display/input ownership, and starts **locked** with its viewer device key. Unlock again with a personal PIN to
+operate. Log out of other Linux terminals when finished. The kiosk is still enabled for the next boot; this action
+does not change boot configuration. **Terminal** is absent in the Mac app and development `--window` mode.
+
+The unit retains crash recovery (`Restart=always`, 5 s), but treats authorized exit code 80 as successful and prevents
+its restart. Invalid settings (78) also prevent restart. An unexpected clean exit or crash still restarts. Only the
+main process's successful exit 80 activates the login handoff. The handoff uses fixed host commands and touches
+no controller service, container or credentials. Its root-owned script is installed program code, outside data
+backups and independent of the executable so an older program can be rolled back without understanding a new
+handoff argument. The installer checks the helper, both units and every parent directory: existing paths must be
+root-owned, without group/other write permission or symbolic links. It refuses an unsafe installation, including
+an unchanged helper owned by another user, and leaves its existing data and keys alone. A Linux administrator must
+secure or move aside the unsafe paths before reinstalling. The same checks guard service activation during
+certificate renewal and rollback; a restore reinstalls the helper from program resources, never backup data.
+TTY input stays on tty1, while stdout and stderr explicitly go to the journal, including startup refusals and
+handoff failures: `journalctl -u hvo-roof-kiosk`.
+From a separately authenticated recovery login (for example SSH), use `sudo systemctl start hvo-roof-terminal.service`
+to restore the login or `sudo systemctl start hvo-roof-kiosk.service` to restore the locked UI. A Linux administrator
+can also restart the kiosk after correcting invalid settings. Controller Restart in password-authenticated clients
+and host reboot are separate administration actions; neither is part of **Exit UI to terminal**.
+
+![Kiosk terminal explanation with permanent Stop](images/kiosk/terminal-1280x720.png)
+
+![Bounded terminal exit confirmation on the smaller display](images/kiosk/terminal-confirm-800x480.png)
+
+![Terminal confirmation at 1920×1200 with explicitly configured 9.0 pixels/mm density](images/kiosk/terminal-confirm-1920x1200.png)
+
 ## Install
 
 The kiosk runs on the controller's Pi, beside the controller's container, as a systemd service. It needs Raspberry Pi
@@ -187,7 +241,7 @@ The steps the installer takes, for a Pi set up without it:
 1. **Packages.** The display and input libraries, and fontconfig:
 
    ```bash
-   sudo apt install libdrm2 libgbm1 libegl1 libgles2 libinput10 libfontconfig1
+   sudo apt install libdrm2 libgbm1 libegl1 libgles2 libinput10 libfontconfig1 kbd
    ```
 
    To hide the console's cursor behind the kiosk, add `vt.global_cursor_default=0` to `/boot/firmware/cmdline.txt`.
@@ -288,15 +342,23 @@ The steps the installer takes, for a Pi set up without it:
    always installs the rule, which does nothing without it). The rule acts on the `add` event the boot sends, so
    apply it now with one (`udevadm trigger` sends `change` unless told):
 
+   Before installing by hand, ensure `/opt/hvo-roof-kiosk`, `/etc/systemd/system` and their parents are ordinary
+   root-owned directories writable only by root, and any existing helper or unit is an ordinary root-owned file
+   writable only by root. Move unsafe paths aside without discarding existing settings or keys; use the installer
+   to verify these requirements before activation.
+
    ```bash
-   sudo install -m 644 hvo-roof-kiosk.service /etc/systemd/system/
+   sudo install -o root -g root -m 644 hvo-roof-kiosk.service /etc/systemd/system/
+   sudo install -o root -g root -m 644 hvo-roof-terminal.service /etc/systemd/system/
+   sudo install -o root -g root -m 644 terminal-handoff.sh /opt/hvo-roof-kiosk/
    sudo install -m 644 99-hvo-roof-kiosk-backlight.rules /etc/udev/rules.d/
    sudo udevadm trigger --action=add --subsystem-match=backlight
    sudo systemctl daemon-reload
    sudo systemctl enable --now hvo-roof-kiosk
    ```
 
-   It starts at boot, and again 5 s after an exit or a crash. Settings it cannot start with stop it with exit code 78
+   It starts at boot, and again 5 s after an unexpected exit or a crash. An authorized terminal exit (80) leaves the
+   fresh Linux login visible until a Linux-authorized service start or the next boot. Settings it cannot start with stop it with exit code 78
    and `The roof kiosk did not start: …` in the journal (`journalctl -u hvo-roof-kiosk`), and systemd does not restart
    it: fix them, then `sudo systemctl restart hvo-roof-kiosk`.
 
@@ -372,6 +434,14 @@ Nothing here needs the Pi, the display or the roof.
 - **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.
+- **Terminal exit** (`KioskTerminalExitTests`, `KioskTerminalHandoffTests`, `KioskTerminalRenderTests`): allowed and
+  denied sessions, fresh controller authorization, expiry/revocation, cancellation and errors, Stop during a pending
+  check, systemd restart/TTY policy, fixed handoff commands and recovery failures. Real child processes hold exclusive
+  emulated display/input handles; the tests prove both are released before handoff and can be acquired again.
+  Bounded pages and confirmation/error states are rendered at 800×480, 1280×720 and 1920×1200 (8.2 and 9.0 density).
+  `KioskTerminalScenarios` uses the controller and emulated plant to prove UI exit preserves the same running
+  controller, ends renewals and leaves ordinary enabled-lease expiry or disabled-lease behavior intact. No live
+  service, physical display or hardware is used.
 - **The installer's steps** (`InstallerKioskTests`) install the kiosk on a fake Pi: the files, their modes and owners,
   the device key, the settings for each way the controller is reached, the unit and the udev rule, the cursor, the
   PINs, a second run that changes nothing, an update that keeps the program it replaces, and a renewed self-signed
@@ -387,8 +457,19 @@ Nothing here needs the Pi, the display or the roof.
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests"
-  for f in ../docs/images/kiosk/*.png; do cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; done
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests"
+  for f in ../docs/images/kiosk/*.png; do
+    if [ -f "/tmp/kiosk-renders/$(basename "$f")" ]; then cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; fi
+  done
+  cp /tmp/kiosk-renders/terminal-locked-8.2-p1-1280x720.png ../docs/images/kiosk/terminal-1280x720.png
+  cp /tmp/kiosk-renders/terminal-confirm-5.2-p1-800x480.png ../docs/images/kiosk/terminal-confirm-800x480.png
+  cp /tmp/kiosk-renders/terminal-confirm-9.0-p1-1920x1200.png ../docs/images/kiosk/terminal-confirm-1920x1200.png
+  cp /tmp/kiosk-renders/native-roof-1920x1200.png ../docs/images/kiosk/roof-1920x1200.png
+  cp /tmp/kiosk-renders/native-readings-0-800x480.png ../docs/images/kiosk/readings-800x480.png
+  cp /tmp/kiosk-renders/native-notices-0-800x480.png ../docs/images/kiosk/notices-800x480.png
+  cp /tmp/kiosk-renders/review-inputs-cached-1920x1200.png ../docs/images/kiosk/input-read-failure-1920x1200.png
+  cp /tmp/kiosk-renders/review-inputs-never-read-1920x1200.png ../docs/images/kiosk/inputs-unavailable-1920x1200.png
+  cp /tmp/kiosk-renders/review-stop-2-1-800x480.png ../docs/images/kiosk/long-stop-result-800x480.png
   ```
 
   The admin's System page masks the host's name.

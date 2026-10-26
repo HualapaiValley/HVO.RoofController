@@ -21,6 +21,8 @@ public static class Program
 {
     /// <summary>Exit code for settings the kiosk cannot start with (EX_CONFIG): systemd does not restart it for these.</summary>
     public const int SettingsExitCode = 78;
+    /// <summary>Authorized exit to an ordinary Linux login; the installed unit prevents restart for this code.</summary>
+    public const int TerminalExitCode = 80;
 
     /// <summary>The settings file next to the program. Optional.</summary>
     public const string SettingsFile = "appsettings.Local.json";
@@ -81,7 +83,9 @@ public static class Program
             new KioskConsoleOptions { IdleLock = TimeSpan.FromSeconds(options.IdleLockSeconds) },
             loggerFactory.CreateLogger<KioskConsole>());
         var metrics = new KioskMetrics(options.PixelsPerMillimetre);
-        KioskApp.CreateShell = () => new KioskShell(console, metrics);
+        var terminalExit = CreateTerminalExit(console, options.Window, Environment.GetEnvironmentVariable("HVO_KIOSK_TERMINAL_HANDOFF"),
+            () => Application.Current?.ApplicationLifetime is IControlledApplicationLifetime lifetime ? lifetime.Shutdown : null);
+        KioskApp.CreateShell = () => new KioskShell(console, metrics, terminalExit);
         using var backlight = string.IsNullOrWhiteSpace(options.BacklightFile)
             ? null
             : new KioskBacklight(console, options.BacklightFile, options.BacklightOn, options.BacklightOff, loggerFactory.CreateLogger<KioskBacklight>());
@@ -217,6 +221,19 @@ public static class Program
         return SettingsExitCode;
     }
 
+    /// <summary>The terminal flow belongs only to the installed direct-display host; it closes that UI's lifetime.</summary>
+    internal static KioskTerminalExit? CreateTerminalExit(KioskConsole console, bool window, string? enabled,
+        Func<Action<int>?> lifetime)
+        => !window && enabled == "1" ? new KioskTerminalExit(console, () =>
+        {
+            // ConfirmAsync preserves the UI context: commit shutdown in this turn, without queuing an action
+            // that could outlive a subsequent Cancel/navigation event.
+            Dispatcher.UIThread.VerifyAccess();
+            if (lifetime() is not { } current) return Task.FromResult(false);
+            current(TerminalExitCode);
+            return Task.FromResult(true);
+        }) : null;
+
     private static void Shutdown(PosixSignalContext context)
     {
         context.Cancel = true;
@@ -229,7 +246,7 @@ public static class Program
         });
     }
 
-    private static void Close(KioskConsole console, ILogger logger)
+    internal static void Close(KioskConsole console, ILogger logger)
     {
         try
         {

@@ -322,6 +322,10 @@ jobs:
           dotnet build "$TEST_PROJECT" --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
 
       - name: C14 soak
+        # Bound allocator retention in this combined test process while retaining tiered JIT and every C14 check.
+        # This changes the harness's glibc arena count, not an allocation limit or production configuration (#159).
+        env:
+          MALLOC_ARENA_MAX: '2'
         run: >
           dotnet test "$TEST_PROJECT"
           --no-build -c Debug -v minimal

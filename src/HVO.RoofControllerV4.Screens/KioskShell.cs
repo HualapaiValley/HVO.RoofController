@@ -20,7 +20,8 @@ public enum KioskPage
     About,
     Readings,
     Notices,
-    StopResult
+    StopResult,
+    Terminal
 }
 
 /// <summary>
@@ -48,6 +49,9 @@ public sealed class KioskShell : UserControl
     private readonly Button _navSystem;
     private readonly Button _navAbout;
     private readonly Button _navLock;
+    private readonly Button _navTerminal;
+    private readonly KioskTerminalExit? _terminalExit;
+    private readonly KioskTerminalPage? _terminalPage;
     private readonly TextBlock _stopMessage;
     private readonly Button _stopDetails;
     private readonly KioskPager _stopResult;
@@ -56,12 +60,14 @@ public sealed class KioskShell : UserControl
     private bool _wasUnlocked;
     private KioskView? _shown;
 
-    public KioskShell(KioskConsole console, KioskMetrics metrics)
+    public KioskShell(KioskConsole console, KioskMetrics metrics, KioskTerminalExit? terminalExit = null)
     {
         ArgumentNullException.ThrowIfNull(console);
         ArgumentNullException.ThrowIfNull(metrics);
         _console = console;
         _metrics = metrics;
+        _terminalExit = terminalExit;
+        _terminalPage = terminalExit is null ? null : new KioskTerminalPage(terminalExit, metrics);
         PinPad = new KioskPinPad(console);
         Settings = new KioskSettingsPanel(console);
         System = new KioskSystemPanel(console);
@@ -105,7 +111,9 @@ public sealed class KioskShell : UserControl
         _navSystem = Nav("System", "nav-system", () => ShowPage(KioskPage.System));
         _navAbout = Nav("About", "nav-about", () => ShowPage(KioskPage.About));
         _navLock = Nav(console.Wording.SignInAction, "nav-lock", LockOrUnlock);
-        var nav = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navSettings, _navSystem, _navAbout, _navLock } };
+        _navTerminal = Nav("Terminal", "nav-terminal", () => ShowPage(KioskPage.Terminal));
+        _navTerminal.IsVisible = terminalExit is not null;
+        var nav = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navSettings, _navSystem, _navAbout, _navTerminal, _navLock } };
         var navFrame = new Border { Background = KioskTheme.Surface, BorderBrush = KioskTheme.Frame, BorderThickness = new Thickness(0, 1, 0, 0), Child = nav };
 
         Stop = new Button
@@ -209,6 +217,8 @@ public sealed class KioskShell : UserControl
     public void ShowPage(KioskPage page)
     {
         var view = _console.View;
+        if (Page == KioskPage.Terminal && page != KioskPage.Terminal) _terminalExit?.Cancel();
+        if (page == KioskPage.Terminal && _terminalPage is null) page = KioskPage.Roof;
         if ((page is KioskPage.Settings or KioskPage.System && (!view.IsUnlocked || _console.Wording.SignIn == KioskSignIn.Pin)) || (page == KioskPage.Unlock && view.IsUnlocked))
         {
             page = KioskPage.Roof;
@@ -225,6 +235,7 @@ public sealed class KioskShell : UserControl
             KioskPage.Readings => _readings,
             KioskPage.Notices => _notices,
             KioskPage.StopResult => _stopResult,
+            KioskPage.Terminal => _terminalPage!,
             _ => RoofPage
         };
 
@@ -352,6 +363,7 @@ public sealed class KioskShell : UserControl
         if (e.Handled || e.Key != Key.Escape) return;
         if (Page == KioskPage.Settings && Settings.Question is not null) { Settings.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.System && System.Question is not null) { System.Dismiss(); e.Handled = true; }
+        else if (Page == KioskPage.Terminal) { _terminalExit?.Cancel(); ShowPage(KioskPage.Roof); e.Handled = true; }
         else if (Page == KioskPage.Unlock)
         {
             PinPad.Select(null);
@@ -401,7 +413,7 @@ public sealed class KioskShell : UserControl
         _navSettings.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navSystem.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
-        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navLock, KioskPage.Unlock) })
+        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navTerminal, KioskPage.Terminal), (_navLock, KioskPage.Unlock) })
         {
             KioskTheme.Selected(button, page == Page);
             if (page == Page)

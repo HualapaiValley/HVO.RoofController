@@ -6,6 +6,11 @@ Description=HVO roof controller touchscreen kiosk
 Documentation=https://github.com/HualapaiValley/HVO.RoofController/blob/main/docs/kiosk.md
 Wants=network-online.target
 After=network-online.target docker.service systemd-udev-settle.service
+# A kiosk always replaces the login on its own VT, with a hangup before acquiring it.
+Conflicts=getty@tty1.service hvo-roof-terminal.service
+# A conflict stops the other unit before this one starts, in either ordering direction. Keep the boot order
+# before getty: the optional splash display gate already orders getty after the kiosk.
+Before=getty@tty1.service
 
 [Service]
 Type=simple
@@ -15,16 +20,31 @@ Group=hvo-kiosk
 SupplementaryGroups=video input render
 WorkingDirectory=/opt/hvo-roof-kiosk
 ExecStart=/opt/hvo-roof-kiosk/hvo-roof-kiosk
-# Always back after an exit or a crash, except for settings it cannot start with (exit 78): fix them, then
+# Only systemd may run the fixed privileged handoff, after the entire kiosk process has exited.
+ExecStopPost=+/bin/sh /opt/hvo-roof-kiosk/terminal-handoff.sh
+Environment=HVO_KIOSK_TERMINAL_HANDOFF=1
+StandardInput=tty
+# TTY input otherwise makes both output streams inherit tty1, hiding startup and handoff failures from the journal.
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+# Always back after an exit or a crash, except an authorized terminal exit (80) or invalid settings (78):
 # `sudo systemctl restart hvo-roof-kiosk`.
 Restart=always
 RestartSec=5
-RestartPreventExitStatus=78
+SuccessExitStatus=80
+RestartPreventExitStatus=78 80
 # SIGTERM: the kiosk locks (ends the PIN session at the controller) before it exits.
 TimeoutStopSec=30
-# The single-file program unpacks its native libraries here; fontconfig keeps its cache here too.
+# The single-file program unpacks its native libraries under its state folder, so `uninstall --purge` removes them with
+# the rest (never under ~/.net). /var/lib/hvo-roof is the controller's data, so the kiosk has a folder of its own.
+StateDirectory=hvo-roof-kiosk
+Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/lib/hvo-roof-kiosk/.net
+# fontconfig keeps its cache here.
 CacheDirectory=hvo-roof-kiosk
-Environment=DOTNET_BUNDLE_EXTRACT_BASE_DIR=/var/cache/hvo-roof-kiosk
 Environment=XDG_CACHE_HOME=/var/cache/hvo-roof-kiosk
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 NoNewPrivileges=true

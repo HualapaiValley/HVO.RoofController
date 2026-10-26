@@ -13,6 +13,9 @@ someone in RoofController. Linux and virtual users remain separate even when the
 
 Stop remains available with the kiosk device key while locked. API roles do not bypass the roof's safety interlocks.
 PIN tokens still need protection: possession grants their limited rights until expiry/revocation.
+The local kiosk's [Exit UI to terminal](kiosk.md#exit-ui-to-terminal-and-return) verifies an operator PIN only to close
+that UI. Its destination is a fresh ordinary Linux login; Linux independently authorizes login and the service start
+used to return. This grants no host shell or administrative API rights.
 
 ## First installation and sudo
 

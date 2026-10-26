@@ -18,6 +18,8 @@ The C14 results upload also keeps the flushed memory-diagnostic JSONL stream, ru
 Linux mapping snapshots, including partial-run evidence when the job times out. The existing summaries are still
 written at the end of a completed run. File formats and interpretation are described in
 [C14 commissioning](commissioning.md#c14-rv-6-soak); diagnostics do not change its pass criteria.
+Only the C14 test step requests `MALLOC_ARENA_MAX=2`; tiered compilation and every existing criterion remain in place.
+The [memory investigation](c14-memory-investigation.md) records the evidence and the resulting harness scope.
 
 CI's `terminal-distributions` matrix runs the final release-assembled installer and CLI on Linux x64,
 Linux arm64 and macOS arm64, after macOS signing. It checks offline notices, help/version, nonterminal

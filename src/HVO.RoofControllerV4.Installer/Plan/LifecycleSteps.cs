@@ -436,7 +436,8 @@ public sealed class KioskServiceRemovalStep : PlanStep
     {
         ArgumentNullException.ThrowIfNull(context);
         var (enabled, active) = await StateAsync(context.Machine, cancellationToken).ConfigureAwait(false);
-        return context.Machine.FileExists(MachineSurveyor.KioskUnitFile) || enabled || active
+        return context.Machine.FileExists(MachineSurveyor.KioskUnitFile) || context.Machine.FileExists(KioskSteps.TerminalUnitFile) ||
+            context.Machine.FileExists(KioskSteps.TerminalHandoffFile) || enabled || active
             ? new StepCheck(StepChange.Remove, active ? "stopped, disabled and removed" : "disabled and removed")
             : StepCheck.Unchanged("not there");
     }
@@ -459,8 +460,15 @@ public sealed class KioskServiceRemovalStep : PlanStep
         if (machine.FileExists(MachineSurveyor.KioskUnitFile))
         {
             machine.DeleteFile(MachineSurveyor.KioskUnitFile);
-            await KioskSteps.Run(context, "reload systemd's units", new CommandLine("systemctl", "daemon-reload"), cancellationToken).ConfigureAwait(false);
         }
+
+        if (machine.FileExists(KioskSteps.TerminalUnitFile))
+        {
+            await KioskSteps.Run(context, "stop the kiosk's login terminal", new CommandLine("systemctl", "stop", "hvo-roof-terminal.service"), cancellationToken).ConfigureAwait(false);
+            machine.DeleteFile(KioskSteps.TerminalUnitFile);
+        }
+        if (machine.FileExists(KioskSteps.TerminalHandoffFile)) machine.DeleteFile(KioskSteps.TerminalHandoffFile);
+        await KioskSteps.Run(context, "reload systemd's units", new CommandLine("systemctl", "daemon-reload"), cancellationToken).ConfigureAwait(false);
 
         context.Log.Write($"Stopped and disabled {Target}, and removed {MachineSurveyor.KioskUnitFile}.");
     }

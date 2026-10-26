@@ -96,6 +96,8 @@ UPGRADE_NOTES_NAME = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-
 KIOSK_FILES = {
     "hvo-roof-kiosk": 0o755,
     "hvo-roof-kiosk.service": 0o644,
+    "hvo-roof-terminal.service": 0o644,
+    "terminal-handoff.sh": 0o644,
     "99-hvo-roof-kiosk-backlight.rules": 0o644,
     "appsettings.Local.example.json": 0o644,
 }

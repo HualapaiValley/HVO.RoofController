@@ -432,6 +432,10 @@ public static class PlanBuilder
             steps.Add(new RemovalStep(app.Target, app.Purpose, StepKind.Folder, app.Previous));
         }
 
+        // Earlier releases unpacked the programs' native libraries under ~/.net, which nothing removed: every uninstall takes
+        // those folders, not only a purge.
+        steps.Add(new LegacyExtractionStep(record.Scope));
+
         var recordPath = InstallPaths.RecordFor(record.Scope, machine);
         if (!purge)
         {
@@ -488,6 +492,8 @@ public static class PlanBuilder
         {
             folders.Add((KioskSteps.ConfigurationFolder, "the kiosk's device key"));
             folders.Add((KioskSteps.ProgramFolder, "the kiosk's settings"));
+            folders.Add((KioskSteps.StateFolder, "the kiosk's native libraries, unpacked for it"));
+            folders.Add((KioskSteps.CacheFolder, "the kiosk's cache"));
         }
 
         if (record.Scope == InstallScope.User && (record.Roles.Contains(InstallRole.MacApp) || record.MacApp is not null))

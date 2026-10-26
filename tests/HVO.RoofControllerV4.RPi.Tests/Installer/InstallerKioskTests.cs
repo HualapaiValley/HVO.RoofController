@@ -37,6 +37,103 @@ public sealed class InstallerKioskTests
     private static readonly InstallAnswers WithTheController = new() { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
 
     [TestMethod]
+    [DataRow(KioskSteps.ProgramFolder)]
+    [DataRow(KioskSteps.TerminalHandoffFile)]
+    public async Task ThePrivilegedHandoff_RefusesExistingUntrustedOwnership_EvenWhenContentAndModeMatch(string path)
+    {
+        using var pi = KioskPi();
+        pi.Machine.CreateDirectory(KioskSteps.ProgramFolder, Modes.Folder);
+        if (path == KioskSteps.TerminalHandoffFile)
+        {
+            pi.Write(path, KioskSteps.Resource("terminal-handoff.sh"));
+            pi.Machine.SetMode(path, Modes.File);
+        }
+        pi.Owners[path] = "untrusted:untrusted";
+        pi.Write(KioskSteps.ProgramFolder + "/keep.txt", "unrelated existing data");
+        var answers = pi.WriteAnswers(WithTheController);
+        var before = pi.Snapshot(InstallPaths.SystemLog);
+
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", answers);
+
+        run.ExitCode.Should().NotBe(0, "a root-run hook cannot trust an untrusted owner, even at 0755/0644");
+        pi.Owners[path].Should().Be("untrusted:untrusted", "unsafe existing installations are refused without taking over their data");
+        pi.KioskStarts.Should().Be(0);
+        pi.Exists(MachineSurveyor.KioskUnitFile).Should().BeFalse("the privileged unit must not be installed before trust is established");
+        pi.Snapshot(InstallPaths.SystemLog).Should().Equal(before, "refusal preserves existing data and keys");
+    }
+
+    [TestMethod]
+    [DataRow("/opt", "owner")]
+    [DataRow("/opt", "writable")]
+    [DataRow(KioskSteps.ProgramFolder, "writable")]
+    [DataRow(KioskSteps.TerminalHandoffFile, "writable")]
+    [DataRow(MachineSurveyor.KioskUnitFile, "owner")]
+    [DataRow(KioskSteps.TerminalUnitFile, "owner")]
+    [DataRow("/etc/systemd", "writable")]
+    [DataRow(KioskSteps.ProgramFolder, "symlink")]
+    [DataRow(KioskSteps.TerminalHandoffFile, "symlink")]
+    [DataRow(KioskSteps.TerminalHandoffFile, "dangling")]
+    [DataRow(KioskSteps.TerminalHandoffFile, "directory")]
+    public async Task ThePrivilegedHandoff_RefusesUnsafeAncestorsUnitsAndLinks_WithoutChangingExistingData(string path, string damage)
+    {
+        using var pi = KioskPi();
+        var file = path.EndsWith(".sh", StringComparison.Ordinal) || path.EndsWith(".service", StringComparison.Ordinal);
+        if (file)
+        {
+            pi.Write(path, "existing file");
+            pi.Machine.SetMode(path, Modes.File);
+        }
+        else
+            pi.Machine.CreateDirectory(path, Modes.Folder);
+        if (damage == "owner") pi.Owners[path] = "untrusted:untrusted";
+        if (damage == "writable") pi.Machine.SetMode(path, (file ? Modes.File : Modes.Folder) | UnixFileMode.GroupWrite);
+        if (damage is "symlink" or "dangling")
+        {
+            if (file) pi.Machine.DeleteFile(path);
+            else pi.Machine.DeleteDirectory(path);
+            pi.Machine.CreateDirectory("/srv/keep", Modes.Folder);
+            if (file) File.CreateSymbolicLink(pi.OnDisk(path), pi.OnDisk(damage == "dangling" ? "/srv/keep/missing" : "/srv/keep/target"));
+            else Directory.CreateSymbolicLink(pi.OnDisk(path), pi.OnDisk("/srv/keep"));
+            if (file && damage != "dangling") pi.Write("/srv/keep/target", "keep this target");
+        }
+        if (damage == "directory")
+        {
+            pi.Machine.DeleteFile(path);
+            pi.Machine.CreateDirectory(path, Modes.Folder);
+        }
+        pi.Write("/srv/keep/data", "unrelated data");
+
+        var run = await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController));
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        pi.KioskStarts.Should().Be(0);
+        pi.Deploys.Should().BeEmpty();
+        pi.Read("/srv/keep/data").Should().Be("unrelated data");
+        pi.Unexpected.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow("owner")]
+    [DataRow("missing")]
+    public async Task ServiceActivation_RechecksTheTrustedHandoff_AfterThePlanWasChecked(string damage)
+    {
+        using var pi = KioskPi();
+        (await pi.RunAsync("--setup-prerequisites", "--answers", pi.WriteAnswers(WithTheController))).ExitCode.Should().Be(0);
+        var session = await InstallerSession.StartAsync(pi.Machine, InstallLog.None, "4.0.0", FakeMachine.Clock);
+        var service = new KioskServiceStep(ControllerLayout.System, new ControllerSettings(), [], unit: null, rule: null);
+        var check = await service.CheckAsync(session.Context, CancellationToken.None);
+        if (damage == "owner") pi.Owners[KioskSteps.TerminalHandoffFile] = "untrusted:untrusted";
+        else pi.Machine.DeleteFile(KioskSteps.TerminalHandoffFile);
+        var reloads = pi.DaemonReloads;
+
+        await FluentActions.Awaiting(() => service.ApplyAsync(session.Context, check, CancellationToken.None))
+            .Should().ThrowAsync<InstallerRefusedException>();
+
+        pi.DaemonReloads.Should().Be(reloads);
+        pi.KioskStarts.Should().Be(1, "no new service activation is allowed after trust is lost");
+    }
+
+    [TestMethod]
     public async Task TheKiosk_IsInstalledWithTheController_AsTheGuideSetsItUp_AndASecondRunChangesNothing()
     {
         using var pi = KioskPi();
@@ -69,6 +166,12 @@ public sealed class InstallerKioskTests
         options.Rotation.Should().Be(90, "the rest of the example's settings are kept");
 
         pi.Read(MachineSurveyor.KioskUnitFile).Should().Be(KioskSteps.Resource("hvo-roof-kiosk.service"));
+        pi.Read(KioskSteps.TerminalUnitFile).Should().Be(KioskSteps.Resource("hvo-roof-terminal.service"));
+        pi.Mode(KioskSteps.TerminalUnitFile).Should().Be(Modes.File);
+        pi.Read(KioskSteps.TerminalHandoffFile).Should().Be(KioskSteps.Resource("terminal-handoff.sh"));
+        pi.Mode(KioskSteps.TerminalHandoffFile).Should().Be(Modes.File);
+        pi.Owners[KioskSteps.TerminalHandoffFile].Should().Be("root:root");
+        (await Ownership.GetAsync(pi.Machine, KioskSteps.ProgramFolder, CancellationToken.None)).Should().Be("root:root");
         pi.Read(KioskSteps.BacklightRuleFile).Should().Be(KioskSteps.Resource("99-hvo-roof-kiosk-backlight.rules"));
         pi.Kiosk.Should().Be((true, true));
         pi.KioskStarts.Should().Be(1);

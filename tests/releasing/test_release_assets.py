@@ -155,7 +155,7 @@ class Release:
             (self.installer / runtime / "hvo-roof-install").write_bytes(make_bundle(prefix=program, rid=runtime))
         self.kiosk.mkdir()
         (self.kiosk / "hvo-roof-kiosk").write_bytes(elf(183, b"kiosk"))
-        for name in ("hvo-roof-kiosk.service", "99-hvo-roof-kiosk-backlight.rules", "appsettings.Local.example.json"):
+        for name in ("hvo-roof-kiosk.service", "hvo-roof-terminal.service", "terminal-handoff.sh", "99-hvo-roof-kiosk-backlight.rules", "appsettings.Local.example.json"):
             (self.kiosk / name).write_text(f"{name}\n", encoding="utf-8")
         mac_zip(self.mac)
 
@@ -300,7 +300,7 @@ class TheAssets(ReleaseTestCase):
         self.assertEqual(kiosk["files"], {
             name: hashlib.sha256((folder / name).read_bytes()).hexdigest()
             for name in ("99-hvo-roof-kiosk-backlight.rules", "appsettings.Local.example.json", "hvo-roof-kiosk",
-                         "hvo-roof-kiosk.service")})
+                         "hvo-roof-kiosk.service", "hvo-roof-terminal.service", "terminal-handoff.sh")})
 
     def test_sha256sums_covers_every_asset_and_release_json_as_sha256sum_writes_it(self):
         lines = (self.out / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
@@ -354,7 +354,9 @@ class TheAssets(ReleaseTestCase):
                  (f"{folder}/99-hvo-roof-kiosk-backlight.rules", False, "0o644"),
                  (f"{folder}/appsettings.Local.example.json", False, "0o644"),
                  (f"{folder}/hvo-roof-kiosk", False, "0o755"),
-                 (f"{folder}/hvo-roof-kiosk.service", False, "0o644")])
+                 (f"{folder}/hvo-roof-kiosk.service", False, "0o644"),
+                 (f"{folder}/hvo-roof-terminal.service", False, "0o644"),
+                 (f"{folder}/terminal-handoff.sh", False, "0o644")])
             for member in members:
                 self.assertEqual((member.uid, member.gid, member.uname, member.gname, member.mtime),
                                  (0, 0, "root", "root", CREATED_SECONDS), member.name)

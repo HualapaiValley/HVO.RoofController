@@ -296,9 +296,69 @@ file its rule says it cannot, change the rule in the same pull request. In a wor
   same pull request, with the issue's number. A change only contributors see (tests, CI, contributor docs) needs none;
   say so in the pull request.
 - **Docs and screenshots** change in the same pull request as the behaviour they describe.
-- **Merging.** When every check has passed and the review's findings are dealt with, merge with a merge commit
-  (`gh pr merge <n> --merge`), not a squash or a rebase. Then check that the issue closed; if not, close it with a
-  comment naming the pull request. Delete the branch: the repository does not.
+- **Merging.** Merge commits only, never a squash or a rebase. Branch protection enforces only 13 of the checks: not
+  `terminal-distributions` or the image workflows, and it requires the `hvo/reviewed-head` status. So merge only after
+  review has converged and every applicable workflow has passed on the head
+  ([Pull request lifecycle](#pull-request-lifecycle), step 6). Then check
+  that the issue closed; if not, close it with a comment naming the pull request. GitHub deletes the remote branch;
+  remove your local branch and worktree.
+
+### Pull request lifecycle
+
+Every change, by a person or an agent, goes the same way:
+
+1. **Draft early.** Open the pull request as a draft once the branch builds, with `Fixes #<n>`.
+2. **Check it locally.** Run the build and tests in [Building and testing](#building-and-testing) that the change can
+   affect before asking for review. For anything touching the motor, relays, limits, interlocks or the installer,
+   run the hardware-free scenarios in [Testing without hardware](#testing-without-hardware) too.
+3. **Independent review.** Ask for it once CI on the draft has passed ([CONTRIBUTING.md](CONTRIBUTING.md)). The
+   reviewer is someone other than the author: a person, or an agent on a different model from the one that wrote
+   the change. Read-only means the reviewer changes no code, branch or pull request state. The review is posted as
+   [Reviews](#reviews) describes, by the reviewer when they can comment on GitHub, otherwise verbatim by the author.
+   An initial review covers the whole pull request. A rereview covers only the commits since the last reviewed head and checks every earlier
+   finding by its ID. The review gives:
+   - a verdict, `CLEAN` or `CHANGES_REQUIRED`;
+   - its findings `F1`, `F2`, … (numbered on across rounds), each with a severity (Critical, High, Medium, Low),
+     blocking or non-blocking, `path:line`, a reproduction (a failing test, a command, or inputs with observed and
+     expected results) and the fix required.
+4. **What blocks.** Anything that could move the roof when it shouldn't, or fail to stop it: limits, interlocks,
+   stop paths, watchdogs, relay verification. Also data loss, a security exposure (credentials, the API key,
+   authentication), wrong behaviour against a documented contract, a broken install, upgrade or rollback, broken
+   CI or release, and unmet acceptance criteria. Everything else is non-blocking. Fix it if it's cheap and in
+   scope; otherwise collect it in one follow-up issue per pull request.
+5. **Corrections.** For each finding you accept about executable behaviour, first add a test that fails on the
+   reviewed head, then fix it. A documentation finding is verified against its source instead: the code, a command's
+   output, the setting or the linked page.
+   Push all of a round's corrections at once, then ask for the rereview. After three rereviews, remaining
+   non-blocking findings go to the follow-up issue. A blocking finding is never deferred.
+6. **Finalize.** Branch protection requires the `hvo/reviewed-head` commit status on the exact head being merged.
+   That status is the merge gate, published only on a head whose review converged. The operator's tooling
+   (`hvo finalize`) does the following in one command. By hand:
+   1. Once the review is clean and nothing is left to correct, mark the pull request ready:
+      `gh pr ready <n> -R HualapaiValley/HVO.RoofController`.
+   2. Wait until every applicable workflow on the reviewed head has passed, including the ones protection doesn't
+      require (`gh pr checks <n> -R HualapaiValley/HVO.RoofController`).
+   3. Publish the gate on exactly that head: `gh api repos/HualapaiValley/HVO.RoofController/statuses/<sha>
+      -f state=success -f context=hvo/reviewed-head -f description="Review converged on this head"`.
+   4. Merge with a merge commit pinned to that head: `gh pr merge <n> -R HualapaiValley/HVO.RoofController --merge --match-head-commit <sha>`.
+
+   If a workflow fails, return the pull request to draft (`gh pr ready <n> -R HualapaiValley/HVO.RoofController --undo`) before correcting it.
+   Auto-merge does **not** turn itself off when someone with write access pushes, and a new commit lacks the status.
+   So before any further push, turn auto-merge off (`gh pr merge <n> -R HualapaiValley/HVO.RoofController --disable-auto`) and return the pull request
+   to draft. Get the new head reviewed, then finalize again.
+7. **Clean up.** After the merge, remove the change's disposable resources: those created only for it and used by
+   nothing else. That means its worktree and local branch (GitHub deletes the remote branch), its scratch
+   directories and review checkouts, and containers, images, volumes, emulators or test processes started only for
+   its own tests.
+
+   Never remove these, even if you started them:
+   - a deployed or installed controller and its state;
+   - the real roof's configuration;
+   - another person's or task's worktree, container or emulator;
+   - release artifacts.
+
+   When ownership is unclear, leave the resource and say so on the issue. Keep a disposable resource only when a
+   follow-up needs it, and say what and why on the issue.
 
 ### Reviews
 
