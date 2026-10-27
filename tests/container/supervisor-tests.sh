@@ -141,6 +141,22 @@ wait_until() {
   done
 }
 
+# A killed descendant may remain a zombie until its new parent reaps it. kill -0 alone also succeeds for zombies;
+# they have ended and cannot run more fixture work. A missing proc entry counts only if the pid is gone as well.
+process_has_ended() {
+  local stat
+  if ! IFS= read -r stat 2>/dev/null <"/proc/$1/stat"; then
+    ! kill -0 "$1" 2>/dev/null
+    return
+  fi
+  stat=${stat##*) }
+  [[ "${stat%% *}" == Z || "${stat%% *}" == X ]]
+}
+
+test_a_live_process_is_not_considered_ended() {
+  process_has_ended "${BASHPID}" && fail_test "a live process was considered ended"
+}
+
 state() {
   jq -r "$1" "${WORK}/run/supervisor.json"
 }
@@ -1072,7 +1088,7 @@ test_a_relay_off_that_hangs_is_killed_after_its_time() {
   wait_until 5 "the hung relay-off killed" grep -qF \
     "WARNING: the relays could not be verified off (before the controller starts): turning them off did not finish within 1s and was killed" \
     "${WORK}/supervisor.log" || return
-  ! kill -0 "${helper}" 2>/dev/null || fail_test "the hung helper (pid ${helper}) still runs"
+  wait_until 1 "the hung helper (pid ${helper}) to end" process_has_ended "${helper}" || return
   # Not verified, so the controller is held stopped; once a relay-off answers in time, it starts.
   expect_equal "controller starts while held" "$(event_count controller start)" 0
   rm -f "${FAKE_DIR}/relays-off.delay"
@@ -1410,7 +1426,7 @@ ui_preparation_waits() {
 expect_the_ui_preparation_abandoned() {
   local install
   install=$(<"${FAKE_DIR}/install.pid")
-  ! kill -0 "${install}" 2>/dev/null || fail_test "the preparation's install (pid ${install}) still runs after the stop"
+  wait_until 1 "the preparation's install (pid ${install}) to end after the stop" process_has_ended "${install}" || return
   ! grep -q '^install keys done' "${FAKE_DIR}/events.log" || fail_test "the preparation went on to its end"
   expect_equal "web UI starts" "$(event_count ui start)" 0
   grep -qF "Abandoned the web UI's preparation: the web UI is not started" "${WORK}/supervisor.log" \
@@ -1461,7 +1477,7 @@ test_a_web_ui_preparation_that_outlasts_its_time_is_killed_and_prepared_again() 
   wait_until 5 "the preparation killed at the end of its time" grep -qF \
     "WARNING: the web UI's preparation (its copies of the certificate and the Stop key, its keys directory) did not finish within 1s and was killed" \
     "${WORK}/supervisor.log" || return
-  ! kill -0 "${install}" 2>/dev/null || fail_test "the stalled install (pid ${install}) still runs"
+  wait_until 1 "the stalled install (pid ${install}) to end" process_has_ended "${install}" || return
   expect_equal "web UI starts" "$(event_count ui start)" 0
   rm -f "${FAKE_DIR}/install.delay"
   wait_until 10 "the web UI started once a preparation finished" started ui 1 || return
@@ -1503,7 +1519,7 @@ test_a_stalled_web_ui_environment_neither_delays_the_stop_nor_starts_the_web_ui(
   expect_equal "web UI starts" "$(event_count ui start)" 0
   local producer
   producer=$(<"${FAKE_DIR}/env.pid")
-  ! kill -0 "${producer}" 2>/dev/null || fail_test "the stalled producer (pid ${producer}) still runs after the stop"
+  wait_until 1 "the stalled producer (pid ${producer}) to end after the stop" process_has_ended "${producer}" || return
 }
 
 test_a_web_ui_environment_that_cannot_be_read_does_not_hold_up_the_supervisor() {

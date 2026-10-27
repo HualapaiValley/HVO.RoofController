@@ -1031,7 +1031,9 @@ jobs:
 
       # The container's supervisor and health check (src/HVO.RoofControllerV4.RPi/container), with stand-in processes.
       - name: Container supervisor tests
-        run: tests/container/supervisor-tests.sh
+        run: |
+          python3 -m unittest discover -s tests/container -p 'test_*.py' -v
+          tests/container/supervisor-tests.sh
 
       - name: Compose profiles
         working-directory: src/HVO.RoofControllerV4.RPi
