@@ -270,9 +270,7 @@ the next version.
 
 The workflows and their triggers are in [docs/ci-runners.md](docs/ci-runners.md). Every pull request runs `ci.yml` and
 `scenarios.yml`, and `pi-image.yml` and `emulator-image.yml` when it touches their inputs; all of them must pass before
-merging. A job that no change in the pull request can affect is skipped ([build/ci-changes.py](build/ci-changes.py);
-the rules are in [docs/ci-runners.md](docs/ci-runners.md#jobs-a-pull-request-can-skip)): when a job starts to read a
-file its rule says it cannot, change the rule in the same pull request. In a workflow:
+merging. In a workflow:
 
 - Pin every action to a full commit SHA with a `# vX.Y.Z` comment; the repository rejects tag references.
 - Keep `permissions: contents: read` at the top, and give a job more only when it needs it.

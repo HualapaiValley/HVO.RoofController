@@ -27,36 +27,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Which of the jobs below this pull request's changes can affect (build/ci-changes.py, docs/ci-runners.md "Jobs a pull
-  # request can skip"). A job that cannot be affected is skipped, which a required check accepts. Anything else (a push,
-  # the nightly run, a release, a pull request into another branch, or a diff that cannot be worked out) runs every job:
-  # the jobs below compare an output with 'false', so a missing one runs them.
-  changes:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      deploy_script: ${{ steps.changes.outputs.deploy_script }}
-      install_sh_mac: ${{ steps.changes.outputs.install_sh_mac }}
-      installer_kiosk: ${{ steps.changes.outputs.installer_kiosk }}
-      installer_mac: ${{ steps.changes.outputs.installer_mac }}
-      mac_app: ${{ steps.changes.outputs.mac_app }}
-      mac_cli: ${{ steps.changes.outputs.mac_cli }}
-      terminal_distributions: ${{ steps.changes.outputs.terminal_distributions }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
-        with:
-          # The merge commit tested and its parents; the script fetches the base if it is not one of them.
-          fetch-depth: 2
-          persist-credentials: false
-
-      - name: Changes since the base
-        id: changes
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: build/ci-changes.py --base "$BASE_SHA" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
-
   # The build and the tests, half of what build-and-test requires; the publish jobs below are the other half.
   unit-tests:
     runs-on: ubuntu-latest
@@ -573,8 +543,8 @@ jobs:
           done
 
   terminal-distributions:
-    needs: [ changes, publish-terminal ]
-    if: ${{ !cancelled() && needs.publish-terminal.result == 'success' && needs.changes.outputs.terminal_distributions != 'false' }}
+    needs: publish-terminal
+    if: ${{ !cancelled() && needs.publish-terminal.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -648,8 +618,8 @@ jobs:
   # runner, as root. The runner is thrown away after, and has no screen: the kiosk logs where it would draw, then stops
   # there, which stays an assumption of docs/kiosk.md.
   installer-kiosk:
-    needs: [ changes, publish-apps ]
-    if: ${{ !cancelled() && needs.publish-apps.result == 'success' && needs.changes.outputs.installer_kiosk != 'false' }}
+    needs: publish-apps
+    if: ${{ !cancelled() && needs.publish-apps.result == 'success' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     env:
@@ -703,8 +673,8 @@ jobs:
   # device key made through the controller's API in process, its settings, and --check. And what the keychain step reads:
   # a keychain of the test's own listed by `security find-certificate -Z`, and SSL trust exported from the admin domain.
   installer-mac:
-    needs: [ changes, publish-apps ]
-    if: ${{ !cancelled() && needs.publish-apps.result == 'success' && needs.changes.outputs.installer_mac != 'false' }}
+    needs: publish-apps
+    if: ${{ !cancelled() && needs.publish-apps.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 30
     env:
@@ -780,8 +750,8 @@ jobs:
           retention-days: 14
 
   mac-app:
-    needs: [ changes, publish-apps ]
-    if: ${{ !cancelled() && needs.publish-apps.result == 'success' && needs.changes.outputs.mac_app != 'false' }}
+    needs: publish-apps
+    if: ${{ !cancelled() && needs.publish-apps.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -836,8 +806,8 @@ jobs:
   # emulator run with dotnet run (tests/cli/dotnet-run-smoke.sh), and the client's certificate checks. No hardware: the
   # roof is the emulator's.
   mac-cli:
-    needs: [ changes, publish-terminal ]
-    if: ${{ !cancelled() && needs.publish-terminal.result == 'success' && needs.changes.outputs.mac_cli != 'false' }}
+    needs: publish-terminal
+    if: ${{ !cancelled() && needs.publish-terminal.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 30
     env:
@@ -925,8 +895,6 @@ jobs:
   # The Pi deploy path: the deploy script (against fake docker/curl, see tests/deploy), the container's supervisor
   # (tests/container) and the compose profiles; with the build and release scripts' tests, and the docs' links.
   deploy-script:
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.deploy_script != 'false' }}
     runs-on: ubuntu-latest
     # About 10 minutes: the deploy script's tests (5) and the supervisor's (3), whose stop tests run with its real
     # 22/5/2 s times.
@@ -979,7 +947,7 @@ jobs:
             src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py \
             build/release-compose.py tests/releasing/test_release_compose.py build/release-assets.py \
             tests/releasing/test_release_assets.py tests/install/on-terminal build/check-doc-links.py \
-            tests/docs/test_check_doc_links.py build/ci-changes.py tests/ci/test_ci_changes.py
+            tests/docs/test_check_doc_links.py tests/ci/test_publish_workflow.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/*.sh tests/installer/rig-scenario.sh tests/cli/terminal-smoke.sh \
@@ -1013,9 +981,8 @@ jobs:
 
       # build/check-doc-links.py: every relative link and anchor in the Markdown files resolves, to a file git tracks
       # (its tests, then every Markdown file git tracks).
-      # build/ci-changes.py (which pull-request jobs a change can affect, docs/ci-runners.md), and the checks that keep
-      # its rules true of the jobs' tests and scripts.
-      - name: CI change rules tests
+      # Required suites run for every changed path; the aggregate fails for every unsuccessful publisher result.
+      - name: CI publish gate tests
         run: python3 -m unittest discover -s tests/ci -p 'test_*.py' -v
 
       - name: Docs links
@@ -1276,8 +1243,6 @@ jobs:
   # install.sh's tests with a Mac's own bash (3.2) and its BSD date, shasum and pseudo-terminals: the commands install.sh
   # finds on a Mac that it does not run in its tests are stand-ins, as on Linux (tests/install).
   install-sh-mac:
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.install_sh_mac != 'false' }}
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
