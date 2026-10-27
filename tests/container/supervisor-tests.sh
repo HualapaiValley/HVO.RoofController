@@ -5,7 +5,7 @@
 # (fake-install, fake-env) and, for the tests that give the web UI its own user, setpriv (fake-setpriv), so no Docker, .NET, root or hardware is needed; the timings are shortened. They also check supervisor-state.sample.json, which the web
 # UI's and the deploy script's tests read, against the supervisor's own output. The container scenarios
 # (tests/emulator/deploy-scenarios.sh, group supervisor) run the real image.
-# Requires bash 5, jq, setsid and prlimit.
+# Requires bash 5, jq, setsid, prlimit and GNU coreutils (timeout must kill the whole preparation process group).
 # Run: tests/container/supervisor-tests.sh [test-name ...]
 set -uo pipefail
 

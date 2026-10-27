@@ -937,6 +937,24 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # The shipped container uses GNU timeout to kill a preparation's whole process group. Ubuntu 26.04 defaults
+      # to uutils, whose timeout leaves the fixture's descendant running. Test with the production dependency.
+      - name: Ensure GNU timeout
+        run: |
+          if ! timeout --version | grep -Fq 'timeout (GNU coreutils)'; then
+            if ! command -v gnutimeout >/dev/null; then
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends gnu-coreutils
+            fi
+            gnu_tools="$RUNNER_TEMP/roof-gnu-timeout"
+            mkdir -p "$gnu_tools"
+            ln -s "$(command -v gnutimeout)" "$gnu_tools/timeout"
+            echo "$gnu_tools" >> "$GITHUB_PATH"
+            export PATH="$gnu_tools:$PATH"
+          fi
+          timeout --version
+          timeout --version | grep -Fq 'timeout (GNU coreutils)'
+
       - name: Syntax and ShellCheck
         run: |
           bash -n src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh

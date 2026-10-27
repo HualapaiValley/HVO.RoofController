@@ -21,6 +21,12 @@ written at the end of a completed run. File formats and interpretation are descr
 Only the C14 test step requests `MALLOC_ARENA_MAX=2`; tiered compilation and every existing criterion remain in place.
 The [memory investigation](c14-memory-investigation.md) records the evidence and the resulting harness scope.
 
+The `deploy-script` job selects and verifies GNU `timeout` when the hosted image supplies another implementation,
+using `gnutimeout` from `gnu-coreutils` through a job-local PATH directory. Its supervisor fixtures require GNU
+`timeout`'s process-group termination, as the shipped container does; Ubuntu 26.04's default uutils `timeout` leaves
+a fixture descendant running. The delayed-reaping regression also verifies that a killed helper waiting to be
+reaped is distinguished from a live process.
+
 CI's `terminal-distributions` matrix runs the final release-assembled installer and CLI on Linux x64,
 Linux arm64 and macOS arm64, after macOS signing. It checks offline notices, help/version, nonterminal
 refusal and isolated PTY startup, and proves the notice document survives the actual installer copy
