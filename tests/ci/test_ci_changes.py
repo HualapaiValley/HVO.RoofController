@@ -107,6 +107,82 @@ class Decisions(unittest.TestCase):
 class Graph(unittest.TestCase):
     """Against fixture repositories."""
 
+    def assert_fallback(self, root, path):
+        changes = root / "name-status"
+        changes.write_text(name_status(("M", path)))
+        code, lines, err = run_main("--name-status", str(changes), "--root", str(root))
+        self.assertEqual(0, code)
+        self.assertEqual(set(ci.JOBS), set(lines))
+        self.assertEqual({"true"}, set(lines.values()))
+        self.assertIn("every job runs", err)
+
+    def test_single_quoted_resources_keep_the_mac_job_enabled(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, dict(SMALL, LinuxAuth=[])).root
+            project = root / "src" / (P + "Mac") / (P + "Mac.csproj")
+            project.write_text(project.read_text().replace(
+                "</ItemGroup>", f"<EmbeddedResource Include='../{P}LinuxAuth/Program.cs' /></ItemGroup>"))
+            self.assertIn("mac_app", decide(("M", f"src/{P}LinuxAuth/Program.cs"), root=root))
+
+    def test_external_imports_run_every_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, SMALL).root
+            (root / "build").mkdir()
+            (root / "build" / "external.targets").write_text(
+                '<Project><ItemGroup><EmbeddedResource Include="../../docs/mac.md" /></ItemGroup></Project>')
+            project = root / "src" / (P + "Mac") / (P + "Mac.csproj")
+            project.write_text(project.read_text().replace(
+                "</Project>", '<Import Project="../../build/external.targets" /></Project>'))
+            self.assert_fallback(root, "docs/mac.md")
+
+    def test_imports_outside_the_image_and_mac_closures_run_every_job(self):
+        # Scenario/browser jobs build the test graph too, including projects outside the three skip closures.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, dict(SMALL, LinuxAuth=[])).root
+            project = root / "src" / (P + "LinuxAuth") / (P + "LinuxAuth.csproj")
+            project.write_text(project.read_text().replace(
+                "</Project>", '<Import Project="../../build/external.targets" /></Project>'))
+            self.assert_fallback(root, "docs/mac.md")
+
+    def test_shared_build_inputs_run_every_job_even_when_conditioned(self):
+        for parent in ("", "src"):
+            with self.subTest(parent=parent), tempfile.TemporaryDirectory() as folder:
+                root = Fixture(folder, dict(SMALL, LinuxAuth=[])).root
+                (root / parent / "Directory.Build.targets").write_text(
+                    f'''<Project><ItemGroup Condition="'$(MSBuildProjectName)' == '{P}Mac'">
+                    <EmbeddedResource Include="../{P}LinuxAuth/Program.cs" /></ItemGroup></Project>''')
+                self.assert_fallback(root, f"src/{P}LinuxAuth/Program.cs")
+
+    def test_symlinked_project_inputs_run_every_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, dict(SMALL, LinuxAuth=[])).root
+            (root / "src" / (P + "LinuxAuth") / "Program.cs").write_text("// shared input\n")
+            (root / "src" / (P + "Mac") / "Shared.cs").symlink_to(f"../{P}LinuxAuth/Program.cs")
+            self.assert_fallback(root, f"src/{P}LinuxAuth/Program.cs")
+
+    def test_broad_or_unhandled_docker_context_copies_run_every_job(self):
+        for source in ("src/", ".", "./src/", "src/./", "src/../", "/src/", '"src/"'):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as folder:
+                root = Fixture(folder, SMALL).root
+                dockerfile = root / ci.DOCKERFILES[0]
+                dockerfile.write_text(dockerfile.read_text() + f"COPY {source} /review-source/\n")
+                self.assert_fallback(root, f"src/{P}Mac/Program.cs")
+
+    def test_unsupported_docker_escape_directives_run_every_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, SMALL).root
+            dockerfile = root / ci.DOCKERFILES[0]
+            dockerfile.write_text("# escape=`\n" + dockerfile.read_text() + "COPY `\nsrc/ /review-source/\n")
+            self.assert_fallback(root, f"src/{P}Mac/Program.cs")
+
+    def test_default_bind_mounts_run_every_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, SMALL).root
+            dockerfile = root / ci.DOCKERFILES[0]
+            dockerfile.write_text(dockerfile.read_text() +
+                f"RUN --mount=source=src/{P}Mac,target=/review-source cat /review-source/Program.cs\n")
+            self.assert_fallback(root, f"src/{P}Mac/Program.cs")
+
     def sets(self, projects, dockerfiles=None):
         with tempfile.TemporaryDirectory() as folder:
             fixture = Fixture(folder, projects, dockerfiles)

@@ -26,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
 PREFIX = "HVO.RoofControllerV4."
@@ -58,8 +59,9 @@ JOBS = {
     "installer_rig": {"docs": True, "test_code": True, "projects": "rig"},
 }
 
-REFERENCE = re.compile(r'\b(?:Include|Project|Update)\s*=\s*"([^"]*)"')
 SOURCE_DIRECTORY = re.compile(r"^src/([^/]+)/")
+IDENTITY_ITEMS = {"PackageReference", "PackageVersion", "NuGetAuditSuppress", "InternalsVisibleTo", "Using",
+                  "AssemblyAttribute"}
 
 
 class Unknown(Exception):
@@ -90,17 +92,33 @@ def _check_target(relative, what):
         raise Unknown(f"{what} reads {relative}, which the skip rules say no build reads")
 
 
+def input_attributes(path):
+    """Read XML attributes, including either quote form and entity escapes. Imports require MSBuild evaluation:
+    relative paths in an imported file need not be relative to that file, so never guess at their dependencies."""
+    try:
+        document = ET.parse(path)
+    except ET.ParseError as error:
+        raise Unknown(f"cannot parse {path}: {error}") from error
+    for element in document.iter():
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "Import":
+            raise Unknown(f"{path} imports build logic, which the skip rules cannot evaluate")
+        for attribute in ("Include", "Project", "Update"):
+            if attribute in element.attrib:
+                yield tag, element.attrib[attribute]
+
+
 def references(root, folder):
-    """The src/ folders a project's files name (ProjectReference, Import, items such as EmbeddedResource) outside its
-    own folder. A name the rules cannot follow (an MSBuild property, a path into docs/ or the test project) is
-    Unknown."""
+    """The src/ folders a project's literal XML items name outside its own folder. Imports, dynamic names and paths
+    into docs/ or the test project are Unknown; they enable every job rather than guessing at MSBuild evaluation."""
     directory = root / "src" / folder
     names = set()
-    files = [p for p in directory.rglob("*") if p.suffix in (".csproj", ".props", ".targets") and p.is_file()
-             and not {"bin", "obj"} & set(p.relative_to(directory).parts)]
+    paths = [p for p in directory.rglob("*") if not {"bin", "obj"} & set(p.relative_to(directory).parts)]
+    if directory.is_symlink() or any(p.is_symlink() for p in paths):
+        raise Unknown(f"{directory} has symlinked inputs, which the skip rules cannot follow")
+    files = [p for p in paths if p.suffix in (".csproj", ".props", ".targets") and p.is_file()]
     for project_file in files:
-        text = project_file.read_text(encoding="utf-8-sig")
-        for value in REFERENCE.findall(text):
+        for _, value in input_attributes(project_file):
             for item in value.split(";"):
                 item = item.strip().replace("\\", "/")
                 if "$(" in item or "@(" in item or "%(" in item:
@@ -109,6 +127,8 @@ def references(root, folder):
                     continue  # inside the projects folder, or a packages name
                 relative = _inside(root, os.path.normpath(project_file.parent / item))
                 _check_target(relative, project_file.relative_to(root).as_posix())
+                if relative in (".", "src"):
+                    raise Unknown(f"{project_file} reads a broad source directory")
                 name = project_of(relative)
                 if name and name != folder:
                     names.add(name)
@@ -143,6 +163,8 @@ def _copy_sources(line):
         except json.JSONDecodeError as error:
             raise Unknown(f"cannot read COPY {rest}: {error}") from error
     else:
+        if any(character in rest for character in "\"'\\"):
+            raise Unknown(f"cannot follow quoted or escaped shell-form COPY {rest}")
         items = words
     if len(items) < 2:
         raise Unknown(f"cannot read COPY {rest}")
@@ -154,43 +176,64 @@ def image_folders(root):
     folders = set()
     for dockerfile in DOCKERFILES:
         text = (root / dockerfile).read_text(encoding="utf-8")
+        for directive in re.findall(r"^\s*#\s*escape\s*=\s*(\S+)", text, re.MULTILINE | re.IGNORECASE):
+            if directive != "\\":
+                raise Unknown(f"{dockerfile} uses an unsupported escape directive")
         # Instructions joined across line continuations; comments dropped.
         logical = re.sub(r"\\\n", " ", "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#")))
         for line in logical.splitlines():
-            keyword, _, rest = line.strip().partition(" ")
+            parts = line.split(None, 1)
+            if not parts:
+                continue
+            keyword, rest = parts[0], parts[1] if len(parts) > 1 else ""
             keyword = keyword.upper()
-            if keyword == "RUN" and "--mount" in rest and "type=bind" in rest:
-                raise Unknown(f"{dockerfile} binds a context path into RUN, which the skip rules cannot follow")
+            if keyword == "RUN" and "--mount" in rest:
+                # Bind is the default mount type. Reject every mount rather than silently miss an implicit bind.
+                raise Unknown(f"{dockerfile} uses a RUN mount, which the skip rules cannot follow")
             if keyword not in ("COPY", "ADD"):
                 continue
             for source in _copy_sources(rest):
                 source = source[2:] if source.startswith("./") else source
-                if "$" in source or "*" in source.split("/")[0]:
+                if (source.startswith("/") or ".." in PurePosixPath(source).parts or "$" in source
+                        or any(c in source.split("/")[0] for c in "*?[]")):
                     raise Unknown(f"{dockerfile} copies {source}, which the skip rules cannot follow")
+                source = PurePosixPath(source).as_posix()
                 _check_target(source, dockerfile)
                 name = project_of(source)
-                if name is None and (root / source).is_dir():
-                    name = project_of(source.rstrip("/") + "/")
+                if name is None:
+                    # A whole project directory (without a trailing slash) is supported; a wider context copy is not.
+                    if (root / source).is_dir():
+                        name = project_of(source.rstrip("/") + "/")
+                        if name is None:
+                            raise Unknown(f"{dockerfile} copies broad context directory {source}")
+                    elif source.rstrip("/") in ("", ".", "src", "docs", TEST_PROJECT.rstrip("/")):
+                        raise Unknown(f"{dockerfile} copies unclassified context directory {source}")
                 if name:
                     folders.add(name)
     return closure(root, folders)
 
 
 def check_root_build_files(root):
-    """The root's MSBuild files apply to every project: none may name docs/ or the test project, which the skip rules
-    say no build reads."""
-    for name in ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props"):
-        path = root / name
-        if not path.is_file():
-            continue
-        for value in REFERENCE.findall(path.read_text(encoding="utf-8-sig")):
-            value = value.replace("\\", "/")
-            if re.search(r"(^|[/)])docs/", value) or "RPi.Tests" in value:
-                raise Unknown(f"{name} names {value}, which the skip rules say no build reads")
+    """Shared build files at the root and src/ are inherited by the project folders. Package/type identities are
+    supported; any file input or import needs MSBuild's project-relative evaluation, so it enables every job.
+    Conditions are deliberately not evaluated: a dependency in any branch must be safe for every job/configuration."""
+    for directory in (root, root / "src"):
+        for name in ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props"):
+            path = directory / name
+            if not path.is_file():
+                continue
+            for tag, value in input_attributes(path):
+                if tag not in IDENTITY_ITEMS:
+                    raise Unknown(f"{path} names build input {value}, which the skip rules cannot evaluate")
 
 
 def project_sets(root):
     check_root_build_files(root)
+    # Scenario/browser jobs also build the test graph. Validate excluded input classes in every project, including
+    # projects outside the Mac/image/rig closures, before allowing any docs/test-code skip.
+    for directory in (root / "src").iterdir():
+        if directory.is_dir() and directory.name not in ("bin", "obj"):
+            references(root, directory.name)
     images = image_folders(root)
     return {
         "mac": closure(root, {MAC}),

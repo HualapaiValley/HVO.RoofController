@@ -69,6 +69,15 @@ branch, or a diff the script cannot work out. `build-and-test` and `secret-scan`
 matrix, and a matrix job skipped as a whole reports one check without its matrix values, which would leave both
 required checks waiting: it runs instead and skips its steps.
 
+Project inputs are parsed as XML, including single-quoted attributes. The classifier does not evaluate MSBuild
+imports or conditions: any explicit import, or a file input in a shared `Directory.Build.props`,
+`Directory.Build.targets` or `Directory.Packages.props` at the root or under `src/`, enables every job. This avoids
+guessing which project's directory an imported relative path uses. Invalid XML and dynamic input expressions also
+enable every job. Project symlinks, Docker copies of a whole context or `src/`, unsupported copy paths/escape
+directives, and every `RUN --mount` enable every job too; a mount without `type=` is a bind mount and cannot be
+ignored. All project definitions are checked before a docs/test-code skip, including projects outside the three
+dependency closures, because scenario and browser jobs build the test graph as well.
+
 The docs and test-code rules are about what the jobs' tests and scripts read, which the script cannot derive, so
 `tests/ci/test_ci_changes.py` (run by `deploy-script`) fails when a test class that a skipping job selects names a
 `docs/` path, when a script those jobs run names one, or when a file outside `src/` and the test project names the
