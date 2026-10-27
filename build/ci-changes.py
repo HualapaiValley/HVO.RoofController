@@ -62,6 +62,29 @@ JOBS = {
 SOURCE_DIRECTORY = re.compile(r"^src/([^/]+)/")
 IDENTITY_ITEMS = {"PackageReference", "PackageVersion", "NuGetAuditSuppress", "InternalsVisibleTo", "Using",
                   "AssemblyAttribute"}
+# A bounded subset of the current build files. These properties describe metadata/output switches, not file-input
+# overrides. New properties, tasks or attributes require review before they can participate in skip decisions.
+METADATA_PROPERTIES = set("""
+AnalysisLevel AssemblyName Company DebugSymbols DebugType Description Deterministic EmbedUntrackedSources
+EnableCompressionInSingleFile EnableDefaultContentItems HvoTerminalProgram ImplicitUsings
+IncludeNativeLibrariesForSelfExtract IncludeSymbols InvariantGlobalization IsPackable IsTestProject LangVersion
+ManagePackageVersionsCentrally NoWarn Nullable OutputType Product PublishReadyToRun PublishRepositoryUrl
+PublishSingleFile PublishTrimmed RequiresAspNetWebAssets RootNamespace RuntimeFrameworkVersion RuntimeIdentifiers
+SelfContained StaticWebAssetsEnabled SuppressNETCoreSdkPreviewMessage SymbolPackageFormat TargetFramework
+TreatWarningsAsErrors UsedAvaloniaProducts VersionPrefix VersionSuffix
+""".split())
+XML_ELEMENTS = METADATA_PROPERTIES | IDENTITY_ITEMS | {
+    "Project", "PropertyGroup", "ItemGroup", "Target", "Error", "ProjectReference", "EmbeddedResource", "Compile",
+    "Content", "None", "AdditionalFiles", "Resource", "AvaloniaResource", "Folder", "AssemblyMetadata",
+    "IncludeAssets", "PrivateAssets", "_Parameter1",
+}
+XML_ATTRIBUTES = set("""
+Sdk Condition Label Include Update Project Remove Exclude ExcludeAssets Version BeforeTargets AfterTargets Name Text
+Link LogicalName Value
+""".split())
+VERSION_CHECK_CONDITION = (
+    "'$(Version)' != '$(VersionPrefix)' and !$([System.String]::Copy('$(Version)').StartsWith('$(VersionPrefix)-'))"
+)
 
 
 class Unknown(Exception):
@@ -95,6 +118,8 @@ def _check_target(relative, what):
 def input_attributes(path):
     """Read XML attributes, including either quote form and entity escapes. Imports require MSBuild evaluation:
     relative paths in an imported file need not be relative to that file, so never guess at their dependencies."""
+    if path.is_symlink():
+        raise Unknown(f"{path} is a symlinked build file")
     try:
         document = ET.parse(path)
     except ET.ParseError as error:
@@ -103,6 +128,17 @@ def input_attributes(path):
         tag = element.tag.rsplit("}", 1)[-1]
         if tag == "Import":
             raise Unknown(f"{path} imports build logic, which the skip rules cannot evaluate")
+        if tag not in XML_ELEMENTS or element.attrib.keys() - XML_ATTRIBUTES:
+            raise Unknown(f"{path} uses unsupported MSBuild element/attributes on {tag}")
+        if "Sdk" in element.attrib and element.attrib["Sdk"] not in ("Microsoft.NET.Sdk", "Microsoft.NET.Sdk.Web"):
+            raise Unknown(f"{path} uses an unsupported SDK")
+        for attribute, value in [("text", element.text or ""), *element.attrib.items()]:
+            if re.search(r"%[0-9a-fA-F]{2}", value):
+                raise Unknown(f"{path} uses MSBuild escapes, which the skip rules cannot evaluate")
+            known_version_check = tag == "Error" and attribute == "Condition" and value == VERSION_CHECK_CONDITION
+            unresolved_property = "$(" in re.sub(r"\$\([A-Za-z_][A-Za-z0-9_.-]*\)", "", value)
+            if (unresolved_property and not known_version_check) or re.search(r"\bExists\s*\(", value, re.IGNORECASE):
+                raise Unknown(f"{path} uses unsupported MSBuild evaluation")
         for attribute in ("Include", "Project", "Update"):
             if attribute in element.attrib:
                 yield tag, element.attrib[attribute]
@@ -111,16 +147,25 @@ def input_attributes(path):
 def references(root, folder):
     """The src/ folders a project's literal XML items name outside its own folder. Imports, dynamic names and paths
     into docs/ or the test project are Unknown; they enable every job rather than guessing at MSBuild evaluation."""
-    directory = root / "src" / folder
+    return project_inputs(root, root / "src" / folder)
+
+
+def project_inputs(root, directory):
+    """Validate source or test project build inputs, using that project's directory for literal paths."""
+    if not directory.is_dir():
+        raise Unknown(f"{directory} is not a project directory")
     names = set()
     paths = [p for p in directory.rglob("*") if not {"bin", "obj"} & set(p.relative_to(directory).parts)]
-    if directory.is_symlink() or any(p.is_symlink() for p in paths):
+    parents = [directory, *directory.parents]
+    if any(p.is_symlink() for p in [*parents, *paths]):
         raise Unknown(f"{directory} has symlinked inputs, which the skip rules cannot follow")
-    files = [p for p in paths if p.suffix in (".csproj", ".props", ".targets") and p.is_file()]
+    files = [p for p in paths if p.suffix.lower() in (".csproj", ".props", ".targets") and p.is_file()]
     for project_file in files:
-        for _, value in input_attributes(project_file):
+        for tag, value in input_attributes(project_file):
             for item in value.split(";"):
                 item = item.strip().replace("\\", "/")
+                if tag == "ProjectReference" and not item.lower().endswith(".csproj"):
+                    raise Unknown(f"{project_file} references an unsupported project format")
                 if "$(" in item or "@(" in item or "%(" in item:
                     raise Unknown(f"{project_file.relative_to(root)} names {item}, which the skip rules cannot follow")
                 if not item or (".." not in item and not item.startswith("/")):
@@ -130,7 +175,7 @@ def references(root, folder):
                 if relative in (".", "src"):
                     raise Unknown(f"{project_file} reads a broad source directory")
                 name = project_of(relative)
-                if name and name != folder:
+                if name and root / "src" / name != directory:
                     names.add(name)
     return names
 
@@ -214,10 +259,10 @@ def image_folders(root):
 
 
 def check_root_build_files(root):
-    """Shared build files at the root and src/ are inherited by the project folders. Package/type identities are
+    """Shared build files at the root, src/ and tests/ are inherited by the project folders. Package/type identities are
     supported; any file input or import needs MSBuild's project-relative evaluation, so it enables every job.
     Conditions are deliberately not evaluated: a dependency in any branch must be safe for every job/configuration."""
-    for directory in (root, root / "src"):
+    for directory in (root, root / "src", root / "tests"):
         for name in ("Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props"):
             path = directory / name
             if not path.is_file():
@@ -234,6 +279,7 @@ def project_sets(root):
     for directory in (root / "src").iterdir():
         if directory.is_dir() and directory.name not in ("bin", "obj"):
             references(root, directory.name)
+    project_inputs(root, root / TEST_PROJECT)
     images = image_folders(root)
     return {
         "mac": closure(root, {MAC}),

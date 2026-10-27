@@ -71,12 +71,20 @@ required checks waiting: it runs instead and skips its steps.
 
 Project inputs are parsed as XML, including single-quoted attributes. The classifier does not evaluate MSBuild
 imports or conditions: any explicit import, or a file input in a shared `Directory.Build.props`,
-`Directory.Build.targets` or `Directory.Packages.props` at the root or under `src/`, enables every job. This avoids
-guessing which project's directory an imported relative path uses. Invalid XML and dynamic input expressions also
-enable every job. Project symlinks, Docker copies of a whole context or `src/`, unsupported copy paths/escape
+`Directory.Build.targets` or `Directory.Packages.props` at the root or under `src/` or `tests/`, enables every job.
+This avoids guessing which project's directory an imported relative path uses. Invalid XML and dynamic input
+expressions also enable every job. Project symlinks, Docker copies of a whole context or `src/`, unsupported copy paths/escape
 directives, and every `RUN --mount` enable every job too; a mount without `type=` is a bind mount and cannot be
-ignored. All project definitions are checked before a docs/test-code skip, including projects outside the three
-dependency closures, because scenario and browser jobs build the test graph as well.
+ignored. All source project definitions and the test project's build inputs are checked before a docs/test-code
+skip, including projects outside the three dependency closures, because scenario and browser jobs build the test
+graph as well.
+
+MSBuild support is deliberately bounded to the metadata/output properties, XML elements and attributes listed in
+the classifier. Unknown properties, tasks or attributes, percent-escaped values, property functions and file-existence
+evaluation enable every job. The existing product-version Error condition is the sole supported property-function
+expression. New build constructs must either remain on this conservative fallback or update the classifier and its
+regressions in the same reviewed change; the classifier does not execute build tasks to discover their inputs.
+Project references must name C# project files; other project formats also enable every job.
 
 The docs and test-code rules are about what the jobs' tests and scripts read, which the script cannot derive, so
 `tests/ci/test_ci_changes.py` (run by `deploy-script`) fails when a test class that a skipping job selects names a

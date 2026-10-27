@@ -40,6 +40,9 @@ class Fixture:
 
     def __init__(self, folder, projects, dockerfiles=None):
         self.root = Path(folder)
+        test_project = self.root / ci.TEST_PROJECT / (P + "RPi.Tests.csproj")
+        test_project.parent.mkdir(parents=True)
+        test_project.write_text("<Project />\n")
         for name, items in projects.items():
             directory = self.root / "src" / (P + name)
             directory.mkdir(parents=True)
@@ -115,6 +118,59 @@ class Graph(unittest.TestCase):
         self.assertEqual(set(ci.JOBS), set(lines))
         self.assertEqual({"true"}, set(lines.values()))
         self.assertIn("every job runs", err)
+
+    def test_percent_escaped_msbuild_inputs_run_every_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, dict(SMALL, LinuxAuth=[])).root
+            project = root / "src" / (P + "Mac") / (P + "Mac.csproj")
+            project.write_text(project.read_text().replace("</ItemGroup>",
+                f'<EmbeddedResource Include="%2e%2e/{P}LinuxAuth/Program.cs" /></ItemGroup>'))
+            self.assert_fallback(root, f"src/{P}LinuxAuth/Program.cs")
+
+    def test_file_reading_build_tasks_run_every_job(self):
+        for parent in ("", "src", "tests", f"src/{P}Mac"):
+            with self.subTest(parent=parent), tempfile.TemporaryDirectory() as folder:
+                root = Fixture(folder, SMALL).root
+                target = root / parent / "Directory.Build.targets"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('''<Project><Target Name="ReviewReadDocs" BeforeTargets="BeforeBuild">
+                    <ReadLinesFromFile File="../../docs/review-ci-input.txt">
+                    <Output TaskParameter="Lines" ItemName="ReviewDocLines" />
+                    </ReadLinesFromFile></Target></Project>''')
+                self.assert_fallback(root, "docs/review-ci-input.txt")
+
+    def test_test_project_build_inputs_run_every_job(self):
+        for extra in ('<ItemGroup><EmbeddedResource Include="../../docs/mac.md" /></ItemGroup>',
+                      '<Import Project="../../build/test-inputs.targets" />'):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as folder:
+                root = Fixture(folder, SMALL).root
+                project = root / ci.TEST_PROJECT / (P + "RPi.Tests.csproj")
+                project.parent.mkdir(parents=True, exist_ok=True)
+                project.write_text(f"<Project>{extra}</Project>")
+                self.assert_fallback(root, "docs/mac.md")
+
+    def test_unsupported_msbuild_evaluation_runs_every_job(self):
+        for extra in ('<PropertyGroup><DirectoryBuildTargetsPath>../../build/external.targets'
+                      '</DirectoryBuildTargetsPath></PropertyGroup>',
+                      '<PropertyGroup><RootNamespace>$([System.IO.File]::ReadAllText(\'../../docs/mac.md\'))'
+                      '</RootNamespace></PropertyGroup>',
+                      '<PropertyGroup><RootNamespace>$( [System.IO.File]::ReadAllText(\'../../docs/mac.md\'))'
+                      '</RootNamespace></PropertyGroup>'):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as folder:
+                root = Fixture(folder, SMALL).root
+                project = root / "src" / (P + "Mac") / (P + "Mac.csproj")
+                project.write_text(project.read_text().replace("</Project>", extra + "</Project>"))
+                self.assert_fallback(root, "docs/mac.md")
+
+    def test_unsupported_project_reference_formats_run_every_job(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Fixture(folder, dict(SMALL, LinuxAuth=[])).root
+            project = root / "src" / (P + "Mac") / (P + "Mac.csproj")
+            project.write_text(project.read_text().replace("</ItemGroup>",
+                f'<ProjectReference Include="../{P}LinuxAuth/extra.proj" /></ItemGroup>'))
+            (root / "src" / (P + "LinuxAuth") / "extra.proj").write_text('''<Project>
+                <Target Name="Build"><ReadLinesFromFile File="../../docs/mac.md" /></Target></Project>''')
+            self.assert_fallback(root, "docs/mac.md")
 
     def test_single_quoted_resources_keep_the_mac_job_enabled(self):
         with tempfile.TemporaryDirectory() as folder:
