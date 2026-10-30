@@ -421,8 +421,9 @@ A person changes **their own PIN** with `POST Auth/Pin/Change` and `{"currentPin
   durable count of failures.
 
 **What ends.** The session that made the change stays open. The person's password sessions stay open too: a PIN is not
-their password. Their **other PIN sessions end, at every kiosk**: someone who learned the old PIN, or a kiosk left
-unlocked in their name, loses it at once. A sign-in already checking the old PIN when the change is saved is refused.
+their password. Their **other PIN sessions end, at every kiosk**, whichever of their PINs opened them (a local
+owner of the commissioned PIN may also have a personal one): someone who learned the old PIN, or a kiosk left unlocked in
+their name, loses it at once. A sign-in already checking the old PIN when the change is saved is refused.
 
 An **admin** sets, replaces or removes anyone's PIN with `PUT` or `DELETE Identity/Users/{name}/Pin` (the web UI's
 People page, `hvo-roof pins set` and `pins remove`, the terminal's People page), or with `pin` and `removePin` on

@@ -250,10 +250,49 @@ public sealed class PinChangeApiTests
         store.Failures.Should().Be(0, "a successful change forgets the wrong guess before it");
     }
 
+    [TestMethod]
+    public async Task APersonWithBothPins_ChangingEither_EndsTheirOtherPinSessionsOfBothKinds()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.File("identity.json");
+        await SeedCommissionedOwnerAsync(path, personalPin: TestSecrets.OtherPin);
+        using var host = CreateHost(extra: new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = path,
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+        });
+        using var kiosk = host.CreateApiClient(KioskKey);
+        using var password = Bearer(host, (await SignInAsync(host, "owner")).Token);
+        using var commissioned = Bearer(host, (await KioskPinAsync(kiosk, TestSecrets.Pin)).Session!.Token);
+        using var otherCommissioned = Bearer(host, (await KioskPinAsync(kiosk, TestSecrets.Pin)).Session!.Token);
+        using var personal = Bearer(host, (await PinSignInAsync(host, "owner", TestSecrets.OtherPin)).Token);
+
+        var commissionedChanged = await commissioned.PostAsJsonAsync($"{Auth}/Pin/Change", new RoofPinChangeRequest { CurrentPin = TestSecrets.Pin, NewPin = NewPin });
+
+        commissionedChanged.StatusCode.Should().Be(HttpStatusCode.NoContent, await commissionedChanged.Content.ReadAsStringAsync());
+        (await commissioned.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await otherCommissioned.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await personal.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "the person's other PIN sessions end, whichever of their PINs opened them");
+        (await password.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var commissionedAgain = Bearer(host, (await KioskPinAsync(kiosk, NewPin)).Session!.Token);
+        using var personalAgain = Bearer(host, (await PinSignInAsync(host, "owner", TestSecrets.OtherPin)).Token);
+        var personalChanged = await password.PostAsJsonAsync($"{Auth}/Pin/Change", new RoofPinChangeRequest { CurrentPin = TestSecrets.OtherPin, NewPin = "9753" });
+
+        personalChanged.StatusCode.Should().Be(HttpStatusCode.NoContent, await personalChanged.Content.ReadAsStringAsync());
+        (await commissionedAgain.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "and the other way round");
+        (await personalAgain.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await password.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     private const string OwnerId = "11111111111111111111111111111111";
 
-    /// <summary>A schema 3 store whose kiosk credential, complete with <see cref="TestSecrets.Pin"/>, is a local person's.</summary>
-    private static async Task SeedCommissionedOwnerAsync(string path)
+    /// <summary>
+    /// A schema 3 store whose kiosk credential, complete with <see cref="TestSecrets.Pin"/>, is a local person's: "owner",
+    /// an admin with the test password and, when <paramref name="personalPin"/> is given, a personal PIN of their own.
+    /// </summary>
+    private static async Task SeedCommissionedOwnerAsync(string path, string? personalPin = null)
     {
         const string ownerStamp = "22222222222222222222222222222222";
         using var hasher = IdentityRig.CreateHasher(1_000);
@@ -263,7 +302,8 @@ public sealed class PinChangeApiTests
             SchemaVersion = 3,
             Users =
             [
-                new StoredUser("owner", RoofControllerApiContract.AdminRole, await hasher.HashAsync(TestSecrets.Password, default), null, ownerStamp, now, now)
+                new StoredUser("owner", RoofControllerApiContract.AdminRole, await hasher.HashAsync(TestSecrets.Password, default),
+                    personalPin is null ? null : await hasher.HashAsync(personalPin, default), ownerStamp, now, now)
                 {
                     PrincipalId = OwnerId,
                     AuthenticationEpoch = ownerStamp

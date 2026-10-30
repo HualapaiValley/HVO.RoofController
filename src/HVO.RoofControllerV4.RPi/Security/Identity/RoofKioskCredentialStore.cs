@@ -128,7 +128,12 @@ public sealed partial class RoofIdentityStore
                 if (c is not { State: "complete" } || c.Stamp != expected.Stamp || c.PrincipalId != expected.PrincipalId || !KioskDeviceIsCurrent(d, deviceId))
                     return RoofIdentityResult<int>.Failure(RoofControllerErrorCode.SignInFailed, "The current PIN is not correct.");
                 d.KioskCredential = c with { PinHash = newHash, Stamp = NewStamp(), Failures = 0, LockedUntilUtc = null };
-                var ended = d.Sessions.RemoveAll(s => s.Kind == RoofCredentialKind.Pin && s.PrincipalId == c.PrincipalId && s.Id != keepSessionId);
+                // The owner's other PIN sessions, whichever PIN opened them: a local owner's personal-PIN sessions name the
+                // person, not the principal. A Linux namesake's sessions are another principal's and stay.
+                var owner = Principal(d, c.PrincipalId);
+                var ended = d.Sessions.RemoveAll(s => s.Kind == RoofCredentialKind.Pin && s.Id != keepSessionId
+                    && (s.PrincipalId == c.PrincipalId
+                        || (owner is { Provider: "virtual" } local && s.Provider != "linux" && Same(s.UserName, local.Name))));
                 return RoofIdentityResult<int>.Success(ended);
             });
         }
