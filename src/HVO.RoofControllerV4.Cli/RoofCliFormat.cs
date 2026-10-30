@@ -30,7 +30,8 @@ internal static class RoofCliFormat
 
     /// <summary>
     /// The roof's state in one line, without the snapshot's time: the position and motion, a fault, relays that could
-    /// not be verified, the lease, and the last stop. <c>status --watch</c> writes a line when this changes.
+    /// not be verified, the lease, the last stop, and the safety conditions when the controller reports them.
+    /// <c>status --watch</c> writes a line when this changes.
     /// </summary>
     public static string DescribeState(RoofStatusResponse status)
     {
@@ -51,6 +52,12 @@ internal static class RoofCliFormat
         }
 
         parts.Add($"last stop: {RoofText.DescribeStopReason(status.LastStopReason)}");
+        if (status.Safety is { } safety)
+        {
+            parts.Add("safety " + RoofStatusText.DescribeSafetyState(safety.State).ToLowerInvariant()
+                + (RoofCommandRules.IsOpenBlockedBySafety(status) ? ", Open blocked" : string.Empty));
+        }
+
         return string.Join("; ", parts);
     }
 

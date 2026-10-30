@@ -207,7 +207,7 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `status [--watch]` | viewer | The roof's status. `--watch` follows the status hub, with one line per change of the roof's state (not one per heartbeat), and says so when the status goes stale, or when no status has arrived 3 s after it started. |
 | `health [--probe ready\|live]` | viewer | The controller's health checks. Exits 8 unless the controller is healthy. `--probe` asks the anonymous readiness or liveness probe, which needs no credential. |
 | `stop` | viewer | **Stop roof.** Sent at once over REST. Exits 9 when the relays could not be verified off. |
-| `open`, `close [--no-wait]` | operator | Starts the motion and follows it to the end, renewing the operator lease. Ctrl+C sends Stop. |
+| `open`, `close [--no-wait]` | operator | Starts the motion and follows it to the end, renewing the operator lease. Ctrl+C sends Stop. `open --override-safety` opens even though the [safety conditions](safety-service.md) are not safe, where the controller's interlock is in Warn mode and you have its override role; the controller logs it. |
 | `lease` | operator | Renews the operator lease of the motion in progress (for scripts that use `--no-wait`). |
 | `clear-fault [--pulse-ms]` | operator | Clears a latched fault once its cause is resolved. |
 | `whoami` | any | The controller in use, and who the controller takes the credential to be: for a person, also their display name, short name and login type (a Linux account's names are the operating system's). |
@@ -268,6 +268,11 @@ reading, and with no status at all for 30 s it gives up (exit 4) and says that t
 
 With `--no-wait`, the command returns once the controller accepts the motion. If the controller holds the motion on a
 lease, the command says so, and the roof stops when the lease runs out unless something runs `hvo-roof lease`.
+
+`status` shows the [safety conditions](safety-service.md) (telescope park and weather) as a `Safety:` row, for example
+`Safety: UNKNOWN: No safety sources configured (advisory: the safety interlock is off)`, and each `status --watch`
+line ends with their state (`safety unknown`, and `Open blocked` while the interlock blocks Open). The terminal
+interface's roof page shows the same row under ROOF STATE.
 
 ## Settings
 

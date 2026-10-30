@@ -62,6 +62,7 @@ it while a controller drives the HAT: it would stop that controller's move.
 - [Wiring diagrams](../../docs/projects/roof-controller-v4-rpi/diagrams/) – source Graphviz DOT files, SVG diagrams, and PNG renderings for the hardware overview
 - [Commissioning](../../docs/commissioning.md) – checks C1-C15 as automated scenarios against the emulated plant, with the installation assumptions each depends on
 - [Security](../../docs/security.md) – API keys, roles, sign-in, HTTPS
+- [Safety conditions](../../docs/safety-service.md) – the safety service (telescope park, weather), `GET /api/v4.0/Safety`, and the Open interlock (`RoofSafety:InterlockMode`, Off by default; `POST .../Open?overrideSafety=true` in Warn mode)
 - [Web UI](../../docs/web.md) – the browser client, with its screenshots
 - [Deployment](../../docs/deployment.md) – deployment script, compose profiles, deployment check, verified stop and rollback
 - [HAT emulator](../../docs/emulator.md) – running without hardware: the emulator, `HatEmulator` settings, fault injection, containers

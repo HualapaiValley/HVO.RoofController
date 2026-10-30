@@ -4,8 +4,9 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.Client;
 
 /// <summary>
-/// Roof commands and status (<c>api/v4.0/RoofControl</c>). A refused command throws <see cref="RoofApiException"/>
-/// carrying the controller's code and its status snapshot. Stop is on <see cref="RoofControllerClient.StopAsync"/>.
+/// Roof commands and status (<c>api/v4.0/RoofControl</c>), and the safety conditions (<c>api/v4.0/Safety</c>). A refused
+/// command throws <see cref="RoofApiException"/> carrying the controller's code and its status snapshot. Stop is on
+/// <see cref="RoofControllerClient.StopAsync"/>.
 /// </summary>
 public sealed class RoofControlApi
 {
@@ -23,6 +24,15 @@ public sealed class RoofControlApi
     /// <summary>Starts opening. Operator role.</summary>
     public Task<RoofStatusResponse> OpenAsync(CancellationToken cancellationToken = default)
         => _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, RoofApiRoutes.Open, null, cancellationToken);
+
+    /// <summary>
+    /// Starts opening; with <paramref name="overrideSafety"/>, even though the safety conditions are not Safe, where the
+    /// controller's safety interlock is in Warn mode and the caller has its override role (the controller logs the
+    /// override). Without the override, Warn mode refuses with SafetyOverrideRequired. Operator role.
+    /// </summary>
+    public Task<RoofStatusResponse> OpenAsync(bool overrideSafety, CancellationToken cancellationToken = default)
+        => _http.SendAsync<RoofStatusResponse>(
+            HttpMethod.Post, overrideSafety ? $"{RoofApiRoutes.Open}?overrideSafety=true" : RoofApiRoutes.Open, null, cancellationToken);
 
     /// <summary>Starts closing. Operator role.</summary>
     public Task<RoofStatusResponse> CloseAsync(CancellationToken cancellationToken = default)
@@ -43,6 +53,13 @@ public sealed class RoofControlApi
             : RoofApiRoutes.ClearFault;
         return _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, path, null, cancellationToken);
     }
+
+    /// <summary>
+    /// The safety conditions (telescope park, weather): Safe, Unsafe or Unknown, the reasons, each source and how Open
+    /// treats them. Every status snapshot carries the same in <see cref="RoofStatusResponse.Safety"/>. Viewer role.
+    /// </summary>
+    public Task<RoofSafetyStatus> GetSafetyAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofSafetyStatus>(RoofApiRoutes.Safety, cancellationToken);
 
     /// <summary>The controller's roof configuration. Admin role.</summary>
     public Task<RoofConfigurationResponse> GetConfigurationAsync(CancellationToken cancellationToken = default)

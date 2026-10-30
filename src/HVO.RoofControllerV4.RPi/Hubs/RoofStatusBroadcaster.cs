@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Threading.Channels;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using Microsoft.AspNetCore.SignalR;
 
@@ -33,6 +34,8 @@ internal sealed class HubRoofStatusSender(IHubContext<RoofStatusHub> hub) : IRoo
 /// heartbeat racing a change can produce) is not published, so no client sees the status go backwards. A change event
 /// must be strictly newer: each change has its own version, so an event whose version was already published (by a
 /// heartbeat or a connection that read the snapshot first) is an older copy of it.</para>
+/// <para>Every message carries the safety conditions (<see cref="RoofStatusResponse.Safety"/>) as they are when it is
+/// published, so a change to them reaches the clients with the next message, a heartbeat at the latest.</para>
 /// <para>A hub connection authenticates once, when it opens. Once every heartbeat interval, whether or not anything
 /// was published, every connection's key is checked again and the connection is closed when that key was removed,
 /// rotated or re-roled.</para>
@@ -52,6 +55,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     internal static readonly TimeSpan RefusalLogInterval = TimeSpan.FromSeconds(10);
 
     private readonly IRoofControllerServiceV4 _controller;
+    private readonly IRoofSafetyService? _safety;
     private readonly IRoofStatusSender _sender;
     private readonly RoofCredentialValidator _credentials;
     private readonly TimeProvider _time;
@@ -74,8 +78,9 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         IRoofStatusSender sender,
         RoofCredentialValidator credentials,
         TimeProvider time,
-        ILogger<RoofStatusBroadcaster> logger)
-        : this(controller, sender, credentials, time, logger, RoofStatusHubContract.HeartbeatInterval, DefaultMaxConnections, DefaultMaxConnectionsPerKey)
+        ILogger<RoofStatusBroadcaster> logger,
+        IRoofSafetyService? safety = null)
+        : this(controller, sender, credentials, time, logger, RoofStatusHubContract.HeartbeatInterval, DefaultMaxConnections, DefaultMaxConnectionsPerKey, safety)
     {
     }
 
@@ -87,7 +92,8 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         ILogger<RoofStatusBroadcaster> logger,
         TimeSpan heartbeatInterval,
         int maxConnections,
-        int maxConnectionsPerKey = DefaultMaxConnectionsPerKey)
+        int maxConnectionsPerKey = DefaultMaxConnectionsPerKey,
+        IRoofSafetyService? safety = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
@@ -100,6 +106,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         _heartbeatInterval = heartbeatInterval;
         _maxConnections = maxConnections;
         _maxConnectionsPerKey = maxConnectionsPerKey;
+        _safety = safety;
     }
 
     /// <summary>Identifies this process's message stream (<see cref="RoofStatusHubMessage.InstanceId"/>).</summary>
@@ -201,7 +208,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
 
         if (refusal is null)
         {
-            var status = _controller.GetCurrentStatusSnapshot();
+            var status = WithSafety(_controller.GetCurrentStatusSnapshot());
             lock (_gate)
             {
                 // Checked again: other connections may have registered while the snapshot was read.
@@ -311,11 +318,15 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     /// <summary>Runs on the controller's status dispatcher: only writes to the pending slots, never waits.</summary>
     private void OnStatusChanged(object? sender, RoofStatusChangedEventArgs e)
     {
+        var status = WithSafety(e.Status);
         lock (_gate)
         {
-            Publish_NoLock(e.Status, fromChange: true);
+            Publish_NoLock(status, fromChange: true);
         }
     }
+
+    /// <summary>The snapshot with the safety conditions now; read outside the gate, as the controller's snapshot is.</summary>
+    private RoofStatusResponse WithSafety(RoofStatusResponse status) => _safety is null ? status : _safety.WithSafety(status);
 
     /// <param name="fromChange">
     /// True for a change event, which must be strictly newer than the last message: every change has its own version,
@@ -419,7 +430,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
             }
         }
 
-        var status = _controller.GetCurrentStatusSnapshot();
+        var status = WithSafety(_controller.GetCurrentStatusSnapshot());
         lock (_gate)
         {
             Publish_NoLock(status, fromChange: false);
