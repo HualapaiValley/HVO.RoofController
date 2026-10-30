@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET api/v4.0/System/Summary` for every role (a viewer, an operator, an admin, a kiosk key, a PIN session): the
+  controller's version and uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and
+  addresses, each null when it cannot be read. `System/info` and `System/metrics` stay admin-only. The client library
+  reads it with `System.GetSummaryAsync()` and describes it with `RoofSystemText.DescribeSummary` (#209).
+- People have an optional display name and short name, set by an admin (`DisplayName` and `ShortName` on
+  `POST`/`PUT Identity/Users`; on a change an empty one removes it, and none ends a session), and the controller records
+  each person's and each Linux account's last sign-in (password, PIN or Linux). `RoofUserResponse`,
+  `RoofPinUserResponse` and `Auth/Me` carry the names, the people list and the kiosk's picker the last sign-in and a
+  `LoginType` (`Local` or `Linux`, derived from the provider), and `RoofPrincipalResponse` the last sign-in. They are
+  optional fields of the identity store, with no new schema, so a rollback still reads it (#209).
+- The web UI's People page, `hvo-roof users` and the terminal's People page show the names, login type and last
+  sign-in, and set or clear the names (`--display-name`, `--short-name`; **Names**). The kiosk's PIN picker shows a
+  person's display name (#209).
+
+### Changed
+
+- The controller's version and summary are no longer admin-only in any UI: the web UI's System page (now in every
+  role's navigation), `hvo-roof info`, the terminal's System page, and the kiosk's and Mac app's About and System pages
+  show them to every role, a locked kiosk too; the host's details and the restarts stay admin-only. A controller that
+  cannot be reached is said so (`Controller unreachable.`) (#209).
+
 ## [4.2.0] - 2026-10-30
 
 ### Added
