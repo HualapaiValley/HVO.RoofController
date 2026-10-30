@@ -12,7 +12,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 /// <summary>
 /// The web UI's screenshots in <c>docs/web.md</c>: each page as an admin sees it, against the emulated roof and camera.
 /// Every page is visited on a phone, a tablet and a desktop and must be whole (no sideways scroll, and once signed in the
-/// mode banner shown) with no secret in it: the key panel is never opened, and the controller's host name is masked.
+/// mode banner shown) with no secret in it: the key panel is never opened, and the controller's host name and addresses
+/// are masked.
 /// The docs keep every page at the desktop, the sign-in and roof pages on the phone, and the roof page on the tablet, as
 /// JPEG to keep the repository small. The images go to <c>browser/screens</c> in the test results, or to <c>WEB_SCREENS_OUT</c> when it is
 /// set (the refresh in <c>docs/web.md</c> points it at <c>docs/images/web</c>).
@@ -95,14 +96,28 @@ public sealed class WebScreenshotTests
         // The first screen: the settings run on for several screens of fields.
         await shots.TakeAsync("05-settings", wholePage: false);
 
+        // One person with both names, so the list shows them (#209); the names are synthetic.
+        using (var admin = browser.AdminClient())
+        {
+            await admin.Identity.UpdateUserAsync(WebBrowser.Operator, new HVO.RoofControllerV4.Common.Models.RoofUserUpdateRequest
+            {
+                Role = HVO.RoofControllerV4.Common.Models.RoofControllerApiContract.OperatorRole,
+                DisplayName = "Olga Example",
+                ShortName = "Olga"
+            });
+        }
+
         await page.GotoAsync("/people");
         await Expect(page.GetByTestId("user").First).ToBeVisibleAsync();
         await shots.TakeAsync("06-people");
 
         await page.GotoAsync("/system");
-        await Expect(page.GetByTestId("system-fact").First).ToBeVisibleAsync();
+        await Expect(page.Locator("[data-testid=system-summary] [data-testid=system-fact]").First).ToBeVisibleAsync();
+        await Expect(page.Locator("[data-testid=system-information] [data-testid=system-fact]").First).ToBeVisibleAsync();
         await Expect(page.GetByTestId("restart")).ToBeVisibleAsync();
-        await shots.TakeAsync("07-system", mask: page.Locator("[data-testid=system-fact][data-label=Host]"));
+        // The host name and the addresses are this machine's: masked, so no private address is published.
+        await shots.TakeAsync("07-system", mask: page.Locator(
+            "[data-testid=system-fact][data-label=Host], [data-testid=system-fact][data-label=Addresses]"));
 
         // Secondary workflows use the same real components; leave all private inputs empty.
         await page.GotoAsync("/people");

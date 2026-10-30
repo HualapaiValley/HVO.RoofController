@@ -69,12 +69,13 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | Roof (`/`) | everyone | The position, what was commanded, Open, Close and Clear fault (Operator and Admin), the operator lease while a move started here runs, the roof camera, and the status in detail. |
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
-| People (`/people`) | Admin | People (add, role, password, kiosk PIN, remove), API keys (add, rotate, change, remove) and sessions (end). |
-| System (`/system`) | Admin | The web UI's version, the controller's version, host and resource use, readiness, Restart, and Forced restart. |
+| People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove) and sessions (end). |
+| System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
 
-A Viewer and an Operator see Roof, Health and Settings in the navigation. Opening an admin page without the Admin role
-says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
+A Viewer and an Operator see Roof, Health, Settings and System in the navigation; System shows them the controller's
+summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role says so, and
+shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
 not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
 mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
 which says only how the roof is driven. The sign-in page, with its Stop, is sent at once, and the banner and the
@@ -173,16 +174,29 @@ A setting that cannot be changed here says why, as the controller gives it.
 
 ### People
 
-![The People page: people, with their roles, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
+![The People page: people, with their names, roles, login type and last sign-in, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
 
 An admin adds people and sets their role, password and [kiosk](kiosk.md) PIN, adds and rotates API keys, and ends sessions
 ([Managing people, keys and sessions](security.md#managing-people-keys-and-sessions)). A new key's secret is shown
 once, as it is created; neither the page nor the controller shows it again.
 
+Each person's row shows their **display name** (a friendly name, up to 64 characters) and **short name** (up to 16, for
+narrow places such as the kiosk), both optional; how they sign in (**Login**: `local` for a person in the controller's
+identity store); and their **last sign-in**, with a password or a PIN (`none recorded` until they sign in after the
+controller began recording it). An admin gives the names when adding a person, or with **Names**; an empty name is
+removed, and a name change ends no session. The **Linux users** tab shows each enrolled account's last sign-in too.
+
 ### System
 
-![The System page: the web UI's version, the controller's facts, Restart, and Forced restart](images/web/07-system-desktop.jpg)
+![The System page: the web UI's version, the controller's summary, the host's details, Restart, and Forced restart](images/web/07-system-desktop.jpg)
 
+Every role sees the web UI's own version and the **controller's summary** (`GET System/Summary`): its version and
+uptime, the machine's uptime, CPU use, load and temperature, memory, the disk it keeps its data on, and its addresses
+(in a container, the container's). A value the controller could not read says `unavailable`; when the controller
+cannot be reached the page says `Controller unreachable.`, and **Refresh** reads it again. An admin also sees:
+
+- **Host details**: the application, host, operating system, runtime, start time and the controller process's memory
+  and CPU (`GET System/info` and `metrics`).
 - **Restart the controller** asks first (`Restart the controller? It stops the roof first, and does not answer until it has started again.`).
   The controller stops the roof, verifies the stop, and exits; the supervisor starts it again. A restart that would
   load a pending hand edit shows it, and needs confirming when it is safety-critical.
@@ -310,7 +324,7 @@ Nothing here needs the Pi, the HAT or the roof.
 
 - **The screenshots** above come from `WebScreenshotTests`, which signs in as an admin against the emulated roof and
   camera and visits every page on a phone, a tablet and a desktop. It checks that no page scrolls sideways and that no
-  page holds a key or a password; the key panel is never opened and the controller's host name is masked. To refresh
+  page holds a key or a password; the key panel is never opened and the controller's host name and addresses are masked. To refresh
   them, from `src/`:
 
   ```bash
@@ -349,4 +363,4 @@ See [Authentication and interface rights](authentication-interfaces.md) for veri
 
 ### Finding the installed version
 
-The footer shows the running **Web UI version**, including build identification. Administrators can read **System** for separately labelled last-read controller information. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.
+The footer shows the running **Web UI version**, including build identification. Everyone signed in can read **System** for the separately labelled, last-read controller version and summary; administrators see the host's details too. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.
