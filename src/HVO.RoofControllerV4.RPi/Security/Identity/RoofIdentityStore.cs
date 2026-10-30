@@ -405,6 +405,30 @@ public sealed partial class RoofIdentityStore
         });
 
     /// <summary>
+    /// A signed-in person changes their own display and short name (#209). A null name is left as it is, an empty one is
+    /// removed, and any other (normalized and checked) replaces it. Changes no stamp and ends no session.
+    /// </summary>
+    public RoofIdentityResult<StoredUser> ChangeOwnNames(string name, string? displayName, string? shortName)
+        => Mutate<StoredUser>((document, now) =>
+        {
+            var index = document.Users.FindIndex(user => Same(user.Name, name));
+            if (index < 0)
+            {
+                return RoofIdentityResult<StoredUser>.Failure(RoofControllerErrorCode.IdentityNotFound, "No person has that name.");
+            }
+
+            var before = document.Users[index];
+            var after = before with
+            {
+                DisplayName = displayName is null ? before.DisplayName : displayName.Length == 0 ? null : displayName,
+                ShortName = shortName is null ? before.ShortName : shortName.Length == 0 ? null : shortName,
+                UpdatedUtc = now
+            };
+            document.Users[index] = after;
+            return RoofIdentityResult<StoredUser>.Success(after);
+        });
+
+    /// <summary>
     /// Replaces a password or PIN hash with a stronger one of the same secret (after a sign-in, when the hash settings
     /// changed). Nothing happens if the hash changed meanwhile.
     /// </summary>

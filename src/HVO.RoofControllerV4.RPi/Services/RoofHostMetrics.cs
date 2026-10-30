@@ -18,10 +18,11 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Services;
 
 /// <summary>
-/// Reads the controller's version and the basic resource use of the machine it runs on, for
-/// <c>GET api/v4.0/System/Summary</c> (#209): CPU use and load, the CPU's temperature, memory, the data disk, the
-/// controller's addresses and the uptimes. On Linux it reads <c>/proc</c> and <c>/sys</c>, which a container shares with
-/// its host. A value it cannot read is null, never an error, so the summary always answers.
+/// Reads the controller's version, where people reach its web UI, and the basic resource use of the machine it runs on,
+/// for <c>GET api/v4.0/System/Summary</c> (#209): CPU use and load, the CPU's temperature, memory, the data disk, the
+/// addresses and the uptimes. On Linux it reads <c>/proc</c> and <c>/sys</c>, which a container shares with its host; the
+/// host's addresses and the web UI's URLs come from the deployment (<see cref="RoofHostOptions"/>), since a container sees
+/// only its own. A value it cannot read is null, never an error, so the summary always answers.
 /// </summary>
 public sealed class RoofHostMetrics
 {
@@ -44,6 +45,7 @@ public sealed class RoofHostMetrics
     private readonly TimeProvider _time;
     private readonly IHostEnvironment _environment;
     private readonly IOptionsMonitor<RoofIdentityOptions> _identity;
+    private readonly IOptionsMonitor<RoofHostOptions> _host;
     private readonly Func<string, string?> _readFile;
     private readonly Func<string, (long Total, long Free)?> _readDisk;
     private readonly Func<IReadOnlyList<string>> _readAddresses;
@@ -57,8 +59,9 @@ public sealed class RoofHostMetrics
     public RoofHostMetrics(
         TimeProvider time,
         IHostEnvironment environment,
-        IOptionsMonitor<RoofIdentityOptions> identity)
-        : this(time, environment, identity, ReadFile, ReadDisk, ReadAddresses, RunningInContainer, DefaultCpuSample)
+        IOptionsMonitor<RoofIdentityOptions> identity,
+        IOptionsMonitor<RoofHostOptions> host)
+        : this(time, environment, identity, host, ReadFile, ReadDisk, ReadAddresses, RunningInContainer, DefaultCpuSample)
     {
     }
 
@@ -67,6 +70,7 @@ public sealed class RoofHostMetrics
         TimeProvider time,
         IHostEnvironment environment,
         IOptionsMonitor<RoofIdentityOptions> identity,
+        IOptionsMonitor<RoofHostOptions> host,
         Func<string, string?> readFile,
         Func<string, (long Total, long Free)?> readDisk,
         Func<IReadOnlyList<string>> readAddresses,
@@ -76,6 +80,7 @@ public sealed class RoofHostMetrics
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+        _host = host ?? throw new ArgumentNullException(nameof(host));
         _readFile = readFile;
         _readDisk = readDisk;
         _readAddresses = readAddresses;
@@ -92,6 +97,10 @@ public sealed class RoofHostMetrics
         var load = ParseLoadAverage(_readFile(LoadAveragePath));
         var memory = ParseMemory(_readFile(MemoryPath));
         var disk = _readDisk(DataDirectory());
+        var own = _readAddresses();
+        var inContainer = _inContainer();
+        var host = _host.CurrentValue;
+        var hostAddresses = ParseAddresses(host.Addresses);
         return new SystemSummaryResponse(
             RoofProductVersion.Of(typeof(Program).Assembly),
             Math.Max((now - process.StartTime.ToUniversalTime()).TotalSeconds, 0d),
@@ -109,8 +118,12 @@ public sealed class RoofHostMetrics
             ProcessWorkingSetBytes = process.WorkingSet64,
             DiskTotalBytes = disk?.Total,
             DiskFreeBytes = disk?.Free,
-            IpAddresses = [.. _readAddresses()],
-            RunningInContainer = _inContainer()
+            WebUiUrls = [.. ParseUrls(host.WebUiUrls)],
+            WebUiAccess = RoofWebUiAccess.Parse(host.WebUiAccess),
+            // Directly on the host, its own addresses are the host's; in a container, only the deployment knows them.
+            HostAddresses = [.. hostAddresses.Count > 0 || inContainer ? hostAddresses : own],
+            IpAddresses = [.. own],
+            RunningInContainer = inContainer
         };
     }
 
@@ -315,6 +328,33 @@ public sealed class RoofHostMetrics
                 && !(address.AddressFamily == AddressFamily.InterNetwork && address.GetAddressBytes() is [169, 254, ..]))
             .OrderBy(address => address.AddressFamily == AddressFamily.InterNetwork ? 0 : 1)
             .Select(address => address.ToString())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// The host's addresses the deployment wrote (<see cref="RoofHostOptions.Addresses"/>), IPv4 first; anything that is
+    /// not an IP address is left out.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseAddresses(string? text)
+        => (text ?? string.Empty).Split([';', ',', ' ', '\t', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(entry => IPAddress.TryParse(entry.Trim('[', ']'), out var address) ? address : null)
+            .Where(address => address is not null)
+            .Select(address => address!)
+            .OrderBy(address => address.AddressFamily == AddressFamily.InterNetwork ? 0 : 1)
+            .Select(address => address.ToString())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// The web UI's URLs the deployment wrote (<see cref="RoofHostOptions.WebUiUrls"/>): absolute <c>http</c> and
+    /// <c>https</c> URLs without user information, as written; anything else is left out.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseUrls(string? text)
+        => (text ?? string.Empty).Split([';', ' ', '\t', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(entry => Uri.TryCreate(entry, UriKind.Absolute, out var url)
+                && url.Scheme is "http" or "https" && url.UserInfo.Length == 0 && url.Host.Length > 0 ? url.AbsoluteUri : null)
+            .Where(url => url is not null)
+            .Select(url => url!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 

@@ -122,7 +122,8 @@ public sealed class IdentityApiTests
 
         using var alice = Bearer(host, session.Token);
         var me = await ApiJson.ReadAsync<RoofCallerResponse>(await alice.GetAsync($"{Auth}/Me"));
-        me.Should().BeEquivalentTo(new RoofCallerResponse("alice", RoofControllerApiContract.OperatorRole, RoofCredentialKind.Session, null, session.SessionId, session.ExpiresUtc, false));
+        me.Should().BeEquivalentTo(new RoofCallerResponse("alice", RoofControllerApiContract.OperatorRole, RoofCredentialKind.Session, null, session.SessionId, session.ExpiresUtc, false)
+            { LoginType = RoofLoginTypes.Local });
         (await alice.PostAsync($"{Roof}/Open", content: null)).StatusCode.Should().Be(HttpStatusCode.OK);
         (await alice.GetAsync($"{Identity}/Users")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }

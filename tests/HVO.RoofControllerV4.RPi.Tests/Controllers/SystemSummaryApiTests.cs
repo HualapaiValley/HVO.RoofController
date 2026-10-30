@@ -90,14 +90,34 @@ public sealed class SystemSummaryApiTests
         [
             "applicationVersion", "uptimeSeconds", "generatedAtUtc", "hostUptimeSeconds", "processorCount", "cpuUsagePercent",
             "loadAverage1Minute", "loadAverage5Minutes", "loadAverage15Minutes", "cpuTemperatureCelsius", "memoryTotalBytes",
-            "memoryAvailableBytes", "processWorkingSetBytes", "diskTotalBytes", "diskFreeBytes", "ipAddresses", "runningInContainer"
+            "memoryAvailableBytes", "processWorkingSetBytes", "diskTotalBytes", "diskFreeBytes", "webUiUrls", "webUiAccess", "hostAddresses",
+            "ipAddresses", "runningInContainer"
         ], "the summary is for every role: the machine's name, the environment and paths stay in the admin-only System/info");
         body.GetRawText().Should().NotContain(Environment.MachineName);
     }
 
-    private static RoofApiTestHost CreateHost()
+    [TestMethod]
+    public async Task WhereTheWebUiIsReached_IsAsTheDeploymentWroteIt()
+    {
+        using var host = CreateHost(new Dictionary<string, string?>
+        {
+            // As the deploy script passes them (RoofHost__*), with documentation addresses.
+            ["RoofHost:Addresses"] = "192.0.2.10;2001:db8::10",
+            ["RoofHost:WebUiUrls"] = "https://192.0.2.10:8088/;https://[2001:db8::10]:8088/",
+            ["RoofHost:WebUiAccess"] = "Network"
+        });
+        using var viewer = host.CreateApiClient(TestApiKeys.Viewer);
+
+        var summary = await ApiJson.ReadAsync<SystemSummaryResponse>(await viewer.GetAsync(Summary));
+
+        summary.WebUiUrls.Should().Equal("https://192.0.2.10:8088/", "https://[2001:db8::10]:8088/");
+        summary.WebUiAccess.Should().Be(RoofWebUiAccess.Network);
+        summary.HostAddresses.Should().Equal("192.0.2.10", "2001:db8::10");
+    }
+
+    private static RoofApiTestHost CreateHost(IDictionary<string, string?>? extra = null)
         => new(
-            settings: new Dictionary<string, string?>
+            settings: new Dictionary<string, string?>(extra ?? new Dictionary<string, string?>())
             {
                 ["RoofControllerSecurity:ApiKeys:4:Name"] = "test-kiosk",
                 ["RoofControllerSecurity:ApiKeys:4:Role"] = RoofControllerApiContract.ViewerRole,

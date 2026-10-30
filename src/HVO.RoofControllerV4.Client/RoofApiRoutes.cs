@@ -26,6 +26,7 @@ internal static class RoofApiRoutes
     public const string PinUsers = V4 + "Auth/Pin/Users";
     public const string Me = V4 + "Auth/Me";
     public const string Password = V4 + "Auth/Password";
+    public const string Names = V4 + "Auth/Names";
 
     public const string Principals = V4 + "Identity/Principals";
     public const string Users = V4 + "Identity/Users";

@@ -70,6 +70,7 @@ public sealed class RoofClientCoverageTests
         ("Auth.GetCaller", client => client.Auth.GetCallerAsync()),
         ("Auth.SignOut", client => client.Auth.SignOutAsync()),
         ("Auth.ChangePassword", client => client.Auth.ChangePasswordAsync("not-a-password", "not-a-password-either")),
+        ("Auth.ChangeNames", client => client.Auth.ChangeNamesAsync(new RoofNamesChangeRequest { DisplayName = "Alice Example" })),
         ("Identity.GetPrincipals", client => client.Identity.GetPrincipalsAsync()),
         ("Identity.EnrollPrincipal", client => client.Identity.EnrollPrincipalAsync(
             new RoofPrincipalEnrollRequest

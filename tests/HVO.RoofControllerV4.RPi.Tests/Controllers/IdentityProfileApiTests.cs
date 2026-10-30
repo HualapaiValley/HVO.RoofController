@@ -150,6 +150,54 @@ public sealed class IdentityProfileApiTests
         me.DisplayName.Should().BeNull("an API key is not the person who shares its name");
     }
 
+    [TestMethod]
+    public async Task APerson_ChangesTheirOwnNames_WithTheirPasswordSession_AndNothingEnds()
+    {
+        using var host = CreateHost();
+        await AddUserAsync(host, "alice", displayName: "Alice Example", shortName: "Ali");
+        var session = await SignInAsync(host, "alice");
+        using var alice = Bearer(host, session.Token);
+
+        var renamed = await alice.PostAsJsonAsync($"{Auth}/Names", new RoofNamesChangeRequest { DisplayName = "  Alice B. Example ", ShortName = "" });
+
+        renamed.StatusCode.Should().Be(HttpStatusCode.OK, await renamed.Content.ReadAsStringAsync());
+        var me = await ApiJson.ReadAsync<RoofCallerResponse>(renamed);
+        me.Name.Should().Be("alice");
+        me.DisplayName.Should().Be("Alice B. Example");
+        me.ShortName.Should().BeNull("an empty name removes it");
+        me.LoginType.Should().Be(RoofLoginTypes.Local);
+        (await alice.GetAsync($"{Auth}/Me")).StatusCode.Should().Be(HttpStatusCode.OK, "changing your names ends no session");
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        var listed = await ApiJson.ReadAsync<RoofUserResponse>(await admin.GetAsync($"{Identity}/Users/alice"));
+        listed.DisplayName.Should().Be("Alice B. Example");
+        listed.ShortName.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task OwnNames_AreNotChanged_AtAKiosk_WithAnApiKey_OrInvalid()
+    {
+        using var host = CreateHost();
+        await AddUserAsync(host, "olive", pin: TestSecrets.Pin, displayName: "Olive Example");
+        using var kiosk = host.CreateApiClient(KioskKey);
+        var pinSession = await ApiJson.ReadAsync<RoofSessionResponse>(
+            await kiosk.PostAsJsonAsync($"{Auth}/Pin", new RoofPinSignInRequest { Name = "olive", Pin = TestSecrets.Pin }));
+        using var atTheKiosk = Bearer(host, pinSession.Token);
+        using var olive = Bearer(host, (await SignInAsync(host, "olive")).Token);
+        var request = new RoofNamesChangeRequest { DisplayName = "Changed" };
+
+        var pin = await atTheKiosk.PostAsJsonAsync($"{Auth}/Names", request);
+        var key = await kiosk.PostAsJsonAsync($"{Auth}/Names", request);
+        var invalid = await olive.PostAsJsonAsync($"{Auth}/Names", new RoofNamesChangeRequest { ShortName = "A short name too long" });
+
+        pin.StatusCode.Should().Be(HttpStatusCode.Forbidden, "names are changed where there is a keyboard, not at the kiosk");
+        (await ApiJson.ReadElementAsync(pin)).GetProperty("code").GetString().Should().Be(nameof(RoofControllerErrorCode.CredentialNotAllowed));
+        key.StatusCode.Should().Be(HttpStatusCode.BadRequest, "an API key is not a person");
+        invalid.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ApiJson.ReadElementAsync(invalid)).GetProperty("detail").GetString().Should().Contain("short name");
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        (await ApiJson.ReadAsync<RoofUserResponse>(await admin.GetAsync($"{Identity}/Users/olive"))).DisplayName.Should().Be("Olive Example");
+    }
+
     private static RoofApiTestHost CreateHost()
         => new(
             settings: new Dictionary<string, string?>

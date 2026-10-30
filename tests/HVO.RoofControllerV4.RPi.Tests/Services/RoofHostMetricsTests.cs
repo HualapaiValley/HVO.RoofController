@@ -1,6 +1,7 @@
 using System.Net;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common;
+using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Tests.Security;
@@ -28,7 +29,17 @@ public sealed class RoofHostMetricsTests
     public async Task TheSummary_ReportsTheVersion_AndEveryFigureFromTheFiles()
     {
         var files = Files(Stat, StatLater);
-        var metrics = Create(files, out _, addresses: ["192.0.2.10", "2001:db8::10"], inContainer: true);
+        var metrics = Create(
+            files,
+            out _,
+            addresses: ["172.17.0.2"],
+            inContainer: true,
+            host: new RoofHostOptions
+            {
+                Addresses = "2001:db8::10; 192.0.2.10",
+                WebUiUrls = "https://192.0.2.10:8088/;https://[2001:db8::10]:8088/",
+                WebUiAccess = "network"
+            });
 
         var summary = await metrics.GetSummaryAsync(CancellationToken.None);
 
@@ -46,8 +57,58 @@ public sealed class RoofHostMetricsTests
         summary.ProcessWorkingSetBytes.Should().BePositive();
         summary.DiskTotalBytes.Should().Be(64L << 30);
         summary.DiskFreeBytes.Should().Be(40L << 30);
-        summary.IpAddresses.Should().Equal("192.0.2.10", "2001:db8::10");
+        summary.WebUiUrls.Should().Equal("https://192.0.2.10:8088/", "https://[2001:db8::10]:8088/");
+        summary.WebUiAccess.Should().Be(RoofWebUiAccess.Network);
+        summary.HostAddresses.Should().Equal("192.0.2.10", "2001:db8::10");
+        summary.IpAddresses.Should().Equal("172.17.0.2");
         summary.RunningInContainer.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task InAContainer_WithoutTheDeploymentsRecord_TheHostsAddressesAndTheWebUiAreNotKnown()
+    {
+        var metrics = Create(Files(Stat, StatLater), out _, addresses: ["172.17.0.2"], inContainer: true);
+
+        var summary = await metrics.GetSummaryAsync(CancellationToken.None);
+
+        summary.HostAddresses.Should().BeEmpty("a container's bridge address is not the host's");
+        summary.IpAddresses.Should().Equal("172.17.0.2");
+        summary.WebUiUrls.Should().BeEmpty();
+        summary.WebUiAccess.Should().Be(RoofWebUiAccess.Unknown);
+    }
+
+    [TestMethod]
+    public async Task DirectlyOnTheHost_ItsOwnAddressesAreTheHosts()
+    {
+        var metrics = Create(Files(Stat, StatLater), out _, addresses: ["192.0.2.20"], inContainer: false);
+
+        (await metrics.GetSummaryAsync(CancellationToken.None)).HostAddresses.Should().Equal("192.0.2.20");
+    }
+
+    [TestMethod]
+    public async Task AWebUiPublishedOnlyOnTheHost_IsSaidSo()
+    {
+        var metrics = Create(
+            Files(Stat, StatLater),
+            out _,
+            inContainer: true,
+            host: new RoofHostOptions { Addresses = "192.0.2.10", WebUiUrls = "https://localhost:8088/", WebUiAccess = "LocalOnly" });
+
+        var summary = await metrics.GetSummaryAsync(CancellationToken.None);
+
+        summary.WebUiAccess.Should().Be(RoofWebUiAccess.LocalOnly);
+        summary.WebUiUrls.Should().Equal("https://localhost:8088/");
+    }
+
+    [TestMethod]
+    public void WhatTheDeploymentWrote_KeepsOnlyAddressesAndWebUrls()
+    {
+        RoofHostMetrics.ParseAddresses("192.0.2.10,[2001:db8::10] not-an-address 192.0.2.10;;").Should().Equal("192.0.2.10", "2001:db8::10");
+        RoofHostMetrics.ParseAddresses(null).Should().BeEmpty();
+        RoofHostMetrics.ParseUrls("https://192.0.2.10:8088 ftp://192.0.2.10/ https://user:secret@192.0.2.10:8088/ /relative http://roof-pi.local:8088/")
+            .Should().Equal("https://192.0.2.10:8088/", "http://roof-pi.local:8088/");
+        RoofWebUiAccess.Parse(" localonly ").Should().Be(RoofWebUiAccess.LocalOnly);
+        RoofWebUiAccess.Parse("open").Should().Be(RoofWebUiAccess.Unknown);
     }
 
     [TestMethod]
@@ -107,6 +168,7 @@ public sealed class RoofHostMetricsTests
             new ManualClock(DateTimeOffset.UtcNow),
             new TestHostEnvironment(),
             new TestOptionsMonitor<RoofIdentityOptions>(new RoofIdentityOptions()),
+            new TestOptionsMonitor<RoofHostOptions>(new RoofHostOptions()),
             path => path == RoofHostMetrics.StatPath ? (Interlocked.Increment(ref reads) == 1 ? Stat : StatLater) : null,
             _ => null,
             () => [],
@@ -157,7 +219,11 @@ public sealed class RoofHostMetricsTests
         using var directory = new TemporaryDirectory();
         var environment = new TestHostEnvironment { ContentRootPath = "/app" };
         var options = new RoofIdentityOptions { StorePath = directory.File("identity.json") };
-        var metrics = new RoofHostMetrics(new ManualClock(DateTimeOffset.UnixEpoch), environment, new TestOptionsMonitor<RoofIdentityOptions>(options));
+        var metrics = new RoofHostMetrics(
+            new ManualClock(DateTimeOffset.UnixEpoch),
+            environment,
+            new TestOptionsMonitor<RoofIdentityOptions>(options),
+            new TestOptionsMonitor<RoofHostOptions>(new RoofHostOptions()));
 
         metrics.DataDirectory().Should().Be(directory.Path);
         options.StorePath = null;
@@ -185,7 +251,8 @@ public sealed class RoofHostMetricsTests
         out ManualClock clock,
         bool noDisk = false,
         string[]? addresses = null,
-        bool inContainer = false)
+        bool inContainer = false,
+        RoofHostOptions? host = null)
     {
         // Now, so the controller process's uptime is not negative.
         var time = clock = new ManualClock(DateTimeOffset.UtcNow);
@@ -194,6 +261,7 @@ public sealed class RoofHostMetricsTests
             time,
             new TestHostEnvironment(),
             new TestOptionsMonitor<RoofIdentityOptions>(new RoofIdentityOptions()),
+            new TestOptionsMonitor<RoofHostOptions>(host ?? new RoofHostOptions()),
             files,
             _ => disk,
             () => addresses ?? [],

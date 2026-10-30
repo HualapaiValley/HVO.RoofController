@@ -44,8 +44,9 @@ public sealed class RoofProviderAuthService(RoofIdentityStore identity, RoofSign
         var scope = purpose == "local-admin" ? claims.Operation : null;
         if (scope is not null && !RoofIdentityStore.ScopeAllowed(principal.Role, scope))
             return RoofIdentityResult<RoofIssuedSession>.Failure(RoofControllerErrorCode.IdentityReadOnly, "Controller role does not allow the requested operation.");
+        // The account's full name for display (#209), refreshed at each sign-in; an older or busy worker leaves the last one.
         return identity.CreateProviderSession(principal.Id, principal.Stamp, scope,
-            new StoredAssertionNonce(claims.Nonce, DateTimeOffset.FromUnixTimeSeconds(claims.ExpiresAt)));
+            new StoredAssertionNonce(claims.Nonce, DateTimeOffset.FromUnixTimeSeconds(claims.ExpiresAt)), native.GetFullName(principal));
     }
 
     public bool PrincipalIsCurrent(string? id, bool local = false)

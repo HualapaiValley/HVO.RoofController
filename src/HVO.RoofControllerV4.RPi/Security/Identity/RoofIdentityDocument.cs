@@ -115,6 +115,12 @@ public sealed record StoredLinuxPrincipal(string Id, string Subject, string Name
 {
     /// <summary>The last successful sign-in (#209), or null. Optional, as <see cref="StoredUser.LastLoginUtc"/> is.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public DateTimeOffset? LastLoginUtc { get; init; }
+
+    /// <summary>
+    /// The account's full name from the operating system (its GECOS field, #209), as the native worker gave it at the last
+    /// sign-in, or null. Read-only in the controller: never set through the API.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? DisplayName { get; init; }
 }
 public sealed record StoredOwnedKey(string Id, string Name, string OwnerId, string OwnerStamp, string[] Scopes, string KeySha256, DateTimeOffset ExpiresUtc, bool Revoked);
 public sealed record StoredAssertionNonce(string Nonce, DateTimeOffset ExpiresUtc);

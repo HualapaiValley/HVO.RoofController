@@ -45,11 +45,16 @@ public sealed class RoofClientSummaryTests
             MemoryAvailableBytes = 3L << 30,
             DiskTotalBytes = 32L << 30,
             DiskFreeBytes = 20L << 30,
-            IpAddresses = ["192.0.2.10", "2001:db8::10"]
+            WebUiUrls = ["https://192.0.2.10:8088/", "https://[2001:db8::10]:8088/"],
+            WebUiAccess = RoofWebUiAccess.Network,
+            HostAddresses = ["192.0.2.10", "2001:db8::10"],
+            IpAddresses = ["172.17.0.2"],
+            RunningInContainer = true
         };
 
         RoofSystemText.DescribeSummary(summary).Should().Equal(
             ("Controller", "4.3.0-ci.7 (commit 0123456789ab)"),
+            ("Web UI", "https://192.0.2.10:8088/, https://[2001:db8::10]:8088/"),
             ("Uptime", "controller 1h 1m, host 1d 1h 1m"),
             ("CPU", "12.3 %, load 0.50 0.25 0.13, 4 processors"),
             ("Temperature", "48.3 °C"),
@@ -59,20 +64,54 @@ public sealed class RoofClientSummaryTests
     }
 
     [TestMethod]
-    public void WhatTheControllerCouldNotRead_IsUnavailable_AndAContainersAddressesSaySo()
+    public void WhatTheControllerCouldNotRead_IsUnavailable_AndAContainersAddressIsNeverWhereToReachTheWebUi()
     {
         var summary = new SystemSummaryResponse("4.3.0", 59, At) { ProcessorCount = 1, IpAddresses = ["172.17.0.2"], RunningInContainer = true };
 
         RoofSystemText.DescribeSummary(summary).Should().Equal(
             ("Controller", "4.3.0"),
+            ("Web UI", "address not known (the deployment did not record it)"),
             ("Uptime", "controller 0m 59s"),
             ("CPU", "unavailable, 1 processor"),
             ("Temperature", "unavailable"),
             ("Memory", "unavailable"),
             ("Disk", "unavailable"),
-            ("Addresses", "172.17.0.2 (the controller's container)"));
+            ("Addresses", "host's not known; the controller's container has 172.17.0.2, which the network does not reach"));
         RoofSystemText.DescribeSummary(summary with { IpAddresses = [], RunningInContainer = false })
             .Should().Contain(("Addresses", "none found"));
+        RoofSystemText.DescribeSummary(summary with { IpAddresses = ["192.0.2.20"], RunningInContainer = false })
+            .Should().Contain(("Addresses", "192.0.2.20"));
+    }
+
+    [TestMethod]
+    public void TheWebUi_IsWhereItIsPublished_OrSaidToBeOnTheControllersMachineOnly()
+    {
+        var summary = new SystemSummaryResponse("4.3.0", 59, At);
+
+        RoofSystemText.DescribeWebUi(summary with { WebUiAccess = RoofWebUiAccess.LocalOnly, WebUiUrls = ["https://localhost:8088/"] })
+            .Should().Be("only on the controller's machine (https://localhost:8088/): it is not published to the network");
+        RoofSystemText.DescribeWebUi(summary with { WebUiAccess = RoofWebUiAccess.LocalOnly })
+            .Should().Be("only on the controller's machine: it is not published to the network");
+        RoofSystemText.DescribeWebUi(summary with { WebUiAccess = RoofWebUiAccess.Network })
+            .Should().Be("published to the network; address not known (the deployment did not record it)");
+        RoofSystemText.DescribeWebUi(summary with { WebUiUrls = ["https://192.0.2.10:8088/"] })
+            .Should().Be("https://192.0.2.10:8088/");
+    }
+
+    [TestMethod]
+    public async Task APerson_ChangesTheirOwnNames_ThroughTheClient()
+    {
+        using var host = new RoofApiTestHost(configureServices: services =>
+            services.Configure<Microsoft.AspNetCore.Identity.PasswordHasherOptions>(options => options.IterationCount = 1_000));
+        await RoofClientApiTests.AddUserAsync(host, "alice", RoofControllerApiContract.OperatorRole);
+        using var anonymous = CreateClient(host);
+        using var alice = CreateClient(host, await anonymous.Auth.SignInAsync("alice", Security.TestSecrets.Password));
+
+        var me = await alice.Auth.ChangeNamesAsync(new RoofNamesChangeRequest { DisplayName = "Alice Example", ShortName = "Ali" });
+
+        me.DisplayName.Should().Be("Alice Example");
+        me.ShortName.Should().Be("Ali");
+        (await alice.Auth.GetCallerAsync()).DisplayName.Should().Be("Alice Example");
     }
 
     [TestMethod]

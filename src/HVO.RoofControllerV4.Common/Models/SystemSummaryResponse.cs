@@ -3,9 +3,9 @@ using System;
 namespace HVO.RoofControllerV4.Common.Models;
 
 /// <summary>
-/// The controller's version and the basic resource use of the machine it runs on, from <c>GET api/v4.0/System/Summary</c>
-/// (#209). Every role may read it: a viewer, an operator or an admin, a kiosk key and a PIN session. It names no host,
-/// user or file; the detailed host information (<see cref="SystemInformationResponse"/>,
+/// The controller's version, where people reach its web UI, and the basic resource use of the machine it runs on, from
+/// <c>GET api/v4.0/System/Summary</c> (#209). Every role may read it: a viewer, an operator or an admin, a kiosk key and
+/// a PIN session. It names no host, user or file; the detailed host information (<see cref="SystemInformationResponse"/>,
 /// <see cref="SystemRuntimeMetricsResponse"/>) stays admin-only. A value the controller could not read (another
 /// operating system, or a file its container does not see) is null; clients show it as unavailable.
 /// </summary>
@@ -56,12 +56,53 @@ public sealed record SystemSummaryResponse(string ApplicationVersion, double Upt
     public long? DiskFreeBytes { get; init; }
 
     /// <summary>
-    /// The controller's IPv4 and IPv6 addresses, IPv4 first, without loopback and link-local ones. In a container
-    /// (<see cref="RunningInContainer"/>) on Docker's bridge network these are the container's addresses, not the
-    /// host's.
+    /// Where people reach the web UI, as absolute URLs (<c>https://192.0.2.10:8088/</c>): built from the host's
+    /// addresses, the web UI's published port and its scheme by the installer or the deploy script at each deploy. With
+    /// <see cref="WebUiAccess"/> <see cref="RoofWebUiAccess.LocalOnly"/>, the one URL on the host itself. Empty when the
+    /// deployment did not say.
+    /// </summary>
+    public string[] WebUiUrls { get; init; } = [];
+
+    /// <summary>
+    /// Whether the web UI is published to the network (<see cref="RoofWebUiAccess"/>): <c>Network</c>, <c>LocalOnly</c>
+    /// (only on the controller's machine), or <c>Unknown</c> when the deployment did not say. A string, so a later value
+    /// does not break an older client.
+    /// </summary>
+    public string WebUiAccess { get; init; } = RoofWebUiAccess.Unknown;
+
+    /// <summary>
+    /// The host machine's LAN addresses, IPv4 first: as the installer or the deploy script recorded them for a controller
+    /// in a container, or the controller's own (<see cref="IpAddresses"/>) when it runs directly on the host. Empty when
+    /// they are not known.
+    /// </summary>
+    public string[] HostAddresses { get; init; } = [];
+
+    /// <summary>
+    /// The controller's own IPv4 and IPv6 addresses, IPv4 first, without loopback and link-local ones. In a container
+    /// (<see cref="RunningInContainer"/>) on Docker's bridge network these are the container's, which nothing on the
+    /// network reaches: never present them as where to reach the web UI (<see cref="WebUiUrls"/>).
     /// </summary>
     public string[] IpAddresses { get; init; } = [];
 
     /// <summary>True when the controller runs in a container (the .NET images set <c>DOTNET_RUNNING_IN_CONTAINER</c>).</summary>
     public bool RunningInContainer { get; init; }
+}
+
+/// <summary>Whether the web UI is published to the network (<see cref="SystemSummaryResponse.WebUiAccess"/>).</summary>
+public static class RoofWebUiAccess
+{
+    /// <summary>Published on the host's network addresses: <see cref="SystemSummaryResponse.WebUiUrls"/> reach it.</summary>
+    public const string Network = "Network";
+
+    /// <summary>Published only on the controller's machine (a rig not open to the network): reachable there alone.</summary>
+    public const string LocalOnly = "LocalOnly";
+
+    /// <summary>The deployment did not say (a development run, or a controller deployed before #209).</summary>
+    public const string Unknown = "Unknown";
+
+    /// <summary>The access a deployment wrote (case-insensitive), or <see cref="Unknown"/>.</summary>
+    public static string Parse(string? value)
+        => string.Equals(value?.Trim(), Network, StringComparison.OrdinalIgnoreCase) ? Network
+            : string.Equals(value?.Trim(), LocalOnly, StringComparison.OrdinalIgnoreCase) ? LocalOnly
+            : Unknown;
 }

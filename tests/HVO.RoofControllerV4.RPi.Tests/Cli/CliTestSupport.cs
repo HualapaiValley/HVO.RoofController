@@ -540,6 +540,13 @@ internal static class DocumentedHostMetrics
             provider.GetRequiredService<TimeProvider>(),
             provider.GetRequiredService<IHostEnvironment>(),
             provider.GetRequiredService<IOptionsMonitor<RoofIdentityOptions>>(),
+            // As the installer writes them for a Pi open to the network, with a documentation address.
+            new HVO.RoofControllerV4.RPi.Tests.Security.TestOptionsMonitor<RoofHostOptions>(new RoofHostOptions
+            {
+                Addresses = "192.0.2.10",
+                WebUiUrls = "https://192.0.2.10:8088/",
+                WebUiAccess = "Network"
+            }),
             path => path switch
             {
                 // Each reading adds 100 busy and 300 idle ticks: 25 % in use.

@@ -41,14 +41,19 @@ public static class RoofSystemText
         _ => RoofText.DescribeFailure(error)
     };
 
+    /// <summary>The web UI's URLs are not known: the deployment did not say (a development run, or deployed before #209).</summary>
+    public const string WebUiUnknown = "address not known (the deployment did not record it)";
+
     /// <summary>
-    /// The controller's summary (#209), as label and value, for every role: its version, the uptimes, CPU, temperature,
-    /// memory, disk and addresses. A value the controller could not read shows as <see cref="Unavailable"/>.
+    /// The controller's summary (#209), as label and value, for every role: its version, where the web UI is reached, the
+    /// uptimes, CPU, temperature, memory, disk and the host's addresses. A value the controller could not read shows as
+    /// <see cref="Unavailable"/>.
     /// </summary>
     public static IEnumerable<(string Label, string Value)> DescribeSummary(SystemSummaryResponse summary)
     {
         ArgumentNullException.ThrowIfNull(summary);
         yield return ("Controller", RoofProductVersion.Describe(summary.ApplicationVersion));
+        yield return ("Web UI", DescribeWebUi(summary));
         var controllerUp = Duration(TimeSpan.FromSeconds(summary.UptimeSeconds));
         yield return ("Uptime", summary.HostUptimeSeconds is { } host
             ? $"controller {controllerUp}, host {Duration(TimeSpan.FromSeconds(host))}"
@@ -63,12 +68,38 @@ public static class RoofSystemText
         yield return ("Disk", summary is { DiskTotalBytes: { } size and > 0, DiskFreeBytes: { } free }
             ? $"{Bytes(free)} free of {Bytes(size)}"
             : Unavailable);
-        yield return ("Addresses", summary.IpAddresses is not { Length: > 0 } addresses
-            ? "none found"
-            : summary.RunningInContainer
-                ? $"{string.Join(", ", addresses)} (the controller's container)"
-                : string.Join(", ", addresses));
+        yield return ("Addresses", DescribeAddresses(summary));
     }
+
+    /// <summary>
+    /// Where people reach the web UI: its URLs, built from the host's addresses (#209); on the controller's machine alone
+    /// when it is not published to the network; or that it is not known. A container's own address is never given as
+    /// where to reach it.
+    /// </summary>
+    public static string DescribeWebUi(SystemSummaryResponse summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        var urls = summary.WebUiUrls is { Length: > 0 } known ? string.Join(", ", known) : null;
+        return summary.WebUiAccess switch
+        {
+            RoofWebUiAccess.LocalOnly => urls is null
+                ? "only on the controller's machine: it is not published to the network"
+                : $"only on the controller's machine ({urls}): it is not published to the network",
+            RoofWebUiAccess.Network => urls ?? "published to the network; " + WebUiUnknown,
+            _ => urls ?? WebUiUnknown
+        };
+    }
+
+    /// <summary>
+    /// The host's addresses; when only a container's own are known, those, said to be the container's and not where
+    /// anything on the network reaches the controller.
+    /// </summary>
+    private static string DescribeAddresses(SystemSummaryResponse summary)
+        => summary.HostAddresses is { Length: > 0 } host ? string.Join(", ", host)
+            : summary.RunningInContainer && summary.IpAddresses is { Length: > 0 } container
+                ? $"host's not known; the controller's container has {string.Join(", ", container)}, which the network does not reach"
+            : summary.IpAddresses is { Length: > 0 } own ? string.Join(", ", own)
+            : "none found";
 
     /// <summary>The controller's version, host and resource use, as label and value.</summary>
     public static IEnumerable<(string Label, string Value)> DescribeInformation(SystemInformationResponse information, SystemRuntimeMetricsResponse metrics)

@@ -239,6 +239,19 @@ public sealed record class RoofPasswordChangeRequest
     }
 }
 
+/// <summary>
+/// Body of <c>POST Auth/Names</c> (#209): a person signed in with a password changes their own display and short name.
+/// A null name is left as it is; an empty one (or only spaces) is removed. Refused for a PIN session (names are edited
+/// where there is a keyboard: the web UI, the terminal) and for a Linux account (its names come from the operating
+/// system).
+/// </summary>
+public sealed record class RoofNamesChangeRequest
+{
+    public string? DisplayName { get; init; }
+
+    public string? ShortName { get; init; }
+}
+
 /// <summary>A new session. The token is shown only here; send it as <c>Authorization: Bearer &lt;token&gt;</c>.</summary>
 /// <param name="Token">The bearer token (secret).</param>
 /// <param name="SessionId">Non-secret identifier of the session, as the admin session list shows it.</param>
@@ -282,11 +295,20 @@ public sealed record RoofCallerResponse(
     DateTimeOffset? ExpiresUtc,
     bool IsKiosk)
 {
-    /// <summary>For a person in the identity store, their display name, or null (#209).</summary>
+    /// <summary>
+    /// For a person, their display name (#209): as set in the controller, or for a Linux account its full name from the
+    /// operating system. Null for an API key, or when there is none.
+    /// </summary>
     public string? DisplayName { get; init; }
 
-    /// <summary>For a person in the identity store, their short name, or null (#209).</summary>
+    /// <summary>For a person, their short name (#209); for a Linux account its user name. Null for an API key.</summary>
     public string? ShortName { get; init; }
+
+    /// <summary>
+    /// How the person signs in (<see cref="RoofLoginTypes"/>), or null for an API key. A Linux account's names are
+    /// read-only: they come from the operating system.
+    /// </summary>
+    public string? LoginType { get; init; }
 }
 
 /// <summary>A person who may sign in with a PIN at a kiosk, from <c>GET Auth/Pin/Users</c>.</summary>
