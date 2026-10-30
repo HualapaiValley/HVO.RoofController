@@ -369,7 +369,22 @@ public sealed class KioskConsole : IAsyncDisposable
     /// while the kiosk is locked, or when it locked before the answer came. A refusal or an unreachable controller
     /// throws, as any read does.
     /// </summary>
-    public async Task<RoofCommandHistoryPage?> ReadRecentHistoryAsync(int take = 10, CancellationToken cancellationToken = default)
+    public Task<RoofCommandHistoryPage?> ReadRecentHistoryAsync(int take = 10, CancellationToken cancellationToken = default)
+        // The person's own name: a PIN session reads only its own anyway, and an admin's password session (the Mac
+        // app's) would otherwise read everyone's.
+        => ReadAsPersonAsync(session => _client.Roof.GetHistoryAsync(new RoofHistoryQuery { User = session.Name, Take = take }, cancellationToken));
+
+    /// <summary>
+    /// Who unlocked the kiosk, as the controller knows them (<c>GET Auth/Me</c>, #208): their names, role and how they sign
+    /// in, for a view of the person's details; null while the kiosk is locked, or when it locked before the answer came.
+    /// A refusal or an unreachable controller throws, as any read does.
+    /// </summary>
+    public Task<RoofCallerResponse?> ReadSignedInPersonAsync(CancellationToken cancellationToken = default)
+        => ReadAsPersonAsync(_ => _client.Auth.GetCallerAsync(cancellationToken));
+
+    // Reads with the unlocking person's session; null while locked, or when the session ended before the answer came.
+    private async Task<T?> ReadAsPersonAsync<T>(Func<RoofSessionResponse, Task<T>> read)
+        where T : class
     {
         RoofSessionResponse session;
         lock (_gate)
@@ -382,14 +397,11 @@ public sealed class KioskConsole : IAsyncDisposable
             session = _session;
         }
 
-        // The person's own name: a PIN session reads only its own anyway, and an admin's password session (the Mac
-        // app's) would otherwise read everyone's.
-        var page = await _client.Roof.GetHistoryAsync(new RoofHistoryQuery { User = session.Name, Take = take }, cancellationToken)
-            .ConfigureAwait(false);
+        var answer = await read(session).ConfigureAwait(false);
         lock (_gate)
         {
-            // Sent after the session ended, the request went with the device key, whose commands these would be.
-            return ReferenceEquals(_session, session) ? page : null;
+            // Sent after the session ended, the request went with the device key, whose answer this would be.
+            return ReferenceEquals(_session, session) ? answer : null;
         }
     }
 

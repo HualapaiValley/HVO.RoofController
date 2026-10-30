@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   only their own. The web UI's new **History** page, the terminal interface's **History** on the Roof page and
   `hvo-roof history [--user] [--since] [--until]` show them; the kiosk has a hook for a person's recent commands. The
   client library now names the program in each request's `User-Agent`.
+- Kiosk and Mac app **History** (#206, #208): while someone has unlocked the kiosk (or signed in to the app), a History
+  page shows them as the controller knows them (`Auth/Me`: name, role, login type, how they signed in, short name),
+  read-only, and their own 20 most recent roof commands, newest first: the time, the command, the controller's answer
+  (a refusal with its code), the roof after it and where it came from. **Read again** reads them afresh; a locked kiosk
+  offers no History and keeps nothing read for the next person. Names are changed in the web UI or the terminal, as the
+  page says, never at the kiosk.
 - Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
   Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
   age) and bounded, non-overlapping reads. It is on every status snapshot and status hub message (`safety`), at
@@ -73,8 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   is a dim red while there is nothing to stop and bright red while the roof moves (never disabled); Open and Close are
   green while offered, bright green while the roof moves their way, and neutral grey while not offered. The colours are
   shared aliases of the canonical HVO Dark roles (#208).
-- Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person shows their display name, role, login type,
-  last sign-in and short name, two a row; Cancel on the people step returns to the keypad (#208).
+- Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person is a read-only card, two a row: their display
+  name, their role and login type (and a pending first-time setup) as chips, then their short name and last sign-in.
+  Choosing a card only chooses; Cancel on the people step returns to the keypad (#208).
 - Kiosk pages show Previous, Next and the page count only when their contents overflow (#208).
 - Kiosk and Mac About: labelled cards for the device, the controller (its version, then where the web UI is) and the
   controller's host (the summary's uptimes, CPU, temperature, memory, disk and addresses), saying

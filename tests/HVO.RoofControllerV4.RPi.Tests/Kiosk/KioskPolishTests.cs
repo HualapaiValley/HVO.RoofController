@@ -118,8 +118,9 @@ public sealed class KioskPolishTests
         await OnUiAsync(() =>
         {
             screen.Visible($"pin-user-{KioskHarness.Operator}").Should().BeTrue();
-            ButtonText(screen, $"pin-user-{KioskHarness.Operator}").Should().Contain(KioskHarness.Operator).And.Contain("Operator · local account · last sign-in");
-            ButtonText(screen, $"pin-user-{KioskHarness.Admin}").Should().Contain("Admin · local account · last sign-in");
+            // Each person's card (KioskPersonHistoryTests has the rest): their role and how they sign in.
+            ButtonText(screen, $"pin-user-{KioskHarness.Operator}").Should().Contain(KioskHarness.Operator).And.Contain("Operator Local account Last sign-in:");
+            ButtonText(screen, $"pin-user-{KioskHarness.Admin}").Should().Contain("Admin Local account Last sign-in:");
             screen.Visible("pin-people-previous").Should().BeFalse("two people fit: no inert page controls");
             screen.Visible("pin-people-next").Should().BeFalse();
             screen.Visible("pin-people-cancel").Should().BeTrue();
@@ -171,24 +172,6 @@ public sealed class KioskPolishTests
             screen.Shell.PinPad.Selected.Should().BeNull();
         });
         harness.Calls("Open").Should().Be(0);
-    }
-
-    [TestMethod]
-    public void ThePeopleStep_DescribesNamesRoleLoginTypeLastSignInAndPendingSetup()
-    {
-        var signedIn = new DateTimeOffset(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
-        var ada = new RoofPinUserResponse("ada", RoofControllerApiContract.AdminRole);
-        KioskPinPage.Heading(ada).Should().Be("ada");
-        KioskPinPage.DescribePerson(ada).Should().Be($"Admin · local account · last sign-in {RoofIdentityText.NoSignInRecorded}");
-        var olga = new RoofPinUserResponse("olga", RoofControllerApiContract.OperatorRole) { DisplayName = "Olga Petrova", LastLoginUtc = signedIn };
-        KioskPinPage.Heading(olga).Should().Be("Olga Petrova (olga)", "the display name, with the name it signs in with");
-        KioskPinPage.DescribePerson(olga).Should().Be($"Operator · local account · last sign-in {RoofStatusText.Time(signedIn)}");
-        var roy = new RoofPinUserResponse("roys", RoofControllerApiContract.OperatorRole)
-        {
-            Provider = "linux", PrincipalId = "p2", DisplayName = "Roy Salisbury", ShortName = "Roy", SetupPending = true
-        };
-        KioskPinPage.Heading(roy).Should().Be("Roy Salisbury (roys)");
-        KioskPinPage.DescribePerson(roy).Should().Be($"Operator · Linux account · last sign-in {RoofIdentityText.NoSignInRecorded} · short name Roy · first-time setup");
     }
 
     [TestMethod]

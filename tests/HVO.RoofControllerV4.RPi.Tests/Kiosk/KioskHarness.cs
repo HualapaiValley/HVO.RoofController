@@ -95,7 +95,12 @@ internal sealed class KioskHarness : IAsyncDisposable
             TimeProvider = Clock,
             StopTimeout = TimeSpan.FromSeconds(10),
             RequestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30),
-            LoggerFactory = LoggerFactory
+            LoggerFactory = LoggerFactory,
+            // The program's name and version, as the installed kiosk or Mac app sends them, so the command history says
+            // "kiosk" or "Mac app".
+            ProgramAssembly = options?.Wording.Device == KioskWording.Desktop.Device
+                ? typeof(HVO.RoofControllerV4.Mac.Program).Assembly
+                : typeof(HVO.RoofControllerV4.Kiosk.Program).Assembly
         });
         Console = new KioskConsole(Client, options, LoggerFactory.CreateLogger<KioskConsole>());
     }

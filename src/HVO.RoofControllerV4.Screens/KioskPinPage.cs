@@ -10,8 +10,9 @@ namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
 /// Separate bounded people and private PIN steps; setup never grants an operator session. The PIN step is a compact,
-/// centred keypad of fixed-size keys. The people step lists each person's name, role and login type, and its Cancel goes
-/// back to the PIN step (with the person chosen before, if any); the PIN step's Cancel leaves the page.
+/// centred keypad of fixed-size keys. The people step shows each person as a read-only card (<see cref="KioskPerson"/>:
+/// name, role, login type, short name, last sign-in), to choose from only, and its Cancel goes back to the PIN step (with
+/// the person chosen before, if any); the PIN step's Cancel leaves the page.
 /// </summary>
 public sealed class KioskPinPage : UserControl
 {
@@ -173,12 +174,12 @@ public sealed class KioskPinPage : UserControl
                 {
                     KioskTheme.Label(_pad.Loading ? "Reading people…" : "PIN access is Operator-only. Settings and System need password sign-in in another client.", _metrics.Font, KioskTheme.Muted)
                 };
-                // Two people a row: each by their display name (#209), then their role, how they sign in and when they
-                // last did.
+                // Two people a row, each a read-only card (#208): their display name (#209), their role and how they sign
+                // in as chips, then their short name and when they last signed in. Choosing one goes to the keypad.
                 var people = _pad.Users.Select(user =>
                 {
                     var name = KioskPinPad.SelectionKey(user);
-                    return KioskPageParts.TwoLineButton(Heading(user), DescribePerson(user), $"pin-user-{name}", _metrics, () => _pad.Select(name));
+                    return KioskPerson.Describe(user).Button($"pin-user-{name}", _metrics, () => _pad.Select(name));
                 }).ToArray();
                 for (var i = 0; i < people.Length; i += 2)
                 {
@@ -192,34 +193,6 @@ public sealed class KioskPinPage : UserControl
             Content = _peopleStep;
         }
         else Content = _entry;
-    }
-
-    /// <summary>
-    /// A person's button heading: their display name with the name they sign in by, or their name
-    /// (<see cref="RoofIdentityText.DescribePerson"/>), as the PIN prompt names them.
-    /// </summary>
-    public static string Heading(RoofPinUserResponse user)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        return RoofIdentityText.DescribePerson(user.Name, user.DisplayName);
-    }
-
-    /// <summary>
-    /// What the people step says under a person's heading: their role, how they sign in, when they last did, their short
-    /// name when they have one, and whether setup is pending.
-    /// </summary>
-    public static string DescribePerson(RoofPinUserResponse user)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        List<string> parts =
-        [
-            KioskText.DescribeRole(user.Role),
-            $"{RoofIdentityText.DescribeLoginType(user.LoginType)} account",
-            $"last sign-in {RoofIdentityText.DescribeLastLogin(user.LastLoginUtc)}"
-        ];
-        if (!string.IsNullOrWhiteSpace(user.ShortName)) parts.Add($"short name {user.ShortName}");
-        if (user.SetupPending) parts.Add("first-time setup");
-        return string.Join(" · ", parts);
     }
 
     private static void Size(Button button, double width)

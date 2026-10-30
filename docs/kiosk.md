@@ -48,7 +48,9 @@ confirms the correction after a coordinated restart.
 
 ## The screen
 
-- **Navigation** along the bottom: Roof, Readings, Notices, About, Terminal and Unlock (Lock while unlocked). Administration belongs in the CLI/TUI or web UI. Terminal appears only in the systemd-managed direct-display kiosk.
+- **Navigation** along the bottom: Roof, Readings, Notices, About, Terminal and Unlock; while unlocked, History and
+  Lock in its place. Administration belongs in the CLI/TUI or web UI. Terminal appears only in the systemd-managed
+  direct-display kiosk.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the kiosk renews it (`Renewing lease (6 s left)`), and
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
@@ -73,15 +75,16 @@ Between people, the kiosk is locked. It shows the roof with its device key, whic
 Open, Close and Clear fault are hidden:
 `Locked: unlock the kiosk with a PIN to open or close the roof. Stop is always available.`
 
-**Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key).
-A person with a display name is shown by it, with the name they sign in by (`Olga Example (olga)`), then their role,
-how they sign in, their last sign-in, their short name when they have one, and `first-time setup` while their temporary
-PIN is still to be changed: for example `Operator · local account · last sign-in 2026-10-30 12:00:00Z`, or
-`Linux account` for an enrolled Linux account.
-Names are not changed at the kiosk, which has no keyboard: people change their own in the web UI (their account) or the
-terminal (Setup), an admin anyone's, and a Linux account's come from the operating system (#209). People are paginated
-only when the list overflows the page. Choosing a name opens a separate keypad step: a compact, centred keypad of
-fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the keypad, with the person
+**Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key),
+each a read-only card, two a row: a person with a display name is shown by it, with the name they sign in by
+(`Olga Example (olga)`); then their role and how they sign in as chips (`Operator`, `Local account` or
+`Linux account` for an enrolled Linux account, and `First-time setup` in amber while their temporary PIN is still to be
+changed); then their short name when they have one (`Short name: Olga`) and their last sign-in
+(`Last sign-in: 2026-10-30 12:00:00Z`, or `none recorded`).
+A card only chooses: names are not changed at the kiosk, which has no keyboard: people change their own in the web UI
+(their account) or the terminal (Setup), an admin anyone's, and a Linux account's come from the operating system
+(#209). People are paginated only when the list overflows the page. Choosing a card opens a separate keypad step: a
+compact, centred keypad of fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the keypad, with the person
 chosen before still chosen; the keypad's **Cancel** leaves Unlock. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
 ([Lockout](security.md#signing-in)). When no one has a PIN yet, the page says how to give one:
@@ -89,7 +92,7 @@ A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, 
 page.
 
 <p>
-  <img src="images/kiosk/people-1280x720.png" alt="Who are you? Each person with their role and login type, and Cancel back to the keypad" width="480">
+  <img src="images/kiosk/people-1280x720.png" alt="Who are you? A read-only card per person: their name, role and login type, short name and last sign-in, and Cancel back to the keypad" width="480">
   <img src="images/kiosk/pin-1280x720.png" alt="The private PIN step: a compact, centred keypad of fixed-size keys, the chosen person and masked digits" width="480">
 </p>
 
@@ -130,6 +133,25 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
 <p>
   <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display: Opening… in bright green, Close not offered, and Stop bright red" width="400">
   <img src="images/kiosk/fault-800x480.png" alt="A latched fault: the fault banner, Clear fault offered, Open and Close refused" width="400">
+</p>
+
+### History
+
+**History**, offered only while the kiosk is unlocked, shows who unlocked it as the controller knows them
+(`GET Auth/Me`): their name, their session's role (Operator, for an admin's PIN too), how they sign in, `Signed in with a
+PIN` and their short name, read-only. Under that are their own 20 most recent roof commands, newest first
+(`GET api/v4.0/RoofControl/History`, with their PIN session, which reads only its own; [the command
+history](security.md#the-command-history)): each one's time, the command, the controller's answer (`Accepted`, or
+`Refused [InterlockActive]` in amber with the controller's code), the roof after it and where it came from (`From
+kiosk`, `From web UI, 192.0.2.20`), in the words the web UI and the terminal use. Commands sent from the web UI or the
+terminal by the same person are theirs too. At the end it says how many there are and how long the controller keeps
+them, and where the person changes their names (never here). **Read again** reads them afresh; they are paginated only
+when they overflow. When they cannot be read the page says why (`Your roof commands could not be read. …`) and still
+shows the person. Locking the kiosk hides History and forgets what it read, so the next person never sees it.
+
+<p>
+  <img src="images/kiosk/history-800x480.png" alt="History on the first 7-inch display: the unlocked person, read-only, and their recent roof commands, a refused Open in amber" width="400">
+  <img src="images/kiosk/history-1280x720.png" alt="History at 1280x720: the person and their newest commands, newest first, with page controls when the list overflows" width="480">
 </p>
 
 ### Settings
@@ -487,11 +509,13 @@ Nothing here needs the Pi, the display or the roof.
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests"
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests|FullyQualifiedName~KioskPersonHistoryTests"
   for f in ../docs/images/kiosk/*.png; do
     if [ -f "/tmp/kiosk-renders/$(basename "$f")" ]; then cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; fi
   done
-  cp /tmp/kiosk-renders/polish-people-1280x720.png ../docs/images/kiosk/people-1280x720.png
+  cp /tmp/kiosk-renders/person-people-1280x720.png ../docs/images/kiosk/people-1280x720.png
+  cp /tmp/kiosk-renders/person-history-800x480.png ../docs/images/kiosk/history-800x480.png
+  cp /tmp/kiosk-renders/person-history-1280x720.png ../docs/images/kiosk/history-1280x720.png
   cp /tmp/kiosk-renders/terminal-locked-8.2-p1-1280x720.png ../docs/images/kiosk/terminal-1280x720.png
   cp /tmp/kiosk-renders/terminal-confirm-5.2-p1-800x480.png ../docs/images/kiosk/terminal-confirm-800x480.png
   cp /tmp/kiosk-renders/terminal-confirm-9.0-p1-1920x1200.png ../docs/images/kiosk/terminal-confirm-1920x1200.png

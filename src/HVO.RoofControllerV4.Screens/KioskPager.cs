@@ -94,6 +94,10 @@ public sealed class KioskPager : UserControl
 
     private List<List<Control>> Paginate(double width, double room)
     {
+        // Every item is measured as it is drawn: attached, so its styles and a button's template apply. Detached, a
+        // button has no template and measures as only its minimum size, however much its content needs.
+        _body.Children.Clear();
+        _body.Children.AddRange(_items);
         List<List<Control>> pages = [[]];
         var used = 0d;
         foreach (var item in ExpandText(_items, width, room))
