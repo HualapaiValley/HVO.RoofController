@@ -36,7 +36,7 @@ public sealed class HistoryPageTests
             new[]
             {
                 new[] { "2026-09-29 12:00:00Z", "Stop", "ada (signed in)", "Accepted", "Closed" },
-                new[] { "2026-09-29 12:00:00Z", "Open", "olive (signed in)", "Accepted (conditions unknown)", "Closed" }
+                new[] { "2026-09-29 12:00:00Z", "Open", "olive (signed in)", "Accepted", "Closed" }
             },
             options => options.WithStrictOrdering());
         cut.Find("[data-testid=history-range]").TextContent.Should().Be("1–2 of 2 commands.");

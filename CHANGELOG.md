@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   matched by an identifier (a person's principal ID, or their name and creation; a key's ID), never by a name alone.
   Stop is never limited; anonymous Stops from one source are one entry with a count, under a cap of their own. An Open
   sent while the safety conditions are not Safe (#207) records them, with the safety interlock's refusals
-  (`SafetyOverrideRequired`, `SafetyInterlockActive`) and whether it went ahead on a safety override. It keeps
-  them in `command-history.jsonl` next to the identity store (so backups hold it), or at
+  (`SafetyOverrideRequired`, `SafetyInterlockActive`) and whether it went ahead on a safety override; an Open accepted
+  with the interlock `Off` and no safety source configured records none, so it shows plain "Accepted" rather than
+  "Accepted (conditions unknown)" (#216). It keeps them in `command-history.jsonl` next to the identity store (so
+  backups hold it), or at
   `RoofCommandHistory:StorePath`, for 90 days and up to 10,000 commands (`RoofCommandHistory:Retention`,
   `RoofCommandHistory:MaximumEntries`). `GET api/v4.0/RoofControl/History` pages them, newest first, with `user`,
   `principalId`, `from`, `to`, `skip` and `take`: an admin reads everyone's, anyone else (a kiosk PIN session included)

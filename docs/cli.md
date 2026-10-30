@@ -283,7 +283,8 @@ controller's code for a refusal), the roof afterwards and where it came from. An
 reads only their own, matched by their identifier rather than their name, and `--user` or `--principal-id` naming
 someone else is refused (exit 6). Anonymous Stops from one source are one row, such as `Stop (12 times, last …)`. An Open sent while the
 [safety conditions](safety-service.md) were not safe says so, such as `Accepted (safety override, conditions unsafe)`,
-and one the safety interlock refused shows its code, such as `Refused [SafetyOverrideRequired]`.
+and one the safety interlock refused shows its code, such as `Refused [SafetyOverrideRequired]`. With the interlock off
+and no safety source configured, an accepted Open is plain `Accepted`: the conditions are always unknown there.
 
 | Option | What it does |
 |--------|--------------|

@@ -102,8 +102,12 @@ public sealed class RoofHistoryClientTests
         RoofHistoryText.DescribeResult(Entry()).Should().Be("Accepted");
         RoofHistoryText.DescribeResult(Entry() with { Accepted = false, Code = "FaultLatched" }).Should().Be("Refused [FaultLatched]");
         RoofHistoryText.DescribeResult(Entry() with { Accepted = false }).Should().Be("Refused");
+        // An Open with no safety note (Safe, or nothing watches the conditions: #216) is plain Accepted, as above.
         RoofHistoryText.DescribeResult(Entry() with { SafetyState = "Unsafe", SafetyOverride = true }).Should().Be("Accepted (safety override, conditions unsafe)");
+        RoofHistoryText.DescribeResult(Entry() with { SafetyState = "Unknown", SafetyOverride = true }).Should().Be("Accepted (safety override, conditions unknown)");
+        RoofHistoryText.DescribeResult(Entry() with { SafetyState = "Unsafe" }).Should().Be("Accepted (conditions unsafe)");
         RoofHistoryText.DescribeResult(Entry() with { SafetyState = "Unknown" }).Should().Be("Accepted (conditions unknown)");
+        RoofHistoryText.DescribeResult(Entry() with { Accepted = false, Code = "FaultLatched", SafetyState = "Unknown" }).Should().Be("Refused [FaultLatched]");
         RoofHistoryText.DescribeResult(Entry() with { Accepted = false, Code = "SafetyOverrideRequired", SafetyState = "Unsafe" })
             .Should().Be("Refused [SafetyOverrideRequired]");
         RoofHistoryText.DescribeOutcome(Entry()).Should().Be("Opening");

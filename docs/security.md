@@ -455,8 +455,11 @@ session, the person an API key said it acted for (`X-On-Behalf-Of`, shown, never
 the request's `User-Agent` names (not verified; the client library sends `<program>/<version>`), the result with the
 refusal's code and explanation, and the roof's status, stop reason and fault latch afterwards. An Open sent while the
 observatory's safety conditions are not Safe also has them (`safetyState`), and `safetyOverride` when the controller
-accepted it only because the caller overrode them; an Open the safety interlock refused is a refusal with its code. A
-request refused before it reaches the roof (no credential, or a role too low) is not a command and is not recorded.
+accepted it only because the caller overrode them; an Open the safety interlock refused is a refusal with its code. An
+Open accepted while nothing watches the conditions (`RoofSafety:InterlockMode` `Off` and no safety source configured)
+has no `safetyState`: its Unknown says nothing (#216). Unsafe, Unknown from a configured source or in `Warn` or
+`Block`, an override and a refusal keep it. A request refused before it reaches the roof (no credential, or a role too
+low) is not a command and is not recorded.
 
 - **Identifiers, never names.** The history matches who sent a command by an identifier, never by a name alone:
   `principal:<id>` for a person the identity store gives a principal ID (schema 2 and later, and every Linux principal),
