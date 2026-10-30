@@ -514,7 +514,7 @@ public sealed class KioskPanelTests
         system.Information.Should().BeEmpty("the host's details are an admin's");
         system.Self.Should().Be(("This kiosk", RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly)),
             "everyone may see the kiosk's own version");
-        system.Summary.Select(row => row.Label).Should().Equal("Controller", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+        system.Summary.Select(row => row.Label).Should().Equal("Controller", "Web UI", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
         system.SummaryProblem.Should().BeNull("every role reads the controller's summary (#209)");
         system.Message!.Text.Should().Be($"Health: {system.Health}.");
 
@@ -610,7 +610,8 @@ public sealed class KioskPanelTests
 
         harness.Console.View.IsUnlocked.Should().BeFalse();
         system.Summary.Should().Contain(("Controller", "9.8.7-rc.2 (commit abcdef123456)"));
-        system.Summary.Should().Contain(("Addresses", "192.0.2.10 (the controller's container)"));
+        system.Summary.Should().Contain(("Web UI", "https://192.0.2.10:8088/"), "where people reach the web UI, from the host's address");
+        system.Summary.Should().Contain(("Addresses", "192.0.2.10"), "the host's address, never the container's own");
         system.SummaryProblem.Should().BeNull();
         system.ReadingSummary.Should().BeFalse();
         system.Health.Should().BeNull("About reads the summary alone");

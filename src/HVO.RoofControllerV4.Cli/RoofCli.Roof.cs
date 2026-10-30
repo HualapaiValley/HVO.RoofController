@@ -715,6 +715,14 @@ public static partial class RoofCli
             yield return ("Controller", connection.Controller.ToString());
             yield return ("Credential", connection.Source);
             yield return ("Name", caller.Name);
+            if (caller.LoginType is not null)
+            {
+                // A person (#209): their names, and how they sign in; a Linux account's names are the operating system's.
+                yield return ("Display name", caller.DisplayName ?? "not set");
+                yield return ("Short name", caller.ShortName ?? "not set");
+                yield return ("Login", RoofIdentityText.DescribeLoginType(caller.LoginType));
+            }
+
             yield return ("Role", RoofCliFormat.Role(caller.Role));
             var kind = caller.Kind switch
             {

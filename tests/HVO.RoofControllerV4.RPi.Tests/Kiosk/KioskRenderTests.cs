@@ -52,9 +52,11 @@ public sealed class KioskRenderTests
                 .And.Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
             screen.Text("about-controller-version").Should().Be("Controller (last read): 9.8.7-rc.2 (commit abcdef123456)",
                 "a locked PIN kiosk reads the controller's version with its own key (#209)");
+            screen.Text("about-web-ui").Should().Be("Web UI: https://192.0.2.10:8088/",
+                "people at the kiosk learn where the web UI is, from the host's address (#209)");
             screen.Text("about-summary-cpu").Should().Be("CPU: 12.5 %, load 0.42 0.35 0.30, 4 processors");
             screen.Text("about-summary-temperature").Should().Be("Temperature: 47.2 °C");
-            screen.Text("about-summary-addresses").Should().Be("Addresses: 192.0.2.10 (the controller's container)");
+            screen.Text("about-summary-addresses").Should().Be("Addresses: 192.0.2.10");
             screen.Shell.Page.Should().Be(KioskPage.About);
         });
         await screen.RenderAsync("about-locked", TestContext);
@@ -65,6 +67,7 @@ public sealed class KioskRenderTests
             screen.Text("about-client-version").Should().Contain("This kiosk version:");
             screen.Text("about-controller-version").Should().Be($"Controller version: unavailable. {RoofSystemText.ControllerUnreachable}");
             screen.Find("about-summary-cpu").Should().BeNull("figures last read are not shown for a controller that cannot be reached");
+            screen.Find("about-web-ui").Should().BeNull();
         });
         await screen.RenderAsync("about-offline", TestContext);
     }

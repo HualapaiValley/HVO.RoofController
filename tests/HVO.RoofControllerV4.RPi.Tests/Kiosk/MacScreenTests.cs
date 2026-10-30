@@ -50,6 +50,7 @@ public sealed class MacScreenTests
             screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly))
                 .And.NotContain("9.8.7");
             screen.Text("about-controller-version").Should().Contain("Controller (last read):").And.Contain("9.8.7-rc.2 (commit abcdef123456)");
+            screen.Text("about-web-ui").Should().Be("Web UI: https://192.0.2.10:8088/", "where the web UI is, from the host's address (#209)");
         });
         await screen.RenderAsync("mac-about", TestContext);
         await OnUiAsync(() =>
@@ -88,6 +89,7 @@ public sealed class MacScreenTests
             screen.Window.UpdateLayout();
             var texts = screen.Window.GetVisualDescendants().OfType<TextBlock>().Select(block => block.Text).ToList();
             texts.Should().Contain("CPU").And.Contain("12.5 %, load 0.42 0.35 0.30, 4 processors", "every role sees the summary (#209)");
+            texts.Should().Contain("Web UI").And.Contain("https://192.0.2.10:8088/");
             texts.Should().Contain(KioskSystemPanel.InformationNeedsAdmin);
             texts.Should().NotContain("Host details");
             screen.Find("system-restart").Should().BeNull();

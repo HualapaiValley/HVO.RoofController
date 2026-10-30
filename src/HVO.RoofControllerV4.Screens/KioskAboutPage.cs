@@ -38,11 +38,13 @@ public sealed class KioskAboutPage : UserControl
         page.Children.Add(controller);
         if (!view.IsStale && !view.IsUnreachable)
         {
-            // The summary's other rows, each a line of its own, as the version is.
+            // Where people reach the web UI first, as plainly as the version: from the host's address, or only on the
+            // controller's machine, never a container's own address (#209). Then the summary's other rows, muted.
             foreach (var (label, value) in _system.Summary.Where(row => row.Label != VersionLabel))
             {
-                var row = KioskTheme.Label($"{label}: {value}", _metrics.Font, KioskTheme.Muted);
-                row.Name = $"about-summary-{label.ToLowerInvariant()}";
+                var webUi = label == WebUiLabel;
+                var row = KioskTheme.Label($"{label}: {value}", _metrics.Font, webUi ? null : KioskTheme.Muted);
+                row.Name = webUi ? "about-web-ui" : $"about-summary-{label.ToLowerInvariant()}";
                 page.Children.Add(row);
             }
         }
@@ -62,6 +64,9 @@ public sealed class KioskAboutPage : UserControl
 
     /// <summary>The summary's row for the controller's version (<see cref="RoofSystemText.DescribeSummary"/>).</summary>
     private const string VersionLabel = "Controller";
+
+    /// <summary>The summary's row for where people reach the web UI (<see cref="RoofSystemText.DescribeWebUi"/>).</summary>
+    private const string WebUiLabel = "Web UI";
 
     private string ControllerText(KioskView view)
     {

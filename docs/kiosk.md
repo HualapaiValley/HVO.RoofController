@@ -73,7 +73,9 @@ Open, Close and Clear fault are hidden:
 
 **Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key).
 A person with a display name is shown by it, with the name they sign in by: `Olga Example (olga)`; an enrolled Linux
-account adds `(Linux)`. Display names are set by an admin in the web UI or with `hvo-roof` (#209). People are paginated. Choosing a name opens a separate keypad step; **Person** returns to the list. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
+account adds `(Linux)`. Names are not changed at the kiosk, which has no keyboard: people change their own in the web UI
+(their account) or the terminal (Setup), an admin anyone's, and a Linux account's come from the operating system
+(#209). People are paginated. Choosing a name opens a separate keypad step; **Person** returns to the list. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
 ([Lockout](security.md#signing-in)). When no one has a PIN yet, the page says how to give one:
 `hvo-roof users set <name> --pin` or `hvo-roof pins set <name>` ([cli.md](cli.md#commands)), or the web UI's People
@@ -582,12 +584,15 @@ See [Authentication and interface rights](authentication-interfaces.md) for pers
 
 Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. Each time About
 opens, the kiosk reads the controller's summary with its device key (`GET System/Summary`, any role, #209): the
-controller's version, labelled separately as last read, then its uptime and its machine's CPU, temperature, memory,
-disk and addresses. A PIN session is not needed. When the controller cannot be reached, About says
-`Controller version: unavailable. Controller unreachable.` and shows no figures last read; while the status is not
-live it says so instead. A summary that cannot be read (a controller older than the summary, say) says why. The local
-build is never substituted for the controller's. Stop remains available in its own column. Behind a controller in a
-container, the addresses are the container's, and say so.
+controller's version, labelled separately as last read, and right after it **where the web UI is**: `Web UI:` and its
+URLs (`https://192.0.2.10:8088/` in the picture), built from the host's address, the published port and the scheme the
+installer recorded, so people at the kiosk know where to open it. When the web UI is not published to the network it
+says `only on the controller's machine`, and when the deployment did not record it, `address not known`; a container's
+own address is never given as where to reach it. Then the controller's uptime and its machine's CPU, temperature,
+memory, disk and host addresses. A PIN session is not needed. When the controller cannot be reached, About says
+`Controller version: unavailable. Controller unreachable.` and shows no figures last read; while the status is not live
+it says so instead. A summary that cannot be read (a controller older than the summary, say) says why. The local build
+is never substituted for the controller's. Stop remains available in its own column.
 
 ![Locked kiosk About view](images/kiosk/about-locked-800x480.png)
 

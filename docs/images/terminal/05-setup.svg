@@ -108,9 +108,9 @@
 <text x="146.40" y="145.50" fill="#f7f9fc" textLength="378.00" lengthAdjust="spacingAndGlyphs">http://localhost/ (from the credentials file)</text>
 <text x="37.20" y="163.50" fill="#f7f9fc" textLength="504.00" lengthAdjust="spacingAndGlyphs">Certificate: not pinned (the system's trust store checks it)</text>
 <text x="37.20" y="181.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">Credential:</text>
-<text x="146.40" y="181.50" fill="#f7f9fc" textLength="739.20" lengthAdjust="spacingAndGlyphs">API key (from /tmp/hvo-roof-cli-tests/991b5f9a27fc4b49ae33bee4349adaa8/credentials.json)</text>
-<text x="37.20" y="199.50" fill="#f7f9fc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Credentials file: /tmp/hvo-roof-cli-tests/991b5f9a27fc4b49ae33bee4349adaa8/credentials.json</text>
-<text x="28.80" y="505.50" fill="#f7f9fc" textLength="546.00" lengthAdjust="spacingAndGlyphs">[ Connection ] [ Check ] [ Sign in ] [ Sign out ] [ First admin ]</text>
+<text x="146.40" y="181.50" fill="#f7f9fc" textLength="739.20" lengthAdjust="spacingAndGlyphs">API key (from /tmp/hvo-roof-cli-tests/5ae7aef9319042efbdc45aa669c068c0/credentials.json)</text>
+<text x="37.20" y="199.50" fill="#f7f9fc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Credentials file: /tmp/hvo-roof-cli-tests/5ae7aef9319042efbdc45aa669c068c0/credentials.json</text>
+<text x="28.80" y="505.50" fill="#f7f9fc" textLength="630.00" lengthAdjust="spacingAndGlyphs">[ Connection ] [ Check ] [ Sign in ] [ Sign out ] [ Names ] [ First admin ]</text>
 <text x="20.40" y="541.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">Health: Degraded.</text>
 <text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
 <text x="188.40" y="559.50" fill="#3fb950" textLength="470.40" lengthAdjust="spacingAndGlyphs">Stop acknowledged. Relay register verified de-energized.</text>

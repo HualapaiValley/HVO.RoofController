@@ -527,9 +527,10 @@ internal sealed class DroppedAnswerHandler(HttpMessageHandler inner, string path
 }
 
 /// <summary>
-/// A controller summary made of fixed, documentation-safe figures (#209): the host's files are fixtures and its only
-/// address is from TEST-NET-1 (RFC 5737), so a capture made for the docs shows no real address of the machine the tests
-/// run on. The controller process's own uptime and memory stay real; they name nothing.
+/// A controller summary made of fixed, documentation-safe figures (#209): the host's files are fixtures, the controller
+/// runs in a container whose own address is Docker's default bridge's, and the host's address and the web UI's URL are
+/// from TEST-NET-1 (RFC 5737), as the installer writes them. A capture made for the docs shows no real address of the
+/// machine the tests run on. The controller process's own uptime and memory stay real; they name nothing.
 /// </summary>
 internal static class DocumentedHostMetrics
 {
@@ -558,7 +559,7 @@ internal static class DocumentedHostMetrics
                 _ => null
             },
             _ => (31_268_536_320L, 22_978_166_784L),
-            () => ["192.0.2.10"],
+            () => ["172.17.0.2"],
             () => true,
             TimeSpan.Zero));
     }

@@ -1462,6 +1462,78 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void Setup_Names_APersonChangesTheirOwn_AndNothingEnds()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        SignedIn(host, rig, "ada");
+        using var tui = Started(rig);
+        tui.Ui.ShowPage(4);
+        tui.Ui.CurrentPage.Should().BeOfType<RoofUiSetupPage>();
+
+        Click(tui, "Names");
+        tui.WaitIdle("your names", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Prompt.Title.Should().Be("Your names (ada)");
+        tui.Ui.Panel.Fields[0].Text.Should().BeEmpty();
+        Fill(tui, "Ada\u0007", string.Empty);
+        tui.Ui.Panel.Press("Save");
+        tui.Ui.Panel!.Error.Should().Be(RoofIdentityText.DisplayNameRule, "a name with a control character is refused before it is sent");
+        Fill(tui, "  Ada Example ", "Ada");
+        tui.Ui.Panel.Press("Save");
+        tui.WaitIdle("the names saved", () => tui.Ui.Message.StartsWith("Saved your names", StringComparison.Ordinal));
+
+        tui.Ui.Message.Should().Be("Saved your names: Ada Example (ada), short name Ada.");
+        tui.Ui.Caller!.Kind.Should().Be(RoofCredentialKind.Session, "changing your names ends no session");
+        using var admin = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        RoofUserResponse? ada = null;
+        OffTheLoop(async () => ada = await admin.Identity.GetUserAsync("ada"));
+        ada!.DisplayName.Should().Be("Ada Example");
+        ada.ShortName.Should().Be("Ada");
+
+        Click(tui, "Names");
+        tui.WaitIdle("your names again", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Fields[0].Text.Should().Be("Ada Example");
+        Fill(tui, "Ada Example", string.Empty);
+        tui.Ui.Panel.Press("Save");
+        tui.WaitIdle("the short name removed", () => tui.Ui.Message.EndsWith("no short name.", StringComparison.Ordinal));
+        OffTheLoop(async () => ada = await admin.Identity.GetUserAsync("ada"));
+        ada!.ShortName.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Setup_Names_WithAnApiKey_SaysAPersonMustSignIn()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        tui.Ui.ShowPage(4);
+
+        Click(tui, "Names");
+        tui.WaitIdle("the answer", () => tui.Ui.Message.StartsWith("Names are a person's", StringComparison.Ordinal));
+
+        tui.Ui.Panel.Should().BeNull("an API key has no names to change");
+        tui.Ui.Message.Should().Contain(RoofIdentityText.OwnNamesWhere);
+    }
+
+    /// <summary>Saves a password session for a new operator <paramref name="name"/>, as <c>hvo-roof login</c> would.</summary>
+    private static void SignedIn(RoofApiTestHost host, CliRig rig, string name)
+    {
+        RoofClientApiTests.AddUserAsync(host, name, RoofControllerApiContract.OperatorRole).GetAwaiter().GetResult();
+        RoofSessionCredential? session = null;
+        OffTheLoop(async () =>
+        {
+            using var anonymous = ClientTestSupport.CreateClient(host);
+            session = await anonymous.Auth.SignInAsync(name, TestSecrets.Password);
+        });
+        RoofCredentialStore.Save(rig.CredentialsPath, new RoofStoredCredentials
+        {
+            Controller = ClientTestSupport.BaseAddress,
+            Session = new RoofStoredSession(session!.Token, session.Name, session.Role, session.SessionId, session.ExpiresUtc)
+        });
+    }
+
+    [TestMethod]
     public void Setup_Connection_RefusesABadAddress_InThePrompt()
     {
         using var rig = new CliRig((RoofApiTestHost?)null);
@@ -1997,6 +2069,23 @@ public sealed class RoofTerminalUiTests
 
         tui.Ui.Message.Should().EndWith("Readiness says when it is back; the status comes back by itself.");
         host.RoofService.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.AtLeastOnce());
+    }
+
+    [TestMethod]
+    public void System_SaysWhereTheWebUiIs_RightAfterTheControllersVersion()
+    {
+        using var host = RoofClientApiTests.CreateHost(configureServices: DocumentedHostMetrics.Use);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+        using var tui = Started(rig);
+        tui.Press(Key.F4);
+        tui.WaitIdle("the health report", () => tui.Ui.Message.StartsWith("Health:", StringComparison.Ordinal));
+
+        var lines = tui.Ui.CurrentPage.Describe().Split('\n');
+        var controller = Array.FindIndex(lines, line => line.StartsWith("Controller:", StringComparison.Ordinal));
+        lines[controller + 1].Should().MatchRegex(@"^Web UI: +https://192\.0\.2\.10:8088/$", "people learn where the web UI is (#209)");
+        tui.Ui.CurrentPage.Describe().Should().MatchRegex(@"Addresses: +192\.0\.2\.10")
+            .And.NotContain("172.17.0.2", "a container's bridge address is never where to reach the web UI");
     }
 
     [TestMethod]

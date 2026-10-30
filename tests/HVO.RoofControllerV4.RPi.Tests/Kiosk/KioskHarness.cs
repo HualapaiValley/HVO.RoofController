@@ -147,7 +147,9 @@ internal sealed class KioskHarness : IAsyncDisposable
 
     /// <summary>
     /// The figures every summary the controller answers carries (#209), in place of this machine's: a render is the same
-    /// on every machine, and never shows its addresses. The version is the controller's, or <see cref="ControllerVersion"/>.
+    /// on every machine, and never shows its addresses. Where the web UI is reached is as the installer writes it for a Pi
+    /// open to the network, with a documentation address (RFC 5737); the container's own address is never shown.
+    /// The version is the controller's, or <see cref="ControllerVersion"/>.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, System.Text.Json.Nodes.JsonNode?> SummaryFigures = new Dictionary<string, System.Text.Json.Nodes.JsonNode?>
     {
@@ -163,7 +165,10 @@ internal sealed class KioskHarness : IAsyncDisposable
         ["memoryAvailableBytes"] = 3_113_851_289L,
         ["diskTotalBytes"] = 31_268_536_320L,
         ["diskFreeBytes"] = 18L << 30,
-        ["ipAddresses"] = new System.Text.Json.Nodes.JsonArray("192.0.2.10"),
+        ["webUiUrls"] = new System.Text.Json.Nodes.JsonArray("https://192.0.2.10:8088/"),
+        ["webUiAccess"] = "Network",
+        ["hostAddresses"] = new System.Text.Json.Nodes.JsonArray("192.0.2.10"),
+        ["ipAddresses"] = new System.Text.Json.Nodes.JsonArray("172.17.0.2"),
         ["runningInContainer"] = true
     };
 

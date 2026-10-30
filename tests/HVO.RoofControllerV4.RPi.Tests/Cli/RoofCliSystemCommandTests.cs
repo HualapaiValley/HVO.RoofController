@@ -58,6 +58,42 @@ public sealed class RoofCliSystemCommandTests
     }
 
     [TestMethod]
+    [DataRow(TestApiKeys.Viewer)]
+    [DataRow(TestApiKeys.Admin)]
+    public async Task Info_SaysWhereTheWebUiIs_RightAfterTheVersion_FromTheHostsAddress(string apiKey)
+    {
+        using var host = RoofClientApiTests.CreateHost(configureServices: DocumentedHostMetrics.Use);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(apiKey);
+
+        var result = await rig.RunAsync("info");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        var lines = result.Out.Split('\n', StringSplitOptions.TrimEntries);
+        var controller = Array.FindIndex(lines, line => line.StartsWith("Controller:", StringComparison.Ordinal));
+        lines[controller + 1].Should().MatchRegex(@"^Web UI:\s+https://192\.0\.2\.10:8088/$", "people learn where the web UI is (#209)");
+        result.Out.Should().MatchRegex(@"(?m)^Addresses:\s+192\.0\.2\.10\s*$")
+            .And.NotContain("172.17.0.2", "a container's bridge address is never where to reach the web UI");
+    }
+
+    [TestMethod]
+    public async Task Info_SaysAWebUiNotPublishedToTheNetwork_IsOnlyOnTheControllersMachine()
+    {
+        using var host = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?>
+        {
+            ["RoofHost:WebUiUrls"] = "https://localhost:8088/",
+            ["RoofHost:WebUiAccess"] = "LocalOnly"
+        });
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+
+        var result = await rig.RunAsync("info");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().MatchRegex(@"(?m)^Web UI:\s+only on the controller's machine \(https://localhost:8088/\): it is not published to the network\s*$");
+    }
+
+    [TestMethod]
     public async Task Info_Json_HoldsTheClientsVersionTheInformationAndTheMetrics()
     {
         using var host = RoofClientApiTests.CreateHost();
