@@ -44,7 +44,15 @@ public static partial class RoofCli
         /// snapshot and each read of the HAT.
         /// </summary>
         internal static string DescribeJsonState(RoofStatusResponse status) => System.Text.Json.JsonSerializer.Serialize(
-            status with { StatusVersion = 0, SnapshotUtc = default, LastSuccessfulRelayReadUtc = null, LastSuccessfulInputReadUtc = null },
+            status with
+            {
+                StatusVersion = 0,
+                SnapshotUtc = default,
+                LastSuccessfulRelayReadUtc = null,
+                LastSuccessfulInputReadUtc = null,
+                // Each safety source's reading time advances with every read.
+                Safety = status.Safety is { } safety ? safety with { Sources = [.. safety.Sources.Select(source => source with { LastReadingUtc = null })] } : null
+            },
             RoofCliJson.Compact);
 
         private static async Task<int> WatchStatusAsync(RoofCliContext context, CancellationToken cancellationToken)
@@ -288,11 +296,22 @@ public static partial class RoofCli
                 Description = "Return once the controller accepts the command. Without it, the command follows the motion, renews the operator lease, and sends Stop on Ctrl+C."
             };
             var command = new Command(name, description + " Follows the motion until it ends; Ctrl+C sends Stop.") { noWait };
-            SetAction(command, (context, parseResult, cancellationToken) => MoveAsync(context, direction, !parseResult.GetValue(noWait), cancellationToken));
+            Option<bool>? overrideSafety = null;
+            if (direction == RoofMotionDirection.Opening)
+            {
+                overrideSafety = new Option<bool>("--override-safety")
+                {
+                    Description = "Open even though the safety conditions (telescope park, weather) are not safe, where the controller's safety interlock is in Warn mode. Anyone who may open the roof may override, unless the controller allows only admins. The controller logs the override."
+                };
+                command.Options.Add(overrideSafety);
+            }
+
+            SetAction(command, (context, parseResult, cancellationToken) => MoveAsync(
+                context, direction, !parseResult.GetValue(noWait), overrideSafety is not null && parseResult.GetValue(overrideSafety), cancellationToken));
             return command;
         }
 
-        private static async Task<int> MoveAsync(RoofCliContext context, RoofMotionDirection direction, bool follow, CancellationToken cancellationToken)
+        private static async Task<int> MoveAsync(RoofCliContext context, RoofMotionDirection direction, bool follow, bool overrideSafety, CancellationToken cancellationToken)
         {
             // From before the command is sent until this command ends, the roof may move on its order: no signal ends
             // the process before the Stop that the first one asks for. The terminal closing sends SIGHUP twice, well
@@ -317,7 +336,7 @@ public static partial class RoofCli
             try
             {
                 status = direction == RoofMotionDirection.Opening
-                    ? await client.Roof.OpenAsync(answerWait.Token).ConfigureAwait(false)
+                    ? await client.Roof.OpenAsync(overrideSafety, answerWait.Token).ConfigureAwait(false)
                     : await client.Roof.CloseAsync(answerWait.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (answerWait.IsCancellationRequested)

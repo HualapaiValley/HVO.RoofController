@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
+  Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
+  age) and bounded, non-overlapping reads. It is on every status snapshot and status hub message (`safety`), at
+  `GET /api/v4.0/Safety` (Viewer) and in the client library (`GetSafetyAsync`), and every change is logged. No real
+  source exists yet, so the conditions are Unknown ("No safety sources configured"); simulated sources test it.
+- An optional Open interlock on the safety conditions, `RoofSafety:InterlockMode`: `Off` (the default: Open is
+  unchanged, and an Open while not Safe is logged), `Warn` (the chosen policy: Open refused with
+  `SafetyOverrideRequired` unless the request carries `overrideSafety=true`, which anyone who may open the roof may
+  send, `RoofSafety:OverrideRole` `Operator` by default; overrides are audit-logged) or `Block` (refused with
+  `SafetyInterlockActive`). Unknown counts as Unsafe. Close and Stop are never refused for the conditions
+  ([docs/safety-service.md](docs/safety-service.md)).
+- Safety indicators: a badge on the web UI's roof page, a Safety row in every client's status (`hvo-roof status`, the
+  terminal interface, the web UI, the kiosk's Readings), the state on `hvo-roof status --watch` lines, a chip on the
+  kiosk's roof page, and `hvo-roof open --override-safety`.
+
 ## [4.2.0] - 2026-10-30
 
 ### Added

@@ -66,6 +66,8 @@ public static class RoofControllerApiContract
         RoofControllerErrorCode.SettingsStoreUnavailable => 503,
         RoofControllerErrorCode.RestartRefused => 409,
         RoofControllerErrorCode.SettingNotFound => 404,
+        RoofControllerErrorCode.SafetyInterlockActive => 409,
+        RoofControllerErrorCode.SafetyOverrideRequired => 409,
         _ => 500
     };
 }

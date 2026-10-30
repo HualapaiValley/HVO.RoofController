@@ -96,6 +96,8 @@ public static class RoofText
         RoofControllerErrorCode.SettingsStoreUnavailable => "The settings file could not be read or written.",
         RoofControllerErrorCode.RestartRefused => "The controller refused to restart.",
         RoofControllerErrorCode.SettingNotFound => "The setting was not found.",
+        RoofControllerErrorCode.SafetyInterlockActive => "The safety interlock refused Open: the conditions are not confirmed safe.",
+        RoofControllerErrorCode.SafetyOverrideRequired => "The conditions are not confirmed safe. Open needs a safety override.",
         _ => "The controller reported an unexpected error."
     };
 

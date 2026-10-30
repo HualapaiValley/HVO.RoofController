@@ -107,6 +107,9 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
   ([commissioning C9](commissioning.md#c9-operator-lease-expiry)).
 - **Notices** keep the last five things that happened, with their time: a command's answer, who unlocked the kiosk, the
   controller restarting, and safety alerts (`SAFETY: …`).
+- **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a chip beside
+  the position, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), and the reasons in the Safety row on
+  Readings. While the interlock blocks Open, Open is not offered.
 
 <p>
   <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display" width="400">
