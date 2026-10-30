@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -35,8 +36,8 @@ public sealed class YourNamesPageTests
         var cut = Loaded(context);
         cut.Find("[data-testid=names-display-name]").GetAttribute("value").Should().BeEmpty();
 
-        cut.Input("[data-testid=names-display-name]", "  Ada Example ");
-        cut.Input("[data-testid=names-short-name]", "Ada");
+        cut.Find("[data-testid=names-display-name]").Input("  Ada Example ");
+        cut.Find("[data-testid=names-short-name]").Input("Ada");
         cut.Click("[data-testid=names-save]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
@@ -46,13 +47,12 @@ public sealed class YourNamesPageTests
         saved.DisplayName.Should().Be("Ada Example");
         saved.ShortName.Should().Be("Ada");
 
-        cut.Input("[data-testid=names-short-name]", "");
+        cut.Find("[data-testid=names-short-name]").Input("");
         cut.Click("[data-testid=names-save]");
 
-        // The click took the first save's result away; it comes back only when this save has been made. (The short name
-        // is empty as soon as it is typed, so it says nothing about the save.)
-        cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
-        cut.Find("[data-testid=names-short-name]").GetAttribute("value").Should().BeEmpty();
+        // The first save's message is still shown, and the box is empty as soon as it is typed in: wait for the controller.
+        await WaitUntilAsync(() => admin.Identity.GetUserAsync("ada").GetAwaiter().GetResult().ShortName is null, "the short name to be removed");
+        cut.WaitForAssertion(() => cut.Find("[data-testid=names-short-name]").GetAttribute("value").Should().BeEmpty());
         var cleared = await admin.Identity.GetUserAsync("ada");
         cleared.DisplayName.Should().Be("Ada Example");
         cleared.ShortName.Should().BeNull("an empty name removes it");

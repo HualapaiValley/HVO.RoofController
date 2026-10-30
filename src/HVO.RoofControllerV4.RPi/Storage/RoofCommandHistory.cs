@@ -501,8 +501,10 @@ public sealed class RoofCommandHistory : BackgroundService
 
     /// <summary>
     /// Notes on <paramref name="context"/> what the safety interlock (#207) decided for an Open, for the entry
-    /// <see cref="Describe"/> makes of it: the conditions when they were not Safe (null when they were), and whether the
-    /// caller overrode them. An override is recorded only on an Open the controller then accepted.
+    /// <see cref="Describe"/> makes of it: the conditions to record
+    /// (<see cref="HVO.RoofControllerV4.RPi.Safety.RoofSafetyOpenDecision.HistorySafetyState"/>: null when they were Safe,
+    /// or nothing watches them), and whether the caller overrode them. An override is recorded only on an Open the
+    /// controller then accepted.
     /// </summary>
     public static void NoteSafety(HttpContext context, string? notSafeState, bool overridden)
     {

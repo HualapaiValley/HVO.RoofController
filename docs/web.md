@@ -195,9 +195,10 @@ from the web UI, the address of the person's browser, which the web UI names to 
 key's name (whoever is named so now); anyone else reads only their own, matched by their identifier, never by name. An
 Open sent while the [safety conditions](safety-service.md) were not safe says so, such as
 `Accepted (safety override, conditions unsafe)`, and one the safety interlock refused shows its code, such as
-`Refused [SafetyOverrideRequired]`. **From** and **To** pick whole UTC days. Newer and Older
-page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the page says when it keeps
-them in memory only.
+`Refused [SafetyOverrideRequired]`. With the interlock off and no safety source configured, an accepted Open is plain
+`Accepted`: the conditions are always unknown there, so saying so tells nothing. **From** and **To** pick whole UTC
+days. Newer and Older page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the
+page says when it keeps them in memory only.
 
 ### People
 

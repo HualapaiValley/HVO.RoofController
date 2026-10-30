@@ -12,7 +12,22 @@ namespace HVO.RoofControllerV4.RPi.Safety;
 /// <param name="Caller">Who asked, as audit lines name them.</param>
 /// <param name="Safety">The safety conditions the decision was made on.</param>
 /// <param name="Overridden">True when Open goes on only because the caller overrode the conditions (Warn mode).</param>
-public sealed record RoofSafetyOpenDecision(RoofControllerException? Refusal, string Caller, RoofSafetyStatus Safety, bool Overridden);
+public sealed record RoofSafetyOpenDecision(RoofControllerException? Refusal, string Caller, RoofSafetyStatus Safety, bool Overridden)
+{
+    /// <summary>
+    /// The conditions the command history (#206) notes for this Open: the state when it was not Safe, null when it was.
+    /// Null as well for an Open the controller accepted while nothing watches the conditions (the interlock Off, no
+    /// safety source configured, no override), whose Unknown says nothing (#216). Unsafe, Unknown in another mode or from
+    /// a configured source, an override and every refusal keep the state.
+    /// </summary>
+    /// <param name="accepted">True when the controller accepted Open.</param>
+    public string? HistorySafetyState(bool accepted)
+        => Safety.State == RoofSafetyState.Safe
+            || (accepted && !Overridden
+                && Safety is { State: RoofSafetyState.Unknown, InterlockMode: RoofSafetyInterlockMode.Off, Sources.Count: 0 })
+            ? null
+            : Safety.State.ToString();
+}
 
 /// <summary>
 /// The safety conditions' part in Open (<see cref="RoofSafetyOptions.InterlockMode"/>): Off reports and logs, Warn
