@@ -28,6 +28,9 @@ public static class RoofSystemText
     /// <summary>A value of the summary the controller could not read.</summary>
     public const string Unavailable = "unavailable";
 
+    /// <summary>In place of the host's details (admin) for a caller without the Admin role; the summary is everyone's.</summary>
+    public const string HostDetailsNeedAdmin = "The host's details (its name, system, runtime and the controller's process) need the Admin role.";
+
     /// <summary>
     /// Why the controller's information is not shown: <see cref="ControllerUnreachable"/> for a controller that cannot be
     /// reached or did not answer in time, otherwise the shared wording for the failure (a refusal says why).
