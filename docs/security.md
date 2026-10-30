@@ -46,7 +46,8 @@ other route refuses such a request with 401, and never falls back to the key.
 |----------------------------------------------------------|-------------------|---------|-----------------|
 | `GET  /api/v4.0/RoofControl/Status`                      | Viewer            | 200 `RoofStatusResponse` (after a forced hardware read) | 401, 403, 500 |
 | `GET  /api/v4.0/RoofControl/Mode`                        | anonymous         | 200 `RoofModeResponse` (the HAT mode and whether the limit switches are ignored, nothing else, from the last status, without a hardware read) | 403 (`https_required`, as on every route but the probes) |
-| `POST /api/v4.0/RoofControl/Open`                        | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
+| `GET  /api/v4.0/Safety`                                  | Viewer            | 200 `RoofSafetyStatus` (telescope park and weather: Safe, Unsafe or Unknown, the reasons, each source; [docs/safety-service.md](safety-service.md)) | 401, 403 |
+| `POST /api/v4.0/RoofControl/Open[?overrideSafety=true]`  | Operator; the override needs `RoofSafety:OverrideRole` (Admin by default) | 200 `RoofStatusResponse` | 400, 401, 403, 409 (also `SafetyOverrideRequired`, `SafetyInterlockActive`), 503, 500 |
 | `POST /api/v4.0/RoofControl/Close`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
 | `POST /api/v4.0/RoofControl/Lease`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409 (`LeaseNotActive`), 503 |

@@ -106,6 +106,11 @@ The page follows the controller's live status: the hub sends a full status at ea
   from the start. Stop still works.
 - **Nothing is claimed that the controller has not said.** Before the first status the page says it is connecting
   (`No status yet.`), rather than showing a position.
+- **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a badge in the
+  header, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), with the reasons and what the interlock does with
+  Open in its tooltip, and a Safety row in the status card. While the interlock blocks Open, Open is not offered and
+  says why; in Warn mode Open shows the controller's refusal, which says how to override it (there is no override
+  prompt on the page yet).
 
 <p>
   <img src="images/web/03-roof-opening-phone.jpg" alt="The roof page on a phone while the roof opens: the position Opening and the lease being renewed" width="240">

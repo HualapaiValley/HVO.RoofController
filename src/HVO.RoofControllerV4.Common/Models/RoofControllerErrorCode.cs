@@ -100,5 +100,18 @@ public enum RoofControllerErrorCode
     RestartRefused = 25,
 
     /// <summary>No setting or settings group has that name. HTTP 404.</summary>
-    SettingNotFound = 26
+    SettingNotFound = 26,
+
+    /// <summary>
+    /// Open was refused because the safety conditions (telescope park, weather) are not confirmed safe and the safety
+    /// interlock blocks it, or an override was sent by a caller who may not give one. Close and Stop are never refused
+    /// for this. HTTP 409.
+    /// </summary>
+    SafetyInterlockActive = 27,
+
+    /// <summary>
+    /// Open was refused because the safety conditions are not confirmed safe; the safety interlock lets a caller with
+    /// the override role open anyway by resending it with <c>overrideSafety=true</c>, which is audit-logged. HTTP 409.
+    /// </summary>
+    SafetyOverrideRequired = 28
 }

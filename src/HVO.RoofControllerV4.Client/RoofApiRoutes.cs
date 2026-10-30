@@ -14,6 +14,7 @@ internal static class RoofApiRoutes
     public const string Lease = V4 + "RoofControl/Lease";
     public const string ClearFault = V4 + "RoofControl/ClearFault";
     public const string Configuration = V4 + "RoofControl/Configuration";
+    public const string Safety = V4 + "Safety";
 
     public const string Session = V4 + "Auth/Session";
     public const string Providers = V4 + "Auth/Providers";

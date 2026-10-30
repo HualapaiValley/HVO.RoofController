@@ -25,6 +25,7 @@ using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Authorization;
@@ -239,6 +240,9 @@ public class Program
 
         // Register RoofController based on configuration
         services.AddSingleton<IRoofControllerServiceV4, RoofControllerServiceV4>();
+
+        // Safety conditions (telescope park, weather) on every status and in the Open interlock (docs/safety-service.md)
+        services.AddRoofSafety(Configuration);
 
         // Live status hub (/hubs/roof) for the separate clients: JSON with string enums, as the REST API writes them.
         services.AddSignalR()

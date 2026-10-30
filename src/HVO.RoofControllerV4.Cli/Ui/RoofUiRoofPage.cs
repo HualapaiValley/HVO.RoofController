@@ -71,9 +71,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             _status.Text = $"{(Ui.IsStale ? "LAST KNOWN" : "LIVE")}: {RoofCliFormat.DescribeRoof(status)}";
             _status.SetScheme(status.IsFaultLatched ? Ui.Theme.Danger : Ui.IsStale ? Ui.Theme.Warning : Ui.Theme.Header);
             var rows = RoofCliFormat.DescribeStatus(status);
-            _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Lease" or "Watchdog" or "Last error")
+            _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error")
                 .Select(row => $"{row.Label}:  {row.Value}").Prepend(heading).ToArray());
-            _readings.Show(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Lease" or "Watchdog" or "Last error"))
+            _readings.Show(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error"))
                 .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status)).ToArray());
         }
 

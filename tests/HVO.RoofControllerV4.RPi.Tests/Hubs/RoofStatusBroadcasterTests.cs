@@ -3,11 +3,13 @@ using System.Security.Claims;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Hubs;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Hubs;
 
@@ -384,13 +386,36 @@ public sealed class RoofStatusBroadcasterTests
         broadcaster.Value.Dispose();
     }
 
+    [TestMethod]
+    public async Task EveryMessage_CarriesTheSafetyConditions_AsTheyAreWhenItIsPublished()
+    {
+        var state = RoofSafetyState.Unknown;
+        var safety = new Mock<IRoofSafetyService>();
+        safety.Setup(s => s.GetCurrent()).Returns(() => new RoofSafetyStatus { State = state });
+        await using var broadcaster = await StartAsync(heartbeat: TimeSpan.FromMilliseconds(50), safety: safety.Object);
+
+        broadcaster.Value.TryRegister("a", Viewer(), () => { });
+        (await _sender.WaitForAsync("a", d => d.Count == 1, "the connect snapshot"))[0].Status.Safety!.State.Should().Be(RoofSafetyState.Unknown);
+
+        state = RoofSafetyState.Unsafe;
+        _controller.Snapshot = Version(6);
+        _controller.RaiseStatusChanged(Version(6));
+        await _sender.WaitForAsync("a", d => d.Any(m => m.Status.StatusVersion == 6 && m.Status.Safety!.State == RoofSafetyState.Unsafe), "the change, with the conditions then");
+
+        state = RoofSafetyState.Safe;
+        var heartbeat = await _sender.WaitForAsync("a", d => d[^1].Status.Safety!.State == RoofSafetyState.Safe, "a heartbeat with the new conditions");
+        heartbeat[^1].Status.StatusVersion.Should().Be(6, "a change to the conditions alone reaches the clients with the next heartbeat");
+        _controller.Snapshot.Safety.Should().BeNull("the controller's own snapshot is left as it is");
+    }
+
     private async Task<AsyncBroadcaster> StartAsync(
         TimeSpan? heartbeat = null,
         int maxConnections = RoofStatusBroadcaster.DefaultMaxConnections,
-        int maxConnectionsPerKey = RoofStatusBroadcaster.DefaultMaxConnectionsPerKey)
+        int maxConnectionsPerKey = RoofStatusBroadcaster.DefaultMaxConnectionsPerKey,
+        IRoofSafetyService? safety = null)
     {
         var broadcaster = new RoofStatusBroadcaster(
-            _controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey);
+            _controller, _sender, RoofCredentialValidator.ForKeysOnly(_keyStore), TimeProvider.System, _logger, heartbeat ?? NoHeartbeat, maxConnections, maxConnectionsPerKey, safety);
         await broadcaster.StartAsync(CancellationToken.None);
         return new AsyncBroadcaster(broadcaster);
     }

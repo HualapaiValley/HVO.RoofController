@@ -272,7 +272,8 @@ public sealed class RoofCliRoofCommandTests
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         var lines = result.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         lines.Should().HaveCount(2, result.ToString());
-        lines[0].Should().EndWith("Closed; last stop: Stopped by operator");
+        // The controller reports the safety conditions (Unknown: it has no safety source), which end the line.
+        lines[0].Should().EndWith("Closed; last stop: Stopped by operator; safety unknown");
         lines[1].Should().Contain("Opening, commanded to open");
     }
 
