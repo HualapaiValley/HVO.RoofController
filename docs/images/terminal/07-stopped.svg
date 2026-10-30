@@ -129,7 +129,7 @@
 <path d="M999.00,438.00 Q999.00,447.00 994.80,447.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M1007.40,510.00 Q1007.40,519.00 1003.20,519.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<text x="37.20" y="55.50" fill="#98a7bb" textLength="277.20" lengthAdjust="spacingAndGlyphs">HVO roof: http://127.0.0.1:15395/</text>
+<text x="37.20" y="55.50" fill="#98a7bb" textLength="277.20" lengthAdjust="spacingAndGlyphs">HVO roof: http://127.0.0.1:18207/</text>
 <text x="20.40" y="73.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">HVO ROOF</text>
 <text x="104.40" y="73.50" fill="#f7f9fc" font-weight="bold">|</text>
 <text x="129.60" y="73.50" fill="#f7f9fc" textLength="394.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">dotnet-run-smoke (admin, API key) · status live</text>
@@ -139,7 +139,7 @@
 <text x="45.60" y="145.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">ROOF STATE</text>
 <text x="532.80" y="145.50" fill="#3a4a60" textLength="159.60" lengthAdjust="spacingAndGlyphs">CONTROLLER READINGS</text>
 <text x="37.20" y="163.50" fill="#f7f9fc" font-weight="bold" text-decoration="underline">S</text>
-<text x="45.60" y="163.50" fill="#f7f9fc" textLength="243.60" lengthAdjust="spacingAndGlyphs">tatus at 2026-10-19 04:00:39Z</text>
+<text x="45.60" y="163.50" fill="#f7f9fc" textLength="243.60" lengthAdjust="spacingAndGlyphs">tatus at 2026-10-30 19:20:32Z</text>
 <text x="524.40" y="163.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Limits:</text>
 <text x="600.00" y="163.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">open inactive, closed inactive</text>
 <text x="37.20" y="181.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Roof:</text>
@@ -147,16 +147,19 @@
 <text x="524.40" y="181.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs">Drive fault:</text>
 <text x="642.00" y="181.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">inactive</text>
 <text x="37.20" y="199.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Last stop:</text>
-<text x="138.00" y="199.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Stopped by operator, 2026-10-19 04:00:39Z</text>
+<text x="138.00" y="199.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Stopped by operator, 2026-10-30 19:20:32Z</text>
 <text x="524.40" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Inputs:</text>
 <text x="600.00" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">read OK</text>
 <text x="37.20" y="217.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">Fault:</text>
 <text x="104.40" y="217.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">none</text>
 <text x="524.40" y="217.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Relays:</text>
 <text x="600.00" y="217.50" fill="#f7f9fc" textLength="218.40" lengthAdjust="spacingAndGlyphs">register read-back matched</text>
+<text x="37.20" y="235.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Safety:</text>
+<text x="112.80" y="235.50" fill="#f7f9fc" textLength="310.80" lengthAdjust="spacingAndGlyphs">UNKNOWN: No safety sources configured</text>
 <text x="524.40" y="235.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">Controller:</text>
 <text x="633.60" y="235.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">HVO Roof Controller, emulated HAT,</text>
-<text x="633.60" y="253.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">snapshot 6 at 2026-10-19 04:00:39Z</text>
+<text x="112.80" y="253.50" fill="#f7f9fc" textLength="327.60" lengthAdjust="spacingAndGlyphs">(advisory: the safety interlock is off)</text>
+<text x="633.60" y="253.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">snapshot 6 at 2026-10-30 19:20:32Z</text>
 <text x="524.40" y="271.50" fill="#f7f9fc" textLength="445.20" lengthAdjust="spacingAndGlyphs">EMULATED HAT: the controller drives the HAT emulator,</text>
 <text x="524.40" y="289.50" fill="#f7f9fc" textLength="428.40" lengthAdjust="spacingAndGlyphs">not the physical HAT. The observatory roof does not</text>
 <text x="524.40" y="307.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">move.</text>
