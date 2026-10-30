@@ -177,10 +177,14 @@ override. The kiosk's indicator is deliberately small while its home page is red
 | The conditions become Safe; the first judgement after start; Unknown with no source configured | Information |
 | A source cannot be read (once, when it starts failing; the failure's type or the timeout, never its message, which could carry an address) | Warning |
 | A source is read again after failing | Information |
-| Open while not Safe, interlock Off | Information |
+| Open accepted by the controller while not Safe, interlock Off | Information |
 | Open refused by the interlock (Warn without an override, Block) | Information, Warning |
-| `AUDIT safety override: Open by <caller> ...` | Warning |
-| `AUDIT safety override by <caller> refused ...` | Warning |
+| `AUDIT safety override: Open by <caller> accepted ...`, written only once the controller has accepted Open | Warning |
+| An override whose Open the controller then refused (a latched fault, say): it had no effect | Information |
+| `AUDIT safety override by <caller> refused ...` (an override from outside a narrowed `OverrideRole`) | Warning |
+
+The interlock decides before the controller's own checks, but what Open did is logged after them: an override is
+audited only when the controller accepted Open, so the audit never records an override that moved nothing.
 
 ## Testing
 

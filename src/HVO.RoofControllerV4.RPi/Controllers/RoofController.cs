@@ -104,8 +104,19 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
         public async Task<ActionResult<RoofStatusResponse>> DoRoofOpen([FromQuery] bool overrideSafety = false)
         {
-            var refusal = await _safetyInterlock.CheckOpenAsync(User, HttpContext, overrideSafety).ConfigureAwait(false);
-            return RunCommand("open", () => refusal is null ? _roofController.Open() : Result<RoofControllerStatus>.Failure(refusal));
+            var safety = await _safetyInterlock.CheckOpenAsync(User, HttpContext, overrideSafety).ConfigureAwait(false);
+            return RunCommand("open", () =>
+            {
+                if (safety.Refusal is { } refusal)
+                {
+                    return Result<RoofControllerStatus>.Failure(refusal);
+                }
+
+                // An override is audited only once the controller's own checks have accepted Open.
+                var result = _roofController.Open();
+                _safetyInterlock.ReportOutcome(safety, result.IsSuccessful ? null : result.Error);
+                return result;
+            });
         }
 
         /// <summary>

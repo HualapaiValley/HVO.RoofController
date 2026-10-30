@@ -3,8 +3,10 @@ using FluentAssertions;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Common.Safety;
+using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation.Safety;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -241,6 +243,48 @@ public sealed class SafetyApiTests
     }
 
     [TestMethod]
+    public async Task Warn_AnOverride_IsAuditedOnlyWhenTheControllerAcceptsOpen()
+    {
+        var logs = new RecordingLoggerProvider();
+        var host = Host(mode: "Warn", logs: logs);
+        host.RoofService.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Failure(
+            new HVO.RoofControllerV4.RPi.Logic.RoofControllerException(RoofControllerErrorCode.FaultLatched, "A fault is latched (test).")));
+        using var client = host.CreateApiClient(TestApiKeys.Operator);
+
+        var refused = await client.PostAsync($"{RoofPath}/Open?overrideSafety=true", null);
+
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        logs.Entries.Should().NotContain(entry => entry.Message.StartsWith("AUDIT safety override:", StringComparison.Ordinal),
+            "the controller refused Open, so no override took effect");
+        logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Information
+            && entry.Message.Contains("with a safety override was refused by the controller (FaultLatched)", StringComparison.Ordinal));
+
+        host.RoofService.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
+        var opened = await client.PostAsync($"{RoofPath}/Open?overrideSafety=true", null);
+
+        opened.StatusCode.Should().Be(HttpStatusCode.OK);
+        logs.Entries.Where(entry => entry.Message.StartsWith("AUDIT safety override:", StringComparison.Ordinal))
+            .Should().ContainSingle().Which.Level.Should().Be(LogLevel.Warning);
+    }
+
+    [TestMethod]
+    public async Task Off_AnOpenWhileNotSafe_IsLoggedOnlyWhenTheControllerAcceptsIt()
+    {
+        var logs = new RecordingLoggerProvider();
+        var host = Host(logs: logs);
+        host.RoofService.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Failure(
+            new HVO.RoofControllerV4.RPi.Logic.RoofControllerException(RoofControllerErrorCode.FaultLatched, "A fault is latched (test).")));
+        using var client = host.CreateApiClient(TestApiKeys.Operator);
+
+        (await client.PostAsync($"{RoofPath}/Open", null)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        logs.Entries.Should().NotContain(entry => entry.Message.Contains("interlock Off, advisory only", StringComparison.Ordinal));
+
+        host.RoofService.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
+        (await client.PostAsync($"{RoofPath}/Open", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        logs.Entries.Should().ContainSingle(entry => entry.Message.Contains("interlock Off, advisory only", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public async Task OverrideSafety_ThatIsNotABoolean_IsABadRequest()
     {
         var host = Host(mode: "Warn");
@@ -266,7 +310,8 @@ public sealed class SafetyApiTests
         string? mode = null,
         string? overrideRole = null,
         ITelescopeParkSource[]? telescopes = null,
-        IWeatherSafetySource[]? weather = null)
+        IWeatherSafetySource[]? weather = null,
+        RecordingLoggerProvider? logs = null)
     {
         var settings = new Dictionary<string, string?>();
         if (mode is not null)
@@ -289,6 +334,11 @@ public sealed class SafetyApiTests
             foreach (var source in weather ?? [])
             {
                 services.AddSingleton(source);
+            }
+
+            if (logs is not null)
+            {
+                services.AddSingleton<ILoggerProvider>(logs);
             }
         });
         return _host;
