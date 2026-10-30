@@ -23,7 +23,7 @@ always has.
 - [The log](#the-log)
 - [Testing](#testing)
 - [Future source adapters](#future-source-adapters)
-- [Open questions](#open-questions)
+- [Decisions and open questions](#decisions-and-open-questions)
 
 ## What it reports
 
@@ -47,7 +47,7 @@ Unknown; otherwise **Safe**. Unknown is never read as safe.
 | `sources[]` | Each source: `name`, `kind` (`TelescopePark` or `Weather`), `state`, `reason`, `detail` (extra words from the source, at most 200 characters), `lastReadingUtc`, `isStale`, `maxReadingAgeSeconds`. |
 | `stateSinceUtc` | When `state` last changed. |
 | `interlockMode` | `Off`, `Warn` or `Block` ([The Open interlock](#the-open-interlock)). |
-| `overrideRole` | In Warn mode, the role an override needs (`RoofAdmin` or `RoofOperator`); null otherwise. |
+| `overrideRole` | In Warn mode, the role an override needs: `RoofOperator` (anyone who may open, the default) or `RoofAdmin`; null otherwise. |
 
 The reasons are written once, by the controller, and every client shows them as they are, for example:
 
@@ -110,7 +110,7 @@ any mode. A repeated Open while the roof is opening is checked like any other Op
 | Mode | Safe | Unsafe or Unknown |
 |---|---|---|
 | `Off` (default) | Open goes ahead. | Open goes ahead, as without the service; the controller logs that it was not safe. |
-| `Warn` | Open goes ahead. | Refused, 409 `SafetyOverrideRequired`, unless the request carries `overrideSafety=true` from a caller with the override role (`OverrideRole`, Admin by default); the override is audit-logged (`AUDIT safety override`). An override from a caller without the role is refused, 409 `SafetyInterlockActive`, and logged. |
+| `Warn` | Open goes ahead. | Refused, 409 `SafetyOverrideRequired`, unless the request carries `overrideSafety=true`. Anyone who may open the roof (an operator or an admin) may override; the override is audit-logged (`AUDIT safety override`). `OverrideRole: Admin` narrows overrides to admins, and an override from anyone else is then refused, 409 `SafetyInterlockActive`, and logged. |
 | `Block` | Open goes ahead. | Refused, 409 `SafetyInterlockActive`. No override. |
 
 ```text
@@ -122,7 +122,13 @@ ProblemDetails like every other: `code`, a detail with the reasons, and `roofSta
 configured the conditions stay Unknown, so Warn always needs an override and Block always refuses Open; the controller
 warns of this at start.
 
-The override role is checked with the role's policy, so an admin's personal key needs its configure scope as well.
+Warn is the owner's chosen policy ([Decisions](#decisions-and-open-questions)): the safety check warns, and the person
+opening decides. Unknown counts as Unsafe, so it asks for the override too. The default mode stays Off until the web
+UI, the kiosk and the terminal interface can ask for the override: in Warn mode they show the refusal and cannot yet
+send the override, and with no source configured every Open would ask for one.
+
+With `OverrideRole: Admin`, the role is checked with its policy, so an admin's personal key needs its configure scope as
+well.
 
 The clients follow the same rule (`RoofCommandRules.IsOpenBlockedBySafety`): in Block mode, while the conditions are not
 Safe, Open is not offered, with the reason "the safety interlock blocks it". In Warn mode Open is offered, and the
@@ -137,7 +143,7 @@ change it. A value the controller cannot use stops it at start.
 | Setting | Default | Range | Meaning |
 |---|---|---|---|
 | `InterlockMode` | `Off` | `Off`, `Warn`, `Block` | [The Open interlock](#the-open-interlock). |
-| `OverrideRole` | `Admin` | `Admin`, `Operator` | Who may override in Warn mode. |
+| `OverrideRole` | `Operator` | `Operator`, `Admin` | Who may override in Warn mode: anyone who may open the roof, or only admins. |
 | `PollInterval` | `00:00:10` | 1 s to 10 min | How often each source is read. |
 | `ReadTimeout` | `00:00:05` | 0.1 s to 1 min | How long one read may take. |
 | `MaxReadingAge` | `00:01:00` | more than `PollInterval` plus `ReadTimeout`, at most 1 h | How old a reading may be and still count, for a source without its own. |
@@ -215,19 +221,28 @@ repository. Planned:
   own idea of a device.
 - **A park sensor on a HAT input** (#32) or a camera's view of the mounts (#76) could become sources of the same kind.
 
-## Open questions
+## Decisions and open questions
 
-These are the owner's decisions; the defaults above are the conservative choices made meanwhile.
+Decided by the owner (#207):
 
-1. **The interlock's mode.** Off (advisory) is the default, so Open is unchanged. Should the observatory run Warn
-   (an override prompt) or Block?
-2. **Who may override in Warn mode.** Admin by default; Operator is a setting. Should an override need a reason
-   typed in, and should the web UI, the kiosk and the terminal interface prompt for it?
-3. **Should Unknown be treated like Unsafe?** It is now, in both Warn and Block: a source that cannot be read is
-   not evidence of safety. A site with a flaky weather link may want Unknown to only warn.
-4. **Should an unparked telescope also gate Close** (the roof could strike a telescope)? Close is never gated now:
-   closing is the safe direction for weather, and blocking it could leave the roof open in rain.
-5. **Should unsafe weather close the roof automatically?** Out of scope: the service never moves the roof.
+1. **The safety check is a warning only.** The policy is Warn: while the conditions are not Safe, Open asks for an
+   override, and **anyone who may open the roof (an operator or an admin) may override it**; every override is
+   audit-logged. `OverrideRole` defaults to `Operator`; `Admin` remains as a narrower setting. The default mode stays
+   `Off` until the web UI, the kiosk and the terminal interface prompt for the override (see
+   [The Open interlock](#the-open-interlock)).
+2. **Unknown is treated the same as Unsafe**, in Warn and in Block: a source that cannot be read is not evidence of
+   safety.
+
+Kept as they are for now:
+
+3. **Close is never gated**, even with a telescope not parked: closing is the safe direction for weather, and
+   blocking it could leave the roof open in rain.
+4. **Unsafe weather does not close the roof automatically**: the service never moves the roof.
+
+Still open:
+
+5. **When to turn Warn on by default**, and whether an override should need a reason typed in. The override prompts in
+   the web UI, the kiosk (#208) and the terminal interface come first.
 6. **Must every kind of source be present to be Safe?** Now the conditions cover the configured sources only: with a
    telescope source and no weather source, a parked telescope is Safe.
 7. **The settings in the catalogue.** `RoofSafety` is configuration only for now; changing the mode through the API

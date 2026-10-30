@@ -301,7 +301,7 @@ public static partial class RoofCli
             {
                 overrideSafety = new Option<bool>("--override-safety")
                 {
-                    Description = "Open even though the safety conditions (telescope park, weather) are not safe, where the controller's safety interlock is in Warn mode and you have its override role. The controller logs the override."
+                    Description = "Open even though the safety conditions (telescope park, weather) are not safe, where the controller's safety interlock is in Warn mode. Anyone who may open the roof may override, unless the controller allows only admins. The controller logs the override."
                 };
                 command.Options.Add(overrideSafety);
             }

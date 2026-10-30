@@ -6,11 +6,11 @@ namespace HVO.RoofControllerV4.RPi.Safety;
 /// <summary>Who may override the safety interlock in <see cref="RoofSafetyInterlockMode.Warn"/>.</summary>
 public enum RoofSafetyOverrideRole
 {
-    /// <summary>Only a caller with the Admin role (and, for a scoped key, the configure scope).</summary>
-    Admin = 0,
+    /// <summary>Anyone who may open the roof (the Operator role, which admins hold too): the default.</summary>
+    Operator = 0,
 
-    /// <summary>Any caller who may open the roof (the Operator role).</summary>
-    Operator = 1
+    /// <summary>Only a caller with the Admin role (and, for a scoped key, the configure scope): a narrower choice.</summary>
+    Admin = 1
 }
 
 /// <summary>
@@ -30,8 +30,11 @@ public sealed class RoofSafetyOptions
     /// <summary>What Open does with the safety state. Off (the default) only reports it.</summary>
     public RoofSafetyInterlockMode InterlockMode { get; set; } = RoofSafetyInterlockMode.Off;
 
-    /// <summary>Who may override in <see cref="RoofSafetyInterlockMode.Warn"/>. Admin by default.</summary>
-    public RoofSafetyOverrideRole OverrideRole { get; set; } = RoofSafetyOverrideRole.Admin;
+    /// <summary>
+    /// Who may override in <see cref="RoofSafetyInterlockMode.Warn"/>: by default anyone who may open the roof, since the
+    /// owner's policy is that the safety check warns and does not decide (#207).
+    /// </summary>
+    public RoofSafetyOverrideRole OverrideRole { get; set; } = RoofSafetyOverrideRole.Operator;
 
     /// <summary>How often each source is read (1 s to 10 min).</summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(10);
@@ -61,7 +64,7 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
 
         if (!Enum.IsDefined(options.OverrideRole))
         {
-            failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.OverrideRole)} must be Admin or Operator.");
+            failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.OverrideRole)} must be Operator or Admin.");
         }
 
         if (options.PollInterval < RoofSafetyOptions.MinPollInterval || options.PollInterval > RoofSafetyOptions.MaxPollInterval)

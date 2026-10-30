@@ -222,10 +222,6 @@ public static class RoofStatusText
 
     private static string DescribeFailures(string text, int count) => count > 0 ? $"{text} ({count} in a row)" : text;
 
-    private static string DescribeOverrideRole(string? role) => role switch
-    {
-        RoofControllerApiContract.AdminRole => " from an admin",
-        RoofControllerApiContract.OperatorRole => " from an operator",
-        _ => string.Empty
-    };
+    // Anyone who may open may override by default, so only the narrower Admin choice is named.
+    private static string DescribeOverrideRole(string? role) => role == RoofControllerApiContract.AdminRole ? " from an admin" : string.Empty;
 }

@@ -87,7 +87,7 @@ public sealed class RoofSafetyClientTests
     [DataRow(RoofSafetyState.Safe, RoofSafetyInterlockMode.Block, null, "safe (safety interlock: block)")]
     [DataRow(RoofSafetyState.Unsafe, RoofSafetyInterlockMode.Off, null, "UNSAFE: Telescope 'Main' is not parked; Weather monitor 'Cloud' reports unsafe weather (advisory: the safety interlock is off)")]
     [DataRow(RoofSafetyState.Unsafe, RoofSafetyInterlockMode.Warn, RoofControllerApiContract.AdminRole, "UNSAFE: Telescope 'Main' is not parked; Weather monitor 'Cloud' reports unsafe weather (Open needs a safety override from an admin)")]
-    [DataRow(RoofSafetyState.Unknown, RoofSafetyInterlockMode.Warn, RoofControllerApiContract.OperatorRole, "UNKNOWN: Telescope 'Main' is not parked; Weather monitor 'Cloud' reports unsafe weather (Open needs a safety override from an operator)")]
+    [DataRow(RoofSafetyState.Unknown, RoofSafetyInterlockMode.Warn, RoofControllerApiContract.OperatorRole, "UNKNOWN: Telescope 'Main' is not parked; Weather monitor 'Cloud' reports unsafe weather (Open needs a safety override)")]
     [DataRow(RoofSafetyState.Unknown, RoofSafetyInterlockMode.Block, null, "UNKNOWN: Telescope 'Main' is not parked; Weather monitor 'Cloud' reports unsafe weather (Open blocked by the safety interlock)")]
     public void DescribeSafety_SaysTheState_WhyNotSafe_AndWhatOpenDoes(RoofSafetyState state, RoofSafetyInterlockMode mode, string? role, string expected)
     {

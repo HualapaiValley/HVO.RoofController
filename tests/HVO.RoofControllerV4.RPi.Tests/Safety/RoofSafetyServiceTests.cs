@@ -383,14 +383,14 @@ public sealed class RoofSafetyServiceTests
         var options = new TestOptionsMonitor<RoofSafetyOptions>(Options(o => o.InterlockMode = RoofSafetyInterlockMode.Warn));
         using var service = Create(options: options.CurrentValue, monitor: options);
 
-        service.GetCurrent().Should().BeEquivalentTo(new { InterlockMode = RoofSafetyInterlockMode.Warn, OverrideRole = RoofControllerApiContract.AdminRole });
+        service.GetCurrent().Should().BeEquivalentTo(new { InterlockMode = RoofSafetyInterlockMode.Warn, OverrideRole = RoofControllerApiContract.OperatorRole });
 
         options.Set(Options(o =>
         {
             o.InterlockMode = RoofSafetyInterlockMode.Warn;
-            o.OverrideRole = RoofSafetyOverrideRole.Operator;
+            o.OverrideRole = RoofSafetyOverrideRole.Admin;
         }));
-        service.GetCurrent().OverrideRole.Should().Be(RoofControllerApiContract.OperatorRole);
+        service.GetCurrent().OverrideRole.Should().Be(RoofControllerApiContract.AdminRole);
 
         options.Set(Options(o => o.InterlockMode = RoofSafetyInterlockMode.Block));
         service.GetCurrent().Should().BeEquivalentTo(new { InterlockMode = RoofSafetyInterlockMode.Block, OverrideRole = (string?)null });
@@ -437,7 +437,8 @@ public sealed class RoofSafetyServiceTests
 
         new RoofSafetyOptionsValidator().Validate(null, defaults).Succeeded.Should().BeTrue();
         defaults.InterlockMode.Should().Be(RoofSafetyInterlockMode.Off);
-        defaults.OverrideRole.Should().Be(RoofSafetyOverrideRole.Admin);
+        defaults.OverrideRole.Should().Be(RoofSafetyOverrideRole.Operator, "anyone who may open may override: the safety check warns, it does not decide");
+        default(RoofSafetyOverrideRole).Should().Be(RoofSafetyOverrideRole.Operator);
     }
 
     [TestMethod]

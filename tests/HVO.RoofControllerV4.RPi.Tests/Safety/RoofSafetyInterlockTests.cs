@@ -12,7 +12,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Safety;
 
 /// <summary>
 /// The Open interlock in each mode against each safety state: Off only logs, Warn refuses unless an override comes from
-/// the override role (audit-logged), Block refuses with no override. A Safe state is never refused.
+/// the override role (by default anyone who may open; audit-logged), Block refuses with no override. A Safe state is
+/// never refused, and Unknown is refused as Unsafe is.
 /// </summary>
 [TestClass]
 public sealed class RoofSafetyInterlockTests
@@ -62,16 +63,30 @@ public sealed class RoofSafetyInterlockTests
         refusal!.Code.Should().Be(RoofControllerErrorCode.SafetyOverrideRequired);
         refusal.Message.Should().Be(
             $"The safety conditions are {state.ToString().ToLowerInvariant()} (reason one; reason two). To open anyway, send Open again with overrideSafety=true; " +
-            "an admin may, and the override is logged. Close and Stop are not affected.");
+            "anyone who can open the roof may override, and the override is logged. Close and Stop are not affected.");
     }
 
     [TestMethod]
-    public async Task Warn_AnOverrideFromAnAdmin_LetsOpenThrough_AndIsAudited()
+    [DataRow(RoofSafetyState.Unsafe)]
+    [DataRow(RoofSafetyState.Unknown)]
+    public async Task Warn_ByDefault_TakesTheOverrideOfAnyoneWhoMayOpen(RoofSafetyState state)
+    {
+        _state = state;
+
+        var refusal = await Create(RoofSafetyInterlockMode.Warn).CheckOpenAsync(_operator, null, overrideRequested: true);
+
+        refusal.Should().BeNull("an operator, who may open, may override; Unknown is overridden as Unsafe is");
+        _logger.Contains(LogLevel.Warning, $"AUDIT safety override: Open by night-operator while the conditions are {state} (interlock Warn): reason one; reason two").Should().BeTrue();
+        _authorization.VerifyNoOtherCalls();
+    }
+
+    [TestMethod]
+    public async Task Warn_NarrowedToAdmins_TakesAnAdminsOverride_AndAuditsIt()
     {
         AuthorizeAdmin(true);
         var request = new object();
 
-        var refusal = await Create(RoofSafetyInterlockMode.Warn).CheckOpenAsync(_operator, request, overrideRequested: true);
+        var refusal = await Create(RoofSafetyInterlockMode.Warn, RoofSafetyOverrideRole.Admin).CheckOpenAsync(_operator, request, overrideRequested: true);
 
         refusal.Should().BeNull();
         _logger.Contains(LogLevel.Warning, "AUDIT safety override: Open by night-operator while the conditions are Unsafe (interlock Warn): reason one; reason two").Should().BeTrue();
@@ -79,25 +94,15 @@ public sealed class RoofSafetyInterlockTests
     }
 
     [TestMethod]
-    public async Task Warn_AnOverrideFromAnOperator_IsRefused_WhenTheOverrideNeedsAnAdmin_AndTheAttemptIsAudited()
+    public async Task Warn_NarrowedToAdmins_RefusesAnOperatorsOverride_AndAuditsTheAttempt()
     {
         AuthorizeAdmin(false);
 
-        var refusal = await Create(RoofSafetyInterlockMode.Warn).CheckOpenAsync(_operator, null, overrideRequested: true);
+        var refusal = await Create(RoofSafetyInterlockMode.Warn, RoofSafetyOverrideRole.Admin).CheckOpenAsync(_operator, null, overrideRequested: true);
 
         refusal!.Code.Should().Be(RoofControllerErrorCode.SafetyInterlockActive);
         refusal.Message.Should().Contain("only an admin may override them");
         _logger.Contains(LogLevel.Warning, "AUDIT safety override by night-operator refused: the override needs the Admin role").Should().BeTrue();
-    }
-
-    [TestMethod]
-    public async Task Warn_WithTheOperatorOverrideRole_TakesAnOperatorsOverride()
-    {
-        var refusal = await Create(RoofSafetyInterlockMode.Warn, RoofSafetyOverrideRole.Operator).CheckOpenAsync(_operator, null, overrideRequested: true);
-
-        refusal.Should().BeNull();
-        _logger.Contains(LogLevel.Warning, "AUDIT safety override: Open by night-operator").Should().BeTrue();
-        _authorization.VerifyNoOtherCalls();
     }
 
     [TestMethod]
@@ -119,7 +124,7 @@ public sealed class RoofSafetyInterlockTests
         _authorization.VerifyNoOtherCalls();
     }
 
-    private RoofSafetyInterlock Create(RoofSafetyInterlockMode mode, RoofSafetyOverrideRole role = RoofSafetyOverrideRole.Admin)
+    private RoofSafetyInterlock Create(RoofSafetyInterlockMode mode, RoofSafetyOverrideRole role = RoofSafetyOverrideRole.Operator)
     {
         // The mode and the override role as the safety service reports them.
         var safety = new Mock<IRoofSafetyService>();

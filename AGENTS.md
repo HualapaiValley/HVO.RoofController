@@ -109,10 +109,11 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
 - Safety conditions (`RoofSafety:InterlockMode`, default `Off`): the safety service reports Safe, Unsafe or Unknown
   (no source, a source not read, failing or older than its `MaxReadingAge`) from telescope-park and weather sources,
-  on every status and at `GET /api/v4.0/Safety`. `Warn` refuses Open (`SafetyOverrideRequired`) unless
-  `overrideSafety=true` comes from `OverrideRole` (Admin by default; audit-logged); `Block` refuses Open
-  (`SafetyInterlockActive`). Only Open is checked: never Close or Stop, and the service never moves the roof. No real
-  source exists yet ([docs/safety-service.md](docs/safety-service.md)).
+  on every status and at `GET /api/v4.0/Safety`. `Warn`, the owner's chosen policy, refuses Open
+  (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`, which anyone who may open may send
+  (`OverrideRole`, default `Operator`; audit-logged); `Block` refuses Open (`SafetyInterlockActive`). Unknown counts as
+  Unsafe. Only Open is checked: never Close or Stop, and the service never moves the roof. No real source exists yet
+  ([docs/safety-service.md](docs/safety-service.md)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

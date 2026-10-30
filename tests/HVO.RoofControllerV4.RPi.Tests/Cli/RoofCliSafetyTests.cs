@@ -81,7 +81,7 @@ public sealed class RoofCliSafetyTests
         var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
         using var host = RoofClientApiTests.CreateHost(
             configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount),
-            settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = "Warn", ["RoofSafety:OverrideRole"] = "Operator" });
+            settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = "Warn" });
         using var rig = new CliRig(host);
         rig.UseApiKey(TestApiKeys.Operator);
         using (var client = CreateClient(host, new HVO.RoofControllerV4.Client.RoofApiKeyCredential(TestApiKeys.Viewer)))

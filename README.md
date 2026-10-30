@@ -116,8 +116,9 @@ upgrades and backups, and troubleshooting.
   unless `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration.
 - **Safety conditions** (telescope park and weather; `RoofSafety:InterlockMode`, `Off` by
   default): the controller reports Safe, Unsafe or Unknown with the reasons on every status
-  and at `GET /api/v4.0/Safety`. Off only reports and logs; `Warn` refuses Open unless an
-  admin (by default) sends an audit-logged override; `Block` refuses Open. Close and Stop are
+  and at `GET /api/v4.0/Safety`. Off only reports and logs; `Warn` (the chosen policy: the
+  check warns) refuses Open unless the request carries an override, which anyone who may open
+  the roof may send and which is audit-logged; `Block` refuses Open. Unknown counts as Unsafe. Close and Stop are
   never refused for the conditions, and the conditions never move the roof. No real source
   (Alpaca mount or weather monitor) exists yet, so they are Unknown
   ([docs/safety-service.md](docs/safety-service.md)).
@@ -257,7 +258,7 @@ Configure access only when a specific development task needs it:
 | [Roof controller hardware overview](docs/projects/roof-controller-v4-rpi/hardware-overview.md) | Canonical SMVector, relay, limit-switch, monitoring, and safety wiring reference |
 | [Commissioning](docs/commissioning.md) | Checks C1-C15 as automated scenarios against the emulated plant, the installation assumptions each depends on, and the settings file on the Pi (hand edits, backup) |
 | [Security](docs/security.md) | API keys, roles, people and sessions, remote settings and restart, HTTPS and the web UI's sign-in |
-| [Safety conditions](docs/safety-service.md) | The safety service: telescope park and weather sources, Safe/Unsafe/Unknown with reasons and staleness, the Open interlock and its override, where it shows, and the open questions |
+| [Safety conditions](docs/safety-service.md) | The safety service: telescope park and weather sources, Safe/Unsafe/Unknown with reasons and staleness, the Open interlock and its override, where it shows, and the decisions and open questions |
 | [Web UI](docs/web.md) | The browser interface: signing in, the pages, Stop, its settings and screenshots |
 | [Kiosk](docs/kiosk.md) | The touchscreen at the roof: the screens, unlocking with a PIN, Stop, installing it on the Pi, its settings and screenshots |
 | [Mac app](docs/mac.md) | The kiosk's screens in a window on a Mac: signing in with a password, Stop, installing it and its device key, its settings, building and signing it on Linux, and screenshots |

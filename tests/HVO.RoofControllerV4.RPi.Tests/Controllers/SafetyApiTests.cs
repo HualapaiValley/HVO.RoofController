@@ -181,14 +181,14 @@ public sealed class SafetyApiTests
         var problem = await ApiJson.ReadElementAsync(response);
         problem.GetProperty("code").GetString().Should().Be(nameof(RoofControllerErrorCode.SafetyOverrideRequired));
         problem.GetProperty("detail").GetString().Should().Contain("Telescope 'Main' is not parked").And.Contain("overrideSafety=true");
-        problem.GetProperty("roofStatus").GetProperty("safety").GetProperty("overrideRole").GetString().Should().Be(RoofControllerApiContract.AdminRole);
+        problem.GetProperty("roofStatus").GetProperty("safety").GetProperty("overrideRole").GetString().Should().Be(RoofControllerApiContract.OperatorRole, "anyone who may open may override by default");
         host.RoofService.Verify(s => s.Open(), Times.Never());
     }
 
     [TestMethod]
-    public async Task Warn_AnAdminsOverride_OpensTheRoof()
+    public async Task Warn_NarrowedToAdmins_AnAdminsOverride_OpensTheRoof()
     {
-        var host = Host(mode: "Warn", telescopes: [new SimulatedTelescopeParkSource("Main", isParked: false)]);
+        var host = Host(mode: "Warn", overrideRole: "Admin", telescopes: [new SimulatedTelescopeParkSource("Main", isParked: false)]);
         using var client = host.CreateApiClient(TestApiKeys.Admin);
         await WaitForAsync(client, RoofSafetyState.Unsafe);
 
@@ -199,9 +199,9 @@ public sealed class SafetyApiTests
     }
 
     [TestMethod]
-    public async Task Warn_AnOperatorsOverride_IsRefused_WhileTheOverrideNeedsAnAdmin()
+    public async Task Warn_NarrowedToAdmins_AnOperatorsOverride_IsRefused()
     {
-        var host = Host(mode: "Warn", telescopes: [new SimulatedTelescopeParkSource("Main", isParked: false)]);
+        var host = Host(mode: "Warn", overrideRole: "Admin", telescopes: [new SimulatedTelescopeParkSource("Main", isParked: false)]);
         using var client = host.CreateApiClient(TestApiKeys.Operator);
         await WaitForAsync(client, RoofSafetyState.Unsafe);
 
@@ -213,15 +213,30 @@ public sealed class SafetyApiTests
     }
 
     [TestMethod]
-    public async Task Warn_WithTheOperatorOverrideRole_AnOperatorsOverride_OpensTheRoof()
+    public async Task Warn_ByDefault_AnOperatorsOverride_OpensTheRoof()
     {
-        var host = Host(mode: "Warn", overrideRole: "Operator", telescopes: [new SimulatedTelescopeParkSource("Main", isParked: false)]);
+        var host = Host(mode: "Warn", telescopes: [new SimulatedTelescopeParkSource("Main", isParked: false)]);
         using var client = host.CreateApiClient(TestApiKeys.Operator);
         await WaitForAsync(client, RoofSafetyState.Unsafe);
 
         var response = await client.PostAsync($"{RoofPath}/Open?overrideSafety=true", null);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.RoofService.Verify(s => s.Open(), Times.Once());
+    }
+
+    [TestMethod]
+    public async Task Warn_Unknown_IsTreatedAsUnsafe_AndAnOperatorsOverride_OpensTheRoof()
+    {
+        var host = Host(mode: "Warn");
+        using var client = host.CreateApiClient(TestApiKeys.Operator);
+
+        var refused = await client.PostAsync($"{RoofPath}/Open", null);
+        var opened = await client.PostAsync($"{RoofPath}/Open?overrideSafety=true", null);
+
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict, "with no source the conditions are Unknown, which counts as Unsafe");
+        (await ApiJson.ReadElementAsync(refused)).GetProperty("code").GetString().Should().Be(nameof(RoofControllerErrorCode.SafetyOverrideRequired));
+        opened.StatusCode.Should().Be(HttpStatusCode.OK);
         host.RoofService.Verify(s => s.Open(), Times.Once());
     }
 

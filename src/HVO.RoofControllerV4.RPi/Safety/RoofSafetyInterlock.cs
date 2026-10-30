@@ -63,7 +63,7 @@ public sealed class RoofSafetyInterlock
                     return new RoofControllerException(
                         RoofControllerErrorCode.SafetyOverrideRequired,
                         $"The safety conditions are {state} ({reasons}). To open anyway, send Open again with overrideSafety=true; " +
-                        $"{DescribeOverrideRole(overrideRole)} may, and the override is logged. Close and Stop are not affected.");
+                        $"{DescribeOverrideRole(overrideRole)} may override, and the override is logged. Close and Stop are not affected.");
                 }
 
                 if (!await MayOverrideAsync(user, resource, overrideRole).ConfigureAwait(false))
@@ -73,7 +73,7 @@ public sealed class RoofSafetyInterlock
                         caller, overrideRole, safety.State, reasons);
                     return new RoofControllerException(
                         RoofControllerErrorCode.SafetyInterlockActive,
-                        $"The safety conditions are {state} ({reasons}), and only {DescribeOverrideRole(overrideRole)} may override them. Close and Stop are not affected.");
+                        $"The safety conditions are {state} ({reasons}), and {DescribeOverrideRole(overrideRole)} may override them. Close and Stop are not affected.");
                 }
 
                 _logger.LogWarning(
@@ -111,5 +111,5 @@ public sealed class RoofSafetyInterlock
     }
 
     private static string DescribeOverrideRole(RoofSafetyOverrideRole role)
-        => role == RoofSafetyOverrideRole.Operator ? "an operator" : "an admin";
+        => role == RoofSafetyOverrideRole.Operator ? "anyone who can open the roof" : "only an admin";
 }

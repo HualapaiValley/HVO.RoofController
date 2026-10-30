@@ -38,8 +38,8 @@ public enum RoofSafetyInterlockMode
 
     /// <summary>
     /// Open is refused (<see cref="RoofControllerErrorCode.SafetyOverrideRequired"/>) unless the state is
-    /// <see cref="RoofSafetyState.Safe"/> or the request carries an override from a caller allowed to give one. Every
-    /// override is audit-logged.
+    /// <see cref="RoofSafetyState.Safe"/> or the request carries an override, which anyone who may open can give (unless
+    /// the controller narrows it to admins). Every override is audit-logged. The owner's chosen policy (#207).
     /// </summary>
     Warn = 1,
 
@@ -109,8 +109,9 @@ public sealed record RoofSafetyStatus
     public RoofSafetyInterlockMode InterlockMode { get; init; }
 
     /// <summary>
-    /// The role an Open override needs in <see cref="RoofSafetyInterlockMode.Warn"/> (<see cref="RoofControllerApiContract.AdminRole"/>
-    /// or <see cref="RoofControllerApiContract.OperatorRole"/>); null in the other modes, which take no override.
+    /// The role an Open override needs in <see cref="RoofSafetyInterlockMode.Warn"/>: <see cref="RoofControllerApiContract.OperatorRole"/>
+    /// (anyone who may open, the default) or <see cref="RoofControllerApiContract.AdminRole"/>; null in the other modes,
+    /// which take no override.
     /// </summary>
     public string? OverrideRole { get; init; }
 }

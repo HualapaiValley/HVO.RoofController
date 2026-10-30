@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `GET /api/v4.0/Safety` (Viewer) and in the client library (`GetSafetyAsync`), and every change is logged. No real
   source exists yet, so the conditions are Unknown ("No safety sources configured"); simulated sources test it.
 - An optional Open interlock on the safety conditions, `RoofSafety:InterlockMode`: `Off` (the default: Open is
-  unchanged, and an Open while not Safe is logged), `Warn` (Open refused with `SafetyOverrideRequired` unless
-  `overrideSafety=true` comes from `RoofSafety:OverrideRole`, Admin by default; overrides are audit-logged) or `Block`
-  (refused with `SafetyInterlockActive`). Close and Stop are never refused for the conditions
+  unchanged, and an Open while not Safe is logged), `Warn` (the chosen policy: Open refused with
+  `SafetyOverrideRequired` unless the request carries `overrideSafety=true`, which anyone who may open the roof may
+  send, `RoofSafety:OverrideRole` `Operator` by default; overrides are audit-logged) or `Block` (refused with
+  `SafetyInterlockActive`). Unknown counts as Unsafe. Close and Stop are never refused for the conditions
   ([docs/safety-service.md](docs/safety-service.md)).
 - Safety indicators: a badge on the web UI's roof page, a Safety row in every client's status (`hvo-roof status`, the
   terminal interface, the web UI, the kiosk's Readings), the state on `hvo-roof status --watch` lines, a chip on the
