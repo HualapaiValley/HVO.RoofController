@@ -57,11 +57,27 @@ public static class RoofHistoryText
         return entry.OnBehalfOf is { Length: > 0 } person ? $"{who} for {person}" : who;
     }
 
-    /// <summary>"Accepted", or "Refused" with the controller's code: "Refused [FaultLatched]".</summary>
+    /// <summary>
+    /// "Accepted", or "Refused" with the controller's code: "Refused [FaultLatched]". An Open accepted while the safety
+    /// conditions were not Safe says so: "Accepted (safety override, conditions unsafe)", or "Accepted (conditions unsafe)"
+    /// when the safety interlock only advises.
+    /// </summary>
     public static string DescribeResult(RoofCommandHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return entry.Accepted ? "Accepted" : entry.Code is { Length: > 0 } code ? $"Refused [{code}]" : "Refused";
+        if (!entry.Accepted)
+        {
+            return entry.Code is { Length: > 0 } code ? $"Refused [{code}]" : "Refused";
+        }
+
+        var conditions = entry.SafetyState is { Length: > 0 } state ? $"conditions {state.ToLowerInvariant()}" : null;
+        return (entry.SafetyOverride == true, conditions) switch
+        {
+            (true, { } notSafe) => $"Accepted (safety override, {notSafe})",
+            (true, null) => "Accepted (safety override)",
+            (false, { } notSafe) => $"Accepted ({notSafe})",
+            _ => "Accepted"
+        };
     }
 
     /// <summary>The roof after the command: its position, and a latched fault; "unknown" when the controller had no status.</summary>

@@ -412,8 +412,10 @@ the name of the person or key as it was then, the identifier it is matched by (`
 (`Person`, `ApiKey` or `Anonymous`; a person's own key counts as the person), how they signed in, the kiosk for a PIN
 session, the person an API key said it acted for (`X-On-Behalf-Of`, shown, never matched), the address and the program
 the request's `User-Agent` names (not verified; the client library sends `<program>/<version>`), the result with the
-refusal's code and explanation, and the roof's status, stop reason and fault latch afterwards. A request refused before
-it reaches the roof (no credential, or a role too low) is not a command and is not recorded.
+refusal's code and explanation, and the roof's status, stop reason and fault latch afterwards. An Open sent while the
+observatory's safety conditions are not Safe also has them (`safetyState`), and `safetyOverride` when the controller
+accepted it only because the caller overrode them; an Open the safety interlock refused is a refusal with its code. A
+request refused before it reaches the roof (no credential, or a role too low) is not a command and is not recorded.
 
 - **Identifiers, never names.** The history matches who sent a command by an identifier, never by a name alone:
   `principal:<id>` for a person the identity store gives a principal ID (schema 2 and later, and every Linux principal),

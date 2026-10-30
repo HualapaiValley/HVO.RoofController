@@ -398,6 +398,36 @@ public sealed class RoofCommandHistoryTests
     }
 
     [TestMethod]
+    public void AnOpenWhileTheSafetyConditionsAreNotSafe_SaysSo_AndAnOverrideOnlyWhenTheOpenWasAccepted()
+    {
+        using var history = Create(new ManualTimeProvider(Start));
+        var user = Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.AdminRole);
+        var refusal = new ProblemDetails { Detail = "A fault is latched." };
+        refusal.Extensions[RoofControllerApiContract.ProblemCodeExtension] = nameof(RoofControllerErrorCode.FaultLatched);
+
+        var overridden = Context(user, IPAddress.Loopback, null);
+        RoofCommandHistory.NoteSafety(overridden, "Unsafe", overridden: true);
+        var refusedAnyway = Context(user, IPAddress.Loopback, null);
+        RoofCommandHistory.NoteSafety(refusedAnyway, "Unsafe", overridden: true);
+        var advisory = Context(user, IPAddress.Loopback, null);
+        RoofCommandHistory.NoteSafety(advisory, "Unknown", overridden: false);
+        var safe = Context(user, IPAddress.Loopback, null);
+        RoofCommandHistory.NoteSafety(safe, null, overridden: false);
+
+        var accepted = history.Describe(overridden, RoofHistoryCommand.Open, Snapshot(RoofControllerStatus.Opening), null);
+        accepted.SafetyState.Should().Be("Unsafe");
+        accepted.SafetyOverride.Should().BeTrue();
+        var refused = history.Describe(refusedAnyway, RoofHistoryCommand.Open, null, refusal);
+        refused.SafetyState.Should().Be("Unsafe");
+        refused.SafetyOverride.Should().BeNull("an override the controller then refused had no effect");
+        history.Describe(advisory, RoofHistoryCommand.Open, null, null).Should().Match<RoofCommandHistoryEntry>(entry =>
+            entry.SafetyState == "Unknown" && entry.SafetyOverride == null);
+        history.Describe(safe, RoofHistoryCommand.Open, null, null).Should().Match<RoofCommandHistoryEntry>(entry =>
+            entry.SafetyState == null && entry.SafetyOverride == null);
+        history.Describe(Context(user, IPAddress.Loopback, null), RoofHistoryCommand.Close, null, null).SafetyState.Should().BeNull();
+    }
+
+    [TestMethod]
     public void APerson_IsKnownByTheirPrincipalId_AndByTheirNameAndCreation_NeverByNameAlone()
     {
         var created = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
@@ -664,6 +694,8 @@ public sealed class RoofCommandHistoryTests
             Status = RoofControllerStatus.PartiallyClose,
             StopReason = RoofControllerStopReason.DepartureLimitNotReleased,
             IsFaultLatched = false,
+            SafetyState = new string('s', 32),
+            SafetyOverride = true,
             Count = int.MaxValue,
             LastTimestampUtc = DateTimeOffset.MaxValue
         };

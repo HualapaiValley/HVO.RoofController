@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   from (the person's browser for the web UI, which names it in `X-Forwarded-For`; the controller believes that only
   from its own loopback, `RoofCommandHistory:TrustedProxies`), and the roof's status afterwards. Who sent a command is
   matched by an identifier (a person's principal ID, or their name and creation; a key's ID), never by a name alone.
-  Stop is never limited; anonymous Stops from one source are one entry with a count, under a cap of their own. It keeps
+  Stop is never limited; anonymous Stops from one source are one entry with a count, under a cap of their own. An Open
+  sent while the safety conditions are not Safe records them, and whether it went ahead on a safety override. It keeps
   them in `command-history.jsonl` next to the identity store (so backups hold it), or at
   `RoofCommandHistory:StorePath`, for 90 days and up to 10,000 commands (`RoofCommandHistory:Retention`,
   `RoofCommandHistory:MaximumEntries`). `GET api/v4.0/RoofControl/History` pages them, newest first, with `user`,

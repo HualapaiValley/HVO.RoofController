@@ -122,6 +122,18 @@ public sealed record RoofCommandHistoryEntry
     public bool? IsFaultLatched { get; init; }
 
     /// <summary>
+    /// For an Open sent while the observatory's safety conditions (#207) were not Safe: what the safety interlock found
+    /// them to be (for example <c>Unsafe</c> or <c>Unknown</c>); null otherwise, and for every other command.
+    /// </summary>
+    public string? SafetyState { get; init; }
+
+    /// <summary>
+    /// True for an Open the controller accepted only because the caller overrode the safety conditions (the interlock's
+    /// Warn mode, audit-logged as well); null otherwise.
+    /// </summary>
+    public bool? SafetyOverride { get; init; }
+
+    /// <summary>
     /// How many commands the entry stands for: 1, or more for anonymous Stops from one source with the same answer, each
     /// within 10 minutes of the last, which are kept as one entry.
     /// </summary>

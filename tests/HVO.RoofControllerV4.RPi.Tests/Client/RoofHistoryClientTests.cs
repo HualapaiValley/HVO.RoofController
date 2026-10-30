@@ -102,6 +102,10 @@ public sealed class RoofHistoryClientTests
         RoofHistoryText.DescribeResult(Entry()).Should().Be("Accepted");
         RoofHistoryText.DescribeResult(Entry() with { Accepted = false, Code = "FaultLatched" }).Should().Be("Refused [FaultLatched]");
         RoofHistoryText.DescribeResult(Entry() with { Accepted = false }).Should().Be("Refused");
+        RoofHistoryText.DescribeResult(Entry() with { SafetyState = "Unsafe", SafetyOverride = true }).Should().Be("Accepted (safety override, conditions unsafe)");
+        RoofHistoryText.DescribeResult(Entry() with { SafetyState = "Unknown" }).Should().Be("Accepted (conditions unknown)");
+        RoofHistoryText.DescribeResult(Entry() with { Accepted = false, Code = "SafetyOverrideRequired", SafetyState = "Unsafe" })
+            .Should().Be("Refused [SafetyOverrideRequired]");
         RoofHistoryText.DescribeOutcome(Entry()).Should().Be("Opening");
         RoofHistoryText.DescribeOutcome(Entry() with { Status = RoofControllerStatus.Closed, IsFaultLatched = true }).Should().Be("Closed, fault latched");
         RoofHistoryText.DescribeOutcome(Entry() with { Status = null }).Should().Be("unknown");

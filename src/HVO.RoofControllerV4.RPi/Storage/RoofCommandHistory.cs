@@ -77,6 +77,9 @@ public sealed class RoofCommandHistory : BackgroundService
     internal static readonly TimeSpan AnonymousStopWindow = TimeSpan.FromMinutes(10);
 
     private const int MaximumDetailLength = 200;
+
+    // The safety interlock's decision for an Open, noted on the request (NoteSafety).
+    private static readonly object SafetyItem = new();
     private const int MaximumClientLength = 100;
 
     private readonly object _gate = new();
@@ -467,6 +470,7 @@ public sealed class RoofCommandHistory : BackgroundService
             status ??= attached as RoofStatusResponse;
         }
 
+        var safety = context.Items.TryGetValue(SafetyItem, out var noted) ? noted as RoofHistorySafetyNote : null;
         var connection = Normalize(context.Connection.RemoteIpAddress);
         var forwarded = connection is not null && IsTrustedProxy(connection)
             ? SingleForwardedAddress(context.Request.Headers[RoofCommandHistoryContract.ForwardedForHeaderName])
@@ -489,8 +493,21 @@ public sealed class RoofCommandHistory : BackgroundService
             Detail = refusal is null ? null : Printable(refusal.Detail, MaximumDetailLength),
             Status = status?.Status,
             StopReason = status?.LastStopReason,
-            IsFaultLatched = status?.IsFaultLatched
+            IsFaultLatched = status?.IsFaultLatched,
+            SafetyState = Printable(safety?.NotSafeState, 32),
+            SafetyOverride = safety is { Overridden: true } && refusal is null ? true : null
         };
+    }
+
+    /// <summary>
+    /// Notes on <paramref name="context"/> what the safety interlock (#207) decided for an Open, for the entry
+    /// <see cref="Describe"/> makes of it: the conditions when they were not Safe (null when they were), and whether the
+    /// caller overrode them. An override is recorded only on an Open the controller then accepted.
+    /// </summary>
+    public static void NoteSafety(HttpContext context, string? notSafeState, bool overridden)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        context.Items[SafetyItem] = new RoofHistorySafetyNote(notSafeState, overridden);
     }
 
     /// <summary>The history's command for one of <c>RoofController</c>'s operations; null for one it does not record.</summary>
@@ -703,6 +720,9 @@ public sealed class RoofCommandHistory : BackgroundService
         }
     }
 }
+
+/// <summary>What the safety interlock decided for an Open (<see cref="RoofCommandHistory.NoteSafety"/>).</summary>
+internal sealed record RoofHistorySafetyNote(string? NotSafeState, bool Overridden);
 
 /// <summary>Registers the roof command history, the identifiers it records, and its background writer.</summary>
 public static class RoofCommandHistoryServiceCollectionExtensions
