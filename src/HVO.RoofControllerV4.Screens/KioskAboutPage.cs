@@ -7,9 +7,10 @@ using Avalonia.Media;
 namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
-/// Build identification available even while locked or disconnected; it grants no controller permissions. Labelled
-/// cards for this device, the controller and the controller's host (<see cref="KioskAboutInfo"/>), each value saying
-/// why when it is not known. On the kiosk the cards are bounded pages, paged only when they overflow.
+/// Build identification and the controller's summary (#209), available even while locked or disconnected: the summary is
+/// read with the kiosk's own key (or the app's session), and grants no controller permissions. Labelled cards for this
+/// device, the controller and the controller's host (<see cref="KioskAboutInfo"/>), each value saying why when it is not
+/// known. On the kiosk the cards are bounded pages, paged only when they overflow.
 /// </summary>
 public sealed class KioskAboutPage : UserControl
 {
@@ -25,7 +26,7 @@ public sealed class KioskAboutPage : UserControl
         _system = system;
         _metrics = metrics;
         _document = new KioskPager(metrics, "about-pages");
-        Info = KioskAboutInfo.Describe(console.View, console.Wording, system.Self, system.Facts);
+        Info = KioskAboutInfo.Describe(console.View, console.Wording, system.Self, system.Summary, system.SummaryProblem);
         system.Changed += () => Update(console.View);
         Update(console.View);
     }
@@ -35,7 +36,7 @@ public sealed class KioskAboutPage : UserControl
 
     public void Update(KioskView view)
     {
-        Info = KioskAboutInfo.Describe(view, _console.Wording, _system.Self, _system.Facts);
+        Info = KioskAboutInfo.Describe(view, _console.Wording, _system.Self, _system.Summary, _system.SummaryProblem);
         // Rebuilt only when something shown changed, so a status heartbeat keeps the reader's page.
         var shown = string.Join('\n', new[] { Info.Device, Info.Controller, Info.Host }
             .SelectMany(section => section.Rows.Select(row => $"{row.Name}={row.Value}").Append(section.Note)));
@@ -57,14 +58,14 @@ public sealed class KioskAboutPage : UserControl
         else Content = new StackPanel { Spacing = _metrics.Gap * 2, Children = { cards, host } };
     }
 
-    // A titled card: label and value rows (or, for tiles, a label over each value, all in one row), then its note.
+    // A titled card: label and value rows (or, for tiles, a label over each value, three a row), then its note.
     private Border Card(KioskAboutSection section, bool tiles = false)
     {
         var panel = new StackPanel { Spacing = _metrics.Gap * 1.5 };
         panel.Children.Add(KioskTheme.Label(section.Title, _metrics.Font, KioskTheme.Accent, FontWeight.SemiBold));
         if (tiles)
         {
-            var grid = new UniformGrid { Columns = section.Rows.Count, ColumnSpacing = _metrics.Gap * 3, RowSpacing = _metrics.Gap * 1.5 };
+            var grid = new UniformGrid { Columns = Math.Min(3, section.Rows.Count), ColumnSpacing = _metrics.Gap * 3, RowSpacing = _metrics.Gap * 1.5 };
             foreach (var row in section.Rows)
                 grid.Children.Add(new StackPanel { Spacing = _metrics.Gap / 2, Children = { Label(row), Value(row) } });
             panel.Children.Add(grid);

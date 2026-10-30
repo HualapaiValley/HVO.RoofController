@@ -25,7 +25,9 @@ public static partial class RoofCli
 
         private Command CreateUsersListCommand()
         {
-            var command = new Command("list", "List the people, their roles, and whether each has a password and a PIN.");
+            var command = new Command(
+                "list",
+                "List the people: their names, roles, how they sign in, whether each has a password and a PIN, and their last sign-in.");
             SetAction(command, async (context, _, cancellationToken) =>
             {
                 using var client = context.Connect();
@@ -70,15 +72,20 @@ public static partial class RoofCli
             return command;
         }
 
-        internal static readonly string[] UserHeaders = ["NAME", "ROLE", "PASSWORD", "PIN", "SESSIONS", "UPDATED"];
+        internal static readonly string[] UserHeaders =
+            ["NAME", "DISPLAY NAME", "SHORT NAME", "ROLE", "LOGIN", "PASSWORD", "PIN", "SESSIONS", "LAST SIGN-IN", "UPDATED"];
 
         internal static IReadOnlyList<string> UserRow(RoofUserResponse user) =>
         [
             user.Name,
+            user.DisplayName ?? string.Empty,
+            user.ShortName ?? string.Empty,
             RoofCliFormat.Role(user.Role),
+            RoofIdentityText.DescribeLoginType(user.LoginType),
             user.HasPassword ? "yes" : "no",
             user.HasTemporaryPin ? "temporary" : user.HasPin ? "yes" : "no",
             user.ActiveSessions.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            RoofIdentityText.DescribeLastLogin(user.LastLoginUtc),
             RoofCliFormat.Time(user.UpdatedUtc)
         ];
 
@@ -109,10 +116,14 @@ public static partial class RoofCli
         internal static IEnumerable<(string, string)> DescribeUser(RoofUserResponse user)
         {
             yield return ("Name", user.Name);
+            yield return ("Display name", user.DisplayName ?? "not set");
+            yield return ("Short name", user.ShortName ?? "not set");
             yield return ("Role", RoofCliFormat.Role(user.Role));
+            yield return ("Login", RoofIdentityText.DescribeLoginType(user.LoginType));
             yield return ("Password", user.HasPassword ? "set" : "not set");
             yield return ("PIN", user.HasTemporaryPin ? "temporary commissioning grant" : user.HasPin ? "set" : "not set");
             yield return ("Sessions", user.ActiveSessions.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            yield return ("Last sign-in", RoofIdentityText.DescribeLastLogin(user.LastLoginUtc));
             yield return ("Created", RoofCliFormat.Time(user.CreatedUtc));
             yield return ("Updated", RoofCliFormat.Time(user.UpdatedUtc));
         }
@@ -124,10 +135,22 @@ public static partial class RoofCli
             var password = new Option<bool>("--password") { Description = "Give the person a password, for the web UI and the CLI (the default)." };
             var pin = new Option<bool>("--pin") { Description = "Give the person a PIN, for a kiosk (operators and admins)." };
             var temporary = new Option<bool>("--temporary-pin") { Description = "Explicit initial emulator-only kiosk commissioning access; requires a password and no personal PIN." };
-            var command = new Command("add", "Add a person. Asks for the password, the PIN, or both.") { name, role, password, pin, temporary };
+            var displayName = DisplayNameOption("The person's friendly name, shown beside their name (optional).");
+            var shortName = ShortNameOption("A short name for narrow places such as the kiosk (optional).");
+            var command = new Command("add", "Add a person. Asks for the password, the PIN, or both.")
+            {
+                name,
+                role,
+                password,
+                pin,
+                temporary,
+                displayName,
+                shortName
+            };
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
                 var person = RequireName(parseResult.GetRequiredValue(name));
+                var names = RequireNames(parseResult.GetValue(displayName), parseResult.GetValue(shortName));
                 var withPin = parseResult.GetValue(pin);
                 if (withPin && parseResult.GetValue(temporary)) throw new RoofCliUsageException("Choose a personal PIN or temporary commissioning access, not both.");
                 var withPassword = parseResult.GetValue(password) || !withPin;
@@ -137,7 +160,9 @@ public static partial class RoofCli
                     Role = parseResult.GetRequiredValue(role),
                     Password = withPassword ? ReadNewPassword(context, $"Password for {person}: ") : null,
                     TemporaryPin = parseResult.GetValue(temporary),
-                    Pin = withPin ? ReadNewPin(context, $"PIN for {person}: ") : null
+                    Pin = withPin ? ReadNewPin(context, $"PIN for {person}: ") : null,
+                    DisplayName = names.DisplayName,
+                    ShortName = names.ShortName
                 };
 
                 using var client = context.Connect();
@@ -155,16 +180,20 @@ public static partial class RoofCli
             var pin = new Option<bool>("--pin") { Description = "Set a new PIN (asked for). Ends the person's PIN sessions." };
             var removePassword = new Option<bool>("--remove-password") { Description = "Remove the password. The person keeps a PIN." };
             var removePin = new Option<bool>("--remove-pin") { Description = "Remove the PIN. Ends the person's PIN sessions." };
+            var displayName = DisplayNameOption("A new friendly name; an empty one (\"\") removes it. Ends no session.");
+            var shortName = ShortNameOption("A new short name; an empty one (\"\") removes it. Ends no session.");
             var command = new Command(
                 "set",
-                "Change a person's role, password or PIN. Changing the role or the password ends all their sessions.")
+                "Change a person's role, password, PIN, display name or short name. Changing the role or the password ends all their sessions.")
             {
                 name,
                 role,
                 password,
                 pin,
                 removePassword,
-                removePin
+                removePin,
+                displayName,
+                shortName
             };
             command.Validators.Add(result =>
             {
@@ -179,14 +208,19 @@ public static partial class RoofCli
                 }
 
                 if (result.GetResult(role) is null && !result.GetValue(password) && !result.GetValue(pin)
-                    && !result.GetValue(removePassword) && !result.GetValue(removePin))
+                    && !result.GetValue(removePassword) && !result.GetValue(removePin)
+                    && result.GetResult(displayName) is null && result.GetResult(shortName) is null)
                 {
-                    result.AddError("Say what to change: --role, --password, --pin, --remove-password or --remove-pin.");
+                    result.AddError("Say what to change: --role, --password, --pin, --remove-password, --remove-pin, --display-name or --short-name.");
                 }
             });
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
                 var person = parseResult.GetRequiredValue(name);
+                // Omitted leaves a name as it is; given empty removes it.
+                var newDisplayName = parseResult.GetResult(displayName) is null ? null : parseResult.GetValue(displayName) ?? string.Empty;
+                var newShortName = parseResult.GetResult(shortName) is null ? null : parseResult.GetValue(shortName) ?? string.Empty;
+                RequireNames(newDisplayName, newShortName);
                 var newPassword = parseResult.GetValue(password) ? ReadNewPassword(context, $"New password for {person}: ") : null;
                 var newPin = parseResult.GetValue(pin) ? ReadNewPin(context, $"New PIN for {person}: ") : null;
 
@@ -203,7 +237,9 @@ public static partial class RoofCli
                         Password = newPassword,
                         Pin = newPin,
                         RemovePassword = parseResult.GetValue(removePassword),
-                        RemovePin = parseResult.GetValue(removePin)
+                        RemovePin = parseResult.GetValue(removePin),
+                        DisplayName = newDisplayName,
+                        ShortName = newShortName
                     },
                     cancellationToken).ConfigureAwait(false);
                 return ReportUser(context, user, $"Updated {user.Name}.");
@@ -229,6 +265,26 @@ public static partial class RoofCli
                 return ReportDone(context, new { removed = person }, $"Removed {person}.");
             });
             return command;
+        }
+
+        private static Option<string?> DisplayNameOption(string description) => new("--display-name") { Description = description };
+
+        private static Option<string?> ShortNameOption(string description) => new("--short-name") { Description = description };
+
+        /// <summary>
+        /// Checks a display and short name before anything is asked or sent; returns them trimmed, an empty one as empty
+        /// (to remove it on a change), or throws a usage error that says the rule.
+        /// </summary>
+        private static (string? DisplayName, string? ShortName) RequireNames(string? displayName, string? shortName)
+        {
+            if (RoofIdentityText.CheckNames(displayName, shortName) is { } problem)
+            {
+                throw new RoofCliUsageException(problem);
+            }
+
+            return (Trim(displayName), Trim(shortName));
+
+            static string? Trim(string? value) => value is null ? null : RoofIdentityContract.NormalizeLabel(value) ?? string.Empty;
         }
 
         private static int ReportUser(RoofCliContext context, RoofUserResponse user, string message)

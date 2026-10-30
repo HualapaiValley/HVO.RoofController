@@ -7,8 +7,8 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 
 /// <summary>
 /// The connection, as <c>hvo-roof setup</c>, <c>login</c> and <c>logout</c> keep it: the controller's address, the
-/// certificate pin or CA, and an API key in the credentials file, a check of the connection, signing in and out, and
-/// adding the first admin person with an admin API key.
+/// certificate pin or CA, and an API key in the credentials file, a check of the connection, signing in and out, the
+/// signed-in person's own display and short name (#209), and adding the first admin person with an admin API key.
 /// </summary>
 internal sealed class RoofUiSetupPage : RoofUiPage
 {
@@ -31,7 +31,8 @@ internal sealed class RoofUiSetupPage : RoofUiPage
         var check = AddButton("Check", connection, () => CheckConnection());
         var signIn = AddButton("Sign in", check, SignIn);
         var signOut = AddButton("Sign out", signIn, SignOut);
-        AddButton("First admin", signOut, AddFirstAdmin);
+        var names = AddButton("Names", signOut, ChangeNames);
+        AddButton("First admin", names, AddFirstAdmin);
     }
 
     /// <summary>The last check of the connection, while it is still the one in use.</summary>
@@ -290,6 +291,68 @@ internal sealed class RoofUiSetupPage : RoofUiPage
             Ui.Say($"{message} The session was removed from {Ui.Context.CredentialsPath}.");
         });
     });
+    }
+
+    /// <summary>
+    /// The signed-in person's own display and short name (#209), changed here because the terminal has a keyboard (the
+    /// kiosk does not change them). A Linux account's names come from the operating system and are only shown; an API key
+    /// is not a person.
+    /// </summary>
+    internal void ChangeNames()
+    {
+        if (Ui.Context.Local)
+        {
+            Ui.Say(RoofIdentityText.LinuxNamesReadOnly);
+            return;
+        }
+
+        _ = Ui.Run("Reading your names…", async (client, cancellationToken) =>
+        {
+            var me = await client.Auth.GetCallerAsync(cancellationToken).ConfigureAwait(false);
+            Ui.Post(() => ShowNames(me));
+        });
+    }
+
+    private void ShowNames(RoofCallerResponse me)
+    {
+        if (me.Kind != RoofCredentialKind.Session)
+        {
+            Ui.Say($"Names are a person's: sign in with your name and password first (Sign in). {RoofIdentityText.OwnNamesWhere}", error: true);
+            return;
+        }
+
+        if (me.LoginType == RoofLoginTypes.Linux)
+        {
+            Ui.Say($"{RoofIdentityText.LinuxNamesReadOnly} Yours: {RoofIdentityText.DescribePerson(me.ShortName ?? me.Name, me.DisplayName)}.");
+            return;
+        }
+
+        Ui.Ask(new RoofUiPrompt(
+            $"Your names ({me.Name})",
+            $"{RoofIdentityText.DisplayNameRule}\n{RoofIdentityText.ShortNameRule}\n{RoofIdentityText.NamesChangeEndsNothing}",
+            [new RoofUiField("Display name", Initial: me.DisplayName ?? string.Empty), new RoofUiField("Short name", Initial: me.ShortName ?? string.Empty)],
+            [new RoofUiAction("Save", values =>
+            {
+                if (RoofIdentityText.CheckNames(values[0], values[1]) is { } error)
+                {
+                    return error;
+                }
+
+                // An empty name removes it.
+                var request = new RoofNamesChangeRequest
+                {
+                    DisplayName = RoofIdentityContract.NormalizeLabel(values[0]) ?? string.Empty,
+                    ShortName = RoofIdentityContract.NormalizeLabel(values[1]) ?? string.Empty
+                };
+                _ = Ui.Run("Saving your names…", async (client, cancellationToken) =>
+                {
+                    var after = await client.Auth.ChangeNamesAsync(request, cancellationToken).ConfigureAwait(false);
+                    Ui.Post(() => Ui.Say(
+                        $"Saved your names: {RoofIdentityText.DescribePerson(after.Name, after.DisplayName)}"
+                        + (after.ShortName is { } shortName ? $", short name {shortName}." : ", no short name.")));
+                });
+                return null;
+            })]));
     }
 
     private void AddFirstAdmin()

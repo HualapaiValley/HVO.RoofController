@@ -149,6 +149,7 @@ internal sealed class KioskScreen : IAsyncDisposable
     public string? Text(string name) => Find(name) switch
     {
         TextBlock block => block.Text,
+        Button { Content: StackPanel lines } => lines.Children.OfType<TextBlock>().First().Text,
         Button button => KioskTheme.GetText(button),
         Border { Child: TextBlock block } => block.Text,
         null => throw new InvalidOperationException($"Nothing called {name} is on the screen."),

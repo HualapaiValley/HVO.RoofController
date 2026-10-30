@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Screens;
 
@@ -25,7 +26,7 @@ public sealed class KioskPinPage : UserControl
     private readonly Button _person;
     private readonly List<Button> _keys = [];
     private readonly Action _cancel;
-    private IReadOnlyList<Common.Models.RoofPinUserResponse>? _shownUsers;
+    private IReadOnlyList<RoofPinUserResponse>? _shownUsers;
     private string? _dismissedError;
     private bool _wasLoading;
     // The people step was cancelled: the keypad shows even without a person, and the person chosen before comes back.
@@ -172,11 +173,12 @@ public sealed class KioskPinPage : UserControl
                 {
                     KioskTheme.Label(_pad.Loading ? "Reading people…" : "PIN access is Operator-only. Settings and System need password sign-in in another client.", _metrics.Font, KioskTheme.Muted)
                 };
-                // Two people a row: each with their name, role and how their account signs in.
+                // Two people a row: each by their display name (#209), then their role, how they sign in and when they
+                // last did.
                 var people = _pad.Users.Select(user =>
                 {
                     var name = KioskPinPad.SelectionKey(user);
-                    return KioskPageParts.TwoLineButton(user.Name, DescribePerson(user), $"pin-user-{name}", _metrics, () => _pad.Select(name));
+                    return KioskPageParts.TwoLineButton(Heading(user), DescribePerson(user), $"pin-user-{name}", _metrics, () => _pad.Select(name));
                 }).ToArray();
                 for (var i = 0; i < people.Length; i += 2)
                 {
@@ -192,12 +194,32 @@ public sealed class KioskPinPage : UserControl
         else Content = _entry;
     }
 
-    /// <summary>What the people step says under a person's name: role, login type, and whether setup is pending.</summary>
-    public static string DescribePerson(Common.Models.RoofPinUserResponse user)
+    /// <summary>
+    /// A person's button heading: their display name with the name they sign in by, or their name
+    /// (<see cref="RoofIdentityText.DescribePerson"/>), as the PIN prompt names them.
+    /// </summary>
+    public static string Heading(RoofPinUserResponse user)
     {
         ArgumentNullException.ThrowIfNull(user);
-        var detail = $"{KioskText.DescribeRole(user.Role)} · {RoofIdentityText.DescribeLoginType(user.Provider)}";
-        return user.SetupPending ? $"{detail} · first-time setup" : detail;
+        return RoofIdentityText.DescribePerson(user.Name, user.DisplayName);
+    }
+
+    /// <summary>
+    /// What the people step says under a person's heading: their role, how they sign in, when they last did, their short
+    /// name when they have one, and whether setup is pending.
+    /// </summary>
+    public static string DescribePerson(RoofPinUserResponse user)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        List<string> parts =
+        [
+            KioskText.DescribeRole(user.Role),
+            $"{RoofIdentityText.DescribeLoginType(user.LoginType)} account",
+            $"last sign-in {RoofIdentityText.DescribeLastLogin(user.LastLoginUtc)}"
+        ];
+        if (!string.IsNullOrWhiteSpace(user.ShortName)) parts.Add($"short name {user.ShortName}");
+        if (user.SetupPending) parts.Add("first-time setup");
+        return string.Join(" · ", parts);
     }
 
     private static void Size(Button button, double width)

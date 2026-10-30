@@ -33,17 +33,17 @@ upgrades a rig from main's version to the new one ([The rig end to end](install.
 | Where | What it shows |
 |-------|---------------|
 | `hvo-roof --version` | `4.0.0-dev+<commit>` |
-| `hvo-roof info`, and the terminal interface's System page | `hvo-roof`'s own version, then the controller's |
-| The web UI's System page and footer | The local web UI version remains visible when controller reads fail; System separately labels last-read controller metadata |
-| The kiosk and Mac app's About view | The local app version, including while locked or offline; the Mac app separately labels last-read controller metadata for an admin |
-| The PIN kiosk's About view | The local kiosk version; controller version is unavailable in the PIN kiosk, with guidance to use an administrator CLI or web System session |
+| `hvo-roof info`, and the terminal interface's System page | `hvo-roof`'s own version, then the controller's (any role) |
+| The web UI's System page and footer | The local web UI version remains visible when controller reads fail; System separately labels the last-read controller version and summary, for every role |
+| The kiosk and Mac app's About view | The local app version, including while locked or offline, and the last-read controller version and summary, read with the device's own key |
 | The controller's log | `HVO Roof Controller 4.0.0-dev+<commit> is starting.` |
-| `GET /api/v1.0/System/info` | `applicationVersion`: `4.0.0-dev+<commit>` |
+| `GET /api/v4.0/System/Summary` (any role) and `GET /api/v1.0/System/info` (admin) | `applicationVersion`: `4.0.0-dev+<commit>` |
 | The Mac app's `Info.plist` | `CFBundleShortVersionString` 4.0.0, and the build number in `CFBundleVersion` |
 | Both images' labels | `org.opencontainers.image.version`, `.revision`, `.created` and `.source` |
 
 The pages show the commit shortened to 12 characters: `4.0.0-dev (commit 0123abcd4567)`. Everyone sees the version of
-the program they use; the controller's version, host and resource use need the Admin role.
+the program they use, and the controller's version and resource use (`System/Summary`); the host's details need the
+Admin role.
 
 ## The scripts
 

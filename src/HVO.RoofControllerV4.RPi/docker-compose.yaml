@@ -78,6 +78,13 @@ x-roof-environment: &roof-environment
   # Host names/IPs clients use to reach the controller (semicolon-separated). A list must include localhost (the
   # health check calls it); "*" logs a startup warning.
   AllowedHosts: ${HVO_ROOF_ALLOWED_HOSTS:-*}
+  # Where people reach the web UI, for the controller's summary (#209), as the deploy script writes them at each deploy:
+  # the host's LAN addresses (semicolon-separated), the web UI's URLs built from them with its published port and
+  # scheme (https://192.0.2.10:8088/), and Network (published to the network) or LocalOnly. A container sees only its
+  # own bridge address, so Compose cannot work them out: unset, the controller says the web UI's address is not known.
+  RoofHost__Addresses: ${HVO_ROOF_HOST_ADDRESSES:-}
+  RoofHost__WebUiUrls: ${HVO_ROOF_WEB_UI_URLS:-}
+  RoofHost__WebUiAccess: ${HVO_ROOF_WEB_UI_ACCESS:-}
   OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
   OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${OTEL_SERVICE_INSTANCE_ID:-roof-controller-rpi}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://192.168.1.238:4318}
@@ -268,6 +275,9 @@ x-emulated-environment: &emulated-environment
   BlueIris__UserName: ""
   BlueIris__Password: ""
   AllowedHosts: "*"
+  # Its web UI is published on this machine's loopback alone (ports below), as the controller's summary says (#209).
+  RoofHost__WebUiUrls: http://localhost:${HVO_EMULATED_WEB_PORT:-5196}/
+  RoofHost__WebUiAccess: LocalOnly
   # Telemetry only when an endpoint is given; the resource carries hvo.roof.hat.mode=emulated.
   OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-hvo-roof-controller}
   OTEL_RESOURCE_ATTRIBUTES: service.instance.id=${HVO_EMULATED_ROOF_INSTANCE_ID:-roof-controller-emulated}

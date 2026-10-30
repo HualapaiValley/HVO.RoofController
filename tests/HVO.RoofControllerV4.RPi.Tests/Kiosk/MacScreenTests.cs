@@ -50,9 +50,7 @@ public sealed class MacScreenTests
             screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly))
                 .And.NotContain("9.8.7");
             screen.Text("about-controller-version").Should().Be("9.8.7-rc.2 (commit abcdef123456)");
-            screen.Text("about-host-note").Should().Contain("as last read in System");
-            screen.Text("about-cpu").Should().Contain("% (controller process)");
-            screen.Text("about-disk").Should().Be(KioskAboutInfo.NotAvailable, "the controller reports no disk use yet");
+            screen.Text("about-web-ui").Should().Be("https://192.0.2.10:8088/", "where the web UI is, from the host's address (#209)");
         });
         await screen.RenderAsync("mac-about", TestContext);
         await OnUiAsync(() =>
@@ -63,7 +61,38 @@ public sealed class MacScreenTests
             screen.Shell.Update(harness.Console.View with { UnlockedBy = null, Role = null });
             screen.Shell.ShowPage(KioskPage.About);
             screen.Window.UpdateLayout();
-            screen.Text("about-controller-version").Should().NotContain("9.8.7");
+            screen.Text("about-controller-version").Should().NotContain("9.8.7", "what was read while signed in is dropped");
+        });
+
+        // Signed out, the app reads the summary again with its own key: the version needs no role (#209).
+        await UntilAsync(() => screen.Shell.System is { ReadingSummary: false, Summary.Count: > 0 }, "the summary read again");
+        await OnUiAsync(() =>
+        {
+            screen.Window.UpdateLayout();
+            screen.Text("about-controller-version").Should().Be("9.8.7-rc.2 (commit abcdef123456)");
+        });
+    }
+
+    [TestMethod]
+    public async Task System_ShowsAnOperatorTheSummary_ButNotTheHostsDetails()
+    {
+        await using var harness = await CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.PasswordAsync(KioskHarness.Operator);
+        await using var screen = await ShowAsync(harness);
+
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.System));
+        await UntilAsync(() => screen.Shell.System is { Health: not null, Busy: null }, "the controller's health and summary");
+
+        await OnUiAsync(() =>
+        {
+            screen.Window.UpdateLayout();
+            var texts = screen.Window.GetVisualDescendants().OfType<TextBlock>().Select(block => block.Text).ToList();
+            texts.Should().Contain("CPU").And.Contain("12.5 %, load 0.42 0.35 0.30, 4 processors", "every role sees the summary (#209)");
+            texts.Should().Contain("Web UI").And.Contain("https://192.0.2.10:8088/");
+            texts.Should().Contain(KioskSystemPanel.InformationNeedsAdmin);
+            texts.Should().NotContain("Host details");
+            screen.Find("system-restart").Should().BeNull();
         });
     }
 

@@ -4,13 +4,13 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
-/// The kiosk's system page: the controller's health and readiness, and for an admin its version, host and resource use,
-/// and a restart. It says and asks what the CLI and the web UI do.
+/// The kiosk's system page: the controller's health and readiness, its summary for every role (version and resource
+/// use, #209), and for an admin the host's details and a restart. It says and asks what the CLI and the web UI do.
 /// </summary>
 /// <remarks>Used on the UI thread only; <see cref="Changed"/> is raised there.</remarks>
 public sealed class KioskSystemPanel
 {
-    public const string InformationNeedsAdmin = "The controller's version, host and resource use need the Admin role.";
+    public const string InformationNeedsAdmin = RoofSystemText.HostDetailsNeedAdmin;
 
     public const string RestartNeedsAdmin = "Restarting the controller needs the Admin role.";
 
@@ -35,11 +35,20 @@ public sealed class KioskSystemPanel
     /// <summary>Each health check: name, status and description.</summary>
     public IReadOnlyList<(string Name, string Status, string Description)> Checks { get; private set; } = [];
 
-    /// <summary>The version, host and resource use (admin), as label and value.</summary>
+    /// <summary>The host's details (admin), as label and value.</summary>
     public IReadOnlyList<(string Label, string Value)> Information { get; private set; } = [];
 
-    /// <summary>The controller's version and resource use as About shows them (admin, last read), or <see cref="KioskControllerFacts.None"/>.</summary>
-    public KioskControllerFacts Facts { get; private set; } = KioskControllerFacts.None;
+    /// <summary>
+    /// The controller's summary (#209), as label and value: its version, the uptimes, CPU, temperature, memory, disk and
+    /// addresses. Every role reads it, the kiosk's own key too; empty before it is read.
+    /// </summary>
+    public IReadOnlyList<(string Label, string Value)> Summary { get; private set; } = [];
+
+    /// <summary>Why the summary could not be read (the controller unreachable, or a refusal), or null.</summary>
+    public string? SummaryProblem { get; private set; }
+
+    /// <summary>True while <see cref="LoadSummaryAsync"/> is reading the summary.</summary>
+    public bool ReadingSummary { get; private set; }
 
     /// <summary>What is on its way to the controller, or null.</summary>
     public string? Busy { get; private set; }
@@ -64,36 +73,65 @@ public sealed class KioskSystemPanel
         Health = null;
         Checks = [];
         Information = [];
-        Facts = KioskControllerFacts.None;
+        Summary = [];
+        SummaryProblem = null;
+        ReadingSummary = false;
         Busy = null;
         Message = null;
         Question = null;
         Raise();
     }
 
-    /// <summary>Reads the health report and, for an admin, the version, host and resource use.</summary>
+    /// <summary>Reads the health report and the summary and, for an admin, the host's details.</summary>
     public Task LoadAsync() => RunAsync("Reading the controller's health…", async reset =>
     {
         var report = await _console.Client.Health.GetReportAsync(reset);
+        var (summary, problem) = await ReadSummaryAsync(reset);
         IReadOnlyList<(string Label, string Value)> information = [];
-        var facts = KioskControllerFacts.None;
         if (_console.View.IsAdmin)
         {
             var info = await _console.Client.System.GetInformationAsync(reset);
             var metrics = await _console.Client.System.GetMetricsAsync(reset);
             information = [.. RoofSystemText.DescribeInformation(info, metrics)];
-            facts = KioskControllerFacts.From(info, metrics);
         }
 
         return () =>
         {
             Health = report.Status;
             Checks = [.. report.Checks.Select(check => (check.Name, check.Status, check.Description ?? string.Empty))];
+            Summary = summary;
+            SummaryProblem = problem;
             Information = information;
-            Facts = facts;
             Message = new KioskNotice($"Health: {report.Status}.", report.Status == "Healthy" ? KioskNoticeLevel.Info : KioskNoticeLevel.Warning, Now);
         };
     });
+
+    /// <summary>
+    /// Reads the summary alone, for About: any role may, the kiosk's own key too, so it is read while locked. It does
+    /// not wait for, or hold up, what the system page sends; one at a time. Nothing is shown if <see cref="Reset"/> came
+    /// first.
+    /// </summary>
+    public async Task LoadSummaryAsync()
+    {
+        if (ReadingSummary)
+        {
+            return;
+        }
+
+        var reset = _reset.Token;
+        ReadingSummary = true;
+        Raise();
+        var (summary, problem) = await ReadSummaryAsync(reset);
+        if (reset.IsCancellationRequested)
+        {
+            return;
+        }
+
+        Summary = summary;
+        SummaryProblem = problem;
+        ReadingSummary = false;
+        Raise();
+    }
 
     /// <summary>Asks whether the controller is ready (anonymous).</summary>
     public Task CheckReadinessAsync() => RunAsync("Asking whether the controller is ready…", async reset =>
@@ -144,6 +182,23 @@ public sealed class KioskSystemPanel
     }
 
     private DateTimeOffset Now => _console.Client.Options.TimeProvider.GetUtcNow();
+
+    /// <summary>
+    /// The summary as label and value, or why it could not be read: an older controller without it, or one that cannot
+    /// be reached, leaves the health report to show.
+    /// </summary>
+    private async Task<(IReadOnlyList<(string Label, string Value)> Summary, string? Problem)> ReadSummaryAsync(CancellationToken reset)
+    {
+        try
+        {
+            return ([.. RoofSystemText.DescribeSummary(await _console.Client.System.GetSummaryAsync(reset))], null);
+        }
+        catch (Exception error)
+        {
+            // After a reset nothing is shown, so nothing is said either.
+            return ([], reset.IsCancellationRequested ? null : RoofSystemText.DescribeUnavailable(error));
+        }
+    }
 
     private Task RestartAsync(bool confirm)
     {

@@ -111,7 +111,10 @@ public sealed class AuthController : ControllerBase
     }
 
     /// <summary>The people who can sign in with a PIN, for a kiosk's picker (the kiosk's key in <c>X-Api-Key</c>).</summary>
-    /// <response code="200">Names and roles, sorted by name. Nothing secret.</response>
+    /// <response code="200">
+    /// Names and roles, sorted by name, with each person's display and short name, login type and last sign-in (#209).
+    /// Nothing secret.
+    /// </response>
     /// <response code="403">The API key is not a kiosk key (<c>KioskKeyRequired</c>).</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpGet("Pin/Users", Name = nameof(GetPinUsers))]
@@ -134,15 +137,30 @@ public sealed class AuthController : ControllerBase
         var credential = _identity.GetKioskCredential();
         var owner = credential is null ? null : _identity.ProviderPrincipals.FirstOrDefault(p => p.Id == credential.PrincipalId && p.Enabled);
         var commissioned = owner is null ? Array.Empty<RoofPinUserResponse>() : new[] { new RoofPinUserResponse(owner.Name, RoofControllerApiContract.OperatorRole)
-            { PrincipalId = owner.Id, Provider = owner.Provider, SetupPending = credential!.State == "pending" } };
+            {
+                PrincipalId = owner.Id,
+                Provider = owner.Provider,
+                SetupPending = credential!.State == "pending",
+                DisplayName = owner.DisplayName,
+                ShortName = owner.ShortName,
+                LastLoginUtc = owner.LastLoginUtc
+            } };
         return _identity.Users
             .Where(user => (user.PinHash is not null || _identity.CanUseTemporaryPin(user)) && user.Role != RoofControllerApiContract.ViewerRole)
             .OrderBy(user => user.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(user => new RoofPinUserResponse(user.Name, user.Role))
+            .Select(user => new RoofPinUserResponse(user.Name, user.Role)
+            {
+                DisplayName = user.DisplayName,
+                ShortName = user.ShortName,
+                LastLoginUtc = user.LastLoginUtc
+            })
             .Concat(commissioned).ToArray();
     }
 
-    /// <summary>Who the caller is: the person or API key, its role and how it signed in (any credential).</summary>
+    /// <summary>
+    /// Who the caller is: the person or API key, its role and how it signed in, and a person's display and short name
+    /// (any credential).
+    /// </summary>
     /// <response code="200">The caller.</response>
     [HttpGet("Me", Name = nameof(GetCaller))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
@@ -158,6 +176,22 @@ public sealed class AuthController : ControllerBase
             _identity.TryGetLiveSession(sessionId, out session);
         }
 
+        // A person: in the identity store, or an enrolled Linux account (its names are the operating system's). An API
+        // key has no names, even one that shares a person's name.
+        string? displayName = null, shortName = null, loginType = null;
+        if (kind != RoofCredentialKind.ApiKey)
+        {
+            if (User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux"))
+            {
+                var linux = _identity.LinuxForPrincipal(User.FindFirst(RoofPrincipalFactory.PrincipalIdClaimType)?.Value ?? string.Empty);
+                (displayName, shortName, loginType) = (linux?.DisplayName, linux?.Name ?? User.Identity!.Name, RoofLoginTypes.Linux);
+            }
+            else if (_identity.TryGetUser(User.Identity!.Name, out var person))
+            {
+                (displayName, shortName, loginType) = (person.DisplayName, person.ShortName, RoofLoginTypes.Local);
+            }
+        }
+
         return new RoofCallerResponse(
             User.Identity!.Name!,
             RoofPrincipalFactory.GetHighestRole(User)!,
@@ -165,8 +199,88 @@ public sealed class AuthController : ControllerBase
             User.FindFirst(RoofPrincipalFactory.DeviceClaimType)?.Value,
             sessionId,
             session?.ExpiresUtc,
-            User.HasClaim(RoofPrincipalFactory.KioskClaimType, "true"));
+            User.HasClaim(RoofPrincipalFactory.KioskClaimType, "true"))
+        {
+            DisplayName = displayName,
+            ShortName = shortName,
+            LoginType = loginType
+        };
     }
+
+    /// <summary>
+    /// A person signed in with a password changes their own display and short name (#209). A null name is left as it
+    /// is, an empty one removed. Names are edited where there is a keyboard (the web UI, the terminal): a PIN session at
+    /// a kiosk is refused, and so is a Linux account, whose names come from the operating system.
+    /// </summary>
+    /// <response code="200">The caller, with the new names.</response>
+    /// <response code="400">An invalid name, or the request used an API key.</response>
+    /// <response code="403">A PIN session (<c>CredentialNotAllowed</c>).</response>
+    /// <response code="409">A Linux account: its names are read-only here (<c>IdentityReadOnly</c>).</response>
+    /// <response code="503">The identity store is unavailable.</response>
+    [RoofRefusePinSession]
+    [HttpPost("Names", Name = nameof(ChangeOwnNames))]
+    [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
+    [ProducesResponseType(typeof(RoofCallerResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public ActionResult<RoofCallerResponse> ChangeOwnNames([FromBody] RoofNamesChangeRequest request)
+    {
+        if (User.FindFirst(RoofPrincipalFactory.SessionIdClaimType)?.Value is null)
+        {
+            return RoofProblemResults.Create(
+                this,
+                RoofControllerErrorCode.InvalidRequest,
+                "Only a signed-in person can change their names; this request used an API key.");
+        }
+
+        if (User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux") || User.HasClaim(RoofPrincipalFactory.LocalClaimType, "true"))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.IdentityReadOnly, LinuxNamesAreReadOnly);
+        }
+
+        // Null leaves a name as it is; empty (or only spaces) removes it.
+        var displayName = request.DisplayName is null ? null : RoofIdentityContract.NormalizeLabel(request.DisplayName) ?? string.Empty;
+        var shortName = request.ShortName is null ? null : RoofIdentityContract.NormalizeLabel(request.ShortName) ?? string.Empty;
+        if (displayName is { Length: > 0 } && !RoofIdentityContract.IsValidDisplayName(displayName))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, IdentityController.DisplayNameRule);
+        }
+
+        if (shortName is { Length: > 0 } && !RoofIdentityContract.IsValidShortName(shortName))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, IdentityController.ShortNameRule);
+        }
+
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        RoofIdentityResult<StoredUser> changed;
+        try
+        {
+            changed = _identity.ChangeOwnNames(User.Identity!.Name!, displayName, shortName);
+        }
+        catch (RoofIdentityStoreException ex)
+        {
+            _logger.LogError("Name change for {Name} could not be saved: {Reason}", User.Identity!.Name, ex.Message);
+            return StoreUnavailable();
+        }
+
+        if (!changed.Succeeded)
+        {
+            return RoofProblemResults.Create(this, changed.Error!.Value, changed.Detail!);
+        }
+
+        _logger.LogWarning("AUDIT {Name} changed their own names from {Remote}.", changed.Value!.Name, Remote);
+        return GetCaller();
+    }
+
+    internal const string LinuxNamesAreReadOnly = "A Linux account's names come from the operating system: change the account's full name there.";
 
     /// <summary>Signs out: ends the session whose token was sent (sessions only).</summary>
     /// <response code="204">The session ended.</response>

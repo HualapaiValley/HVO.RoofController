@@ -74,11 +74,15 @@ Open, Close and Clear fault are hidden:
 `Locked: unlock the kiosk with a PIN to open or close the roof. Stop is always available.`
 
 **Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key).
-Each person shows their name, their role and how their account signs in (`Operator · Controller account`, or
-`Linux account` for a Linux account through the host), and `first-time setup` while their temporary PIN is still to be
-changed. People are paginated only when the list overflows the page. Choosing a name opens a separate keypad step: a
-compact, centred keypad of fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the
-keypad, with the person chosen before still chosen; the keypad's **Cancel** leaves Unlock. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
+A person with a display name is shown by it, with the name they sign in by (`Olga Example (olga)`), then their role,
+how they sign in, their last sign-in, their short name when they have one, and `first-time setup` while their temporary
+PIN is still to be changed: for example `Operator · local account · last sign-in 2026-10-30 12:00:00Z`, or
+`Linux account` for an enrolled Linux account.
+Names are not changed at the kiosk, which has no keyboard: people change their own in the web UI (their account) or the
+terminal (Setup), an admin anyone's, and a Linux account's come from the operating system (#209). People are paginated
+only when the list overflows the page. Choosing a name opens a separate keypad step: a compact, centred keypad of
+fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the keypad, with the person
+chosen before still chosen; the keypad's **Cancel** leaves Unlock. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
 ([Lockout](security.md#signing-in)). When no one has a PIN yet, the page says how to give one:
 `hvo-roof users set <name> --pin` or `hvo-roof pins set <name>` ([cli.md](cli.md#commands)), or the web UI's People
@@ -119,6 +123,9 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
   ([commissioning C9](commissioning.md#c9-operator-lease-expiry)).
 - **Notices** keep the last five things that happened, with their time: a command's answer, who unlocked the kiosk, the
   controller restarting, and safety alerts (`SAFETY: …`).
+- **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a chip beside
+  the position, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), and the reasons in the Safety row on
+  Readings. While the interlock blocks Open, Open is not offered.
 
 <p>
   <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display: Opening… in bright green, Close not offered, and Stop bright red" width="400">
@@ -132,8 +139,14 @@ screens remain available in the password-authenticated Mac app. PIN sessions can
 
 ### System
 
-Use an authorized administrative password session or local CLI/TUI for host information and restart. A PIN
-session does not gain these rights, even when its account is an administrator.
+The PIN kiosk has no System page: its controller summary is on **About**. Use an authorized administrative password
+session or local CLI/TUI for the host's details and restart. A PIN session does not gain these rights, even when its
+account is an administrator. A kiosk set to password sign-in shows System to every role: this kiosk's version, the
+controller's summary (version, uptimes, CPU, temperature, memory, disk and addresses, `GET System/Summary`) and its
+health checks; for an admin, the host's details and **Restart**, while others read
+`The host's details (its name, system, runtime and the controller's process) need the Admin role.`
+
+![An admin's System page: this kiosk's version, the controller's summary, and Restart](images/kiosk/admin-system-1280x720.png)
 
 ## The status
 
@@ -592,12 +605,18 @@ See [Authentication and interface rights](authentication-interfaces.md) for pers
 ### Finding the installed version
 
 Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. About is labelled
-cards: **This kiosk** (its version and the PIN policy), **Controller** (the connection, its name, its version and how
-long it has been running) and **Controller host** (CPU, memory, disk and IP addresses). A value not known says why:
-`Controller not configured yet` (the controller refused this kiosk's device key), `Controller unreachable` (no live
-status), or `Not available`. The controller gives its version and resource use only to an administrator's password
-session today, so the PIN kiosk shows `Not available` for them rather than substituting the local build; the Mac app
-signed in as an administrator shows what System last read. Stop remains available in its own column.
+cards. **This kiosk** has its version and the PIN policy. Each time About opens, the kiosk reads the controller's
+summary with its device key (`GET System/Summary`, any role, #209), and the **Controller** card shows the controller's
+version, then **where the web UI is** (`https://192.0.2.10:8088/` in the picture), built from the host's address, the
+published port and the scheme the installer recorded, so people at the kiosk know where to open it. When the web UI is not published to the network it says `only on the controller's machine`, and when the deployment did
+not record it, `address not known`; a container's own address is never given as where to reach it. The **Controller
+host** card has the controller's and the machine's uptime, and the machine's CPU, temperature, memory, disk and host
+addresses. A PIN session is not needed. A value
+not known says why: `Controller not configured yet.` (the controller refused this kiosk's device key),
+`Controller unreachable.` (no live status, or the summary could not be reached; no figures last read are shown),
+`Reading…`, or `Not available` (a value the controller could not read, or a controller older than the summary, whose
+reason is under the card). The local build is never substituted for the controller's. Stop remains available in its own
+column.
 
 ![Locked kiosk About view: labelled cards for this kiosk, the controller and its host, with fallback text](images/kiosk/about-locked-800x480.png)
 

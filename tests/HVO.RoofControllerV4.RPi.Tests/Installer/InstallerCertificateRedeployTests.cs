@@ -482,6 +482,7 @@ public sealed class InstallerCertificateRedeployTests
             .And.EndWith("The controller serves the new certificate.\n");
         pi.Deploys.Should().HaveCount(2);
         pi.Deploys[^1]["ALLOWED_HOSTS"].Split(';').Should().Contain("192.168.1.60").And.NotContain("192.168.1.50");
+        pi.Deploys[^1]["HOST_ADDRESSES"].Should().Be("192.168.1.60", "the redeploy refreshes where the web UI is reached (#209)");
         ServesTheCertificateInItsFile(pi).Should().BeTrue();
 
         var again = await pi.RunAsync("cert");

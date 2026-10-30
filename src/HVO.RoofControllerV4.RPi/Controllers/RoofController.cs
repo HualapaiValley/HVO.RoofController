@@ -8,6 +8,7 @@ using Asp.Versioning;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using Microsoft.AspNetCore.Authorization;
@@ -36,19 +37,25 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         private readonly IOptionsMonitor<RoofControllerHostOptionsV4> _hostOptions;
         private readonly IEnumerable<IValidateOptions<RoofControllerOptionsV4>> _configurationValidators;
         private readonly RoofSettingsStore _settings;
+        private readonly IRoofSafetyService _safety;
+        private readonly RoofSafetyInterlock _safetyInterlock;
 
         public RoofController(
             ILogger<RoofController> logger,
             IRoofControllerServiceV4 roofController,
             IOptionsMonitor<RoofControllerHostOptionsV4> hostOptions,
             IEnumerable<IValidateOptions<RoofControllerOptionsV4>> configurationValidators,
-            RoofSettingsStore settings)
+            RoofSettingsStore settings,
+            IRoofSafetyService safety,
+            RoofSafetyInterlock safetyInterlock)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _roofController = roofController ?? throw new ArgumentNullException(nameof(roofController));
             _hostOptions = hostOptions ?? throw new ArgumentNullException(nameof(hostOptions));
             _configurationValidators = configurationValidators ?? throw new ArgumentNullException(nameof(configurationValidators));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _safety = safety ?? throw new ArgumentNullException(nameof(safety));
+            _safetyInterlock = safetyInterlock ?? throw new ArgumentNullException(nameof(safetyInterlock));
         }
 
         /// <summary>
@@ -62,7 +69,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         {
             // Re-read the inputs so the snapshot reflects current hardware when input events are not flowing.
             _roofController.RefreshStatus(forceHardwareRead: true);
-            return Ok(_roofController.GetCurrentStatusSnapshot());
+            return Ok(_safety.WithSafety(_roofController.GetCurrentStatusSnapshot()));
         }
 
         /// <summary>
@@ -80,18 +87,37 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         }
 
         /// <summary>
-        /// Starts opening the roof (Operator).
+        /// Starts opening the roof (Operator). The safety interlock checks it first (<c>RoofSafety:InterlockMode</c>;
+        /// Off by default, which only logs an Open while the safety conditions are not Safe).
         /// </summary>
+        /// <param name="overrideSafety">
+        /// Open even though the safety conditions are not Safe, when the interlock is in Warn mode and the caller has its
+        /// override role. Audit-logged; ignored while the conditions are Safe or the interlock is Off.
+        /// </param>
         /// <response code="200">Motion started; status snapshot after the command.</response>
-        /// <response code="409">Refused by an interlock (fault latched, limit, operation in progress).</response>
+        /// <response code="409">Refused by an interlock (fault latched, limit, operation in progress, safety conditions).</response>
         /// <response code="503">Controller not ready (not initialized, shutting down, hardware or relay state unverified).</response>
         [HttpPost("Open", Name = nameof(DoRoofOpen))]
         [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
-        public ActionResult<RoofStatusResponse> DoRoofOpen()
-            => RunCommand("open", () => _roofController.Open());
+        public async Task<ActionResult<RoofStatusResponse>> DoRoofOpen([FromQuery] bool overrideSafety = false)
+        {
+            var safety = await _safetyInterlock.CheckOpenAsync(User, HttpContext, overrideSafety).ConfigureAwait(false);
+            return RunCommand("open", () =>
+            {
+                if (safety.Refusal is { } refusal)
+                {
+                    return Result<RoofControllerStatus>.Failure(refusal);
+                }
+
+                // An override is audited only once the controller's own checks have accepted Open.
+                var result = _roofController.Open();
+                _safetyInterlock.ReportOutcome(safety, result.IsSuccessful ? null : result.Error);
+                return result;
+            });
+        }
 
         /// <summary>
         /// Starts closing the roof (Operator).
@@ -157,7 +183,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             RoofControllerTelemetry.CompleteCommand(activity, "clear_fault", result.IsSuccessful, startTimestamp);
 
             return result.IsSuccessful
-                ? Ok(_roofController.GetCurrentStatusSnapshot())
+                ? Ok(_safety.WithSafety(_roofController.GetCurrentStatusSnapshot()))
                 : RoofProblem(result.Error, "clear_fault");
         }
 
@@ -294,7 +320,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             RoofControllerTelemetry.CompleteCommand(activity, command, result.IsSuccessful, startTimestamp);
 
             return result.IsSuccessful
-                ? Ok(_roofController.GetCurrentStatusSnapshot())
+                ? Ok(_safety.WithSafety(_roofController.GetCurrentStatusSnapshot()))
                 : RoofProblem(result.Error, command);
         }
 
@@ -344,7 +370,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 details.Extensions[RoofControllerApiContract.ProblemCodeExtension] = code.ToString();
                 if (snapshot is not null)
                 {
-                    details.Extensions[RoofControllerApiContract.ProblemStatusExtension] = snapshot;
+                    details.Extensions[RoofControllerApiContract.ProblemStatusExtension] = _safety.WithSafety(snapshot);
                 }
             }
 
@@ -382,6 +408,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             RoofControllerErrorCode.ConfigurationVersionConflict => "Configuration version conflict",
             RoofControllerErrorCode.ConfigurationRejected => "Configuration rejected",
             RoofControllerErrorCode.InvalidRequest => "Invalid request",
+            RoofControllerErrorCode.SafetyInterlockActive => "Safety interlock active",
+            RoofControllerErrorCode.SafetyOverrideRequired => "Safety override required",
             _ => "Roof controller error"
         };
 

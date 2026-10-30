@@ -57,7 +57,7 @@ public sealed class KioskPinPad
         ? _chosenPin is null ? "Choose your personal four-digit PIN." : "Enter your new PIN again to confirm."
         : Selected is null ? "Choose your name, then enter your PIN."
         : SelectedUser?.SetupPending == true ? $"First-time setup for {SelectedUser.Name}: enter the temporary PIN."
-        : $"PIN for {SelectedUser?.Name ?? Selected}: four digits.";
+        : $"PIN for {(SelectedUser is { } user ? RoofIdentityText.DescribePerson(user.Name, user.DisplayName) : Selected)}: four digits.";
 
     /// <summary>True when the PIN can be sent: a person is chosen and the PIN has an allowed length.</summary>
     public bool CanUnlock => Selected is not null && !Unlocking && RoofIdentityContract.IsAcceptedPin(_pin);

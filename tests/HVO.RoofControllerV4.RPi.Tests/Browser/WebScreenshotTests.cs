@@ -12,7 +12,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Browser;
 /// <summary>
 /// The web UI's screenshots in <c>docs/web.md</c>: each page as an admin sees it, against the emulated roof and camera.
 /// Every page is visited on a phone, a tablet and a desktop and must be whole (no sideways scroll, and once signed in the
-/// mode banner shown) with no secret in it: the key panel is never opened, and the controller's host name is masked.
+/// mode banner shown) with no secret in it: the key panel is never opened, and the controller's host name and addresses
+/// are masked.
 /// The docs keep every page at the desktop, the sign-in and roof pages on the phone, and the roof page on the tablet, as
 /// JPEG to keep the repository small. The images go to <c>browser/screens</c> in the test results, or to <c>WEB_SCREENS_OUT</c> when it is
 /// set (the refresh in <c>docs/web.md</c> points it at <c>docs/images/web</c>).
@@ -27,6 +28,17 @@ public sealed class WebScreenshotTests
     {
         ["phone"] = ["01-signin", "02-roof", "03-roof-opening"],
         ["tablet"] = ["02-roof"],
+    };
+
+    /// <summary>
+    /// Where the web UI is reached, as the deploy script would pass it (RoofHost__*), with a documentation address
+    /// (RFC 5737): the System page shows these, never this machine's own addresses.
+    /// </summary>
+    private static readonly Dictionary<string, string?> DocumentedHost = new()
+    {
+        ["RoofHost:Addresses"] = "192.0.2.10",
+        ["RoofHost:WebUiUrls"] = "https://192.0.2.10:8088/",
+        ["RoofHost:WebUiAccess"] = "Network"
     };
 
     private WebBrowser? _browser;
@@ -48,7 +60,7 @@ public sealed class WebScreenshotTests
     [DataRow(WebDevices.Desktop, "desktop")]
     public async Task EachPage_AsAnAdminSeesIt_IsCaptured_WithoutASecret(string device, string name)
     {
-        var options = Scenario.Production(travelMeters: 2.0) with { Camera = true };
+        var options = Scenario.Production(travelMeters: 2.0, settings: DocumentedHost) with { Camera = true };
         var browser = _browser = await WebBrowser.StartAsync(TestContext, options, device);
         var page = browser.Page;
         var shots = new Screens(this, browser, name);
@@ -105,13 +117,29 @@ public sealed class WebScreenshotTests
         // The first screen: the settings run on for several screens of fields.
         await shots.TakeAsync("05-settings", wholePage: false);
 
+        // One person with both names, so the list shows them (#209); the names are synthetic.
+        using (var admin = browser.AdminClient())
+        {
+            await admin.Identity.UpdateUserAsync(WebBrowser.Operator, new HVO.RoofControllerV4.Common.Models.RoofUserUpdateRequest
+            {
+                Role = HVO.RoofControllerV4.Common.Models.RoofControllerApiContract.OperatorRole,
+                DisplayName = "Olga Example",
+                ShortName = "Olga"
+            });
+        }
+
         await page.GotoAsync("/people");
         await Expect(page.GetByTestId("user").First).ToBeVisibleAsync();
         await shots.TakeAsync("06-people");
 
         await page.GotoAsync("/system");
-        await Expect(page.GetByTestId("system-fact").First).ToBeVisibleAsync();
+        await Expect(page.Locator("[data-testid=system-summary] [data-testid=system-fact]").First).ToBeVisibleAsync();
+        await Expect(page.Locator("[data-testid=system-information] [data-testid=system-fact]").First).ToBeVisibleAsync();
         await Expect(page.GetByTestId("restart")).ToBeVisibleAsync();
+        // The web UI's address and the host's are the documentation address above; checked before the image is taken,
+        // so a setting that did not apply cannot publish this machine's. Its host name is masked.
+        await Expect(page.Locator("[data-testid=system-summary] [data-testid=system-fact][data-label='Web UI']")).ToHaveTextAsync("https://192.0.2.10:8088/");
+        await Expect(page.Locator("[data-testid=system-summary] [data-testid=system-fact][data-label=Addresses]")).ToHaveTextAsync("192.0.2.10");
         await shots.TakeAsync("07-system", mask: page.Locator("[data-testid=system-fact][data-label=Host]"));
 
         // Secondary workflows use the same real components; leave all private inputs empty.
@@ -120,6 +148,13 @@ public sealed class WebScreenshotTests
         await shots.TakeAsync("09-person-editor", wholePage: false);
         await page.GotoAsync("/account/password");
         await shots.TakeAsync("11-password");
+        // A person's own names (#209), typed but not saved; the names are synthetic.
+        await page.GotoAsync("/account/names");
+        await Expect(page.GetByTestId("names-form")).ToBeVisibleAsync();
+        await page.GetByTestId("names-display-name").FillAsync("Ada Example");
+        await page.GetByTestId("names-short-name").FillAsync("Ada");
+        await page.GetByTestId("names-short-name").BlurAsync();
+        await shots.TakeAsync("16-names");
         await page.GotoAsync("/settings");
         await page.Locator("[data-testid=settings-group][data-group=roof]").ClickAsync();
         var safety = page.Locator("[data-testid=setting][data-key$=':AtSpeedConfirmationTimeout']");

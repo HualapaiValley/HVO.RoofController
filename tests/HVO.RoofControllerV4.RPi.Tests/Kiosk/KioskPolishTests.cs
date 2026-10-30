@@ -118,8 +118,8 @@ public sealed class KioskPolishTests
         await OnUiAsync(() =>
         {
             screen.Visible($"pin-user-{KioskHarness.Operator}").Should().BeTrue();
-            ButtonText(screen, $"pin-user-{KioskHarness.Operator}").Should().Contain(KioskHarness.Operator).And.Contain("Operator · Controller account");
-            ButtonText(screen, $"pin-user-{KioskHarness.Admin}").Should().Contain("Admin · Controller account");
+            ButtonText(screen, $"pin-user-{KioskHarness.Operator}").Should().Contain(KioskHarness.Operator).And.Contain("Operator · local account · last sign-in");
+            ButtonText(screen, $"pin-user-{KioskHarness.Admin}").Should().Contain("Admin · local account · last sign-in");
             screen.Visible("pin-people-previous").Should().BeFalse("two people fit: no inert page controls");
             screen.Visible("pin-people-next").Should().BeFalse();
             screen.Visible("pin-people-cancel").Should().BeTrue();
@@ -174,14 +174,21 @@ public sealed class KioskPolishTests
     }
 
     [TestMethod]
-    public void ThePeopleStep_DescribesRoleLoginTypeAndPendingSetup()
+    public void ThePeopleStep_DescribesNamesRoleLoginTypeLastSignInAndPendingSetup()
     {
-        KioskPinPage.DescribePerson(new RoofPinUserResponse("ada", RoofControllerApiContract.AdminRole)).Should().Be("Admin · Controller account");
-        KioskPinPage.DescribePerson(new RoofPinUserResponse("olga", RoofControllerApiContract.OperatorRole) { Provider = "virtual", PrincipalId = "p1" })
-            .Should().Be("Operator · Controller account");
-        KioskPinPage.DescribePerson(new RoofPinUserResponse("roy", RoofControllerApiContract.OperatorRole) { Provider = "linux", PrincipalId = "p2", SetupPending = true })
-            .Should().Be("Operator · Linux account · first-time setup");
-        RoofIdentityText.DescribeLoginType("ldap").Should().Be("ldap account");
+        var signedIn = new DateTimeOffset(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
+        var ada = new RoofPinUserResponse("ada", RoofControllerApiContract.AdminRole);
+        KioskPinPage.Heading(ada).Should().Be("ada");
+        KioskPinPage.DescribePerson(ada).Should().Be($"Admin · local account · last sign-in {RoofIdentityText.NoSignInRecorded}");
+        var olga = new RoofPinUserResponse("olga", RoofControllerApiContract.OperatorRole) { DisplayName = "Olga Petrova", LastLoginUtc = signedIn };
+        KioskPinPage.Heading(olga).Should().Be("Olga Petrova (olga)", "the display name, with the name it signs in with");
+        KioskPinPage.DescribePerson(olga).Should().Be($"Operator · local account · last sign-in {RoofStatusText.Time(signedIn)}");
+        var roy = new RoofPinUserResponse("roys", RoofControllerApiContract.OperatorRole)
+        {
+            Provider = "linux", PrincipalId = "p2", DisplayName = "Roy Salisbury", ShortName = "Roy", SetupPending = true
+        };
+        KioskPinPage.Heading(roy).Should().Be("Roy Salisbury (roys)");
+        KioskPinPage.DescribePerson(roy).Should().Be($"Operator · Linux account · last sign-in {RoofIdentityText.NoSignInRecorded} · short name Roy · first-time setup");
     }
 
     [TestMethod]
@@ -227,69 +234,64 @@ public sealed class KioskPolishTests
         await harness.UnlockAsync(KioskHarness.Operator);
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.About));
+        await UntilAsync(() => screen.Shell.System is { ReadingSummary: false, Summary.Count: > 0 }, "the summary, read by an operator's PIN session");
         await screen.RenderAsync("polish-about", TestContext);
         await OnUiAsync(() =>
         {
             screen.Text("about-client-version").Should().Be(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
-            screen.Text("about-controller-state").Should().Be("Live");
-            screen.Text("about-controller-name").Should().Be(KioskHarness.ControllerName);
-            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.NotAvailable, "the PIN kiosk gets no version from the controller yet");
             var info = screen.Shell.AboutPage.Info;
-            info.Host.Rows.Select(row => row.Label).Should().Equal("CPU", "Memory", "Disk", "IP addresses");
-            info.Host.Rows.Should().OnlyContain(row => !row.IsKnown && row.Value == KioskAboutInfo.NotAvailable);
-            info.Host.Note.Should().Contain("administrator");
+            info.Controller.Rows.Select(row => row.Label).Should().Equal(["Version", "Web UI"], "where the web UI is comes first after the version");
+            screen.Text("about-web-ui").Should().Be("https://192.0.2.10:8088/", "the host's address, not a container's");
+            info.Host.Rows.Select(row => row.Label).Should().Equal("Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+            info.Host.Rows.Should().OnlyContain(row => row.IsKnown, "the emulated controller gives every summary figure");
+            info.Host.Note.Should().BeNull();
             if (width >= 1280)
             {
                 var pager = (KioskPager)screen.Find("about-pages")!;
                 pager.IsPaged.Should().BeFalse($"About fits one page at {width}x{height}");
             }
+            screen.OffScreen(name => name.StartsWith("about-", StringComparison.Ordinal)).Should().BeEmpty();
         });
 
         await OnUiAsync(() => screen.Shell.Update(harness.Console.View with { IsUnreachable = true, StaleSince = KioskHarness.Start }));
         await screen.RenderAsync("polish-about-unreachable", TestContext);
         await OnUiAsync(() =>
         {
-            screen.Text("about-controller-state").Should().Be("Unreachable");
             screen.Text("about-controller-version").Should().Be(KioskAboutInfo.Unreachable);
-            screen.Shell.AboutPage.Info.Host.Rows.Should().OnlyContain(row => row.Value == KioskAboutInfo.Unreachable);
+            screen.Shell.AboutPage.Info.Host.Rows.Should().OnlyContain(row => !row.IsKnown && row.Value == KioskAboutInfo.Unreachable);
         });
 
         await OnUiAsync(() => screen.Shell.Update(harness.Console.View with { FeedRefused = true, IsUnreachable = false }));
-        await OnUiAsync(() =>
-        {
-            screen.Text("about-controller-state").Should().Contain("Refused");
-            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.NotConfigured);
-        });
+        await OnUiAsync(() => screen.Text("about-controller-version").Should().Be(KioskAboutInfo.NotConfigured));
     }
 
     [TestMethod]
-    public void AboutInfo_ShowsSuppliedControllerFacts_OnlyWhileLive()
+    public void AboutInfo_ShowsTheSummary_OnlyWhileLive_AndSaysWhyOtherwise()
     {
-        var live = new KioskView
-        {
-            IsStarted = true,
-            UnlockedBy = "ada",
-            Role = RoofControllerApiContract.AdminRole,
-            Status = KioskHarness.Snapshot(),
-            FeedLabel = "live"
-        };
-        var facts = new KioskControllerFacts { Version = "9.8.7", Uptime = "1h 2m", Cpu = "3.0 %", Memory = "64.0 MiB", Disk = "40 % used", Addresses = "192.0.2.10" };
+        var live = new KioskView { IsStarted = true, Status = KioskHarness.Snapshot(), FeedLabel = "live" };
+        IReadOnlyList<(string Label, string Value)> summary =
+        [
+            ("Controller", "9.8.7"), ("Web UI", "https://192.0.2.10:8088/"), ("Uptime", "controller 1h 2m"),
+            ("CPU", "3.0 %"), ("Temperature", RoofSystemText.Unavailable), ("Memory", "1.0 GiB used of 4.0 GiB (25.0 %)"),
+            ("Disk", "9.0 GiB free of 28.0 GiB"), ("Addresses", "192.0.2.10")
+        ];
         var self = ("This app", "1.2.3");
-        var shown = KioskAboutInfo.Describe(live, KioskWording.Desktop, self, facts);
-        shown.Controller.Rows.Single(row => row.Name == "about-controller-version").Value.Should().Be("9.8.7");
-        shown.Host.Rows.Select(row => row.Value).Should().Equal("3.0 %", "64.0 MiB", "40 % used", "192.0.2.10");
-        shown.Host.Note.Should().BeNull("every slot is filled");
+        var shown = KioskAboutInfo.Describe(live, KioskWording.Desktop, self, summary, null);
+        shown.Controller.Rows.Select(row => row.Value).Should().Equal("9.8.7", "https://192.0.2.10:8088/");
+        shown.Host.Rows.Select(row => row.Name).Should().Equal("about-uptime", "about-cpu", "about-temperature", "about-memory", "about-disk", "about-addresses");
+        shown.Host.Rows.Single(row => row.Label == "Temperature").Should().Be(new KioskAboutRow("about-temperature", "Temperature", KioskAboutInfo.NotAvailable, false));
+        shown.Device.Note.Should().Be(KioskAboutInfo.DesktopPolicy);
 
-        var partial = KioskAboutInfo.Describe(live, KioskWording.Desktop, self, facts with { Disk = null, Addresses = null });
-        partial.Host.Rows.Where(row => !row.IsKnown).Select(row => row.Label).Should().Equal("Disk", "IP addresses");
-        partial.Host.Note.Should().Contain("does not report disk use or addresses");
+        var stale = KioskAboutInfo.Describe(live with { StaleSince = KioskHarness.Start }, KioskWording.Desktop, self, summary, null);
+        stale.Controller.Rows[0].Value.Should().Be(KioskAboutInfo.Unreachable, "a value from before the feed went stale is not shown as current");
 
-        var stale = KioskAboutInfo.Describe(live with { StaleSince = KioskHarness.Start }, KioskWording.Desktop, self, facts);
-        stale.Controller.Rows.Single(row => row.Name == "about-controller-version").Value.Should().Be(KioskAboutInfo.Unreachable, "a value from before the feed went stale is not shown as current");
-        stale.Controller.Rows.Single(row => row.Name == "about-controller-state").Value.Should().StartWith("Stale");
-
-        var notStarted = KioskAboutInfo.Describe(KioskView.NotStarted, KioskWording.Kiosk, self, facts);
-        notStarted.Controller.Rows.Single(row => row.Name == "about-controller-state").Value.Should().Be("Connecting…");
+        KioskAboutInfo.Describe(live, KioskWording.Kiosk, self, [], null).Controller.Rows[0].Value.Should().Be(KioskAboutInfo.Reading);
+        KioskAboutInfo.Describe(live, KioskWording.Kiosk, self, [], RoofSystemText.ControllerUnreachable).Host.Rows
+            .Should().OnlyContain(row => row.Value == KioskAboutInfo.Unreachable);
+        var refused = KioskAboutInfo.Describe(live, KioskWording.Kiosk, self, [], "Not found.");
+        refused.Host.Rows.Should().OnlyContain(row => row.Value == KioskAboutInfo.NotAvailable, "an older controller without a summary");
+        refused.Host.Note.Should().Be("Not found.");
+        var notStarted = KioskAboutInfo.Describe(KioskView.NotStarted, KioskWording.Kiosk, self, summary, null);
         notStarted.Host.Rows.Should().OnlyContain(row => row.Value == KioskAboutInfo.NotAvailable);
         notStarted.Device.Note.Should().Be(KioskAboutInfo.PinPolicy);
     }

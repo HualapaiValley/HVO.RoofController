@@ -40,16 +40,23 @@ public sealed class KioskRenderTests
     public async Task About_IsReadableWhileLockedAndOffline_AndKeepsStopVisible(int width, int height, double pixelsPerMillimetre)
     {
         await using var harness = await KioskHarness.CreateAsync();
+        harness.ControllerVersion = "9.8.7-rc.2+abcdef1234567890";
         await harness.StartLiveAsync();
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.About));
+        await UntilAsync(() => screen.Shell.System is { ReadingSummary: false, Summary.Count: > 0 }, "the summary, read with the kiosk's own key");
         await screen.DrawAsync();
         await OnUiAsync(() =>
         {
             screen.Shell.AboutPage.Info.Device.Title.Should().Be("This kiosk");
             screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
-            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.NotAvailable);
-            screen.Text("about-host-note").Should().Contain("administrator's password session");
+            screen.Text("about-controller-version").Should().Be("9.8.7-rc.2 (commit abcdef123456)",
+                "a locked PIN kiosk reads the controller's version with its own key (#209)");
+            screen.Text("about-web-ui").Should().Be("https://192.0.2.10:8088/",
+                "people at the kiosk learn where the web UI is, from the host's address (#209)");
+            screen.Text("about-cpu").Should().Be("12.5 %, load 0.42 0.35 0.30, 4 processors");
+            screen.Text("about-temperature").Should().Be("47.2 °C");
+            screen.Text("about-addresses").Should().Be("192.0.2.10");
             screen.Shell.Page.Should().Be(KioskPage.About);
         });
         await screen.RenderAsync("about-locked", TestContext);
@@ -59,7 +66,8 @@ public sealed class KioskRenderTests
             screen.Window.UpdateLayout();
             screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
             screen.Text("about-controller-version").Should().Be(KioskAboutInfo.Unreachable);
-            screen.Text("about-controller-state").Should().Be("Unreachable");
+            screen.Text("about-web-ui").Should().Be(KioskAboutInfo.Unreachable, "figures last read are not shown for a controller that cannot be reached");
+            screen.Text("about-cpu").Should().Be(KioskAboutInfo.Unreachable);
         });
         await screen.RenderAsync("about-offline", TestContext);
     }
@@ -294,6 +302,36 @@ public sealed class KioskRenderTests
     }
 
     [TestMethod]
+    public async Task ThePinPad_NamesAPersonByTheirFriendlyName()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        using (var admin = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(Controllers.TestApiKeys.Admin)))
+        {
+            await admin.Identity.UpdateUserAsync(KioskHarness.Operator, new RoofUserUpdateRequest
+            {
+                Role = RoofControllerApiContract.OperatorRole,
+                DisplayName = "Olga Example",
+                ShortName = "Olga"
+            });
+        }
+
+        await harness.StartLiveAsync();
+        await using var screen = await KioskScreen.ShowAsync(harness, 1280, 720, 8.2);
+
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Unlock));
+        await UntilAsync(() => screen.Shell.PinPad.Users.Count == 2, "the people with a PIN");
+        await OnUiAsync(() =>
+        {
+            screen.Text($"pin-user-{KioskHarness.Operator}").Should().Be($"Olga Example ({KioskHarness.Operator})",
+                "the friendly name, with the name signed in by (#209)");
+            screen.Text($"pin-user-{KioskHarness.Admin}").Should().Be(KioskHarness.Admin, "a person without one is shown by name");
+            screen.Shell.PinPad.Select(KioskHarness.Operator);
+            screen.Window.UpdateLayout();
+            screen.Text("pin-prompt").Should().Be($"PIN for Olga Example ({KioskHarness.Operator}): four digits.");
+        });
+    }
+
+    [TestMethod]
     [DataRow(1280, 720, 8.2)]
     [DataRow(800, 480, 5.2)]
     public async Task ThePinPad_ListsThePeople_AndShowsADotPerDigit(int width, int height, double pixelsPerMillimetre)
@@ -337,7 +375,7 @@ public sealed class KioskRenderTests
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, pixelsPerMillimetre);
 
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.System));
-        await UntilAsync(() => screen.Shell.System is { Health: not null, Busy: null, Information.Count: > 0 }, "the controller's health and host");
+        await UntilAsync(() => screen.Shell.System is { Health: not null, Busy: null, Information.Count: > 0, Summary.Count: > 0 }, "the controller's health, summary and host");
         (await screen.MaskAsync(Environment.MachineName)).Should().Be(1, "the host is shown once");
 
         await screen.RenderAsync("admin-system", TestContext);

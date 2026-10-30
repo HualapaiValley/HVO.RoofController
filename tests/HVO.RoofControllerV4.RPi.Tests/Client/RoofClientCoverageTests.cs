@@ -49,6 +49,7 @@ public sealed class RoofClientCoverageTests
         ("Roof.ClearFault", client => client.Roof.ClearFaultAsync()),
         ("Roof.GetConfiguration", client => client.Roof.GetConfigurationAsync()),
         ("Roof.UpdateConfiguration", client => client.Roof.UpdateConfigurationAsync(new RoofConfigurationRequest())),
+        ("Roof.GetSafety", client => client.Roof.GetSafetyAsync()),
         ("Stop", client => client.StopAsync()),
         ("Auth.SignIn", client => client.Auth.SignInAsync("alice", "not-a-password")),
         ("Auth.GetProviders", client => client.Auth.GetProvidersAsync()),
@@ -70,6 +71,7 @@ public sealed class RoofClientCoverageTests
         ("Auth.GetCaller", client => client.Auth.GetCallerAsync()),
         ("Auth.SignOut", client => client.Auth.SignOutAsync()),
         ("Auth.ChangePassword", client => client.Auth.ChangePasswordAsync("not-a-password", "not-a-password-either")),
+        ("Auth.ChangeNames", client => client.Auth.ChangeNamesAsync(new RoofNamesChangeRequest { DisplayName = "Alice Example" })),
         ("Identity.GetPrincipals", client => client.Identity.GetPrincipalsAsync()),
         ("Identity.EnrollPrincipal", client => client.Identity.EnrollPrincipalAsync(
             new RoofPrincipalEnrollRequest
@@ -105,6 +107,7 @@ public sealed class RoofClientCoverageTests
         ("Settings.ApplyHandEdit", client => client.Settings.ApplyHandEditAsync(new RoofSettingsHandEditRequest { Token = "edit-1" })),
         ("Settings.DiscardHandEdit", client => client.Settings.DiscardHandEditAsync(new RoofSettingsHandEditRequest { Token = "edit-1" })),
         ("System.Restart", client => client.System.RestartAsync()),
+        ("System.GetSummary", client => client.System.GetSummaryAsync()),
         ("System.GetInformation", client => client.System.GetInformationAsync()),
         ("System.GetMetrics", client => client.System.GetMetricsAsync()),
         ("Health.GetReport", client => client.Health.GetReportAsync()),

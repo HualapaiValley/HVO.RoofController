@@ -19,6 +19,88 @@ public static class RoofSystemText
     /// <summary>Follows the controller's answer to a restart.</summary>
     public const string RestartComingBack = "Readiness says when it is back; the status comes back by itself.";
 
+    /// <summary>In place of the controller's information when the client has no controller to ask yet.</summary>
+    public const string ControllerNotConfigured = "Controller not configured yet.";
+
+    /// <summary>In place of the controller's information when the controller cannot be reached.</summary>
+    public const string ControllerUnreachable = "Controller unreachable.";
+
+    /// <summary>A value of the summary the controller could not read.</summary>
+    public const string Unavailable = "unavailable";
+
+    /// <summary>In place of the host's details (admin) for a caller without the Admin role; the summary is everyone's.</summary>
+    public const string HostDetailsNeedAdmin = "The host's details (its name, system, runtime and the controller's process) need the Admin role.";
+
+    /// <summary>
+    /// Why the controller's information is not shown: <see cref="ControllerUnreachable"/> for a controller that cannot be
+    /// reached or did not answer in time, otherwise the shared wording for the failure (a refusal says why).
+    /// </summary>
+    public static string DescribeUnavailable(Exception error) => error switch
+    {
+        HttpRequestException or TimeoutException or TaskCanceledException { InnerException: TimeoutException } => ControllerUnreachable,
+        _ => RoofText.DescribeFailure(error)
+    };
+
+    /// <summary>The web UI's URLs are not known: the deployment did not say (a development run, or deployed before #209).</summary>
+    public const string WebUiUnknown = "address not known (the deployment did not record it)";
+
+    /// <summary>
+    /// The controller's summary (#209), as label and value, for every role: its version, where the web UI is reached, the
+    /// uptimes, CPU, temperature, memory, disk and the host's addresses. A value the controller could not read shows as
+    /// <see cref="Unavailable"/>.
+    /// </summary>
+    public static IEnumerable<(string Label, string Value)> DescribeSummary(SystemSummaryResponse summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        yield return ("Controller", RoofProductVersion.Describe(summary.ApplicationVersion));
+        yield return ("Web UI", DescribeWebUi(summary));
+        var controllerUp = Duration(TimeSpan.FromSeconds(summary.UptimeSeconds));
+        yield return ("Uptime", summary.HostUptimeSeconds is { } host
+            ? $"controller {controllerUp}, host {Duration(TimeSpan.FromSeconds(host))}"
+            : $"controller {controllerUp}");
+        yield return ("CPU", DescribeCpu(summary));
+        yield return ("Temperature", summary.CpuTemperatureCelsius is { } celsius
+            ? $"{celsius.ToString("0.0", CultureInfo.InvariantCulture)} °C"
+            : Unavailable);
+        yield return ("Memory", summary is { MemoryTotalBytes: { } total and > 0, MemoryAvailableBytes: { } available }
+            ? $"{Bytes(Math.Max(total - available, 0))} used of {Bytes(total)} ({Percent((total - available) * 100d / total)})"
+            : Unavailable);
+        yield return ("Disk", summary is { DiskTotalBytes: { } size and > 0, DiskFreeBytes: { } free }
+            ? $"{Bytes(free)} free of {Bytes(size)}"
+            : Unavailable);
+        yield return ("Addresses", DescribeAddresses(summary));
+    }
+
+    /// <summary>
+    /// Where people reach the web UI: its URLs, built from the host's addresses (#209); on the controller's machine alone
+    /// when it is not published to the network; or that it is not known. A container's own address is never given as
+    /// where to reach it.
+    /// </summary>
+    public static string DescribeWebUi(SystemSummaryResponse summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        var urls = summary.WebUiUrls is { Length: > 0 } known ? string.Join(", ", known) : null;
+        return summary.WebUiAccess switch
+        {
+            RoofWebUiAccess.LocalOnly => urls is null
+                ? "only on the controller's machine: it is not published to the network"
+                : $"only on the controller's machine ({urls}): it is not published to the network",
+            RoofWebUiAccess.Network => urls ?? "published to the network; " + WebUiUnknown,
+            _ => urls ?? WebUiUnknown
+        };
+    }
+
+    /// <summary>
+    /// The host's addresses; when only a container's own are known, those, said to be the container's and not where
+    /// anything on the network reaches the controller.
+    /// </summary>
+    private static string DescribeAddresses(SystemSummaryResponse summary)
+        => summary.HostAddresses is { Length: > 0 } host ? string.Join(", ", host)
+            : summary.RunningInContainer && summary.IpAddresses is { Length: > 0 } container
+                ? $"host's not known; the controller's container has {string.Join(", ", container)}, which the network does not reach"
+            : summary.IpAddresses is { Length: > 0 } own ? string.Join(", ", own)
+            : "none found";
+
     /// <summary>The controller's version, host and resource use, as label and value.</summary>
     public static IEnumerable<(string Label, string Value)> DescribeInformation(SystemInformationResponse information, SystemRuntimeMetricsResponse metrics)
     {
@@ -48,7 +130,27 @@ public static class RoofSystemText
         ? $"{(int)value.TotalDays}d {value.Hours}h {value.Minutes}m"
         : value.TotalHours >= 1 ? $"{(int)value.TotalHours}h {value.Minutes}m" : $"{value.Minutes}m {value.Seconds}s";
 
-    public static string Bytes(long bytes) => bytes >= 1 << 20
+    public static string Bytes(long bytes) => bytes >= 1L << 30
+        ? $"{(bytes / (double)(1L << 30)).ToString("0.0", CultureInfo.InvariantCulture)} GiB"
+        : bytes >= 1 << 20
         ? $"{(bytes / (double)(1 << 20)).ToString("0.0", CultureInfo.InvariantCulture)} MiB"
         : $"{(bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture)} KiB";
+
+    private static string DescribeCpu(SystemSummaryResponse summary)
+    {
+        var parts = new List<string> { summary.CpuUsagePercent is { } percent ? Percent(percent) : Unavailable };
+        if (summary is { LoadAverage1Minute: { } one, LoadAverage5Minutes: { } five, LoadAverage15Minutes: { } fifteen })
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"load {one:0.00} {five:0.00} {fifteen:0.00}"));
+        }
+
+        if (summary.ProcessorCount > 0)
+        {
+            parts.Add(summary.ProcessorCount == 1 ? "1 processor" : $"{summary.ProcessorCount} processors");
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string Percent(double value) => $"{value.ToString("0.0", CultureInfo.InvariantCulture)} %";
 }

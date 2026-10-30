@@ -903,6 +903,15 @@ never changes what the installer deploys. The installer also sets `REQUIRE_IDLE_
 it replaces the controller when it cannot read the roof's status, as well as when the roof moves
 ([Deploying](deployment.md#deploying-with-the-script)).
 
+The installer gives the script `HOST_ADDRESSES`: this machine's private LAN addresses, the ones the controller's names
+hold (never a container's, a virtual network's, a link-local or a loopback one). From them, with the web UI's port and
+scheme, the script tells the controller [where people reach the web UI](deployment.md#where-people-reach-the-web-ui),
+and every role sees it in the controller's summary (the kiosk's About page, the web UI's System page,
+`hvo-roof info`): `https://192.0.2.10:8088/`, say. A rig not open to the network says its web UI is on the machine
+alone. They are recorded at each install, upgrade and `cert` redeploy. When this machine's address changes, its names
+change too, so `sudo hvo-roof-install` (or `cert`) redeploys the controller and refreshes them; until then the
+controller shows the address it had.
+
 ### Temporary files
 
 The [owner's 2026-10-17 decision for #147](https://github.com/HualapaiValley/HVO.RoofController/issues/147)

@@ -75,6 +75,23 @@ public sealed class RoofNativeAuthClient : IDisposable
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException) { return null; }
     }
 
+    /// <summary>
+    /// The account's full name from the operating system (its GECOS field, #209), for display only; null when it has
+    /// none, the account is not enrolled, or the worker cannot say (unavailable, or older than <c>/v1/profile</c>).
+    /// Never a reason to refuse a sign-in.
+    /// </summary>
+    public string? GetFullName(StoredLinuxPrincipal principal)
+    {
+        if (!_options.CurrentValue.LinuxAuth.Enabled) return null;
+        try
+        {
+            using var result = _client.PostAsJsonAsync("/v1/profile", new { subject = principal.Subject, enrollmentStamp = principal.EnrollmentStamp }).GetAwaiter().GetResult();
+            if (!result.IsSuccessStatusCode) return null;
+            return result.Content.ReadFromJsonAsync<ProfileResponse>(Json).GetAwaiter().GetResult()?.FullName;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException or NotSupportedException) { return null; }
+    }
+
     public RoofNativeAssertion? Verify(string? assertion, string purpose)
     {
         var options = _options.CurrentValue.LinuxAuth;
@@ -118,4 +135,5 @@ public sealed class RoofNativeAuthClient : IDisposable
     public void Dispose() => _client.Dispose();
     private sealed record AssertionResponse(string Assertion);
     private sealed record RevalidationResponse(bool? Valid, string? UserName);
+    private sealed record ProfileResponse(string? FullName);
 }

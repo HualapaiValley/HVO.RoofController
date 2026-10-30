@@ -55,6 +55,10 @@ The private controller HTTP socket accepts:
 * `POST /v1/revalidate`, `{subject,enrollmentStamp,purpose}` → `{valid:true,userName}` only while that exact enrollment and
   native account remain valid. No cached positive decision outlives an account/enrollment change.
   Purpose defaults to `linux-password`; `local-admin` follows the native sudo account policy below.
+* `POST /v1/profile`, `{subject,enrollmentStamp}` → `{fullName}` for an enabled enrollment: the account's full name, the
+  first field of its GECOS entry (`null` when it has none), for display only (#209). It authenticates nothing and grants
+  nothing; the controller asks for it at each Linux sign-in and keeps it read-only. A worker older than it answers 404,
+  and the controller shows the user name alone.
 
 `POST /v1/local` accepts `{uid,operation}` only on the separate local socket and only from a kernel root peer. The
 fixed `/usr/local/libexec/hvo-roof-local-auth` wrapper accepts no arguments, removes runtime environment overrides and

@@ -97,6 +97,7 @@ public sealed partial class RoofIdentityStore
                     owner.Value.Role, RoofCredentialKind.Pin, device, deviceId, now, now + _options.CurrentValue.PinSessionLifetime)
                     { PrincipalId = owner.Value.Id, PrincipalStamp = owner.Value.Stamp, Provider = owner.Value.Provider };
                 d.Sessions.Add(session); _lastActivity[session.Id] = now.UtcTicks;
+                RecordSignIn(d, owner.Value.Id, now);
                 return RoofIdentityResult<RoofKioskPinResponse>.Success(new(new RoofSessionResponse(sessionToken, session.Id,
                     session.UserName, RoofControllerApiContract.OperatorRole, RoofCredentialKind.Pin, session.ExpiresUtc,
                     _options.CurrentValue.PinSessionIdleTimeout.TotalSeconds), null, null));

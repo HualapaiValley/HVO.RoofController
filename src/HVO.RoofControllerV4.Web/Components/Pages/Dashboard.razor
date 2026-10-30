@@ -26,6 +26,13 @@
             <span class="badge rc2-badge @FeedBadgeClass" data-testid="feed-state" title="Where the status on this page comes from">
                 <i class="bi bi-broadcast" aria-hidden="true"></i>Status: @View.FeedLabel
             </span>
+            @if (status?.Safety is { } safety)
+            {
+                <span class="badge rc2-badge @SafetyBadgeClass(safety.State)" data-testid="safety" data-state="@safety.State"
+                      title="@RoofStatusText.DescribeSafety(safety)">
+                    <i class="bi @SafetyIcon(safety.State)" aria-hidden="true"></i>Safety: @RoofStatusText.DescribeSafetyState(safety.State)@(stale ? " (last known)" : string.Empty)
+                </span>
+            }
             @if (View.HoldsLease)
             {
                 <span class="badge rc2-badge bg-info text-dark" data-testid="lease" title="This page renews the operator lease while the roof moves">
@@ -263,6 +270,20 @@
         "live" => "bg-success",
         "refused" or "STALE" => "bg-danger",
         _ => "bg-warning text-dark"
+    };
+
+    private static string SafetyBadgeClass(RoofSafetyState state) => state switch
+    {
+        RoofSafetyState.Safe => "bg-success",
+        RoofSafetyState.Unsafe => "bg-danger",
+        _ => "bg-warning text-dark"
+    };
+
+    private static string SafetyIcon(RoofSafetyState state) => state switch
+    {
+        RoofSafetyState.Safe => "bi-shield-check",
+        RoofSafetyState.Unsafe => "bi-shield-exclamation",
+        _ => "bi-shield"
     };
 
     private static string DescribeMotion(RoofStatusResponse? status) => status?.CommandedMotion switch

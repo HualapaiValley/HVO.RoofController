@@ -207,7 +207,7 @@ public sealed class KioskShell : UserControl
 
     public KioskSystemPage SystemPage { get; }
 
-    /// <summary>Build identification, available without unlocking.</summary>
+    /// <summary>Build identification and the controller's summary, available without unlocking.</summary>
     public KioskAboutPage AboutPage { get; }
 
     /// <summary>The page shown.</summary>
@@ -263,6 +263,10 @@ public sealed class KioskShell : UserControl
                 break;
             case KioskPage.System when System.Health is null:
                 _ = System.LoadAsync();
+                break;
+            case KioskPage.About:
+                // Every role, a locked kiosk too: the summary is read afresh each time About opens (#209).
+                _ = System.LoadSummaryAsync();
                 break;
         }
 

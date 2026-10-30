@@ -106,6 +106,8 @@ public sealed class KioskRoofPage : UserControl
         };
 
         _chips.Children.Clear();
+        if (status?.Safety is { } safety)
+            _chips.Children.Add(SafetyChip(safety.State, stale));
         if (status is { IsWatchdogActive: true, WatchdogSecondsRemaining: { } watchdog })
             _chips.Children.Add(Chip($"Watchdog: {RoofStatusText.Seconds(watchdog)} left", true));
         _statusTime.Text = status is null ? KioskText.NoStatusYet
@@ -193,6 +195,19 @@ public sealed class KioskRoofPage : UserControl
         Grid.SetColumn(control, column);
         return control;
     }
+
+    // The reasons are on Readings, with the rest of the status; #208 redesigns this page.
+    private Border SafetyChip(RoofSafetyState state, bool stale) => KioskTheme.Pill(
+        $"Safety: {RoofStatusText.DescribeSafetyState(state)}{(stale ? " (last known)" : string.Empty)}",
+        stale ? (KioskTheme.Muted, KioskTheme.Badge, KioskTheme.Frame)
+            : state switch
+            {
+                RoofSafetyState.Safe => KioskTheme.SuccessColours,
+                RoofSafetyState.Unsafe => KioskTheme.Colours(KioskNoticeLevel.Danger),
+                _ => KioskTheme.Colours(KioskNoticeLevel.Warning)
+            },
+        _metrics,
+        "safety");
 
     private Border Chip(string text, bool on) => KioskTheme.Pill(
         text,

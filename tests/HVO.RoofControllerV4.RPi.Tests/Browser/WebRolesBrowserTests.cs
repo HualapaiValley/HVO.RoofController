@@ -50,10 +50,10 @@ public sealed class WebRolesBrowserTests
         await Expect(page.GetByTestId("signed-in-role")).ToHaveTextAsync(role);
 
         var links = page.Locator(".web-nav-links .nav-link");
-        await Expect(links).ToHaveTextAsync(["Roof", "Health", "Settings"]);
+        await Expect(links).ToHaveTextAsync(["Roof", "Health", "Settings", "System"]);
         await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
 
-        foreach (var path in new[] { "/health", "/settings", "/account/password" })
+        foreach (var path in new[] { "/health", "/settings", "/account/password", "/account/names" })
         {
             await page.GotoAsync(path);
             await Expect(page.Locator("main h1").First).ToBeVisibleAsync();
@@ -61,14 +61,18 @@ public sealed class WebRolesBrowserTests
             await Expect(page.GetByTestId("role-denied")).ToHaveCountAsync(0);
         }
 
-        foreach (var path in new[] { "/people", "/system" })
-        {
-            await page.GotoAsync(path);
-            await Expect(page.GetByTestId("role-denied")).ToBeVisibleAsync();
-            await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
-            await Expect(page.GetByTestId("users")).ToHaveCountAsync(0);
-            await Expect(page.GetByTestId("restart")).ToHaveCountAsync(0);
-        }
+        // Every role reads the controller's summary (#209); the host's details and the restarts stay an admin's.
+        await page.GotoAsync("/system");
+        await Expect(page.Locator("[data-testid=system-summary] [data-testid=system-fact][data-label=Controller]")).ToBeVisibleAsync();
+        await Expect(page.GetByTestId("role-denied")).ToHaveCountAsync(0);
+        await Expect(page.GetByTestId("system-information")).ToHaveCountAsync(0);
+        await Expect(page.GetByTestId("restart")).ToHaveCountAsync(0);
+        await Expect(page.GetByTestId("forced-restart")).ToHaveCountAsync(0);
+
+        await page.GotoAsync("/people");
+        await Expect(page.GetByTestId("role-denied")).ToBeVisibleAsync();
+        await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
+        await Expect(page.GetByTestId("users")).ToHaveCountAsync(0);
 
         // Stop is not a role's: it is on the page that turned the person away too.
         await browser.Stop.ClickAsync();
