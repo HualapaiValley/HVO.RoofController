@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The web UI's People page, `hvo-roof users` and the terminal's People page show the names, login type and last
   sign-in, and set or clear the names (`--display-name`, `--short-name`; **Names**). The kiosk's PIN picker shows a
   person's display name (#209).
+- People change their own display and short name where there is a keyboard: `POST api/v4.0/Auth/Names` from a password
+  session, the web UI's **Your names** page and the terminal's Setup page; a PIN session at a kiosk cannot. An enrolled
+  Linux account's names come from the operating system (its GECOS full name, from the native worker's new
+  `/v1/profile`, and its user name) and are read-only (#209).
+- Where people reach the web UI: the summary's `webUiUrls` and `webUiAccess` (`Network`, `LocalOnly` or `Unknown`),
+  shown first after the version on the kiosk's About page, in `hvo-roof info`, the terminal's and the web UI's System
+  pages. The installer gives the deploy script the host's LAN addresses (`HOST_ADDRESSES`), and the script passes the
+  URLs built from them, the published web port and the scheme (`RoofHost__*`) at every deploy; a rig not open to the
+  network says the web UI is only on that machine. A controller in a container never shows its bridge address as where
+  to reach it (#209).
 
 ### Changed
 

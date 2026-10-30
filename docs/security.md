@@ -57,7 +57,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/Settings/{group}`                        | Operator for `ui`, Admin for every other group | 200 `RoofSettingsResponse` | 400, 401, 403 (`SettingNotPermitted`), 404 (`SettingNotFound`), 409, 503 (`SettingsStoreUnavailable`) |
 | `POST /api/v4.0/Settings/Reload`, `POST /api/v4.0/Settings/Discard` | Admin (API key or session) | 200 `RoofSettingsResponse` | 400, 401, 403, 409, 503 |
 | `POST /api/v4.0/System/Restart`                          | Admin (API key or session) | 202 `RoofRestartResponse`, then the controller exits with code 75 | 401, 403, 409 (`RestartRefused`) |
-| `GET  /api/v4.0/System/Summary`                          | Viewer (API key or session, a kiosk key and a PIN session too) | 200 `SystemSummaryResponse`: the controller's version and uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and addresses (null where it could not read one); no host name, path or user | 401 |
+| `GET  /api/v4.0/System/Summary`                          | Viewer (API key or session, a kiosk key and a PIN session too) | 200 `SystemSummaryResponse`: the controller's version and uptime, where people reach the web UI (`webUiUrls`, `webUiAccess`: [Where people reach the web UI](deployment.md#where-people-reach-the-web-ui)), and its machine's uptime, CPU use, load and temperature, memory, data disk and addresses (null where it could not read one); no host name, path or user | 401 |
 | `GET  /api/v1.0/System/info`, `GET /api/v1.0/System/metrics` | Admin         | 200 | 401, 403 |
 | `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key or session) | 200 MJPEG | 401, 502, 503, 504 |
 | `POST /api/v4.0/Auth/Session`                            | anonymous         | 200 `RoofSessionResponse` | 400, 401 (`SignInFailed`), 429 (`SignInLockedOut`, `SignInBusy`), 503 |
@@ -66,6 +66,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` (a person's display and short name too) | 401 |
 | `DELETE /api/v4.0/Auth/Session`                          | a session (signs it out) | 204 | 400 (an API key), 401, 503 |
 | `POST /api/v4.0/Auth/Password`                           | a session (own password) | 204 | 400, 401 (`SignInFailed`), 429, 503 |
+| `POST /api/v4.0/Auth/Names`                              | a password session (own names) | 200 `RoofCallerResponse` | 400 (an invalid name, or an API key), 401, 403 (`CredentialNotAllowed` for a PIN session), 409 (`IdentityReadOnly` for a Linux account), 503 |
 | `GET, POST /api/v4.0/Identity/Users`, `GET, PUT, DELETE /api/v4.0/Identity/Users/{name}` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed` for a PIN session), 404, 409, 429, 503 |
 | `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed`), 404, 409, 503 |
 | `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin (not a PIN session) | 200, 204 | 401, 403 (`CredentialNotAllowed`), 404, 503 |
@@ -313,6 +314,8 @@ API in its identity store.
 - **Sign out.** `DELETE /api/v4.0/Auth/Session` ends the session that sent it.
 - **Own password.** `POST /api/v4.0/Auth/Password` with `currentPassword` and `newPassword` changes a signed-in
   person's password. Their other sessions end; this one stays open.
+- **Own names.** `POST /api/v4.0/Auth/Names` with `displayName` and `shortName` changes a signed-in person's own names
+  ([Names and last sign-in](#names-and-last-sign-in)).
 
 New virtual passwords are 7 to 256 characters with no composition rule. New personal PINs are exactly four ASCII digits; the temporary commissioning code is reserved. Existing credentials are preserved. Linux passwords retain PAM policy. Names are 1 to 64 letters, digits, `.`, `_`, `@` or `-`,
 starting with a letter or digit. Passwords and PINs are stored as PBKDF2 hashes. Session tokens and managed keys are
@@ -391,9 +394,20 @@ session, is refused at once. A status hub connection that used it closes within 
 
 A person has a sign-in name (the rules above) and, optionally, a **display name** (a friendly name, up to 64
 characters) and a **short name** (up to 16, for narrow places such as a kiosk). Both are trimmed, and may not hold a
-control, formatting (such as a bidirectional override) or private-use character. An admin sets them with `DisplayName`
-and `ShortName` on `POST Identity/Users`, or on `PUT Identity/Users/{name}`, where a name left out (null) is kept and an
-empty one is removed. A name change is an `AUDIT` change of the person, and ends no session.
+control, formatting (such as a bidirectional override) or private-use character. A name left out (null) is kept and an
+empty one is removed; a change is an `AUDIT` change of the person, and ends no session. Names are changed only where
+there is a keyboard:
+
+- a person changes their own with `POST Auth/Names`, from a password session (the web UI's **Your names**, the
+  terminal's Setup page). A PIN session at a kiosk is refused (403 `CredentialNotAllowed`), and so is an API key (400);
+- an admin changes anyone's with `DisplayName` and `ShortName` on `POST Identity/Users` and `PUT Identity/Users/{name}`
+  (the web UI's People page, `hvo-roof users set`, the terminal's People page).
+
+An enrolled **Linux account's names come from the operating system**: its display name is its full name (the first
+field of its GECOS entry, from the native worker's `/v1/profile`, refreshed at each Linux sign-in and kept when the
+worker cannot say), and its short name is its user name. They are read-only in the controller: `POST Auth/Names` from a
+Linux session is refused with 409 `IdentityReadOnly`, and no route sets them. A worker older than `/v1/profile` gives
+no full name, and the user name stands alone. The full name is display text only: it authenticates and grants nothing.
 
 The controller records a person's **last sign-in** (`LastLoginUtc`) in the same save as the session each successful
 sign-in opens: a password, a PIN at a kiosk, an enrolled Linux account (its password, a local grant, or its kiosk PIN).
