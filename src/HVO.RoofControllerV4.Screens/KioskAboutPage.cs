@@ -4,7 +4,10 @@ using HVO.RoofControllerV4.Client;
 
 namespace HVO.RoofControllerV4.Screens;
 
-/// <summary>Build identification available even while locked or disconnected; it grants no controller permissions.</summary>
+/// <summary>
+/// Build identification and the controller's summary (#209), available even while locked or disconnected: the summary is
+/// read with the kiosk's own key, and grants no controller permissions.
+/// </summary>
 public sealed class KioskAboutPage : UserControl
 {
     private readonly KioskConsole _console;
@@ -33,6 +36,16 @@ public sealed class KioskAboutPage : UserControl
         var controller = KioskTheme.Label(ControllerText(view), _metrics.Font);
         controller.Name = "about-controller-version";
         page.Children.Add(controller);
+        if (!view.IsStale && !view.IsUnreachable)
+        {
+            // The summary's other rows, each a line of its own, as the version is.
+            foreach (var (label, value) in _system.Summary.Where(row => row.Label != VersionLabel))
+            {
+                var row = KioskTheme.Label($"{label}: {value}", _metrics.Font, KioskTheme.Muted);
+                row.Name = $"about-summary-{label.ToLowerInvariant()}";
+                page.Children.Add(row);
+            }
+        }
         page.Children.Add(KioskTheme.Label(
             _console.Wording.SignIn == KioskSignIn.Pin
                 ? "PIN policy: every PIN session is Operator-only, including an administrator's PIN. Settings and System require password sign-in in the Mac, web or CLI client. A PIN grants no host or terminal privileges."
@@ -47,23 +60,22 @@ public sealed class KioskAboutPage : UserControl
         else Content = KioskTheme.Card(page, _metrics);
     }
 
+    /// <summary>The summary's row for the controller's version (<see cref="RoofSystemText.DescribeSummary"/>).</summary>
+    private const string VersionLabel = "Controller";
+
     private string ControllerText(KioskView view)
     {
-        if (view.IsStale || view.IsUnreachable)
+        if (view.IsUnreachable)
+        {
+            return $"Controller version: unavailable. {RoofSystemText.ControllerUnreachable}";
+        }
+        if (view.IsStale)
         {
             return "Controller version: unavailable (controller status is not live).";
         }
-        if (_console.Wording.SignIn == KioskSignIn.Pin)
-        {
-            return "Controller version: unavailable in the PIN kiosk. Use an administrator session in CLI or web System.";
-        }
-        if (!view.IsAdmin)
-        {
-            return "Controller version: unavailable (requires an administrator session in System).";
-        }
-        var information = _system.Information.FirstOrDefault(row => row.Label == "Application").Value;
-        return string.IsNullOrWhiteSpace(information)
-            ? "Controller version: unavailable. Open System to read controller information."
-            : $"Controller (last read): {information}";
+        var version = _system.Summary.FirstOrDefault(row => row.Label == VersionLabel).Value;
+        return !string.IsNullOrWhiteSpace(version) ? $"Controller (last read): {version}"
+            : _system.SummaryProblem is { } problem ? $"Controller version: unavailable. {problem}"
+            : "Controller version: reading…";
     }
 }
