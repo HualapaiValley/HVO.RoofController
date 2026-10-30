@@ -163,7 +163,8 @@ public sealed class RoofHostMetrics
                 return null;
             }
 
-            await Task.Delay(_cpuSample, _time, cancellationToken).ConfigureAwait(false);
+            // Real time, whatever the clock: the kernel counts real clock ticks.
+            await Task.Delay(_cpuSample, cancellationToken).ConfigureAwait(false);
         }
 
         var current = ParseCpu(_readFile(StatPath), _time.GetUtcNow());
