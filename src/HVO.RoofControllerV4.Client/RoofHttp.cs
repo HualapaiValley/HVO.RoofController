@@ -24,6 +24,7 @@ internal sealed class RoofHttp : IDisposable
             BaseAddress = options.NormalizedBaseAddress,
             Timeout = Timeout.InfiniteTimeSpan
         };
+        _client.DefaultRequestHeaders.UserAgent.Add(RoofUserAgent.Create(options.ProgramAssembly));
         _credential = credential;
         _timeout = timeout;
         _time = options.TimeProvider;

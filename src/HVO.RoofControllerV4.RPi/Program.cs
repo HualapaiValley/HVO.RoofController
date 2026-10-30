@@ -27,6 +27,7 @@ using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
+using HVO.RoofControllerV4.RPi.Storage;
 using Microsoft.AspNetCore.Authorization;
 
 namespace HVO.RoofControllerV4.RPi;
@@ -220,6 +221,10 @@ public class Program
 
         // API keys, sessions, the Stop credential and the role policies (docs/security.md)
         services.AddRoofControllerSecurity(Configuration);
+
+        // The roof command history (#206), next to the identity store unless configured. Registered before the roof's
+        // host, so it stops after it and writes what was recorded until then.
+        services.AddRoofCommandHistory(Configuration);
 
         services.AddSingleton<IGpioControllerClient>(_ => GpioControllerClientFactory.CreateAutoSelecting());
 

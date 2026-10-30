@@ -49,6 +49,7 @@ public sealed class RoofClientCoverageTests
         ("Roof.ClearFault", client => client.Roof.ClearFaultAsync()),
         ("Roof.GetConfiguration", client => client.Roof.GetConfigurationAsync()),
         ("Roof.UpdateConfiguration", client => client.Roof.UpdateConfigurationAsync(new RoofConfigurationRequest())),
+        ("Roof.GetHistory", client => client.Roof.GetHistoryAsync()),
         ("Stop", client => client.StopAsync()),
         ("Auth.SignIn", client => client.Auth.SignInAsync("alice", "not-a-password")),
         ("Auth.GetProviders", client => client.Auth.GetProvidersAsync()),

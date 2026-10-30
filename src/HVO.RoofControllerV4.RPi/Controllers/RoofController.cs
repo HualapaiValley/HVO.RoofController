@@ -10,6 +10,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
+using HVO.RoofControllerV4.RPi.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -36,19 +37,22 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         private readonly IOptionsMonitor<RoofControllerHostOptionsV4> _hostOptions;
         private readonly IEnumerable<IValidateOptions<RoofControllerOptionsV4>> _configurationValidators;
         private readonly RoofSettingsStore _settings;
+        private readonly RoofCommandHistory _history;
 
         public RoofController(
             ILogger<RoofController> logger,
             IRoofControllerServiceV4 roofController,
             IOptionsMonitor<RoofControllerHostOptionsV4> hostOptions,
             IEnumerable<IValidateOptions<RoofControllerOptionsV4>> configurationValidators,
-            RoofSettingsStore settings)
+            RoofSettingsStore settings,
+            RoofCommandHistory history)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _roofController = roofController ?? throw new ArgumentNullException(nameof(roofController));
             _hostOptions = hostOptions ?? throw new ArgumentNullException(nameof(hostOptions));
             _configurationValidators = configurationValidators ?? throw new ArgumentNullException(nameof(configurationValidators));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _history = history ?? throw new ArgumentNullException(nameof(history));
         }
 
         /// <summary>
@@ -156,9 +160,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             var result = await _roofController.ClearFault(pulseMs, cancellationToken).ConfigureAwait(false);
             RoofControllerTelemetry.CompleteCommand(activity, "clear_fault", result.IsSuccessful, startTimestamp);
 
-            return result.IsSuccessful
-                ? Ok(_roofController.GetCurrentStatusSnapshot())
-                : RoofProblem(result.Error, "clear_fault");
+            return Answer("clear_fault", result.IsSuccessful, result.Error);
         }
 
         /// <summary>
@@ -293,9 +295,38 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             var result = execute();
             RoofControllerTelemetry.CompleteCommand(activity, command, result.IsSuccessful, startTimestamp);
 
-            return result.IsSuccessful
-                ? Ok(_roofController.GetCurrentStatusSnapshot())
-                : RoofProblem(result.Error, command);
+            return Answer(command, result.IsSuccessful, result.Error);
+        }
+
+        /// <summary>A command's answer, recorded in the command history (#206) whether it was carried out or refused.</summary>
+        private ActionResult<RoofStatusResponse> Answer(string command, bool succeeded, Exception? error)
+        {
+            if (succeeded)
+            {
+                var status = _roofController.GetCurrentStatusSnapshot();
+                Record(command, status, refusal: null);
+                return Ok(status);
+            }
+
+            var problem = RoofProblem(error, command);
+            Record(command, status: null, problem.Value as ProblemDetails);
+            return problem;
+        }
+
+        /// <summary>Never fails the command: the roof has already done what it was told, and a Stop's answer must say so.</summary>
+        private void Record(string command, RoofStatusResponse? status, ProblemDetails? refusal)
+        {
+            try
+            {
+                if (RoofCommandHistory.CommandFor(command) is { } recorded)
+                {
+                    _history.Record(RoofCommandHistory.Describe(HttpContext, recorded, status, refusal));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Roof command {Command} could not be recorded in the command history", command);
+            }
         }
 
         private void LogCommand(string command)

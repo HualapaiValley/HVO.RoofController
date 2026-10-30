@@ -101,6 +101,7 @@ public sealed class RoofWebHostTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "everyone may read the settings their role allows");
         html.Should().Contain("href=\"settings\"");
+        html.Should().Contain("href=\"history\"", "everyone may read their own roof commands");
         html.Contains("href=\"people\"", StringComparison.Ordinal).Should().Be(admin);
         html.Contains("href=\"system\"", StringComparison.Ordinal).Should().Be(admin);
     }

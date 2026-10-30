@@ -44,6 +44,14 @@ public sealed class RoofControlApi
         return _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, path, null, cancellationToken);
     }
 
+    /// <summary>
+    /// A page of the roof command history, newest first. Viewer role: an admin reads everyone's commands (one person's or
+    /// key's with <see cref="RoofHistoryQuery.User"/>); anyone else reads their own, and naming someone else is refused
+    /// with 403.
+    /// </summary>
+    public Task<RoofCommandHistoryPage> GetHistoryAsync(RoofHistoryQuery? query = null, CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofCommandHistoryPage>(RoofApiRoutes.HistoryPage(query ?? new RoofHistoryQuery()), cancellationToken);
+
     /// <summary>The controller's roof configuration. Admin role.</summary>
     public Task<RoofConfigurationResponse> GetConfigurationAsync(CancellationToken cancellationToken = default)
         => _http.GetAsync<RoofConfigurationResponse>(RoofApiRoutes.Configuration, cancellationToken);

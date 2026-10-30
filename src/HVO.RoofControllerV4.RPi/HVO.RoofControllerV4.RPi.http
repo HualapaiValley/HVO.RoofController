@@ -7,7 +7,7 @@
 # 2. Start the app ("Debug" launch profile binds http://localhost:5195)
 # 3. Highlight any request below and use the REST Client "Send Request" action
 #
-# Roles: Status = Viewer; Open/Close/ClearFault/Lease = Operator; Stop = any key; Configuration and System = Admin.
+# Roles: Status and History = Viewer (History: own commands; Admin: everyone's); Open/Close/ClearFault/Lease = Operator; Stop = any key; Configuration and System = Admin.
 # Commands are POST; GET returns 405. Failures are ProblemDetails with "code" and "roofStatus" (409 refused by an
 # interlock, 503 not ready / relay state unverified, 401 missing key, 403 wrong role).
 
@@ -56,6 +56,11 @@ X-Api-Key: {{apiKey}}
 
 ### Clear controller fault (Operator); pulseMs 50-2000, default 250
 POST {{baseUrl}}/api/v{{apiVersion}}/RoofControl/ClearFault?pulseMs=250
+Accept: {{contentType}}
+X-Api-Key: {{apiKey}}
+
+### Roof command history, newest first (Viewer: own commands; Admin: everyone's, or one person's with user=)
+GET {{baseUrl}}/api/v{{apiVersion}}/RoofControl/History?take=20
 Accept: {{contentType}}
 X-Api-Key: {{apiKey}}
 

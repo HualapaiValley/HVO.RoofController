@@ -62,6 +62,12 @@ public sealed class RoofConnectionOptions
 
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
+    /// <summary>
+    /// The program sending the requests: its name and version are each request's <c>User-Agent</c>, which the controller's
+    /// command history shows. Null: the process's entry assembly.
+    /// </summary>
+    public System.Reflection.Assembly? ProgramAssembly { get; init; }
+
     public ILoggerFactory? LoggerFactory { get; init; }
 
     internal void Validate()

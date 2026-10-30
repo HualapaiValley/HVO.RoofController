@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Roof command history (#206): the controller records every Open, Close, Stop and Clear fault sent to its API,
+  accepted or refused (with the refusal's code and explanation), and refused lease renewals, with who sent it (person
+  or key, how they signed in, the kiosk for a PIN, the person a key acted for), the address and the program it came
+  from, and the roof's status afterwards. It keeps them in `command-history.jsonl` next to the identity store, or at
+  `RoofCommandHistory:StorePath`, for 90 days and up to 10,000 commands (`RoofCommandHistory:Retention`,
+  `RoofCommandHistory:MaximumEntries`). `GET api/v4.0/RoofControl/History` pages them, newest first, with `user`,
+  `from`, `to`, `skip` and `take`: an admin reads everyone's, anyone else (a kiosk PIN session included) only their
+  own. The web UI's new **History** page, the terminal interface's **History** on the Roof page and
+  `hvo-roof history [--user] [--since] [--until]` show them; the kiosk has a hook for a person's recent commands. The
+  client library now names the program in each request's `User-Agent`.
+
 ## [4.2.0] - 2026-10-30
 
 ### Added

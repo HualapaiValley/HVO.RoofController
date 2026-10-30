@@ -104,6 +104,11 @@ public sealed class WebScreenshotTests
         await Expect(page.GetByTestId("restart")).ToBeVisibleAsync();
         await shots.TakeAsync("07-system", mask: page.Locator("[data-testid=system-fact][data-label=Host]"));
 
+        // The commands sent above: the Open and the Stop, by the admin from this web UI.
+        await page.GotoAsync("/history");
+        await Expect(page.GetByTestId("history-entry").First).ToBeVisibleAsync();
+        await shots.TakeAsync("16-history");
+
         // Secondary workflows use the same real components; leave all private inputs empty.
         await page.GotoAsync("/people");
         await page.GetByTestId("user-add").ClickAsync();

@@ -17,5 +17,7 @@ public class RoofControllerConnector(IOptions<RoofWebOptions> options, ILoggerFa
         RequestTimeout = requestTimeout,
         TimeProvider = time,
         LoggerFactory = loggerFactory,
+        // Named outright: the web UI may run in another process's host (the browser tests').
+        ProgramAssembly = typeof(RoofWebOptions).Assembly,
     });
 }

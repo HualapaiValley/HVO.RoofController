@@ -210,6 +210,7 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `open`, `close [--no-wait]` | operator | Starts the motion and follows it to the end, renewing the operator lease. Ctrl+C sends Stop. |
 | `lease` | operator | Renews the operator lease of the motion in progress (for scripts that use `--no-wait`). |
 | `clear-fault [--pulse-ms]` | operator | Clears a latched fault once its cause is resolved. |
+| `history [--user] [--since] [--until] [--take] [--skip]` | viewer | The roof command history, newest first: your own, or everyone's for an admin (see [History](#history)). |
 | `whoami` | any | The controller in use, and who the controller takes the credential to be. |
 | `login`, `logout`, `passwd` | any | Signing in with a password (see [Setup](#setup)). |
 | `config show\|get\|set\|set-secret\|diff\|apply\|discard` | operator (UI group), admin | The controller's settings (see [Settings](#settings)). |
@@ -268,6 +269,28 @@ reading, and with no status at all for 30 s it gives up (exit 4) and says that t
 
 With `--no-wait`, the command returns once the controller accepts the motion. If the controller holds the motion on a
 lease, the command says so, and the roof stops when the lease runs out unless something runs `hvo-roof lease`.
+
+## History
+
+`hvo-roof history` shows the roof commands the controller recorded (#206), newest first: each Open, Close, Stop and
+Clear fault, accepted or refused, and each refused lease renewal, with when (UTC), who sent it, the result (the
+controller's code for a refusal), the roof afterwards and where it came from. An admin reads everyone's; anyone else
+reads only their own, and `--user` naming someone else is refused (exit 6).
+
+| Option | What it does |
+|--------|--------------|
+| `--user`, `-u` | Only the commands of this person or key, or sent by a key on their behalf (admin). |
+| `--since`, `--until` | Only commands from, or before, a time: a date or time in ISO 8601 (UTC unless it gives an offset), such as `2026-10-30` or `2026-10-30T18:00Z`, or how long ago, such as `30m`, `12h` or `7d`. |
+| `--take`, `-n` | How many to show, 1 to 500 (default 50). |
+| `--skip` | How many of the newest to skip, to read older ones. |
+
+```bash
+hvo-roof history --since 7d
+hvo-roof history --user ada --since 2026-10-01 --until 2026-11-01 --json
+```
+
+`--json` writes the controller's page: `entries`, `totalCount`, `skip`, `take`, `allUsers`, `retentionDays`,
+`maximumEntries` and `isPersistent`.
 
 ## Settings
 
@@ -368,13 +391,13 @@ and the Settings page's header then says the file was edited by hand.
 
 | Key | Page | What it has |
 |-----|------|-------------|
-| F1 | Roof | The status, with Open, Close, Clear fault and Refresh. Each button that cannot be used says why, for example "the roof is already closed". |
+| F1 | Roof | The status, with Open, Close, Clear fault, Refresh and History. Each button that cannot be used says why, for example "the roof is already closed". History shows your roof commands (everyone's for an admin) in place of the controller's readings; Readings shows them again. |
 | F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. A group's secrets are set and cleared together: Change on the camera's user name or password asks for both, each typed twice, and Clear secret clears both. |
 | F3 | People | People, API keys and sessions (admin). |
 | F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's version, host and resource use (admin), and Restart (admin). |
 | F5 | Setup | Connection, a connection check, Sign in, Sign out, and First admin. |
 
-![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
+![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault, Refresh and History buttons](images/terminal/01-roof.svg)
 
 - **F9 sends Stop from every page, even over an open prompt**, and the result appears next to the button. The Stop
   button is never disabled.

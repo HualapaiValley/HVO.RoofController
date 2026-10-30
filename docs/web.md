@@ -69,11 +69,12 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | Roof (`/`) | everyone | The position, what was commanded, Open, Close and Clear fault (Operator and Admin), the operator lease while a move started here runs, the roof camera, and the status in detail. |
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
+| History (`/history`) | everyone | The roof commands the controller was sent, accepted or refused, newest first: the person's own, or everyone's for an admin, who may pick one person or key. |
 | People (`/people`) | Admin | People (add, role, password, kiosk PIN, remove), API keys (add, rotate, change, remove) and sessions (end). |
 | System (`/system`) | Admin | The web UI's version, the controller's version, host and resource use, readiness, Restart, and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
 
-A Viewer and an Operator see Roof, Health and Settings in the navigation. Opening an admin page without the Admin role
+A Viewer and an Operator see Roof, Health, Settings and History in the navigation. Opening an admin page without the Admin role
 says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
 not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
 mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
@@ -170,6 +171,18 @@ A setting that cannot be changed here says why, as the controller gives it.
 1. **Clear secret** on the camera's user name or password (both are cleared).
 2. **Change** `BlueIris:BaseUrl` to the new server.
 3. **Change** the user name or password, and type both for the new server.
+
+### History
+
+![The History page: the roof commands, newest first, with who sent each, the result, the roof afterwards and where it came from](images/web/16-history-desktop.jpg)
+
+The roof command history (#206), as the controller records it: each Open, Close, Stop and Clear fault, accepted or
+refused (with the controller's code), and each refused lease renewal. Each row says when (UTC), who sent it and how
+they signed in, the result, the roof's position afterwards, and the program and address it came from; the web UI sends
+from the controller's own host, so its commands show that address. An admin reads everyone's commands and may give a
+person's or key's name; anyone else reads only their own. **From** and **To** pick whole UTC days. Newer and Older
+page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the page says when it keeps
+them in memory only.
 
 ### People
 
