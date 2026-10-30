@@ -109,6 +109,10 @@ internal sealed class WebBrowser : IAsyncDisposable
     /// <summary>How long an expectation waits for the page by default (Playwright's is 5 s).</summary>
     public static readonly TimeSpan ExpectTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>A <c>#rrggbb</c> palette colour as a browser's computed style writes it.</summary>
+    public static string Rgb(string colour)
+        => $"rgb({Convert.ToInt32(colour[1..3], 16)}, {Convert.ToInt32(colour[3..5], 16)}, {Convert.ToInt32(colour[5..7], 16)})";
+
     private const string PlacementScript = """
         element => {
           const r = element.getBoundingClientRect();
