@@ -65,11 +65,13 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/Auth/Session`                            | anonymous         | 200 `RoofSessionResponse` | 400, 401 (`SignInFailed`), 429 (`SignInLockedOut`, `SignInBusy`), 503 |
 | `POST /api/v4.0/Auth/Pin`                                | a kiosk key (API key only) | 200 `RoofSessionResponse` | 400, 401, 403 (`KioskKeyRequired`), 429, 503 |
 | `GET  /api/v4.0/Auth/Pin/Users`                          | a kiosk key (API key only) | 200 `RoofPinUserResponse[]` (names, roles, display and short names, login type and last sign-in; nothing secret) | 401, 403 (`KioskKeyRequired`), 503 |
-| `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` (a person's display and short name too) | 401 |
+| `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` (a person's display and short name, and whether they have a PIN to change, too) | 401 |
 | `DELETE /api/v4.0/Auth/Session`                          | a session (signs it out) | 204 | 400 (an API key), 401, 503 |
 | `POST /api/v4.0/Auth/Password`                           | a session (own password) | 204 | 400, 401 (`SignInFailed`), 429, 503 |
+| `POST /api/v4.0/Auth/Pin/Change`                         | a PIN session at a kiosk or a password session (own PIN) | 204 | 400 (an invalid new PIN, no PIN to change, or an API key), 401 (`SignInFailed`: the current PIN), 409 (`IdentityReadOnly` for a Linux account's password session), 429, 503 |
 | `POST /api/v4.0/Auth/Names`                              | a password session (own names) | 200 `RoofCallerResponse` | 400 (an invalid name, or an API key), 401, 403 (`CredentialNotAllowed` for a PIN session), 409 (`IdentityReadOnly` for a Linux account), 503 |
 | `GET, POST /api/v4.0/Identity/Users`, `GET, PUT, DELETE /api/v4.0/Identity/Users/{name}` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed` for a PIN session), 404, 409, 429, 503 |
+| `PUT, DELETE /api/v4.0/Identity/Users/{name}/Pin`        | Admin (not a PIN session) | 200 `RoofUserResponse` | 400, 401, 403, 404, 429, 503 |
 | `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed`), 404, 409, 503 |
 | `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin (not a PIN session) | 200, 204 | 401, 403 (`CredentialNotAllowed`), 404, 503 |
 | `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
@@ -312,12 +314,15 @@ API in its identity store.
   offers Stop with the device key made for that Mac: an ordinary `RoofViewer` key, not a kiosk key, so a Mac's key that
   is lost cannot be used to try PINs. Removing the key at the controller cuts that Mac off at once.
 - **Who am I.** `GET /api/v4.0/Auth/Me` returns the caller's name, role and kind (`ApiKey`, `Session` or `Pin`), and
-  for a person in the identity store their display and short name.
+  for a person in the identity store their display and short name, and `hasPin`: whether they have a PIN they can
+  change ([Changing a PIN](#changing-a-pin)).
 - **Sign out.** `DELETE /api/v4.0/Auth/Session` ends the session that sent it.
 - **Own password.** `POST /api/v4.0/Auth/Password` with `currentPassword` and `newPassword` changes a signed-in
   person's password. Their other sessions end; this one stays open.
 - **Own names.** `POST /api/v4.0/Auth/Names` with `displayName` and `shortName` changes a signed-in person's own names
   ([Names and last sign-in](#names-and-last-sign-in)).
+- **Own PIN.** `POST /api/v4.0/Auth/Pin/Change` with `currentPin` and `newPin` changes a signed-in person's own PIN,
+  at a kiosk or with a password ([Changing a PIN](#changing-a-pin)).
 
 New virtual passwords are 7 to 256 characters with no composition rule. New personal PINs are exactly four ASCII digits; the temporary commissioning code is reserved. Existing credentials are preserved. Linux passwords retain PAM policy. Names are 1 to 64 letters, digits, `.`, `_`, `@` or `-`,
 starting with a letter or digit. Passwords and PINs are stored as PBKDF2 hashes. Session tokens and managed keys are
@@ -350,7 +355,7 @@ name's count can be forgotten, which could show that it is not a person. Each ad
 so a caller with many IPv6 networks can fill those slots within seconds, where one IPv4 address needs hours.)
 
 Each caller may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across `Auth/Session`,
-`Auth/Pin` and `Auth/Password`. A kiosk counts by its key, a signed-in person changing their password by their name,
+`Auth/Pin`, `Auth/Password` and `Auth/Pin/Change`. A kiosk counts by its key, a signed-in person changing their password or PIN by their name,
 and an anonymous `Auth/Session` by its remote address, whatever credential comes with it. A public IPv6 address from
 another network counts by its /64 network, since one host there can pick a new address for every attempt; a loopback,
 link-local or unique local IPv6 address, or one in the controller's own /64, counts by itself, since every host on the
@@ -375,6 +380,7 @@ Admins manage everything under `/api/v4.0/Identity`:
 | Route | What it does |
 |-------|--------------|
 | `GET/POST Identity/Users`, `GET/PUT/DELETE Identity/Users/{name}` | People. A person needs a password, a PIN or both. Secrets are never returned, only whether each is set. Changing a person's role or password ends all their sessions; changing or removing the PIN ends their PIN sessions; removing them ends every session. Each person may have a display name and a short name ([Names and last sign-in](#names-and-last-sign-in)). |
+| `PUT/DELETE Identity/Users/{name}/Pin` | A person's PIN alone: `PUT` with `{"pin": ...}` sets or replaces it, `DELETE` removes it (or the temporary commissioning PIN). The role is not sent, so it cannot be changed back by mistake. Their PIN sessions end ([Changing a PIN](#changing-a-pin)). |
 | `GET/POST Identity/ApiKeys`, `PUT/DELETE Identity/ApiKeys/{name}`, `POST Identity/ApiKeys/{name}/Rotate` | API keys. The list includes the configured keys, marked `Configuration` and read-only (409 `IdentityReadOnly`). The controller generates a managed key's value and returns it once, on create and on rotate. A kiosk key must have the `RoofViewer` role. |
 | `GET Identity/Sessions`, `DELETE Identity/Sessions/{id}` | Open sessions (never their tokens), and ending one. |
 
@@ -391,6 +397,42 @@ A change that would leave no admin credential is refused with 409 `LastAdministr
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
 or locked-out sign-in as a `SECURITY` warning, with the name and remote address and never a secret. A request with a removed, rotated or re-roled key, or an ended
 session, is refused at once. A status hub connection that used it closes within a second.
+
+### Changing a PIN
+
+A person changes **their own PIN** with `POST Auth/Pin/Change` and `{"currentPin": ..., "newPin": ...}` (#205):
+
+- **Where.** From a PIN session at a kiosk (the kiosk's PIN pad) or from a password session (the web UI's **Your
+  PIN**, the terminal's Setup page, `hvo-roof pin`). An API key is refused (400). A PIN session may change only its own
+  PIN: a PIN works at a kiosk alone, so this creates nothing that works anywhere else, and the current PIN is asked for
+  again, so an unlocked kiosk left behind is not enough.
+- **The current PIN is always checked**, as a PIN sign-in checks it: a wrong one is 401 `SignInFailed` (the session
+  stays open) and counts towards the same lockouts, the name's PIN at every kiosk and, from a PIN session, that kiosk,
+  with the same `SignInAttemptsPerMinute` limit. After `LockoutThreshold` wrong PINs the change, and PIN sign-in for
+  that name, are refused with 429 `SignInLockedOut` until the lockout ends.
+- **The new PIN** follows the rules above (exactly four digits, not the temporary commissioning code) and must differ
+  from the current one; otherwise 400 `InvalidRequest`, before anything is checked.
+- **Who has one.** A person changes a PIN they have: their own, or in the emulator the temporary commissioning PIN,
+  which then gives way to the personal one. The first PIN is an admin's to give; a person with none gets 400.
+  `hasPin` on `GET Auth/Me` says which, so a client offers the change only to someone who can make it.
+- **Linux accounts** have no PIN of their own here: a Linux account's password session is refused with 409
+  `IdentityReadOnly`. The kiosk's commissioned PIN ([kiosk-commissioning.md](kiosk-commissioning.md)), which may
+  belong to a Linux account, is changed the same way from a kiosk session opened with it, checked against its own
+  durable count of failures.
+
+**What ends.** The session that made the change stays open. The person's password sessions stay open too: a PIN is not
+their password. Their **other PIN sessions end, at every kiosk**: someone who learned the old PIN, or a kiosk left
+unlocked in their name, loses it at once. A sign-in already checking the old PIN when the change is saved is refused.
+
+An **admin** sets, replaces or removes anyone's PIN with `PUT` or `DELETE Identity/Users/{name}/Pin` (the web UI's
+People page, `hvo-roof pins set` and `pins remove`, the terminal's People page), or with `pin` and `removePin` on
+`PUT Identity/Users/{name}`. That needs an admin API key or an admin's password session, never a PIN session, and no
+current PIN: it is how a forgotten PIN is reset. Only operators and admins may have a PIN, and a person with no password
+keeps theirs. All the person's PIN sessions end; their password sessions, and the admin's own session, do not.
+
+Every change is an `AUDIT` entry with who changed whose PIN, from where (the kiosk's name for a PIN session) and how
+many sessions ended, and every refused current PIN is a `SECURITY` warning; neither ever holds a PIN. The identity
+store keeps only the new PIN's hash, in the fields it already had, so a rollback still reads it.
 
 ### Names and last sign-in
 

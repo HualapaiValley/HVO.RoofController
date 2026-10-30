@@ -168,6 +168,12 @@ separate checks.
 
 PIN sessions are limited to roof operation; settings writes and identity administration are refused. See [Authentication and interface rights](../../docs/authentication-interfaces.md) for enrollment and credential policies.
 
+## PIN changes (#205)
+
+- `POST api/v4.0/Auth/Pin/Change` with `currentPin` and `newPin`: a signed-in person changes their own PIN, from a PIN session at a kiosk or a password session. The current PIN is checked with the PIN sign-in lockouts and rate limit (401 `SignInFailed` keeps the session; 429 `SignInLockedOut`). The session that made the change stays open, as do the person's password sessions; their other PIN sessions end. A person without a PIN gets 400 (an admin gives the first), a Linux account's password session 409 `IdentityReadOnly`. A kiosk session opened with the commissioned PIN changes that PIN.
+- `PUT api/v4.0/Identity/Users/{name}/Pin` with `pin`, and `DELETE` the same route (`RoofAdmin`, not a PIN session): set, replace or remove a person's PIN without sending their role; their PIN sessions end.
+- `GET api/v4.0/Auth/Me` returns `hasPin`. Every change is an `AUDIT` line naming who changed whose PIN and from where; no PIN is ever logged. See [Changing a PIN](../../docs/security.md#changing-a-pin).
+
 ## Kiosk owner commissioning API
 
 Eligible installations expose POST api/v4.0/Auth/KioskPin and POST api/v4.0/Auth/KioskPin/Complete.
