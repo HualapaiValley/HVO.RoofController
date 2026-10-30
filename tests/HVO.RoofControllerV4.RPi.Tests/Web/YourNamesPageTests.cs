@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using static HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -49,6 +50,8 @@ public sealed class YourNamesPageTests
         cut.Find("[data-testid=names-short-name]").Input("");
         cut.Click("[data-testid=names-save]");
 
+        // The first save's message is still shown, and the box is empty as soon as it is typed in: wait for the controller.
+        await WaitUntilAsync(() => admin.Identity.GetUserAsync("ada").GetAwaiter().GetResult().ShortName is null, "the short name to be removed");
         cut.WaitForAssertion(() => cut.Find("[data-testid=names-short-name]").GetAttribute("value").Should().BeEmpty());
         var cleared = await admin.Identity.GetUserAsync("ada");
         cleared.DisplayName.Should().Be("Ada Example");
