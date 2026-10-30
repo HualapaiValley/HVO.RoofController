@@ -240,6 +240,46 @@ public sealed record class RoofPasswordChangeRequest
 }
 
 /// <summary>
+/// Body of <c>POST Auth/Pin/Change</c> (#205): a signed-in person changes their own PIN, with a PIN session at a kiosk
+/// or a password session. The current PIN is always checked, and counts towards the same lockout as PIN sign-in.
+/// </summary>
+public sealed record class RoofPinChangeRequest
+{
+    [Required]
+    [JsonRequired]
+    public string? CurrentPin { get; init; }
+
+    [Required]
+    [JsonRequired]
+    public string? NewPin { get; init; }
+
+    // The PINs are left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"CurrentPin = {(CurrentPin is null ? "(none)" : "(set)")}, NewPin = {(NewPin is null ? "(none)" : "(set)")}");
+        return true;
+    }
+}
+
+/// <summary>
+/// Body of <c>PUT Identity/Users/{name}/Pin</c> (#205): an admin sets or replaces a person's PIN. The person's PIN
+/// sessions end; their password sessions do not.
+/// </summary>
+public sealed record class RoofPinSetRequest
+{
+    [Required]
+    [JsonRequired]
+    public string? Pin { get; init; }
+
+    // The PIN is left out, so the request can be logged.
+    private bool PrintMembers(StringBuilder builder)
+    {
+        builder.Append($"Pin = {(Pin is null ? "(none)" : "(set)")}");
+        return true;
+    }
+}
+
+/// <summary>
 /// Body of <c>POST Auth/Names</c> (#209): a person signed in with a password changes their own display and short name.
 /// A null name is left as it is; an empty one (or only spaces) is removed. Refused for a PIN session (names are edited
 /// where there is a keyboard: the web UI, the terminal) and for a Linux account (its names come from the operating
@@ -309,6 +349,14 @@ public sealed record RoofCallerResponse(
     /// read-only: they come from the operating system.
     /// </summary>
     public string? LoginType { get; init; }
+
+    /// <summary>
+    /// For a person, whether they have a PIN they can change themselves (<c>POST Auth/Pin/Change</c>, #205): their own
+    /// PIN (or the emulator's temporary commissioning PIN), or at a kiosk the commissioned PIN the session was opened
+    /// with. False when they have none (an admin gives the first one) or the account is a Linux account signed in with
+    /// its password; null for an API key, and from a controller older than #205.
+    /// </summary>
+    public bool? HasPin { get; init; }
 }
 
 /// <summary>A person who may sign in with a PIN at a kiosk, from <c>GET Auth/Pin/Users</c>.</summary>
