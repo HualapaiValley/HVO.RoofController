@@ -44,6 +44,10 @@ public sealed class RoofCliSystemCommandTests
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Out.Should().MatchRegex($@"(?m)^{RoofCli.CommandName}:\s+{Regex.Escape(RoofProductVersion.Describe(typeof(RoofCli).Assembly))}\s*$")
+            .And.MatchRegex($@"(?m)^Controller:\s+{Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))}\s*$")
+            .And.MatchRegex(@"(?m)^Uptime:\s+controller \S")
+            .And.MatchRegex(@"(?m)^Addresses:\s+\S")
+            .And.MatchRegex($@"(?m)^{Regex.Escape(RoofCli.HostDetailsHeading)}\s*$")
             .And.MatchRegex($@"(?m)^Application:\s+HVO\.RoofControllerV4\.RPi {Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))} \(Development\)\s*$")
             .And.MatchRegex($@"(?m)^Host:\s+{Regex.Escape(Environment.MachineName)}\s*$")
             .And.MatchRegex(@"(?m)^System:\s+\S")
@@ -72,12 +76,13 @@ public sealed class RoofCliSystemCommandTests
         information.GetProperty("machineName").GetString().Should().Be(Environment.MachineName);
         information.GetProperty("applicationName").GetString().Should().NotBeNullOrWhiteSpace();
         result.Json.GetProperty("metrics").GetProperty("threadCount").GetInt32().Should().BePositive();
+        result.Json.GetProperty("summary").GetProperty("applicationVersion").GetString().Should().Be(RoofProductVersion.Of(typeof(Program).Assembly));
     }
 
     [TestMethod]
     [DataRow(TestApiKeys.Operator)]
     [DataRow(TestApiKeys.Viewer)]
-    public async Task Info_WithoutAnAdminCredential_IsForbidden(string apiKey)
+    public async Task Info_WithoutTheAdminRole_ShowsTheSummary_AndSaysTheHostsDetailsNeedAnAdmin(string apiKey)
     {
         using var host = RoofClientApiTests.CreateHost();
         using var rig = new CliRig(host);
@@ -85,9 +90,46 @@ public sealed class RoofCliSystemCommandTests
 
         var result = await rig.RunAsync("info");
 
-        result.Code.Should().Be(RoofExitCode.Forbidden, result.ToString());
-        result.Out.Should().BeEmpty();
-        result.Error.Should().Contain("Your role does not permit this.");
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().MatchRegex($@"(?m)^Controller:\s+{Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))}\s*$")
+            .And.MatchRegex(@"(?m)^Memory:\s+\S")
+            .And.NotContain("Application:").And.NotContain(RoofCli.HostDetailsHeading)
+            .And.NotContain(Environment.MachineName, "the host's name is an admin's");
+        result.Error.Should().Contain(RoofCli.HostDetailsNeedAdmin);
+    }
+
+    [TestMethod]
+    public async Task Info_Json_WithoutTheAdminRole_HoldsTheSummary_AndNoDetails()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+
+        var result = await rig.RunAsync("info", "--json");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Json.GetProperty("summary").GetProperty("applicationVersion").GetString().Should().Be(RoofProductVersion.Of(typeof(Program).Assembly));
+        result.Json.GetProperty("summary").GetProperty("processorCount").GetInt32().Should().BePositive();
+        result.Json.GetProperty("information").ValueKind.Should().Be(JsonValueKind.Null);
+        result.Json.GetProperty("metrics").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [TestMethod]
+    public async Task Info_FromAControllerWithoutTheSummary_StillShowsAnAdminTheDetails_AndRefusesAViewer()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.WrapHandler = handler => new NoSummaryHandler(handler);
+        rig.UseApiKey(TestApiKeys.Admin);
+
+        var admin = await rig.RunAsync("info");
+        rig.UseApiKey(TestApiKeys.Viewer);
+        var viewer = await rig.RunAsync("info");
+
+        admin.Code.Should().Be(RoofExitCode.Success, admin.ToString());
+        admin.Out.Should().MatchRegex(@"(?m)^Application:\s+\S").And.NotMatchRegex(@"(?m)^Controller:");
+        viewer.Code.Should().Be(RoofExitCode.Forbidden, viewer.ToString());
+        viewer.Error.Should().Contain("Your role does not permit this.");
     }
 
     [TestMethod]
@@ -114,6 +156,15 @@ public sealed class RoofCliSystemCommandTests
 
         result.Code.Should().Be(RoofExitCode.NotConfigured, result.ToString());
         result.Error.Should().Contain("No controller address. Run 'hvo-roof setup', set HVO_ROOF_URL, or pass --controller.");
+    }
+
+    /// <summary>A controller from before #209: it has no <c>System/Summary</c>.</summary>
+    private sealed class NoSummaryHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => request.RequestUri!.AbsolutePath.EndsWith("/System/Summary", StringComparison.OrdinalIgnoreCase)
+                ? Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound) { RequestMessage = request })
+                : base.SendAsync(request, cancellationToken);
     }
 
     // ---- restart ------------------------------------------------------------------------------------------------------

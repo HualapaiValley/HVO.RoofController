@@ -6,8 +6,13 @@ using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.RPi.Tests.Client;
+using HVO.RoofControllerV4.RPi.Security.Identity;
+using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -518,5 +523,36 @@ internal sealed class DroppedAnswerHandler(HttpMessageHandler inner, string path
 
         response.Dispose();
         throw error;
+    }
+}
+
+/// <summary>
+/// A controller summary made of fixed, documentation-safe figures (#209): the host's files are fixtures and its only
+/// address is from TEST-NET-1 (RFC 5737), so a capture made for the docs shows no real address of the machine the tests
+/// run on. The controller process's own uptime and memory stay real; they name nothing.
+/// </summary>
+internal static class DocumentedHostMetrics
+{
+    public static void Use(IServiceCollection services)
+    {
+        var reads = 0;
+        services.AddSingleton(provider => new RoofHostMetrics(
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<IHostEnvironment>(),
+            provider.GetRequiredService<IOptionsMonitor<RoofIdentityOptions>>(),
+            path => path switch
+            {
+                // Each reading adds 100 busy and 300 idle ticks: 25 % in use.
+                RoofHostMetrics.StatPath => FormattableString.Invariant($"cpu  {100 * Interlocked.Increment(ref reads)} 0 0 {300 * reads} 0 0 0 0 0 0\n"),
+                RoofHostMetrics.LoadAveragePath => "0.42 0.37 0.30 1/200 1234\n",
+                RoofHostMetrics.MemoryPath => "MemTotal:        3884340 kB\nMemAvailable:    2949716 kB\n",
+                RoofHostMetrics.UptimePath => "93784.00 0.00\n",
+                RoofHostMetrics.TemperaturePath => "47200\n",
+                _ => null
+            },
+            _ => (31_268_536_320L, 22_978_166_784L),
+            () => ["192.0.2.10"],
+            () => true,
+            TimeSpan.Zero));
     }
 }

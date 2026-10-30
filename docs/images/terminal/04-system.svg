@@ -87,6 +87,17 @@
 <rect x="1011.60" y="564" width="8.80" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="582" width="1008.40" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="600" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="986.40" y="150.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="168.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="186.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="204.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="222.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="240.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="258.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="276.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="294.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="312.00" width="8.70" height="18.30" fill="#58a6ff"/>
+<rect x="986.40" y="330.00" width="8.70" height="18.30" fill="#58a6ff"/>
 <line x1="16.20" y1="50.40" x2="16.20" y2="609.60" stroke="#98a7bb" stroke-width="1.2"/>
 <line x1="15.60" y1="51.00" x2="25.20" y2="51.00" stroke="#98a7bb" stroke-width="1.2"/>
 <line x1="276.00" y1="51.00" x2="1016.40" y2="51.00" stroke="#98a7bb" stroke-width="1.2"/>
@@ -135,41 +146,48 @@
 <text x="45.60" y="127.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">CLIENT</text>
 <text x="432.00" y="127.50" fill="#3a4a60" textLength="159.60" lengthAdjust="spacingAndGlyphs">CONTROLLER / HEALTH</text>
 <text x="37.20" y="145.50" fill="#f7f9fc" font-weight="bold" text-decoration="underline">h</text>
-<text x="45.60" y="145.50" fill="#f7f9fc" textLength="361.20" lengthAdjust="spacingAndGlyphs">vo-roof version: 4.1.1-dev (commit 981f2ea9</text>
-<text x="423.60" y="145.50" fill="#f7f9fc" textLength="411.60" lengthAdjust="spacingAndGlyphs">hvo-roof version: 4.1.1-dev (commit 981f2ea9dd11)</text>
+<text x="45.60" y="145.50" fill="#f7f9fc" textLength="361.20" lengthAdjust="spacingAndGlyphs">vo-roof version: 4.2.0-dev (commit bd04e017</text>
+<text x="423.60" y="145.50" fill="#f7f9fc" textLength="411.60" lengthAdjust="spacingAndGlyphs">hvo-roof version: 4.2.0-dev (commit bd04e017a62a)</text>
+<text x="986.40" y="145.50" fill="#f7f9fc">▲</text>
 <text x="37.20" y="163.50" fill="#f7f9fc" textLength="235.20" lengthAdjust="spacingAndGlyphs">Transport: REST + status hub</text>
-<text x="423.60" y="163.50" fill="#f7f9fc" textLength="294.00" lengthAdjust="spacingAndGlyphs">Controller information (last read):</text>
-<text x="37.20" y="181.50" fill="#f7f9fc" textLength="319.20" lengthAdjust="spacingAndGlyphs">Controller information requires Admin.</text>
-<text x="423.60" y="181.50" fill="#f7f9fc" textLength="462.00" lengthAdjust="spacingAndGlyphs">Application: HVO.RoofControllerV4.RPi 4.1.1-dev (commit</text>
+<text x="423.60" y="163.50" fill="#f7f9fc" textLength="193.20" lengthAdjust="spacingAndGlyphs">Controller (last read):</text>
+<text x="37.20" y="181.50" fill="#f7f9fc" textLength="327.60" lengthAdjust="spacingAndGlyphs">Host details and restart require Admin.</text>
+<text x="423.60" y="181.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">Controller:</text>
+<text x="532.80" y="181.50" fill="#f7f9fc" textLength="260.40" lengthAdjust="spacingAndGlyphs">4.2.0-dev (commit bd04e017a62a)</text>
 <text x="37.20" y="199.50" fill="#f7f9fc" textLength="369.60" lengthAdjust="spacingAndGlyphs">Readings are last read; stale data is hidden</text>
-<text x="423.60" y="199.50" fill="#f7f9fc" textLength="226.80" lengthAdjust="spacingAndGlyphs">981f2ea9dd11) (Development)</text>
-<text x="423.60" y="217.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Host:</text>
-<text x="532.80" y="217.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">[host]</text>
-<text x="423.60" y="235.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">System:</text>
-<text x="532.80" y="235.50" fill="#f7f9fc" textLength="151.20" lengthAdjust="spacingAndGlyphs">Ubuntu 24.04.4 LTS</text>
-<text x="423.60" y="253.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Runtime:</text>
-<text x="532.80" y="253.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs">.NET 10.0.13</text>
-<text x="423.60" y="271.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Started:</text>
-<text x="532.80" y="271.50" fill="#f7f9fc" textLength="268.80" lengthAdjust="spacingAndGlyphs">2026-10-19 03:58:22Z (up 0m 35s)</text>
-<text x="423.60" y="289.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Memory:</text>
-<text x="532.80" y="289.50" fill="#f7f9fc" textLength="336.00" lengthAdjust="spacingAndGlyphs">921.7 MiB working set, 553.7 MiB managed</text>
-<text x="423.60" y="307.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">CPU:</text>
-<text x="532.80" y="307.50" fill="#f7f9fc" textLength="151.20" lengthAdjust="spacingAndGlyphs">27.8 %, 47 threads</text>
-<text x="423.60" y="343.50" fill="#f7f9fc" textLength="134.40" lengthAdjust="spacingAndGlyphs">Health: Degraded</text>
-<text x="423.60" y="361.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">CHECK</text>
-<text x="583.20" y="361.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">STATUS</text>
-<text x="667.20" y="361.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">DESCRIPTION</text>
-<text x="423.60" y="379.50" fill="#f7f9fc" textLength="126.00" lengthAdjust="spacingAndGlyphs">roof_controller</text>
-<text x="583.20" y="379.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Healthy</text>
-<text x="667.20" y="379.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">Roof controller is operational</text>
-<text x="423.60" y="397.50" fill="#f7f9fc" textLength="117.60" lengthAdjust="spacingAndGlyphs">identity_store</text>
-<text x="583.20" y="397.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Degraded</text>
-<text x="667.20" y="397.50" fill="#f7f9fc" textLength="310.80" lengthAdjust="spacingAndGlyphs">No identity store file is configured:</text>
-<text x="667.20" y="415.50" fill="#f7f9fc" textLength="310.80" lengthAdjust="spacingAndGlyphs">people, sessions and managed API keys</text>
-<text x="667.20" y="433.50" fill="#f7f9fc" textLength="319.20" lengthAdjust="spacingAndGlyphs">are lost when the controller restarts.</text>
-<text x="423.60" y="451.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">https_certificate</text>
-<text x="583.20" y="451.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Healthy</text>
-<text x="667.20" y="451.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">No certificate file is configured.</text>
+<text x="423.60" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Uptime:</text>
+<text x="532.80" y="199.50" fill="#f7f9fc" textLength="260.40" lengthAdjust="spacingAndGlyphs">controller 0m 9s, host 1d 2h 3m</text>
+<text x="423.60" y="217.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">CPU:</text>
+<text x="532.80" y="217.50" fill="#f7f9fc" textLength="352.80" lengthAdjust="spacingAndGlyphs">25.0 %, load 0.42 0.37 0.30, 12 processors</text>
+<text x="423.60" y="235.50" fill="#f7f9fc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Temperature: 47.2 °C</text>
+<text x="423.60" y="253.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Memory:</text>
+<text x="532.80" y="253.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">912.7 MiB used of 3.7 GiB (24.1 %)</text>
+<text x="423.60" y="271.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Disk:</text>
+<text x="532.80" y="271.50" fill="#f7f9fc" textLength="210.00" lengthAdjust="spacingAndGlyphs">21.4 GiB free of 29.1 GiB</text>
+<text x="423.60" y="289.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Addresses:</text>
+<text x="532.80" y="289.50" fill="#f7f9fc" textLength="327.60" lengthAdjust="spacingAndGlyphs">192.0.2.10 (the controller's container)</text>
+<text x="423.60" y="325.50" fill="#f7f9fc" textLength="268.80" lengthAdjust="spacingAndGlyphs">Host details (admin, last read):</text>
+<text x="423.60" y="343.50" fill="#f7f9fc" textLength="462.00" lengthAdjust="spacingAndGlyphs">Application: HVO.RoofControllerV4.RPi 4.2.0-dev (commit</text>
+<text x="423.60" y="361.50" fill="#f7f9fc" textLength="226.80" lengthAdjust="spacingAndGlyphs">bd04e017a62a) (Development)</text>
+<text x="986.40" y="361.50" fill="#f7f9fc">░</text>
+<text x="423.60" y="379.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Host:</text>
+<text x="532.80" y="379.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">[host]</text>
+<text x="986.40" y="379.50" fill="#f7f9fc">░</text>
+<text x="423.60" y="397.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">System:</text>
+<text x="532.80" y="397.50" fill="#f7f9fc" textLength="151.20" lengthAdjust="spacingAndGlyphs">Ubuntu 24.04.5 LTS</text>
+<text x="986.40" y="397.50" fill="#f7f9fc">░</text>
+<text x="423.60" y="415.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Runtime:</text>
+<text x="532.80" y="415.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs">.NET 10.0.14</text>
+<text x="986.40" y="415.50" fill="#f7f9fc">░</text>
+<text x="423.60" y="433.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">Started:</text>
+<text x="532.80" y="433.50" fill="#f7f9fc" textLength="260.40" lengthAdjust="spacingAndGlyphs">2026-10-30 18:20:13Z (up 0m 9s)</text>
+<text x="986.40" y="433.50" fill="#f7f9fc">░</text>
+<text x="423.60" y="451.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Memory:</text>
+<text x="532.80" y="451.50" fill="#f7f9fc" textLength="327.60" lengthAdjust="spacingAndGlyphs">354.7 MiB working set, 62.1 MiB managed</text>
+<text x="986.40" y="451.50" fill="#f7f9fc">░</text>
+<text x="423.60" y="469.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">CPU:</text>
+<text x="532.80" y="469.50" fill="#f7f9fc" textLength="151.20" lengthAdjust="spacingAndGlyphs">10.8 %, 51 threads</text>
+<text x="986.40" y="469.50" fill="#f7f9fc">▼</text>
 <text x="28.80" y="505.50" fill="#f7f9fc" textLength="310.80" lengthAdjust="spacingAndGlyphs">[ Refresh ] [ Readiness ] [ Restart ]</text>
 <text x="20.40" y="541.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">Health: Degraded.</text>
 <text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
