@@ -123,7 +123,8 @@ public sealed record RoofCommandHistoryEntry
 
     /// <summary>
     /// For an Open sent while the observatory's safety conditions (#207) were not Safe: what the safety interlock found
-    /// them to be (for example <c>Unsafe</c> or <c>Unknown</c>); null otherwise, and for every other command.
+    /// them to be (for example <c>Unsafe</c> or <c>Unknown</c>); null otherwise, for an Open accepted while nothing
+    /// watches the conditions (the interlock Off and no safety source configured, #216), and for every other command.
     /// </summary>
     public string? SafetyState { get; init; }
 

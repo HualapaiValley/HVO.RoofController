@@ -2,7 +2,9 @@ using System.Net;
 using System.Security.Claims;
 using System.Text.Json;
 using FluentAssertions;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using HVO.RoofControllerV4.RPi.Storage;
@@ -425,6 +427,43 @@ public sealed class RoofCommandHistoryTests
         history.Describe(safe, RoofHistoryCommand.Open, null, null).Should().Match<RoofCommandHistoryEntry>(entry =>
             entry.SafetyState == null && entry.SafetyOverride == null);
         history.Describe(Context(user, IPAddress.Loopback, null), RoofHistoryCommand.Close, null, null).SafetyState.Should().BeNull();
+    }
+
+    [TestMethod]
+    // Nothing watches the conditions (the interlock Off, no source): an accepted Open has no note (#216); a refusal keeps it.
+    [DataRow(RoofSafetyInterlockMode.Off, RoofSafetyState.Unknown, false, false, true, null, "Accepted")]
+    [DataRow(RoofSafetyInterlockMode.Off, RoofSafetyState.Unknown, false, false, false, "Unknown", "Refused [FaultLatched]")]
+    // A configured source that cannot be read or is stale, an unsafe one, in any mode.
+    [DataRow(RoofSafetyInterlockMode.Off, RoofSafetyState.Unknown, true, false, true, "Unknown", "Accepted (conditions unknown)")]
+    [DataRow(RoofSafetyInterlockMode.Off, RoofSafetyState.Unsafe, true, false, true, "Unsafe", "Accepted (conditions unsafe)")]
+    [DataRow(RoofSafetyInterlockMode.Warn, RoofSafetyState.Unsafe, true, true, true, "Unsafe", "Accepted (safety override, conditions unsafe)")]
+    [DataRow(RoofSafetyInterlockMode.Block, RoofSafetyState.Unsafe, true, false, false, "Unsafe", "Refused [FaultLatched]")]
+    // Unknown in Warn or Block, with no source: an override, and a refusal, keep it.
+    [DataRow(RoofSafetyInterlockMode.Warn, RoofSafetyState.Unknown, false, true, true, "Unknown", "Accepted (safety override, conditions unknown)")]
+    [DataRow(RoofSafetyInterlockMode.Warn, RoofSafetyState.Unknown, false, false, false, "Unknown", "Refused [FaultLatched]")]
+    [DataRow(RoofSafetyInterlockMode.Block, RoofSafetyState.Unknown, false, false, false, "Unknown", "Refused [FaultLatched]")]
+    // Safe: never a note.
+    [DataRow(RoofSafetyInterlockMode.Off, RoofSafetyState.Safe, true, false, true, null, "Accepted")]
+    [DataRow(RoofSafetyInterlockMode.Warn, RoofSafetyState.Safe, true, false, true, null, "Accepted")]
+    public void AnOpensEntry_NotesTheConditions_UnlessNothingWatchesThem(
+        RoofSafetyInterlockMode mode, RoofSafetyState state, bool sourceConfigured, bool overridden, bool accepted, string? expected, string result)
+    {
+        using var history = Create(new ManualTimeProvider(Start));
+        var refusal = new ProblemDetails { Detail = "A fault is latched." };
+        refusal.Extensions[RoofControllerApiContract.ProblemCodeExtension] = nameof(RoofControllerErrorCode.FaultLatched);
+        var decision = new RoofSafetyOpenDecision(null, "ada", new RoofSafetyStatus
+        {
+            State = state,
+            InterlockMode = mode,
+            Sources = sourceConfigured ? [new RoofSafetySourceStatus { Name = "Main", Kind = RoofSafetySourceKind.TelescopePark, State = state }] : []
+        }, overridden);
+        var context = Context(Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.OperatorRole), IPAddress.Loopback, null);
+
+        RoofCommandHistory.NoteSafety(context, decision.HistorySafetyState(accepted), decision.Overridden);
+        var entry = history.Describe(context, RoofHistoryCommand.Open, accepted ? Snapshot(RoofControllerStatus.Opening) : null, accepted ? null : refusal);
+
+        entry.SafetyState.Should().Be(expected);
+        RoofHistoryText.DescribeResult(entry).Should().Be(result);
     }
 
     [TestMethod]

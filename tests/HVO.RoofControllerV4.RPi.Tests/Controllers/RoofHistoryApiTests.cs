@@ -4,10 +4,12 @@ using FluentAssertions;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.Safety;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Storage;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Security;
+using HVO.RoofControllerV4.Simulation.Safety;
 using HVO.RoofControllerV4.Web.Sessions;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -423,14 +425,60 @@ public sealed class RoofHistoryApiTests
             refused.SafetyOverride.Should().BeNull("Block takes no override");
         }
 
-        using var advising = RoofClientApiTests.CreateHost();
+        // A source that says unsafe: the interlock only advises, and the entry says what it found.
+        var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
+        using var advising = RoofClientApiTests.CreateHost(configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
         using var operatorClient = CreateClient(advising, new RoofApiKeyCredential(TestApiKeys.Operator));
+        await WaitUntilAsync(() => operatorClient.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the mount to be read");
         await operatorClient.Roof.OpenAsync();
 
         var accepted = (await operatorClient.Roof.GetHistoryAsync()).Entries.Single();
         accepted.Accepted.Should().BeTrue("the interlock is off by default");
-        accepted.SafetyState.Should().Be("Unknown");
+        accepted.SafetyState.Should().Be("Unsafe");
         accepted.SafetyOverride.Should().BeNull();
+        RoofHistoryText.DescribeResult(accepted).Should().Be("Accepted (conditions unsafe)");
+    }
+
+    [TestMethod]
+    public async Task AnOpenAcceptedWhileNothingWatchesTheConditions_HasNoSafetyNote_ButARefusalKeepsIt()
+    {
+        // The interlock Off (the default) and no safety source: the conditions are always Unknown, which says nothing (#216).
+        using var host = RoofClientApiTests.CreateHost();
+        using var operatorClient = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Operator));
+        (await operatorClient.Roof.GetSafetyAsync()).Should().Match<RoofSafetyStatus>(safety =>
+            safety.State == RoofSafetyState.Unknown && safety.InterlockMode == RoofSafetyInterlockMode.Off && safety.Sources.Count == 0);
+
+        await operatorClient.Roof.OpenAsync();
+        host.RoofService.Setup(service => service.Open()).Returns(Result<RoofControllerStatus>.Failure(
+            new RoofControllerException(RoofControllerErrorCode.FaultLatched, "A fault is latched (test).")));
+        await RoofClientApiTests.RefusedAsync(() => operatorClient.Roof.OpenAsync());
+
+        var entries = (await operatorClient.Roof.GetHistoryAsync()).Entries;
+        entries.Select(entry => (entry.Accepted, entry.Code, entry.SafetyState, entry.SafetyOverride)).Should().Equal(
+            (false, nameof(RoofControllerErrorCode.FaultLatched), "Unknown", null),
+            (true, null, null, null));
+        RoofHistoryText.DescribeResult(entries[0]).Should().Be("Refused [FaultLatched]");
+        RoofHistoryText.DescribeResult(entries[1]).Should().Be("Accepted");
+    }
+
+    [TestMethod]
+    [DataRow(SimulatedSourceBehaviour.Fails, false, "cannot be read")]
+    [DataRow(SimulatedSourceBehaviour.Answers, true, "is older than")]
+    public async Task AnOpenAcceptedWhileAConfiguredSourceIsUnknown_SaysSo(SimulatedSourceBehaviour behaviour, bool stale, string reason)
+    {
+        // The interlock Off, but a source is configured: one that cannot be read, or whose last reading is too old.
+        var weather = new SimulatedWeatherSafetySource("Cloud") { Behaviour = behaviour, ObservedUtc = stale ? DateTimeOffset.UtcNow.AddHours(-1) : null };
+        using var host = RoofClientApiTests.CreateHost(configureServices: services => services.AddSingleton<IWeatherSafetySource>(weather));
+        using var operatorClient = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Operator));
+        await WaitUntilAsync(
+            () => operatorClient.Roof.GetSafetyAsync().GetAwaiter().GetResult().Sources.Single().Reason.Contains(reason, StringComparison.Ordinal),
+            "the weather monitor to be read");
+
+        await operatorClient.Roof.OpenAsync();
+
+        var accepted = (await operatorClient.Roof.GetHistoryAsync()).Entries.Single();
+        accepted.SafetyState.Should().Be("Unknown");
+        RoofHistoryText.DescribeResult(accepted).Should().Be("Accepted (conditions unknown)");
     }
 
     private static async Task<RoofControllerClient> SignedInAsync(RoofApiTestHost host, string name)
