@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-30
+
 ### Added
 
 - Kiosk **Terminal → Exit UI to terminal**: a verified operator PIN and confirmation close only the UI, release
