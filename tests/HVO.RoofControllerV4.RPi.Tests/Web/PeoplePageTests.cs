@@ -7,6 +7,7 @@ using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Sessions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -38,6 +39,8 @@ public sealed class PeoplePageTests
         cut.Click("[data-testid=people-tab][data-tab=linux]");
         cut.Click("[data-testid=linux-users] button");
         cut.WaitForElement("[data-testid=linux-user]");
+        cut.Find("[data-testid=linux-user-last-login]").TextContent.Should().Be($"Last sign-in: {RoofIdentityText.NoSignInRecorded}");
+        cut.Find("[data-testid=linux-user-full-name]").TextContent.Should().Be("Full name: none recorded, from the operating system (read-only).");
         cut.Click("[data-testid=linux-user] button");
         cut.Change("[data-testid=linux-role]", RoofControllerApiContract.OperatorRole);
         cut.Change("[data-testid=linux-user] input[type=checkbox]", false);
@@ -47,6 +50,42 @@ public sealed class PeoplePageTests
         changed.Enabled.Should().BeFalse();
         changed.Role.Should().Be(RoofControllerApiContract.OperatorRole);
         (await admin.Identity.GetUsersAsync()).Should().ContainSingle(item => item.Name == "ada");
+    }
+
+    [TestMethod]
+    public async Task ALinuxUsersFullName_IsTheOperatingSystems_ShownWithoutAnEditor()
+    {
+        using var directory = new TemporaryDirectory();
+        using var harness = new WebAdminHarness(new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+        });
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        var store = harness.Host.Services.GetRequiredService<HVO.RoofControllerV4.RPi.Security.Identity.RoofIdentityStore>();
+        var enrollment = new RoofPrincipalEnrollRequest
+        {
+            Provider = "linux",
+            Subject = Guid.NewGuid().ToString(),
+            Name = "fixture-linux",
+            EnrollmentStamp = Guid.NewGuid().ToString(),
+            Role = RoofControllerApiContract.OperatorRole
+        };
+        var principal = store.EnrollLinux(enrollment).Value!;
+        // A sign-in records the full name the native worker gave (no worker here: the store is given it directly).
+        store.CreateProviderSession(principal.Id, store.FindLinux(enrollment.Subject)!.Stamp,
+            assertion: new HVO.RoofControllerV4.RPi.Security.Identity.StoredAssertionNonce(
+                Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)), DateTimeOffset.UtcNow.AddSeconds(30)),
+            osDisplayName: "Fixture Owner").Succeeded.Should().BeTrue();
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+
+        cut.Click("[data-testid=people-tab][data-tab=linux]");
+        cut.Click("[data-testid=linux-users] button");
+        cut.WaitForElement("[data-testid=linux-user]");
+
+        cut.Find("[data-testid=linux-user-full-name]").TextContent.Should().Be("Full name: Fixture Owner, from the operating system (read-only).");
+        cut.FindAll("[data-testid=linux-user] [data-testid=user-names-change]").Should().BeEmpty("a Linux account's names are not edited here");
     }
 
     [TestMethod]
@@ -84,8 +123,8 @@ public sealed class PeoplePageTests
         var cut = Loaded(context);
 
         cut.FindAll("[data-testid=user]").Select(Row).ToList().Should().Equal(
-            "ada | Admin | yes | no | 1 | 2026-09-29 12:00:00Z",
-            "vic | Viewer | yes | no | 1 | 2026-09-29 12:00:00Z");
+            "ada |  |  | Admin | local | yes | no | 1 | 2026-09-29 12:00:00Z | 2026-09-29 12:00:00Z",
+            "vic |  |  | Viewer | local | yes | no | 1 | 2026-09-29 12:00:00Z | 2026-09-29 12:00:00Z");
 
         cut.Click("[data-testid=people-tab][data-tab=keys]");
         cut.WaitForAssertion(() => cut.FindAll("[data-testid=key]").Select(Row).ToList().Should().Contain(
@@ -118,7 +157,8 @@ public sealed class PeoplePageTests
 
         cut.WaitForAssertion(() => Message(cut).Should().Be("Added otto (Operator)."));
         cut.FindAll("[data-testid=user-add-form]").Should().BeEmpty();
-        Row(cut.Find("[data-testid=user][data-name=otto]")).Should().Be("otto | Operator | yes | yes | 0 | 2026-09-29 12:00:00Z");
+        Row(cut.Find("[data-testid=user][data-name=otto]")).Should().Be(
+            "otto |  |  | Operator | local | yes | yes | 0 | none recorded | 2026-09-29 12:00:00Z");
         using var anonymous = ClientTestSupport.CreateClient(harness.Host);
         (await anonymous.Auth.SignInAsync("otto", NewPassword)).Role.Should().Be(RoofControllerApiContract.OperatorRole);
     }
@@ -188,7 +228,7 @@ public sealed class PeoplePageTests
         cut.Click("[data-testid=user-panel-send]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be("vic is now Operator."));
-        Row(cut.Find("[data-testid=user][data-name=vic]")).Should().StartWith("vic | Operator | yes | no | 0 | ");
+        Row(cut.Find("[data-testid=user][data-name=vic]")).Should().StartWith("vic |  |  | Operator | local | yes | no | 0 | ");
         using var admin = harness.Admin();
         (await admin.Identity.GetSessionsAsync()).Select(open => open.Name).Should().NotContain("vic");
     }
@@ -217,13 +257,13 @@ public sealed class PeoplePageTests
         cut.Input("[data-testid=user-new-pin-again]", NewPin);
         cut.Click("[data-testid=user-panel-send]");
         cut.WaitForAssertion(() => Message(cut).Should().Be("Set the PIN of olga."));
-        Row(cut.Find("[data-testid=user][data-name=olga]")).Should().StartWith("olga | Operator | yes | yes | ");
+        Row(cut.Find("[data-testid=user][data-name=olga]")).Should().StartWith("olga |  |  | Operator | local | yes | yes | ");
 
         UserAction(cut, "olga", "user-pin-remove");
         cut.WaitForElement("[data-testid=user-panel]").TextContent.Should().Contain("Remove the PIN of olga? Their PIN sessions end.");
         cut.Click("[data-testid=user-panel-send]");
         cut.WaitForAssertion(() => Message(cut).Should().Be("Removed the PIN of olga."));
-        Row(cut.Find("[data-testid=user][data-name=olga]")).Should().StartWith("olga | Operator | yes | no | ");
+        Row(cut.Find("[data-testid=user][data-name=olga]")).Should().StartWith("olga |  |  | Operator | local | yes | no | ");
 
         using var anonymous = ClientTestSupport.CreateClient(harness.Host);
         (await anonymous.Auth.SignInAsync("olga", NewPassword)).Role.Should().Be(RoofControllerApiContract.OperatorRole, "the role was kept");
@@ -248,6 +288,99 @@ public sealed class PeoplePageTests
 
         cut.WaitForAssertion(() => Message(cut).Should().Be("Set the password of olga."));
         (await admin.Identity.GetUserAsync("olga")).Role.Should().Be(RoofControllerApiContract.ViewerRole, "another admin's change is not undone");
+    }
+
+    [TestMethod]
+    public async Task AnAdmin_AddsAPerson_WithTheirNames_AndTheListShowsThem()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+
+        cut.Click("[data-testid=user-add]");
+        cut.WaitForElement("[data-testid=user-name]");
+        cut.Find("[data-testid=user-add-form]").TextContent.Should().Contain(RoofIdentityText.DisplayNameRule).And.Contain(RoofIdentityText.ShortNameRule);
+        cut.Input("[data-testid=user-name]", "otto");
+        cut.Input("[data-testid=user-display-name]", "  Otto Example ");
+        cut.Input("[data-testid=user-short-name]", "Otto");
+        cut.Input("[data-testid=user-password]", NewPassword);
+        cut.Input("[data-testid=user-password-again]", NewPassword);
+        cut.Click("[data-testid=user-add-send]");
+
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Added otto (Viewer)."));
+        Row(cut.Find("[data-testid=user][data-name=otto]")).Should().Be(
+            "otto | Otto Example | Otto | Viewer | local | yes | no | 0 | none recorded | 2026-09-29 12:00:00Z");
+        using var admin = harness.Admin();
+        var otto = await admin.Identity.GetUserAsync("otto");
+        otto.DisplayName.Should().Be("Otto Example", "the name is trimmed before it is sent");
+        otto.ShortName.Should().Be("Otto");
+    }
+
+    [TestMethod]
+    public async Task ANamesChange_IsSaved_AndAnEmptyNameRemoved_WithoutEndingTheSessions()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await harness.SignInAsync("vic", RoofControllerApiContract.ViewerRole);
+        using var admin = harness.Admin();
+        await admin.Identity.UpdateUserAsync("vic", new RoofUserUpdateRequest
+        {
+            Role = RoofControllerApiContract.ViewerRole,
+            DisplayName = "Vic Example",
+            ShortName = "Vic"
+        });
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+
+        UserAction(cut, "vic", "user-names-change");
+        cut.WaitForElement("[data-testid=user-panel]").TextContent.Should().Contain(RoofIdentityText.NamesChangeEndsNothing);
+        cut.Find("[data-testid=user-new-display-name]").GetAttribute("value").Should().Be("Vic Example", "the panel opens with the names as they are");
+        cut.Find("[data-testid=user-new-short-name]").GetAttribute("value").Should().Be("Vic");
+        cut.Input("[data-testid=user-new-display-name]", "Victor Example");
+        cut.Input("[data-testid=user-new-short-name]", "  ");
+        cut.Click("[data-testid=user-panel-send]");
+
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Set the names of vic."));
+        Row(cut.Find("[data-testid=user][data-name=vic]")).Should().StartWith("vic | Victor Example |  | Viewer | local | yes | no | 1 | ");
+        var vic = await admin.Identity.GetUserAsync("vic");
+        vic.DisplayName.Should().Be("Victor Example");
+        vic.ShortName.Should().BeNull("an empty name is removed");
+        vic.Role.Should().Be(RoofControllerApiContract.ViewerRole);
+        (await admin.Identity.GetSessionsAsync()).Select(open => open.Name).Should().Contain("vic", "a name change ends no session");
+    }
+
+    [TestMethod]
+    [DataRow("Otto\u0007", "", "A display name is optional: ")]
+    [DataRow("", "A short name too long", "A short name is optional: ")]
+    public async Task AName_ThatCannotBeRight_IsNotSent(string displayName, string shortName, string said)
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+
+        cut.Click("[data-testid=user-add]");
+        cut.WaitForElement("[data-testid=user-name]");
+        cut.Input("[data-testid=user-name]", "otto");
+        cut.Input("[data-testid=user-display-name]", displayName);
+        cut.Input("[data-testid=user-short-name]", shortName);
+        cut.Input("[data-testid=user-password]", NewPassword);
+        cut.Input("[data-testid=user-password-again]", NewPassword);
+        cut.Click("[data-testid=user-add-send]");
+        cut.WaitForAssertion(() => cut.Find("[data-testid=panel-error]").TextContent.Should().StartWith(said));
+        cut.Click("[data-testid=panel-cancel]");
+
+        UserAction(cut, "ada", "user-names-change");
+        cut.WaitForElement("[data-testid=user-new-display-name]");
+        cut.Input("[data-testid=user-new-display-name]", displayName);
+        cut.Input("[data-testid=user-new-short-name]", shortName);
+        cut.Click("[data-testid=user-panel-send]");
+        cut.WaitForAssertion(() => cut.Find("[data-testid=panel-error]").TextContent.Should().StartWith(said));
+        cut.FindAll("[data-testid=user-panel]").Should().ContainSingle("the panel stays open to correct it");
+
+        using var admin = harness.Admin();
+        (await admin.Identity.GetUsersAsync()).Should().ContainSingle().Which.DisplayName.Should().BeNull();
     }
 
     [TestMethod]

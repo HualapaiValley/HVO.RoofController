@@ -70,11 +70,13 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
 | History (`/history`) | everyone | The roof commands the controller was sent, accepted or refused, newest first: the person's own, or everyone's for an admin, who may pick one person or key. |
-| People (`/people`) | Admin | People (add, role, password, kiosk PIN, remove), API keys (add, rotate, change, remove) and sessions (end). |
-| System (`/system`) | Admin | The web UI's version, the controller's version, host and resource use, readiness, Restart, and Forced restart. |
+| People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove) and sessions (end). |
+| System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
+| Your names (`/account/names`) | everyone | The person's own display and short name; for a Linux account, its names from the operating system, read-only. **Your names** in the header opens it. |
 
-A Viewer and an Operator see Roof, Health, Settings and History in the navigation. Opening an admin page without the Admin role
+A Viewer and an Operator see Roof, Health, Settings, History and System in the navigation; System shows them the
+controller's summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role
 says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
 not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
 mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
@@ -95,6 +97,9 @@ The page follows the controller's live status: the hub sends a full status at ea
 - **Open, Close and Clear fault** need the Operator role. A Viewer sees them disabled, with
   `Open, Close and Clear fault need the Operator role. Stop is always available.` A button that cannot be used says
   why, for example that the roof is already closed.
+- **Open and Close show their state** as the kiosk and the terminal UI do: green while offered, bright green while the
+  roof moves their way (`Opening…`, `Closing…`; not pressable), and a neutral grey, never a faded green, while not
+  offered (`data-state` is `available`, `running` or `disabled`).
 - **The operator lease.** When the controller has a lease (`OperatorLeaseTimeout`), a move started from the page holds
   it, and the page renews it while the roof moves (`Renewing lease (12 s left)`). The page renews it only while its
   live connection is up. When the page closes, or its connection is lost, it stops renewing, and the roof stops when the
@@ -107,6 +112,11 @@ The page follows the controller's live status: the hub sends a full status at ea
   from the start. Stop still works.
 - **Nothing is claimed that the controller has not said.** Before the first status the page says it is connecting
   (`No status yet.`), rather than showing a position.
+- **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a badge in the
+  header, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), with the reasons and what the interlock does with
+  Open in its tooltip, and a Safety row in the status card. While the interlock blocks Open, Open is not offered and
+  says why; in Warn mode Open shows the controller's refusal, which says how to override it (there is no override
+  prompt on the page yet).
 
 <p>
   <img src="images/web/03-roof-opening-phone.jpg" alt="The roof page on a phone while the roof opens: the position Opening and the lease being renewed" width="240">
@@ -174,29 +184,53 @@ A setting that cannot be changed here says why, as the controller gives it.
 
 ### History
 
-![The History page: the roof commands, newest first, with who sent each, the result, the roof afterwards and where it came from](images/web/16-history-desktop.jpg)
+![The History page: the roof commands, newest first, with who sent each, the result, the roof afterwards and where it came from](images/web/17-history-desktop.jpg)
 
 The roof command history (#206), as the controller records it: each Open, Close, Stop and Clear fault, accepted or
 refused (with the controller's code), and each refused lease renewal. Each row says when (UTC), who sent it and how
 they signed in, the result, the roof's position afterwards, and the program and address it came from: for a command sent
 from the web UI, the address of the person's browser, which the web UI names to the controller in `X-Forwarded-For`
 ([The command history](security.md#the-command-history)). An admin reads everyone's commands and may give a person's or
-key's name (whoever is named so now); anyone else reads only their own, matched by their identifier, never by name. **From** and **To** pick whole UTC days. Newer and Older
+key's name (whoever is named so now); anyone else reads only their own, matched by their identifier, never by name. An
+Open sent while the [safety conditions](safety-service.md) were not safe says so, such as
+`Accepted (safety override, conditions unsafe)`, and one the safety interlock refused shows its code, such as
+`Refused [SafetyOverrideRequired]`. **From** and **To** pick whole UTC days. Newer and Older
 page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the page says when it keeps
 them in memory only.
 
 ### People
 
-![The People page: people, with their roles, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
+![The People page: people, with their names, roles, login type and last sign-in, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
 
 An admin adds people and sets their role, password and [kiosk](kiosk.md) PIN, adds and rotates API keys, and ends sessions
 ([Managing people, keys and sessions](security.md#managing-people-keys-and-sessions)). A new key's secret is shown
 once, as it is created; neither the page nor the controller shows it again.
 
+Each person's row shows their **display name** (a friendly name, up to 64 characters) and **short name** (up to 16, for
+narrow places such as the kiosk), both optional; how they sign in (**Login**: `local` for a person in the controller's
+identity store); and their **last sign-in**, with a password or a PIN (`none recorded` until they sign in after the
+controller began recording it). An admin gives the names when adding a person, or with **Names**; an empty name is
+removed, and a name change ends no session. The **Linux users** tab shows each enrolled account's last sign-in too, and
+its full name from the operating system (its GECOS field, as the controller recorded it at the last sign-in), read-only:
+a Linux account's names are changed on the controller's machine, not here.
+
 ### System
 
-![The System page: the web UI's version, the controller's facts, Restart, and Forced restart](images/web/07-system-desktop.jpg)
+![The System page: the web UI's version, the controller's summary, the host's details, Restart, and Forced restart](images/web/07-system-desktop.jpg)
 
+Every role sees the web UI's own version (**Web UI version**) and the **controller's summary** (`GET System/Summary`):
+its version; **Web UI**, where people reach the web UI; its uptime, the machine's uptime, CPU use, load and
+temperature, memory and the disk it keeps its data on; and the host's addresses. The installer and the deploy script
+record the web UI's URLs at each deploy, from the host's LAN addresses, the web UI's published port and its scheme
+(for example `https://192.0.2.10:8088/`). When the web UI is published only on the controller's machine (a rig not
+open to the network) it says `only on the controller's machine`, and when the deployment did not record them it says
+the address is not known. A container's own address is never given as where to reach the web UI: when only that is
+known, **Addresses** says it is the container's, which the network does not reach. A value the controller could not
+read says `unavailable`; when the controller cannot be reached the page says `Controller unreachable.`, and
+**Refresh** reads it again. An admin also sees:
+
+- **Host details**: the application, host, operating system, runtime, start time and the controller process's memory
+  and CPU (`GET System/info` and `metrics`).
 - **Restart the controller** asks first (`Restart the controller? It stops the roof first, and does not answer until it has started again.`).
   The controller stops the roof, verifies the stop, and exits; the supervisor starts it again. A restart that would
   load a pending hand edit shows it, and needs confirming when it is safety-critical.
@@ -208,11 +242,25 @@ once, as it is created; neither the page nor the controller shows it again.
   held). The page says to use the stop control at the roof
   if the roof is moving. To send it, type `restart`.
 
+### Your names
+
+![Your names: the display name and short name, with their rules](images/web/16-names-desktop.jpg)
+
+**Your names** in the header opens the person's own names: a **display name** (a friendly name, up to 64 characters)
+and a **short name** (up to 16, for narrow places such as the kiosk). Leave one empty to remove it; saving ends no
+session (`POST Auth/Names`). Names are changed only where there is a keyboard: here and in the terminal's Setup page;
+the kiosk shows them but does not change them, and a PIN session cannot. An admin changes anyone's on the People page.
+A Linux account's names come from the operating system (its full name and its user name), so the page shows them
+read-only and says to change the full name on the controller's machine.
+
 ## Stop
 
 **Stop roof** is on every page, the sign-in page too, in a bar fixed to the bottom of the screen. It is never
 disabled, needs no role and no PIN, and uses the same words as every other client. The page keeps room for the bar at
-its end, so the bar never covers the end of a page.
+its end, so the bar never covers the end of a page. It is a dim red while there is nothing to stop, and bright red
+while the Roof page's newest status, live or last known, shows the roof moving (the page's `data-roof-motion`, read
+by the stylesheet alone, so Stop's own script is unchanged); other pages, which show no roof status, keep the dim red.
+Only the colour changes.
 
 - The Stop bar is outside the live page. `wwwroot/js/stop.js` posts it (`POST /stop`) with `fetch` and shows the
   answer next to the button, so Stop works while the page's live connection is down. Without the script, the browser
@@ -324,7 +372,9 @@ Nothing here needs the Pi, the HAT or the roof.
 
 - **The screenshots** above come from `WebScreenshotTests`, which signs in as an admin against the emulated roof and
   camera and visits every page on a phone, a tablet and a desktop. It checks that no page scrolls sideways and that no
-  page holds a key or a password; the key panel is never opened and the controller's host name is masked. To refresh
+  page holds a key or a password; the key panel is never opened, the controller's host name is masked, and the
+  controller is given a documentation address (`192.0.2.10`) for the web UI and the host, checked before the System
+  page is captured, so no address of the machine the tests run on is published. To refresh
   them, from `src/`:
 
   ```bash
@@ -363,4 +413,4 @@ See [Authentication and interface rights](authentication-interfaces.md) for veri
 
 ### Finding the installed version
 
-The footer shows the running **Web UI version**, including build identification. Administrators can read **System** for separately labelled last-read controller information. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.
+The footer shows the running **Web UI version**, including build identification. Everyone signed in can read **System** for the separately labelled, last-read controller version and summary; administrators see the host's details too. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.

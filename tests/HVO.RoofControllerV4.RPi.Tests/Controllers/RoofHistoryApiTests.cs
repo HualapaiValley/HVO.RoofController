@@ -353,6 +353,53 @@ public sealed class RoofHistoryApiTests
         page.Entries.Should().ContainSingle().Which.Command.Should().Be(RoofHistoryCommand.Open);
     }
 
+    // ---- The safety interlock (#207) -------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task TheSafetyInterlocksRefusal_AndAnOverride_AreRecorded_WithTheSafetyState()
+    {
+        // No safety source: the conditions are Unknown, never Safe.
+        using var host = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = "Warn" });
+        using var operatorClient = host.CreateApiClient(TestApiKeys.Operator);
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+
+        (await operatorClient.PostAsync("/api/v4.0/RoofControl/Open", null)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await operatorClient.PostAsync("/api/v4.0/RoofControl/Open?overrideSafety=true", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await operatorClient.PostAsync("/api/v4.0/RoofControl/Close", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var entries = (await admin.Roof.GetHistoryAsync()).Entries;
+        entries.Select(entry => (entry.Command, entry.Accepted, entry.Code, entry.SafetyState, entry.SafetyOverride)).Should().Equal(
+            (RoofHistoryCommand.Close, true, null, null, null),
+            (RoofHistoryCommand.Open, true, null, "Unknown", true),
+            (RoofHistoryCommand.Open, false, nameof(RoofControllerErrorCode.SafetyOverrideRequired), "Unknown", null));
+        RoofHistoryText.DescribeResult(entries[1]).Should().Be("Accepted (safety override, conditions unknown)");
+        RoofHistoryText.DescribeResult(entries[2]).Should().Be("Refused [SafetyOverrideRequired]");
+    }
+
+    [TestMethod]
+    public async Task AnOpenTheInterlockBlocks_IsRecordedAsARefusal_AndOneItOnlyAdvisesOn_AsAccepted()
+    {
+        using (var blocking = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = "Block" }))
+        {
+            using var admin = CreateClient(blocking, new RoofApiKeyCredential(TestApiKeys.Admin));
+            await RoofClientApiTests.RefusedAsync(() => admin.Roof.OpenAsync(overrideSafety: true));
+
+            var refused = (await admin.Roof.GetHistoryAsync()).Entries.Single();
+            refused.Code.Should().Be(nameof(RoofControllerErrorCode.SafetyInterlockActive));
+            refused.SafetyState.Should().Be("Unknown");
+            refused.SafetyOverride.Should().BeNull("Block takes no override");
+        }
+
+        using var advising = RoofClientApiTests.CreateHost();
+        using var operatorClient = CreateClient(advising, new RoofApiKeyCredential(TestApiKeys.Operator));
+        await operatorClient.Roof.OpenAsync();
+
+        var accepted = (await operatorClient.Roof.GetHistoryAsync()).Entries.Single();
+        accepted.Accepted.Should().BeTrue("the interlock is off by default");
+        accepted.SafetyState.Should().Be("Unknown");
+        accepted.SafetyOverride.Should().BeNull();
+    }
+
     private static async Task<RoofControllerClient> SignedInAsync(RoofApiTestHost host, string name)
     {
         using var anonymous = CreateClient(host);

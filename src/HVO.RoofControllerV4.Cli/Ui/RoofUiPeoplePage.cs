@@ -11,6 +11,12 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// </summary>
 internal sealed class RoofUiPeoplePage : RoofUiPage
 {
+    /// <summary>
+    /// The people's columns: the CLI's, without UPDATED (<c>users show</c> has it), so the list fits 120 columns with the
+    /// names, login type and last sign-in (#209).
+    /// </summary>
+    internal static readonly string[] UserHeaders = [.. RoofCli.CommandBuilder.UserHeaders.SkipLast(1)];
+
     internal enum Mode
     {
         Users,
@@ -47,6 +53,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
         _actions[Mode.Users] = Buttons(
             ("Add", AddUser),
             ("Role", ChangeRole),
+            ("Names", ChangeNames),
             ("Password", SetPassword),
             ("PIN", SetPin),
             ("Remove PIN", RemovePin),
@@ -172,7 +179,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                 break;
             case Mode.Users:
                 _header.Text = _users.Length == 0 && _loaded ? "No people yet: Add one. The first admin can also be made on Setup (F5)." : "People";
-                SetLines(_rows, Table(RoofCli.CommandBuilder.UserHeaders, _users.Select(RoofCli.CommandBuilder.UserRow)));
+                SetLines(_rows, Table(UserHeaders, _users.Select(user => (IReadOnlyList<string>)[.. RoofCli.CommandBuilder.UserRow(user).SkipLast(1)])));
                 break;
             case Mode.Keys:
                 _header.Text = "API keys (a configuration key is read-only here)";
@@ -313,6 +320,37 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                 }
 
                 Update(user, new RoofUserUpdateRequest { Role = role }, $"{user.Name} is now {RoofCliFormat.Role(role)}.");
+                return null;
+            })]));
+    }
+
+    private void ChangeNames()
+    {
+        if (RequireUser() is not { } user)
+        {
+            return;
+        }
+
+        Ui.Ask(new RoofUiPrompt(
+            $"Names of {user.Name}",
+            $"{RoofIdentityText.DisplayNameRule}\n{RoofIdentityText.ShortNameRule}\n{RoofIdentityText.NamesChangeEndsNothing}",
+            [new RoofUiField("Display name", Initial: user.DisplayName ?? string.Empty), new RoofUiField("Short name", Initial: user.ShortName ?? string.Empty)],
+            [new RoofUiAction("Save", values =>
+            {
+                if (RoofIdentityText.CheckNames(values[0], values[1]) is { } error)
+                {
+                    return error;
+                }
+
+                // An empty name removes it.
+                Update(
+                    user,
+                    new RoofUserUpdateRequest
+                    {
+                        DisplayName = RoofIdentityContract.NormalizeLabel(values[0]) ?? string.Empty,
+                        ShortName = RoofIdentityContract.NormalizeLabel(values[1]) ?? string.Empty
+                    },
+                    $"Saved the names of {user.Name}.");
                 return null;
             })]));
     }

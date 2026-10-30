@@ -146,6 +146,33 @@ internal sealed class KioskHarness : IAsyncDisposable
     public string? ControllerVersion { get; set; }
 
     /// <summary>
+    /// The figures every summary the controller answers carries (#209), in place of this machine's: a render is the same
+    /// on every machine, and never shows its addresses. Where the web UI is reached is as the installer writes it for a Pi
+    /// open to the network, with a documentation address (RFC 5737); the container's own address is never shown.
+    /// The version is the controller's, or <see cref="ControllerVersion"/>.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, System.Text.Json.Nodes.JsonNode?> SummaryFigures = new Dictionary<string, System.Text.Json.Nodes.JsonNode?>
+    {
+        ["uptimeSeconds"] = 7_380,
+        ["hostUptimeSeconds"] = 356_460,
+        ["processorCount"] = 4,
+        ["cpuUsagePercent"] = 12.5,
+        ["loadAverage1Minute"] = 0.42,
+        ["loadAverage5Minutes"] = 0.35,
+        ["loadAverage15Minutes"] = 0.3,
+        ["cpuTemperatureCelsius"] = 47.2,
+        ["memoryTotalBytes"] = 4L << 30,
+        ["memoryAvailableBytes"] = 3_113_851_289L,
+        ["diskTotalBytes"] = 31_268_536_320L,
+        ["diskFreeBytes"] = 18L << 30,
+        ["webUiUrls"] = new System.Text.Json.Nodes.JsonArray("https://192.0.2.10:8088/"),
+        ["webUiAccess"] = "Network",
+        ["hostAddresses"] = new System.Text.Json.Nodes.JsonArray("192.0.2.10"),
+        ["ipAddresses"] = new System.Text.Json.Nodes.JsonArray("172.17.0.2"),
+        ["runningInContainer"] = true
+    };
+
+    /// <summary>
     /// Awaited after the controller handled each request and before its answer reaches the kiosk: a slow network, or
     /// (with a task the test completes) an answer held on its way.
     /// </summary>
@@ -311,11 +338,28 @@ internal sealed class KioskHarness : IAsyncDisposable
                     }
                 }
 
-                if (response.IsSuccessStatusCode && harness.ControllerVersion is { } version
-                    && request.RequestUri.AbsolutePath.TrimStart('/') == RoofApiRoutes.SystemInformation)
+                var path = request.RequestUri.AbsolutePath.TrimStart('/');
+                if (response.IsSuccessStatusCode && harness.ControllerVersion is { } version && path == RoofApiRoutes.SystemInformation)
                 {
                     var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken))!;
                     json["applicationVersion"] = version;
+                    response.Content.Dispose();
+                    response.Content = new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+                }
+
+                if (response.IsSuccessStatusCode && path == RoofApiRoutes.SystemSummary)
+                {
+                    var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken))!;
+                    foreach (var (name, value) in SummaryFigures)
+                    {
+                        json[name] = value?.DeepClone();
+                    }
+
+                    if (harness.ControllerVersion is { } summaryVersion)
+                    {
+                        json["applicationVersion"] = summaryVersion;
+                    }
+
                     response.Content.Dispose();
                     response.Content = new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
                 }

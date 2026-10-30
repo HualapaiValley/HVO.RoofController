@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common;
@@ -8,32 +9,73 @@ namespace HVO.RoofControllerV4.Cli;
 
 public static partial class RoofCli
 {
+    /// <summary>Heads the host's details in <c>info</c>: an admin's, below the summary every role reads (#209).</summary>
+    internal const string HostDetailsHeading = "Host details (admin):";
+
+    /// <summary>Said, on standard error, in place of the host's details to a caller without the Admin role.</summary>
+    internal const string HostDetailsNeedAdmin = RoofSystemText.HostDetailsNeedAdmin;
+
     internal sealed partial class CommandBuilder
     {
         private Command CreateInfoCommand()
         {
-            var command = new Command("info", "Show hvo-roof's own version, then the controller's version, host and resource use (admin).");
+            var command = new Command(
+                "info",
+                "Show hvo-roof's own version, then the controller's version and resource use (any role), and for an admin the host's details.");
             SetAction(command, async (context, _, cancellationToken) =>
             {
                 using var client = context.Connect();
-                var information = await client.System.GetInformationAsync(cancellationToken).ConfigureAwait(false);
-                var metrics = await client.System.GetMetricsAsync(cancellationToken).ConfigureAwait(false);
+                var summary = await ReadSummaryAsync(client, cancellationToken).ConfigureAwait(false);
+                SystemInformationResponse? information = null;
+                SystemRuntimeMetricsResponse? metrics = null;
+                try
+                {
+                    information = await client.System.GetInformationAsync(cancellationToken).ConfigureAwait(false);
+                    metrics = await client.System.GetMetricsAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (RoofApiException refused) when (refused.StatusCode == HttpStatusCode.Forbidden && summary is not null)
+                {
+                    // The host's details are an admin's; the summary is everyone's (#209).
+                }
+
                 if (context.Json)
                 {
                     // hvo-roof's full version (with its commit), as the controller's applicationVersion is given.
                     var self = new { name = CommandName, version = RoofProductVersion.Of(typeof(RoofCli).Assembly) };
-                    context.WriteJson(new { client = self, information, metrics });
+                    context.WriteJson(new { client = self, summary, information, metrics });
                 }
                 else
                 {
-                    RoofCliFormat.WriteRows(
-                        context.Out,
-                        RoofSystemText.DescribeInformation(information, metrics).Prepend(RoofSystemText.DescribeClient(CommandName, typeof(RoofCli).Assembly)));
+                    var rows = summary is null ? [] : RoofSystemText.DescribeSummary(summary);
+                    RoofCliFormat.WriteRows(context.Out, rows.Prepend(RoofSystemText.DescribeClient(CommandName, typeof(RoofCli).Assembly)));
+                    if (information is not null && metrics is not null)
+                    {
+                        context.Out.WriteLine();
+                        context.Out.WriteLine(HostDetailsHeading);
+                        RoofCliFormat.WriteRows(context.Out, RoofSystemText.DescribeInformation(information, metrics));
+                    }
+                    else
+                    {
+                        context.Host.Error.WriteLine(HostDetailsNeedAdmin);
+                    }
                 }
 
                 return (int)RoofExitCode.Success;
             });
             return command;
+        }
+
+        /// <summary>The controller's summary (any role), or null from a controller older than it (#209).</summary>
+        private static async Task<SystemSummaryResponse?> ReadSummaryAsync(RoofControllerClient client, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await client.System.GetSummaryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (RoofApiException refused) when (refused.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
         }
 
         private Command CreateRestartCommand()

@@ -34,16 +34,19 @@
                                 <li class="nav-item">
                                     <NavLink class="nav-link" href="people">People</NavLink>
                                 </li>
-                                <li class="nav-item">
-                                    <NavLink class="nav-link" href="system">System</NavLink>
-                                </li>
                             }
+                            <li class="nav-item">
+                                <NavLink class="nav-link" href="system">System</NavLink>
+                            </li>
                         </ul>
                         <div class="web-user" data-testid="signed-in-user">
                             <a class="navbar-text web-user-name" href="@WebAccountEndpoints.ChangePasswordPath.TrimStart('/')" title="Change your password">
                                 <i class="bi bi-person-circle" aria-hidden="true"></i>
                                 @context.User.Identity?.Name
                                 <span class="badge bg-outline ms-1" data-testid="signed-in-role">@WebRoles.Describe(HighestRole(context.User))</span>
+                            </a>
+                            <a class="navbar-text web-user-name" href="@WebAccountEndpoints.NamesPath.TrimStart('/')" title="Your display and short names" data-testid="your-names">
+                                <i class="bi bi-person-vcard" aria-hidden="true"></i> Your names
                             </a>
                             <form method="post" action="@WebAuthentication.SignOutPostPath.TrimStart('/')" class="web-signout">
                                 <button type="submit" class="btn btn-sm btn-outline-light" data-testid="sign-out">

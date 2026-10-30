@@ -46,6 +46,9 @@ public static class RoofCommandRules
 
     public const string AlreadyClosed = "the roof is already closed";
 
+    /// <summary>Open, while the controller's safety interlock blocks it (Block mode) and the conditions are not Safe.</summary>
+    public const string SafetyInterlock = "the safety interlock blocks it: the safety conditions are not confirmed safe";
+
     public const string NoFault = "no fault is active";
 
     /// <summary>Why Open or Close got no answer, when the connection ended after the command was sent.</summary>
@@ -98,7 +101,18 @@ public static class RoofCommandRules
             : status.IsMoving ? Moving
             : direction == RoofMotionDirection.Opening && status.Status is RoofControllerStatus.Open or RoofControllerStatus.Opening ? AlreadyOpen
             : direction == RoofMotionDirection.Closing && status.Status is RoofControllerStatus.Closed or RoofControllerStatus.Closing ? AlreadyClosed
+            : direction == RoofMotionDirection.Opening && IsOpenBlockedBySafety(status) ? SafetyInterlock
             : null;
+    }
+
+    /// <summary>
+    /// True when the controller's safety interlock refuses Open whatever the caller sends: Block mode, and conditions
+    /// that are not Safe. Warn mode is not a block: Open is offered, and the controller asks for an override.
+    /// </summary>
+    public static bool IsOpenBlockedBySafety(RoofStatusResponse status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        return status.Safety is { InterlockMode: RoofSafetyInterlockMode.Block, State: not RoofSafetyState.Safe };
     }
 
     /// <summary>Why Clear fault is not offered; null when it is.</summary>

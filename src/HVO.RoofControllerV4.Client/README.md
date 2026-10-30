@@ -45,7 +45,7 @@ and `RoofCertificateAuthorityTests` check both over real HTTPS, against CAs and 
 | `Auth` | `Auth`: sign-in with a password or a PIN, the caller, refresh, sign-out, password change, PIN users |
 | `Identity` | `Identity`: people, API keys and sessions (admin) |
 | `Settings` | `Settings`: the catalogue, the values, a group change, reloading or discarding a hand edit |
-| `System` | `System`: restart, information and metrics |
+| `System` | `System`: the summary (any role), restart, information and metrics (admin) |
 | `Health` | `/health`, `/health/ready`, `/health/live` |
 | `Camera` | the camera stream |
 

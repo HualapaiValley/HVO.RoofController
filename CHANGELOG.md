@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   from its own loopback, `RoofCommandHistory:TrustedProxies`), and the roof's status afterwards. Who sent a command is
   matched by an identifier (a person's principal ID, or their name and creation; a key's ID), never by a name alone.
   Stop is never limited; anonymous Stops from one source are one entry with a count, under a cap of their own. An Open
-  sent while the safety conditions are not Safe records them, and whether it went ahead on a safety override. It keeps
+  sent while the safety conditions are not Safe (#207) records them, with the safety interlock's refusals
+  (`SafetyOverrideRequired`, `SafetyInterlockActive`) and whether it went ahead on a safety override. It keeps
   them in `command-history.jsonl` next to the identity store (so backups hold it), or at
   `RoofCommandHistory:StorePath`, for 90 days and up to 10,000 commands (`RoofCommandHistory:Retention`,
   `RoofCommandHistory:MaximumEntries`). `GET api/v4.0/RoofControl/History` pages them, newest first, with `user`,
@@ -24,6 +25,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   only their own. The web UI's new **History** page, the terminal interface's **History** on the Roof page and
   `hvo-roof history [--user] [--since] [--until]` show them; the kiosk has a hook for a person's recent commands. The
   client library now names the program in each request's `User-Agent`.
+- Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
+  Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
+  age) and bounded, non-overlapping reads. It is on every status snapshot and status hub message (`safety`), at
+  `GET /api/v4.0/Safety` (Viewer) and in the client library (`GetSafetyAsync`), and every change is logged. No real
+  source exists yet, so the conditions are Unknown ("No safety sources configured"); simulated sources test it.
+- An optional Open interlock on the safety conditions, `RoofSafety:InterlockMode`: `Off` (the default: Open is
+  unchanged, and an Open while not Safe is logged), `Warn` (the chosen policy: Open refused with
+  `SafetyOverrideRequired` unless the request carries `overrideSafety=true`, which anyone who may open the roof may
+  send, `RoofSafety:OverrideRole` `Operator` by default; overrides are audit-logged) or `Block` (refused with
+  `SafetyInterlockActive`). Unknown counts as Unsafe. Close and Stop are never refused for the conditions
+  ([docs/safety-service.md](docs/safety-service.md)).
+- Safety indicators: a badge on the web UI's roof page, a Safety row in every client's status (`hvo-roof status`, the
+  terminal interface, the web UI, the kiosk's Readings), the state on `hvo-roof status --watch` lines, a chip on the
+  kiosk's roof page, and `hvo-roof open --override-safety`.
+- `GET api/v4.0/System/Summary` for every role (a viewer, an operator, an admin, a kiosk key, a PIN session): the
+  controller's version and uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and
+  addresses, each null when it cannot be read. `System/info` and `System/metrics` stay admin-only. The client library
+  reads it with `System.GetSummaryAsync()` and describes it with `RoofSystemText.DescribeSummary` (#209).
+- People have an optional display name and short name, set by an admin (`DisplayName` and `ShortName` on
+  `POST`/`PUT Identity/Users`; on a change an empty one removes it, and none ends a session), and the controller records
+  each person's and each Linux account's last sign-in (password, PIN or Linux). `RoofUserResponse`,
+  `RoofPinUserResponse` and `Auth/Me` carry the names, the people list and the kiosk's picker the last sign-in and a
+  `LoginType` (`Local` or `Linux`, derived from the provider), and `RoofPrincipalResponse` the last sign-in. They are
+  optional fields of the identity store, with no new schema, so a rollback still reads it (#209).
+- The web UI's People page, `hvo-roof users` and the terminal's People page show the names, login type and last
+  sign-in, and set or clear the names (`--display-name`, `--short-name`; **Names**). The kiosk's PIN picker shows a
+  person's display name (#209).
+- People change their own display and short name where there is a keyboard: `POST api/v4.0/Auth/Names` from a password
+  session, the web UI's **Your names** page and the terminal's Setup page; a PIN session at a kiosk cannot. An enrolled
+  Linux account's names come from the operating system (its GECOS full name, from the native worker's new
+  `/v1/profile`, and its user name) and are read-only (#209).
+- Where people reach the web UI: the summary's `webUiUrls` and `webUiAccess` (`Network`, `LocalOnly` or `Unknown`),
+  shown first after the version on the kiosk's About page, in `hvo-roof info`, the terminal's and the web UI's System
+  pages. The installer gives the deploy script the host's LAN addresses (`HOST_ADDRESSES`), and the script passes the
+  URLs built from them, the published web port and the scheme (`RoofHost__*`) at every deploy; a rig not open to the
+  network says the web UI is only on that machine. A controller in a container never shows its bridge address as where
+  to reach it (#209).
+
+### Changed
+
+- The controller's version and summary are no longer admin-only in any UI: the web UI's System page (now in every
+  role's navigation), `hvo-roof info`, the terminal's System page, and the kiosk's and Mac app's About and System pages
+  show them to every role, a locked kiosk too; the host's details and the restarts stay admin-only. A controller that
+  cannot be reached is said so (`Controller unreachable.`) (#209).
+- Stop, Open and Close show the roof's state in colour in the kiosk, the Mac app, the web UI and `hvo-roof ui`: Stop
+  is a dim red while there is nothing to stop and bright red while the roof moves (never disabled); Open and Close are
+  green while offered, bright green while the roof moves their way, and neutral grey while not offered. The colours are
+  shared aliases of the canonical HVO Dark roles (#208).
+- Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person shows their display name, role, login type,
+  last sign-in and short name, two a row; Cancel on the people step returns to the keypad (#208).
+- Kiosk pages show Previous, Next and the page count only when their contents overflow (#208).
+- Kiosk and Mac About: labelled cards for the device, the controller (its version, then where the web UI is) and the
+  controller's host (the summary's uptimes, CPU, temperature, memory, disk and addresses), saying
+  `Controller not configured yet.`, `Controller unreachable.`, `Reading…` or `Not available` where a value is not
+  known (#208).
+- Kiosk Terminal: **Exit UI to terminal** is at the top of the page, always on screen, above the explanation (#208).
 
 ## [4.2.0] - 2026-10-30
 

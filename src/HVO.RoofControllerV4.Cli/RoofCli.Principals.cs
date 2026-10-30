@@ -1,4 +1,5 @@
 using System.CommandLine;
+using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Cli;
@@ -7,9 +8,10 @@ public static partial class RoofCli
 {
     internal sealed partial class CommandBuilder
     {
-        internal static readonly string[] PrincipalHeaders = ["ID", "PROVIDER", "NAME", "ROLE", "ENABLED"];
+        internal static readonly string[] PrincipalHeaders = ["ID", "PROVIDER", "NAME", "ROLE", "ENABLED", "LAST SIGN-IN"];
         internal static IReadOnlyList<string> PrincipalRow(RoofPrincipalResponse person)
-            => [person.Id, person.Provider, person.Name, RoofCliFormat.Role(person.Role), person.Enabled ? "yes" : "no"];
+            => [person.Id, person.Provider, person.Name, RoofCliFormat.Role(person.Role), person.Enabled ? "yes" : "no",
+                RoofIdentityText.DescribeLastLogin(person.LastLoginUtc)];
 
         private Command CreatePrincipalsCommand()
         {

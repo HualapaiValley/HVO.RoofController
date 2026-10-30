@@ -57,6 +57,9 @@ public sealed class KioskRoofPage : UserControl
             button.HorizontalAlignment = HorizontalAlignment.Stretch;
             button.FontWeight = FontWeight.SemiBold;
         }
+        // Nothing is offered before the first view.
+        KioskTheme.Colour(Open, OpenState = RoofActionState.Disabled);
+        KioskTheme.Colour(Close, CloseState = RoofActionState.Disabled);
         _commands = new StackPanel { Spacing = metrics.Gap, Children = { Open, Close, ClearFault } };
         _hint = KioskTheme.Label(string.Empty, metrics.Font, KioskTheme.MutedWeak);
         _hint.Name = "hint";
@@ -78,6 +81,12 @@ public sealed class KioskRoofPage : UserControl
 
     public Button ClearFault { get; }
 
+    /// <summary>How Open is drawn (<see cref="RoofActionStates.ForMotion"/>).</summary>
+    public RoofActionState OpenState { get; private set; }
+
+    /// <summary>How Close is drawn (<see cref="RoofActionStates.ForMotion"/>).</summary>
+    public RoofActionState CloseState { get; private set; }
+
     /// <summary>Shows <paramref name="view"/>.</summary>
     public void Update(KioskView view)
     {
@@ -97,6 +106,8 @@ public sealed class KioskRoofPage : UserControl
         };
 
         _chips.Children.Clear();
+        if (status?.Safety is { } safety)
+            _chips.Children.Add(SafetyChip(safety.State, stale));
         if (status is { IsWatchdogActive: true, WatchdogSecondsRemaining: { } watchdog })
             _chips.Children.Add(Chip($"Watchdog: {RoofStatusText.Seconds(watchdog)} left", true));
         _statusTime.Text = status is null ? KioskText.NoStatusYet
@@ -137,6 +148,9 @@ public sealed class KioskRoofPage : UserControl
         _commands.IsVisible = view.IsOperator;
         Open.IsEnabled = view.OpenBlock is null;
         Close.IsEnabled = view.CloseBlock is null;
+        // Green while offered, bright green while the roof moves that way, neutral while not offered: the reason is below.
+        OpenState = Show(Open, RoofActionStates.ForMotion(RoofMotionDirection.Opening, status, view.IsStale, view.OpenBlock), OpenState, "↑  Open roof", "↑  Opening…");
+        CloseState = Show(Close, RoofActionStates.ForMotion(RoofMotionDirection.Closing, status, view.IsStale, view.CloseBlock), CloseState, "↓  Close roof", "↓  Closing…");
         ClearFault.IsEnabled = view.ClearFaultBlock is null;
 
         _hint.Text = !view.IsUnlocked ? $"{_wording.SignedOutHint} {RoofStopText.AlwaysAvailable}"
@@ -152,6 +166,17 @@ public sealed class KioskRoofPage : UserControl
         if (_blocked.Text.Length > 100) _blocked.Text = "Motion unavailable. Readings has details.";
         _blocked.IsVisible = _blocked.Text.Length > 0;
 
+    }
+
+    // Recolours a motion button only when its state changes; while running, its label says so as well as its colour.
+    private static RoofActionState Show(Button button, RoofActionState state, RoofActionState shown, string label, string running)
+    {
+        if (state == shown) return state;
+        KioskTheme.Colour(button, state);
+        KioskTheme.SetText(button, state == RoofActionState.Running ? running : label);
+        button.Classes.Set("running", state == RoofActionState.Running);
+        button.FontWeight = state == RoofActionState.Disabled ? FontWeight.Normal : FontWeight.SemiBold;
+        return state;
     }
 
     private static IBrush PositionBrush(RoofStatusResponse? status) => status?.Status switch
@@ -170,6 +195,19 @@ public sealed class KioskRoofPage : UserControl
         Grid.SetColumn(control, column);
         return control;
     }
+
+    // The reasons are on Readings, with the rest of the status; #208 redesigns this page.
+    private Border SafetyChip(RoofSafetyState state, bool stale) => KioskTheme.Pill(
+        $"Safety: {RoofStatusText.DescribeSafetyState(state)}{(stale ? " (last known)" : string.Empty)}",
+        stale ? (KioskTheme.Muted, KioskTheme.Badge, KioskTheme.Frame)
+            : state switch
+            {
+                RoofSafetyState.Safe => KioskTheme.SuccessColours,
+                RoofSafetyState.Unsafe => KioskTheme.Colours(KioskNoticeLevel.Danger),
+                _ => KioskTheme.Colours(KioskNoticeLevel.Warning)
+            },
+        _metrics,
+        "safety");
 
     private Border Chip(string text, bool on) => KioskTheme.Pill(
         text,

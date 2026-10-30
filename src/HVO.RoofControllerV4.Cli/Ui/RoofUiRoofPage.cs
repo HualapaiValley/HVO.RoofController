@@ -93,9 +93,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             _status.Text = $"{(Ui.IsStale ? "LAST KNOWN" : "LIVE")}: {RoofCliFormat.DescribeRoof(status)}";
             _status.SetScheme(status.IsFaultLatched ? Ui.Theme.Danger : Ui.IsStale ? Ui.Theme.Warning : Ui.Theme.Header);
             var rows = RoofCliFormat.DescribeStatus(status);
-            _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Lease" or "Watchdog" or "Last error")
+            _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error")
                 .Select(row => $"{row.Label}:  {row.Value}").Prepend(heading).ToArray());
-            ShowReadings(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Lease" or "Watchdog" or "Last error"))
+            ShowReadings(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error"))
                 .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status)).ToArray());
         }
 
@@ -105,6 +105,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         OpenButton.Enabled = open is null;
         CloseButton.Enabled = close is null;
         ClearFaultButton.Enabled = clear is null;
+        // Green while offered, bright green while the roof moves that way, neutral while not offered (the reason is below).
+        OpenButton.SetScheme(Ui.Theme.ForMotion(RoofActionStates.ForMotion(RoofMotionDirection.Opening, Ui.Status, Ui.IsStale, open), RoofMotionDirection.Opening));
+        CloseButton.SetScheme(Ui.Theme.ForMotion(RoofActionStates.ForMotion(RoofMotionDirection.Closing, Ui.Status, Ui.IsStale, close), RoofMotionDirection.Closing));
         _blocked.Text = RoofCommandRules.DescribeMotionBlocks(open, close) ?? string.Empty;
     }
 

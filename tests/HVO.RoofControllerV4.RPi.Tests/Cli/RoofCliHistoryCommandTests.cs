@@ -30,7 +30,7 @@ public sealed class RoofCliHistoryCommandTests
         lines[0].Should().Be("Everyone's roof commands (admin).");
         lines[1].Should().MatchRegex("^TIME +COMMAND +BY +RESULT +ROOF AFTER +FROM$");
         lines[2].Should().MatchRegex(@"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\dZ +Stop +test-viewer \(API key\) +Accepted +Closed +");
-        lines[3].Should().MatchRegex(@"Open +test-operator \(API key\) +Accepted +Closed +");
+        lines[3].Should().MatchRegex(@"Open +test-operator \(API key\) +Accepted \(conditions unknown\) +Closed +", "no safety source is configured, so the conditions are not known");
         lines[4].Should().Be("1–2 of 2 commands.");
         lines[5].Should().Be("The controller keeps commands for 90 days, up to 10,000. It keeps them in memory only, so a restart loses them.");
     }
@@ -75,6 +75,24 @@ public sealed class RoofCliHistoryCommandTests
         mine.Json.GetProperty("entries").EnumerateArray().Select(entry => entry.GetProperty("id").GetInt64()).Should().Equal(2, 1);
         none.Code.Should().Be(RoofExitCode.Success, none.ToString());
         none.Out.Should().Contain(RoofHistoryText.EmptyFiltered);
+    }
+
+    [TestMethod]
+    public async Task History_ShowsTheSafetyInterlocksRefusal_AndAnOpenOnASafetyOverride()
+    {
+        using var host = RoofClientApiTests.CreateHost(settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = "Warn" });
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+
+        (await rig.RunAsync("open", "--no-wait")).Code.Should().Be(RoofExitCode.Refused);
+        (await rig.RunAsync("open", "--no-wait", "--override-safety")).Code.Should().Be(RoofExitCode.Success);
+        var result = await rig.RunAsync("history");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        var rows = result.Out.Split('\n').Where(line => line.Contains(" Open ", StringComparison.Ordinal)).ToArray();
+        rows.Should().HaveCount(2);
+        rows[0].Should().Contain("Accepted (safety override, conditions unknown)");
+        rows[1].Should().Contain("Refused [SafetyOverrideRequired]");
     }
 
     [TestMethod]

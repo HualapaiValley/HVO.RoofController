@@ -40,7 +40,7 @@ public sealed class WebRedesignBrowserTests
         await page.GotoAsync("/signin");
         await FitAndStopAsync();
         await browser.SignInAsync(longName);
-        foreach (var route in new[] { "/", "/health", "/settings", "/people", "/system", "/account/keys", "/account/password", "/denied", "/missing-redesign-address" })
+        foreach (var route in new[] { "/", "/health", "/settings", "/people", "/system", "/account/keys", "/account/password", "/account/names", "/denied", "/missing-redesign-address" })
         {
             await page.GotoAsync(route);
             await Expect(page.Locator("main h1")).ToHaveCountAsync(1);
@@ -118,13 +118,17 @@ public sealed class WebRedesignBrowserTests
         await browser.Rig.WaitForControllerAsync(status => status.IsMoving, "the emulated roof to move before fullscreen Stop");
         await page.GetByRole(AriaRole.Button, new() { Name = "Fullscreen", Exact = true }).ClickAsync();
         await Expect(page.Locator(":fullscreen [data-testid=stop]")).ToBeVisibleAsync();
-        await FitAndStopAsync();
+        // #208: the roof is moving, so the same direct Stop is the bright red, still enabled and uncovered.
+        await FitAndStopAsync(moving: true);
         await browser.Stop.ClickAsync();
         await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
         browser.Rig.Controller.GetCurrentStatusSnapshot().ShouldBeDeenergized(browser.Rig);
+        // Stopped: the dim red again, in fullscreen and after it, and never disabled.
+        await ExpectStopAsync(moving: false);
         await page.Keyboard.PressAsync("Escape");
         await Expect(page.Locator(":fullscreen")).ToHaveCountAsync(0);
         await Expect(page.Locator("body > .web-stop-bar [data-testid=stop]")).ToBeVisibleAsync();
+        await ExpectStopAsync(moving: false);
         await Expect(page.GetByTestId("stop")).ToHaveCountAsync(1);
         await Expect(page.GetByRole(AriaRole.Button, new() { Name = "Fullscreen", Exact = true })).ToBeFocusedAsync();
     }
@@ -181,7 +185,7 @@ public sealed class WebRedesignBrowserTests
         await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.Acknowledged);
     }
 
-    private async Task FitAndStopAsync()
+    private async Task FitAndStopAsync(bool moving = false)
     {
         var browser = _browser!;
         var page = browser.Page;
@@ -197,8 +201,27 @@ public sealed class WebRedesignBrowserTests
         await Expect(browser.Stop).ToBeEnabledAsync();
         await page.Keyboard.PressAsync("Tab");
         await browser.Stop.FocusAsync();
+        // Focus keeps Stop's red pair for its state: dim while idle, bright while the roof moves (#208).
+        await Expect(browser.Stop).ToHaveCSSAsync("background-color", WebBrowser.Rgb(StopColours(moving)[1]));
         var colors = await browser.Stop.EvaluateAsync<string[]>("e => { const s=getComputedStyle(e); return [s.color,s.backgroundColor,s.borderTopColor,s.outlineStyle]; }");
-        colors.Should().Equal("rgb(254, 202, 202)", "rgb(66, 34, 38)", "rgb(248, 81, 73)", "solid");
+        colors.Should().Equal([.. StopColours(moving).Select(WebBrowser.Rgb), "solid"]);
         (await browser.PlacementOfAsync(browser.Stop)).Reachable.Should().BeTrue("Stop remains visible and uncovered");
     }
+
+    // Stop in its state's colours, enabled and uncovered, without moving the focus.
+    private async Task ExpectStopAsync(bool moving)
+    {
+        var browser = _browser!;
+        var (text, background, border) = (StopColours(moving)[0], StopColours(moving)[1], StopColours(moving)[2]);
+        await Expect(browser.Stop).ToHaveCSSAsync("background-color", WebBrowser.Rgb(background), new() { Timeout = 15_000 });
+        await Expect(browser.Stop).ToHaveCSSAsync("color", WebBrowser.Rgb(text));
+        await Expect(browser.Stop).ToHaveCSSAsync("border-top-color", WebBrowser.Rgb(border));
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        (await browser.PlacementOfAsync(browser.Stop)).Reachable.Should().BeTrue("Stop remains visible and uncovered");
+    }
+
+    // Stop's text, background and edge: RoofUiPalette's idle or active pair.
+    private static string[] StopColours(bool moving) => moving
+        ? [RoofUiPalette.StopButtonActiveText, RoofUiPalette.StopButtonActive, RoofUiPalette.StopButtonActiveBorder]
+        : [RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, RoofUiPalette.StopButtonBorder];
 }

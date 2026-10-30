@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
@@ -192,6 +193,41 @@ public sealed class RoofTerminalUiTests
     // ---- Colours -----------------------------------------------------------------------------------------------------
 
     [TestMethod]
+    public void StopOpenAndClose_AreColouredByTheRoofsState_AndStopStaysEnabled()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        var stop = $"{RoofStopText.ButtonLabel} (F9)";
+
+        tui.Ui.StopButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Stop, "nothing to stop: the dim red");
+        ShouldHaveColours(tui.ColoursOf(stop), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton);
+        page.OpenButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Open);
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionDisabled);
+        ShouldHaveColours(tui.ColoursOf(" Close "), RoofUiPalette.MotionDisabledText, RoofUiPalette.MotionDisabled, "a disabled Close is neutral, not a faded green");
+
+        host.RoofService.Raise(service => service.StatusChanged += null,
+            new RoofStatusChangedEventArgs(RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening) with { StatusVersion = 50 }));
+        tui.WaitIdle("the opening roof", () => tui.Ui.Status?.StatusVersion == 50);
+        tui.Ui.StopButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.StopMoving, "the roof is moving: bright red");
+        tui.Ui.StopButton.Enabled.Should().BeTrue();
+        ShouldHaveColours(tui.ColoursOf(stop), RoofUiPalette.StopButtonActiveText, RoofUiPalette.StopButtonActive);
+        page.OpenButton.Enabled.Should().BeFalse("the roof is already opening");
+        page.OpenButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionRunning);
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.MotionRunningText, RoofUiPalette.MotionRunning, "running keeps its bright green while not pressable");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionDisabled);
+
+        host.RoofService.Raise(service => service.StatusChanged += null,
+            new RoofStatusChangedEventArgs(RoofServiceMock.Snapshot(RoofControllerStatus.PartiallyOpen) with { StatusVersion = 51 }));
+        tui.WaitIdle("the stopped roof", () => tui.Ui.Status?.StatusVersion == 51);
+        tui.Ui.StopButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Stop);
+        page.OpenButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Open);
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close);
+    }
+
+    [TestMethod]
     public void TheScreen_IsDrawnInTheWebUisColours()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -202,8 +238,8 @@ public sealed class RoofTerminalUiTests
 
         ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop retains the canonical red action pair");
         tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Bold);
-        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open uses the canonical raised action surface");
-        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close uses the raised action surface (disabled while the roof is closed)");
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.MotionAvailableText, RoofUiPalette.MotionAvailable, "an offered Open is green");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionDisabled, "Close is neutral while the roof is closed");
         ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
         ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Surface, "the page is HVO Dark's");
         ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web UI's navigation bar");
@@ -1461,6 +1497,78 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void Setup_Names_APersonChangesTheirOwn_AndNothingEnds()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        SignedIn(host, rig, "ada");
+        using var tui = Started(rig);
+        tui.Ui.ShowPage(4);
+        tui.Ui.CurrentPage.Should().BeOfType<RoofUiSetupPage>();
+
+        Click(tui, "Names");
+        tui.WaitIdle("your names", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Prompt.Title.Should().Be("Your names (ada)");
+        tui.Ui.Panel.Fields[0].Text.Should().BeEmpty();
+        Fill(tui, "Ada\u0007", string.Empty);
+        tui.Ui.Panel.Press("Save");
+        tui.Ui.Panel!.Error.Should().Be(RoofIdentityText.DisplayNameRule, "a name with a control character is refused before it is sent");
+        Fill(tui, "  Ada Example ", "Ada");
+        tui.Ui.Panel.Press("Save");
+        tui.WaitIdle("the names saved", () => tui.Ui.Message.StartsWith("Saved your names", StringComparison.Ordinal));
+
+        tui.Ui.Message.Should().Be("Saved your names: Ada Example (ada), short name Ada.");
+        tui.Ui.Caller!.Kind.Should().Be(RoofCredentialKind.Session, "changing your names ends no session");
+        using var admin = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        RoofUserResponse? ada = null;
+        OffTheLoop(async () => ada = await admin.Identity.GetUserAsync("ada"));
+        ada!.DisplayName.Should().Be("Ada Example");
+        ada.ShortName.Should().Be("Ada");
+
+        Click(tui, "Names");
+        tui.WaitIdle("your names again", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Fields[0].Text.Should().Be("Ada Example");
+        Fill(tui, "Ada Example", string.Empty);
+        tui.Ui.Panel.Press("Save");
+        tui.WaitIdle("the short name removed", () => tui.Ui.Message.EndsWith("no short name.", StringComparison.Ordinal));
+        OffTheLoop(async () => ada = await admin.Identity.GetUserAsync("ada"));
+        ada!.ShortName.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void Setup_Names_WithAnApiKey_SaysAPersonMustSignIn()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        tui.Ui.ShowPage(4);
+
+        Click(tui, "Names");
+        tui.WaitIdle("the answer", () => tui.Ui.Message.StartsWith("Names are a person's", StringComparison.Ordinal));
+
+        tui.Ui.Panel.Should().BeNull("an API key has no names to change");
+        tui.Ui.Message.Should().Contain(RoofIdentityText.OwnNamesWhere);
+    }
+
+    /// <summary>Saves a password session for a new operator <paramref name="name"/>, as <c>hvo-roof login</c> would.</summary>
+    private static void SignedIn(RoofApiTestHost host, CliRig rig, string name)
+    {
+        RoofClientApiTests.AddUserAsync(host, name, RoofControllerApiContract.OperatorRole).GetAwaiter().GetResult();
+        RoofSessionCredential? session = null;
+        OffTheLoop(async () =>
+        {
+            using var anonymous = ClientTestSupport.CreateClient(host);
+            session = await anonymous.Auth.SignInAsync(name, TestSecrets.Password);
+        });
+        RoofCredentialStore.Save(rig.CredentialsPath, new RoofStoredCredentials
+        {
+            Controller = ClientTestSupport.BaseAddress,
+            Session = new RoofStoredSession(session!.Token, session.Name, session.Role, session.SessionId, session.ExpiresUtc)
+        });
+    }
+
+    [TestMethod]
     public void Setup_Connection_RefusesABadAddress_InThePrompt()
     {
         using var rig = new CliRig((RoofApiTestHost?)null);
@@ -1593,6 +1701,7 @@ public sealed class RoofTerminalUiTests
         Click(tui, "Linux users");
         var page = (RoofUiPeoplePage)tui.Ui.CurrentPage;
         tui.WaitIdle("Linux users", () => page.Describe().Contains("fixture-linux", StringComparison.Ordinal));
+        page.Describe().Should().MatchRegex($@"fixture-linux +viewer +yes +{Regex.Escape(RoofIdentityText.NoSignInRecorded)}");
         tui.Render(TestContext, "09-linux-users");
         page.Select(person.Id);
         Click(tui, "Role / access");
@@ -1644,6 +1753,49 @@ public sealed class RoofTerminalUiTests
         Click(tui, "Rotate");
         tui.Ui.Message.Should().Be("The key test-admin comes from the controller's configuration and is read-only here.");
         tui.Ui.Panel.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void People_ShowsNamesLoginAndLastSignIn_AndNamesAreSetAndCleared_WithoutEndingASession()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        RoofClientApiTests.AddUserAsync(host, "grace", RoofControllerApiContract.OperatorRole).GetAwaiter().GetResult();
+        OffTheLoop(async () =>
+        {
+            using var signIn = ClientTestSupport.CreateClient(host);
+            await signIn.Auth.SignInAsync("grace", TestSecrets.Password);
+        });
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        tui.Press(Key.F3);
+        tui.WaitIdle("the lists");
+        var people = (RoofUiPeoplePage)tui.Ui.CurrentPage;
+        people.Describe().Should().MatchRegex(@"NAME +DISPLAY NAME +SHORT NAME +ROLE +LOGIN +PASSWORD +PIN +SESSIONS +LAST SIGN-IN")
+            .And.NotContain("UPDATED", "the terminal's list leaves it to 'users show', so the list fits")
+            .And.MatchRegex(@"grace +operator +local +yes +no +1 +\d{4}-\d{2}-\d{2} ");
+
+        people.Select("grace");
+        Click(tui, "Names");
+        tui.Ui.Panel!.Prompt.Message.Should().Contain(RoofIdentityText.NamesChangeEndsNothing);
+        Fill(tui, "Grace\u0007", "Gee");
+        tui.Ui.Panel.Press("Save");
+        tui.Ui.Panel.Error.Should().Be(RoofIdentityText.DisplayNameRule, "an invalid name is refused before anything is sent");
+        Fill(tui, " Grace Example ", "Gee");
+        tui.Ui.Panel.Press("Save");
+        tui.WaitIdle("the names", () => people.Describe().Contains("Grace Example", StringComparison.Ordinal));
+
+        tui.Ui.Message.Should().Be("Saved the names of grace.");
+        people.Describe().Should().MatchRegex("grace +Grace Example +Gee +operator");
+        people.Select("grace");
+        Click(tui, "Names");
+        Fill(tui, "Grace Example", string.Empty);
+        tui.Ui.Panel!.Press("Save");
+        tui.WaitIdle("the cleared short name", () => !people.Describe().Contains("Gee", StringComparison.Ordinal));
+        var grace = UsersOf(host).Single();
+        grace.DisplayName.Should().Be("Grace Example");
+        grace.ShortName.Should().BeNull("an empty short name removes it");
+        grace.ActiveSessions.Should().Be(1, "a name ends no session");
     }
 
     [TestMethod]
@@ -1934,6 +2086,9 @@ public sealed class RoofTerminalUiTests
 
         system.Describe().Should().Contain("Health: Degraded").And.Contain("identity_store");
         system.Describe().Should().NotContain("need the Admin role");
+        system.Describe().Should().Contain("Controller (last read):").And.Contain("Host details (admin, last read):")
+            .And.MatchRegex($@"Controller: +{Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))}")
+            .And.MatchRegex(@"Application: +HVO\.RoofControllerV4\.RPi ");
 
         Click(tui, "Restart");
         tui.WaitIdle("the restart prompt", () => tui.Ui.Panel is not null);
@@ -1952,6 +2107,23 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
+    public void System_SaysWhereTheWebUiIs_RightAfterTheControllersVersion()
+    {
+        using var host = RoofClientApiTests.CreateHost(configureServices: DocumentedHostMetrics.Use);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+        using var tui = Started(rig);
+        tui.Press(Key.F4);
+        tui.WaitIdle("the health report", () => tui.Ui.Message.StartsWith("Health:", StringComparison.Ordinal));
+
+        var lines = tui.Ui.CurrentPage.Describe().Split('\n');
+        var controller = Array.FindIndex(lines, line => line.StartsWith("Controller:", StringComparison.Ordinal));
+        lines[controller + 1].Should().MatchRegex(@"^Web UI: +https://192\.0\.2\.10:8088/$", "people learn where the web UI is (#209)");
+        tui.Ui.CurrentPage.Describe().Should().MatchRegex(@"Addresses: +192\.0\.2\.10")
+            .And.NotContain("172.17.0.2", "a container's bridge address is never where to reach the web UI");
+    }
+
+    [TestMethod]
     public void System_ForAnOperator_ShowsHealth_ButNotRestart()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -1963,7 +2135,12 @@ public sealed class RoofTerminalUiTests
 
         tui.Ui.CurrentPage.Describe().Should().StartWith($"{RoofCli.CommandName}")
             .And.Contain(RoofProductVersion.Describe(typeof(RoofCli).Assembly))
-            .And.Contain("The controller's version, host and resource use need the Admin role.");
+            .And.Contain("Controller (last read):")
+            .And.MatchRegex($@"Controller: +{Regex.Escape(RoofProductVersion.Describe(typeof(Program).Assembly))}")
+            .And.MatchRegex(@"Memory: +\S")
+            .And.Contain(RoofCli.HostDetailsNeedAdmin)
+            .And.NotContain("Host details (admin")
+            .And.NotContain(Environment.MachineName, "the host's name is an admin's");
         Click(tui, "Restart");
 
         tui.Ui.Panel.Should().BeNull();
@@ -1992,6 +2169,18 @@ public sealed class RoofTerminalUiTests
             role = (await admin.Identity.GetUserAsync(name)).Role;
         });
         return role;
+    }
+
+    /// <summary>The people as the controller has them now.</summary>
+    private static RoofUserResponse[] UsersOf(RoofApiTestHost host)
+    {
+        RoofUserResponse[] users = [];
+        OffTheLoop(async () =>
+        {
+            using var admin = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+            users = await admin.Identity.GetUsersAsync();
+        });
+        return users;
     }
 
     /// <summary>

@@ -45,6 +45,11 @@ public static class RoofStatusText
             rows.Add(("Watchdog", $"{Seconds(watchdog)} left"));
         }
 
+        if (status.Safety is { } safety)
+        {
+            rows.Add(("Safety", DescribeSafety(safety)));
+        }
+
         rows.Add(("Controller", DescribeController(status)));
         if (!string.IsNullOrWhiteSpace(status.LastError))
         {
@@ -159,6 +164,39 @@ public static class RoofStatusText
         return status.InputsHealthy ? "read OK" : DescribeFailures("reads failing", status.ConsecutiveInputReadFailures);
     }
 
+    /// <summary>
+    /// The safety conditions in one line: the state, why it is not safe, and what the interlock does with Open, as
+    /// "UNSAFE: Telescope 'Main' is not parked (Open blocked by the safety interlock)".
+    /// </summary>
+    public static string DescribeSafety(RoofSafetyStatus safety)
+    {
+        ArgumentNullException.ThrowIfNull(safety);
+        var state = safety.State switch
+        {
+            RoofSafetyState.Safe => "safe",
+            RoofSafetyState.Unsafe => "UNSAFE",
+            _ => "UNKNOWN"
+        };
+        var reasons = safety.State != RoofSafetyState.Safe && safety.Reasons.Count > 0 ? $": {string.Join("; ", safety.Reasons)}" : string.Empty;
+        var interlock = (safety.InterlockMode, safety.State) switch
+        {
+            (RoofSafetyInterlockMode.Block, not RoofSafetyState.Safe) => "Open blocked by the safety interlock",
+            (RoofSafetyInterlockMode.Warn, not RoofSafetyState.Safe) => $"Open needs a safety override{DescribeOverrideRole(safety.OverrideRole)}",
+            (RoofSafetyInterlockMode.Block, _) => "safety interlock: block",
+            (RoofSafetyInterlockMode.Warn, _) => "safety interlock: warn",
+            _ => "advisory: the safety interlock is off"
+        };
+        return $"{state}{reasons} ({interlock})";
+    }
+
+    /// <summary>Safe, Unsafe or Unknown: the safety state as a badge shows it.</summary>
+    public static string DescribeSafetyState(RoofSafetyState state) => state switch
+    {
+        RoofSafetyState.Safe => "Safe",
+        RoofSafetyState.Unsafe => "Unsafe",
+        _ => "Unknown"
+    };
+
     /// <summary>active, inactive, or unknown for an input the controller could not read.</summary>
     public static string DescribeInput(bool? active) => active switch
     {
@@ -183,4 +221,7 @@ public static class RoofStatusText
     public static string Seconds(double seconds) => $"{Math.Max(0, seconds).ToString("0", CultureInfo.InvariantCulture)} s";
 
     private static string DescribeFailures(string text, int count) => count > 0 ? $"{text} ({count} in a row)" : text;
+
+    // Anyone who may open may override by default, so only the narrower Admin choice is named.
+    private static string DescribeOverrideRole(string? role) => role == RoofControllerApiContract.AdminRole ? " from an admin" : string.Empty;
 }

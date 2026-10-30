@@ -98,6 +98,35 @@ public static class KioskTheme
         SetButton(button.Resources, background, foreground, border ?? background);
     }
 
+    /// <summary>
+    /// Colours Open or Close in <paramref name="state"/> (<see cref="RoofActionStates.ForMotion"/>): green while offered,
+    /// bright green while the roof moves its way, neutral while not offered. A running button is not pressable either, so
+    /// it keeps its bright colours while disabled; a disabled one is drawn in the neutral colours, never a faded green.
+    /// </summary>
+    public static void Colour(Button button, RoofActionState state)
+    {
+        ArgumentNullException.ThrowIfNull(button);
+        var (background, foreground, border) = MotionColours(state);
+        SetButton(button.Resources, background, foreground, border);
+        var (offBackground, offForeground, offBorder) = MotionColours(state == RoofActionState.Running ? state : RoofActionState.Disabled);
+        button.Resources["ButtonBackgroundDisabled"] = Brush(offBackground);
+        button.Resources["ButtonForegroundDisabled"] = Brush(offForeground);
+        button.Resources["ButtonBorderBrushDisabled"] = Brush(offBorder);
+    }
+
+    /// <summary>The background, text and edge of Open or Close in <paramref name="state"/>.</summary>
+    public static (string Background, string Foreground, string Border) MotionColours(RoofActionState state) => state switch
+    {
+        RoofActionState.Running => (RoofUiPalette.MotionRunning, RoofUiPalette.MotionRunningText, RoofUiPalette.MotionRunningBorder),
+        RoofActionState.Disabled => (RoofUiPalette.MotionDisabled, RoofUiPalette.MotionDisabledText, RoofUiPalette.MotionDisabledBorder),
+        _ => (RoofUiPalette.MotionAvailable, RoofUiPalette.MotionAvailableText, RoofUiPalette.MotionAvailableBorder)
+    };
+
+    /// <summary>The background, text and edge of Stop: bright while the roof moves (<see cref="RoofActionStates.IsStopActive"/>), dim while idle.</summary>
+    public static (string Background, string Foreground, string Border) StopColours(bool active) => active
+        ? (RoofUiPalette.StopButtonActive, RoofUiPalette.StopButtonActiveText, RoofUiPalette.StopButtonActiveBorder)
+        : (RoofUiPalette.StopButton, RoofUiPalette.StopButtonText, RoofUiPalette.StopButtonBorder);
+
     /// <summary>Wrapped text in the kiosk's text colour.</summary>
     public static TextBlock Label(string text, double fontSize, IBrush? foreground = null, FontWeight weight = FontWeight.Normal) => new()
     {

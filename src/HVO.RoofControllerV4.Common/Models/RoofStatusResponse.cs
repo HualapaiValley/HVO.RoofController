@@ -94,5 +94,11 @@ namespace HVO.RoofControllerV4.Common.Models
 
         /// <summary>Most recent safety or hardware error message, if any.</summary>
         public string? LastError { get; init; }
+
+        /// <summary>
+        /// The observatory's safety conditions (telescope park, weather) as the controller's safety service judges them
+        /// when the snapshot is sent, and how Open treats them. Null from controllers that do not report it.
+        /// </summary>
+        public RoofSafetyStatus? Safety { get; init; }
     }
 }

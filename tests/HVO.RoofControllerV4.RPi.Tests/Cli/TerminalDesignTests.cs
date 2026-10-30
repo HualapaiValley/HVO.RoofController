@@ -179,7 +179,8 @@ public sealed class TerminalDesignTests
     [DataRow("nocolor,ascii", 120, 32)]
     public void EveryPageAndLongPrivatePrompt_KeepStopAndNewestResultVisible(string mode, int width, int height)
     {
-        using var host = RoofClientApiTests.CreateHost();
+        // These pages are the docs' captures: the System page's summary shows fixed figures, never this machine's address.
+        using var host = RoofClientApiTests.CreateHost(configureServices: DocumentedHostMetrics.Use);
         using var rig = new CliRig(host);
         rig.UseApiKey(TestApiKeys.Admin);
         rig.Environment["HVO_TERMINAL"] = mode;
@@ -485,7 +486,7 @@ public sealed class TerminalDesignTests
         tui.WaitIdle("identity lists");
         var people = (RoofUiPeoplePage)tui.Ui.CurrentPage;
         people.Select("fixture-person");
-        foreach (var action in new[] { "PIN", "Remove PIN", "Remove" }) CheckPrompt(action);
+        foreach (var action in new[] { "Names", "PIN", "Remove PIN", "Remove" }) CheckPrompt(action);
         people.Switch(RoofUiPeoplePage.Mode.Keys);
         people.Select("fixture-managed");
         foreach (var action in new[] { "Change", "Rotate", "Remove" }) CheckPrompt(action);

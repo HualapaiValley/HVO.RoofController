@@ -15,9 +15,10 @@ using Moq;
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
 /// <summary>
-/// The System page: the controller's information and readiness, a restart through the controller (asked first, and
-/// confirmed when it would load a safety-critical hand edit), and a forced restart through the container's supervisor
-/// for a controller that does not answer (typed to confirm, rechecked against the session, logged).
+/// The System page: the controller's summary for every role (#209); for an admin, the host's details, a restart through
+/// the controller (asked first, and confirmed when it would load a safety-critical hand edit), and a forced restart
+/// through the container's supervisor for a controller that does not answer (typed to confirm, rechecked against the
+/// session, logged).
 /// </summary>
 [TestClass]
 public sealed class SystemPageTests
@@ -34,8 +35,10 @@ public sealed class SystemPageTests
 
         cut.Click("[data-testid=system-reload]");
 
-        cut.WaitForAssertion(() => cut.Find("[data-testid=system-information]").TextContent.Should().Contain("Controller version unavailable"));
+        cut.WaitForAssertion(() => cut.Find("[data-testid=system-summary] p[role=status]").TextContent.Should().Be(RoofSystemText.ControllerUnreachable));
+        cut.Find("[data-testid=system-information] p[role=status]").TextContent.Should().Be("Host details unavailable: they are not read.");
         Fact(cut, SystemPage.WebUiLabel).Should().Be(RoofProductVersion.Describe(typeof(RoofWebOptions).Assembly));
+        cut.FindAll("[data-label=Controller]").Should().BeEmpty();
         cut.FindAll("[data-label=Application]").Should().BeEmpty();
     }
 
@@ -48,14 +51,40 @@ public sealed class SystemPageTests
 
         var cut = Loaded(context);
 
-        cut.FindAll("[data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
-            .Should().Equal(SystemPage.WebUiLabel, "Application", "Host", "System", "Runtime", "Started", "Memory", "CPU");
+        cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
+            .Should().Equal("Controller", "Web UI", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+        cut.FindAll("[data-testid=system-information] [data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
+            .Should().Equal("Application", "Host", "System", "Runtime", "Started", "Memory", "CPU");
         Fact(cut, SystemPage.WebUiLabel).Should().Be(RoofProductVersion.Describe(typeof(RoofWebOptions).Assembly));
+        Fact(cut, "Controller").Should().Be(RoofProductVersion.Describe(typeof(Program).Assembly));
         Fact(cut, "Application").Should().StartWith($"HVO.RoofControllerV4.RPi {RoofProductVersion.Describe(typeof(Program).Assembly)}")
             .And.EndWith("(Development)");
-        Fact(cut, "Memory").Should().MatchRegex(@"^\d+\.\d (KiB|MiB) working set, \d+\.\d (KiB|MiB) managed$");
-        cut.Find("[data-testid=system-information]").TextContent.Should().Contain("Read at 2026-09-29 12:00:00Z.");
+        Detail(cut, "Memory").Should().MatchRegex(@"^\d+\.\d (KiB|MiB) working set, \d+\.\d (KiB|MiB) managed$");
+        cut.Find("[data-testid=system-summary]").TextContent.Should().Contain("Read at 2026-09-29 12:00:00Z.");
         cut.Find("[data-testid=forced-restart-last]").TextContent.Should().Be("The web UI is not running under the container's supervisor.");
+    }
+
+    [TestMethod]
+    [DataRow("Network", "https://192.0.2.10:8088/", "https://192.0.2.10:8088/")]
+    [DataRow("LocalOnly", "https://localhost:8088/", "only on the controller's machine (https://localhost:8088/): it is not published to the network")]
+    [DataRow("", "", "address not known (the deployment did not record it)")]
+    public async Task TheWebUi_IsWhereTheDeploymentSaysPeopleReachIt(string access, string urls, string expected)
+    {
+        // As the deploy script passes them (RoofHost__*), with a documentation address.
+        using var harness = new WebAdminHarness(new Dictionary<string, string?>
+        {
+            ["RoofHost:Addresses"] = "192.0.2.10",
+            ["RoofHost:WebUiUrls"] = urls,
+            ["RoofHost:WebUiAccess"] = access
+        });
+        var session = await harness.SignInAsync("vera", RoofControllerApiContract.ViewerRole);
+        await using var context = harness.Context(session);
+
+        var cut = context.Render<SystemPage>();
+
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().NotBeEmpty());
+        Fact(cut, "Web UI").Should().Be(expected);
+        Fact(cut, "Addresses").Should().Be("192.0.2.10");
     }
 
     [TestMethod]
@@ -95,6 +124,7 @@ public sealed class SystemPageTests
 
         cut.WaitForAssertion(() => cut.Find("[data-testid=page-message]").GetAttribute("data-level").Should().Be(nameof(WebMessageLevel.Info)));
         Lines(cut).Last().Should().Be(RoofSystemText.RestartComingBack);
+        cut.FindAll("[data-testid=system-fact][data-label=Controller]").Should().BeEmpty("the summary is out of date once the controller restarts");
         cut.FindAll("[data-testid=system-information] [data-testid=system-fact]").Should().BeEmpty("the information is out of date once the controller restarts");
         signal.Requested.Should().BeTrue();
         harness.Roof.Mock.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.Once());
@@ -243,7 +273,27 @@ public sealed class SystemPageTests
         var cut = context.Render<SystemPage>();
 
         cut.WaitForAssertion(() => Message(cut).Should().Be(WebClientPage.SignedOut));
-        cut.Find("[data-testid=system-information] p[role=status]").TextContent.Should().Be("Controller version unavailable: the controller's information is not read.");
+        cut.Find("[data-testid=system-summary] p[role=status]").TextContent.Should().Be("Controller version unavailable: the controller's information is not read.");
+    }
+
+    [TestMethod]
+    [DataRow(RoofControllerApiContract.ViewerRole)]
+    [DataRow(RoofControllerApiContract.OperatorRole)]
+    public async Task WithoutTheAdminRole_TheSummaryIsShown_ButNotTheHostsDetailsOrTheRestarts(string role)
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("vera", role);
+        await using var context = harness.Context(session, supervised: true);
+
+        var cut = context.Render<SystemPage>();
+
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().HaveCount(8,
+            cut.FindAll("[data-testid=page-message]").FirstOrDefault()?.TextContent ?? "the summary to be read"));
+        Fact(cut, "Controller").Should().Be(RoofProductVersion.Describe(typeof(Program).Assembly));
+        cut.FindAll("[data-testid=page-message]").Should().BeEmpty("the summary needs no admin");
+        cut.FindAll("[data-testid=system-information]").Should().BeEmpty();
+        cut.FindAll("[data-testid=restart]").Should().BeEmpty();
+        cut.FindAll("[data-testid=forced-restart]").Should().BeEmpty();
     }
 
     private static IRenderedComponent<SystemPage> Loaded(BunitContext context)
@@ -256,6 +306,9 @@ public sealed class SystemPageTests
 
     private static string Fact(IRenderedComponent<SystemPage> cut, string label)
         => cut.Find($"[data-testid=system-fact][data-label='{label}']").TextContent;
+
+    private static string Detail(IRenderedComponent<SystemPage> cut, string label)
+        => cut.Find($"[data-testid=system-information] [data-testid=system-fact][data-label='{label}']").TextContent;
 
     private static List<string> Lines(IRenderedComponent<SystemPage> cut)
         => [.. cut.Find("[data-testid=page-message]").QuerySelectorAll("p").Select(line => line.TextContent)];

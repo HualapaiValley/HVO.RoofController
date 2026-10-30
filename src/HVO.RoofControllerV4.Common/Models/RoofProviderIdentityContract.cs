@@ -34,7 +34,20 @@ public sealed record RoofPrincipalUpdateRequest
     public bool Enabled { get; init; } = true;
 }
 /// <summary>Public provider identity; secrets are never returned.</summary>
-public sealed record RoofPrincipalResponse(string Id, string Provider, string Subject, string Name, string Role, bool Enabled);
+public sealed record RoofPrincipalResponse(string Id, string Provider, string Subject, string Name, string Role, bool Enabled)
+{
+    /// <summary>When the principal last signed in (password, PIN or a local grant), or null when it is not known (#209).</summary>
+    public DateTimeOffset? LastLoginUtc { get; init; }
+
+    /// <summary>
+    /// The display name (#209): a person's, as set in the controller; a Linux account's full name from the operating
+    /// system (its GECOS field), refreshed at each sign-in and read-only here. Null when there is none.
+    /// </summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>The short name (#209): a person's, as set in the controller; a Linux account's user name. Read-only for Linux.</summary>
+    public string? ShortName { get; init; }
+}
 /// <summary>Creates a personal automation key bounded by owner role and scopes.</summary>
 public sealed record RoofOwnedKeyCreateRequest
 {

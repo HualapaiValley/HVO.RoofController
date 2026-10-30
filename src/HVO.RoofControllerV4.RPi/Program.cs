@@ -25,6 +25,7 @@ using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
 using HVO.RoofControllerV4.RPi.Storage;
@@ -208,6 +209,10 @@ public class Program
         services.AddSingleton<RoofSettingsValidator>();
         services.AddSingleton<RoofSettingsStore>();
         services.AddSingleton<RoofRestartSignal>();
+        // The version and basic host summary every role may read (GET System/Summary, #209), with where the web UI is
+        // reached as the deployment wrote it (RoofHost__*).
+        services.Configure<RoofHostOptions>(Configuration.GetSection(RoofHostOptions.SectionName));
+        services.AddSingleton<RoofHostMetrics>();
         services.Configure<RoofControllerUiOptions>(Configuration.GetSection(RoofControllerUiOptions.SectionName));
 
         // Give the hosted-service stop path (verified roof stop) and long-lived camera streams time to finish on
@@ -244,6 +249,9 @@ public class Program
 
         // Register RoofController based on configuration
         services.AddSingleton<IRoofControllerServiceV4, RoofControllerServiceV4>();
+
+        // Safety conditions (telescope park, weather) on every status and in the Open interlock (docs/safety-service.md)
+        services.AddRoofSafety(Configuration);
 
         // Live status hub (/hubs/roof) for the separate clients: JSON with string enums, as the REST API writes them.
         services.AddSignalR()
