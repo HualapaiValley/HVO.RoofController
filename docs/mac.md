@@ -366,8 +366,9 @@ remains available.
 
 While someone is signed in, **History** shows them as the controller knows them (`GET Auth/Me`: name, role, login
 type, `Signed in with a password`, short name), read-only, and their own 20 most recent roof commands, newest first,
-as on the [kiosk](kiosk.md#history): an admin's too, since the app asks for the person's own commands only. The web
-UI's History page is where an admin reads everyone's. Signing out hides History and forgets what it read.
+as on the [kiosk](kiosk.md#history): an admin's too, since the app asks for the person's own commands only
+(`mine=true`, matched by their identifier, so never a key named like them). The web UI's History page is where an admin
+reads everyone's. A controller too old to list only the person's own is said so, and nothing is shown. Signing out hides History and forgets what it read.
 
 ![History in the app's smallest window: the signed-in person, read-only, and their own recent roof commands](images/mac/history-960x600.png)
 

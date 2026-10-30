@@ -31,6 +31,7 @@ public sealed class RoofHistoryClientTests
         }).Should().Be(
             "api/v4.0/RoofControl/History?user=ada%40lab&from=2026-10-30T18%3A00%3A00.0000000%2B00%3A00"
             + "&to=2026-10-30T18%3A05%3A09.0000000%2B00%3A00&skip=50&take=25");
+        RoofApiRoutes.HistoryPage(new RoofHistoryQuery { Mine = true, Take = 20 }).Should().Be("api/v4.0/RoofControl/History?mine=true&take=20");
     }
 
     [TestMethod]

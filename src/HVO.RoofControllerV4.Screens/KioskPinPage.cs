@@ -175,7 +175,8 @@ public sealed class KioskPinPage : UserControl
                     KioskTheme.Label(_pad.Loading ? "Reading people…" : "PIN access is Operator-only. Settings and System need password sign-in in another client.", _metrics.Font, KioskTheme.Muted)
                 };
                 // Two people a row, each a read-only card (#208): their display name (#209), their role and how they sign
-                // in as chips, then their short name and when they last signed in. Choosing one goes to the keypad.
+                // in as chips, then their short name and when they last signed in. Choosing one goes to the keypad. A row
+                // too tall for a page (the longest names) shows its two cards one under the other.
                 var people = _pad.Users.Select(user =>
                 {
                     var name = KioskPinPad.SelectionKey(user);
@@ -183,9 +184,8 @@ public sealed class KioskPinPage : UserControl
                 }).ToArray();
                 for (var i = 0; i < people.Length; i += 2)
                 {
-                    var row = new UniformGrid { Columns = 2, ColumnSpacing = _metrics.Gap };
-                    row.Children.Add(people[i]);
-                    if (i + 1 < people.Length) row.Children.Add(people[i + 1]);
+                    // A lone last person keeps the column width of the rest.
+                    var row = new KioskPagerRow(people.Skip(i).Take(2), _metrics.Gap) { Columns = 2 };
                     items.Add(row);
                 }
                 _people.SetItems(items);

@@ -37,17 +37,21 @@ public sealed class RoofHistoryController : ControllerBase
     /// A page of the roof command history, newest first (Viewer). An admin reads everyone's commands, or one person's or
     /// key's: by <paramref name="principalId"/>, the identifier each entry shows, or by <paramref name="user"/>, which finds
     /// whoever is named so now. Anyone else reads their own, matched by their identifier, never by name; asking for anyone
-    /// else's is refused (403).
+    /// else's is refused (403). With <paramref name="mine"/>, an admin reads their own as anyone else does (#208): a name
+    /// would find a key named like them too.
     /// </summary>
     /// <param name="user">Only the commands of the person or API key named so now (case-insensitive).</param>
     /// <param name="principalId">Only the commands recorded under this identifier (an entry's <c>principalId</c>).</param>
+    /// <param name="mine">Only the caller's own commands, matched by their identifier, an admin's too.</param>
     /// <param name="from">Only commands at or after this time (ISO 8601).</param>
     /// <param name="to">Only commands before this time (ISO 8601).</param>
     /// <param name="skip">Entries to skip, newest first.</param>
     /// <param name="take">Entries in the page (1-500, default 50).</param>
     /// <response code="200">The page, with how many entries match in all.</response>
     /// <response code="400">A value out of range, or <paramref name="to"/> before <paramref name="from"/>.</response>
-    /// <response code="403">Not an admin, and <paramref name="user"/> or <paramref name="principalId"/> is someone else.</response>
+    /// <response code="403">
+    /// Not an admin (or <paramref name="mine"/>), and <paramref name="user"/> or <paramref name="principalId"/> is someone else.
+    /// </response>
     [HttpGet(RoofCommandHistoryContract.Route, Name = nameof(GetRoofHistory))]
     [ProducesResponseType(typeof(RoofCommandHistoryPage), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -57,7 +61,8 @@ public sealed class RoofHistoryController : ControllerBase
         [FromQuery] DateTimeOffset? from = null,
         [FromQuery] DateTimeOffset? to = null,
         [FromQuery, Range(0, int.MaxValue)] int skip = 0,
-        [FromQuery, Range(1, RoofCommandHistoryContract.MaximumTake)] int take = RoofCommandHistoryContract.DefaultTake)
+        [FromQuery, Range(1, RoofCommandHistoryContract.MaximumTake)] int take = RoofCommandHistoryContract.DefaultTake,
+        [FromQuery] bool mine = false)
     {
         if (from is { } start && to is { } end && end < start)
         {
@@ -68,7 +73,8 @@ public sealed class RoofHistoryController : ControllerBase
         user = string.IsNullOrWhiteSpace(user) ? null : user.Trim();
         principalId = string.IsNullOrWhiteSpace(principalId) ? null : principalId.Trim();
         IReadOnlyCollection<string>? ids;
-        if (User.IsInRole(RoofControllerApiContract.AdminRole))
+        var everyone = User.IsInRole(RoofControllerApiContract.AdminRole) && !mine;
+        if (everyone)
         {
             ids = user is null && principalId is null
                 ? null
@@ -99,7 +105,7 @@ public sealed class RoofHistoryController : ControllerBase
         return Ok(_history.Query(new RoofCommandHistoryFilter
         {
             PrincipalIds = ids,
-            AllUsers = User.IsInRole(RoofControllerApiContract.AdminRole),
+            AllUsers = everyone,
             From = from,
             To = to,
             Skip = skip,

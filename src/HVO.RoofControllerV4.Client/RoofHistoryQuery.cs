@@ -14,6 +14,12 @@ public sealed record RoofHistoryQuery
     /// </summary>
     public string? PrincipalId { get; init; }
 
+    /// <summary>
+    /// Only the caller's own commands, matched by their identifier, an admin's too (#208). Without it an admin reads
+    /// everyone's, and <see cref="User"/> finds an API key named like them as well.
+    /// </summary>
+    public bool Mine { get; init; }
+
     /// <summary>Only commands at or after this time.</summary>
     public DateTimeOffset? From { get; init; }
 

@@ -7,6 +7,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
+using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Screens;
 using Moq;
 using static HVO.RoofControllerV4.RPi.Tests.Kiosk.KioskAvalonia;
@@ -243,6 +244,85 @@ public sealed class KioskPersonHistoryTests
         (await ReadEveryPageAsync(screen, "history-pages")).Should().ContainKey("history-command-0");
     }
 
+    [TestMethod]
+    public async Task TheMacAppsHistory_IsTheAdminsOwn_NotAKeyNamedLikeThem()
+    {
+        await using var harness = await KioskHarness.CreateAsync(
+            settings: new Dictionary<string, string?> { ["RoofControllerSecurity:ApiKeys:4:Kiosk"] = "false" },
+            options: new KioskConsoleOptions { Wording = KioskWording.Desktop, Blanking = false });
+        await harness.StartLiveAsync();
+        using (var admin = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(TestApiKeys.Admin)))
+        {
+            var key = await admin.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = KioskHarness.Admin, Role = RoofControllerApiContract.OperatorRole });
+            using var namesake = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(key.Secret));
+            await namesake.StopAsync();
+        }
+
+        await harness.PasswordAsync(KioskHarness.Admin);
+        await harness.Console.StopAsync();
+
+        var page = await harness.Console.ReadRecentHistoryAsync(KioskHistoryPanel.Take);
+        page.Should().NotBeNull();
+        page!.AllUsers.Should().BeFalse("History is the person's own, an admin's too");
+        page.Entries.Should().ContainSingle("a key named like the admin is not the admin").Which.Should().Match<RoofCommandHistoryEntry>(entry =>
+            entry.User == KioskHarness.Admin && entry.PrincipalKind == RoofHistoryPrincipalKind.Person);
+
+        // A controller from before "mine" ignores it and gives an admin everyone's: History says so and shows none of them.
+        harness.AlterRequest = request =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/" + RoofCommandHistoryContract.Route, StringComparison.Ordinal))
+                request.RequestUri = new Uri(request.RequestUri.GetLeftPart(UriPartial.Path) + request.RequestUri.Query.Replace("mine=true&", string.Empty, StringComparison.Ordinal));
+        };
+        await using var screen = await KioskScreen.ShowAsync(harness, 960, 600, KioskMetrics.DeskPixelsPerMillimetre);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.History));
+        await UntilAsync(() => screen.Shell.History is { Reading: false, Problem: not null }, "the refusal to show everyone's as the admin's");
+        await OnUiAsync(() =>
+        {
+            screen.Shell.History.Page.Should().BeNull();
+            screen.Text("history-status").Should().EndWith(KioskConsole.OwnHistoryUnsupported);
+            screen.Find("history-entry-0").Should().BeNull("no one's commands are shown as the admin's own");
+        });
+    }
+
+    [TestMethod]
+    [DataRow(1920, 1200, 9.0)]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
+    public async Task TheLongestNames_StayClearOfThePageControls_OnThePeopleStepAndHistory(int width, int height, double density)
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        var longest = new[] { new string('W', RoofIdentityContract.MaximumNameLength), new string('X', RoofIdentityContract.MaximumNameLength) };
+        using (var admin = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(TestApiKeys.Admin)))
+        {
+            foreach (var name in longest)
+            {
+                await RoofClientApiTests.AddUserAsync(harness.Host, name, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+                await admin.Identity.UpdateUserAsync(name, new RoofUserUpdateRequest
+                {
+                    Role = RoofControllerApiContract.OperatorRole,
+                    DisplayName = new string('W', RoofIdentityContract.MaximumDisplayNameLength),
+                    ShortName = new string('W', RoofIdentityContract.MaximumShortNameLength)
+                });
+            }
+        }
+
+        await harness.StartLiveAsync();
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Unlock));
+        await UntilAsync(() => screen.Shell.PinPad.Users.Count == 4 && screen.Find($"pin-user-{KioskHarness.Admin}") is not null, "the people with a PIN");
+        var people = await ReadEveryPageAsync(screen, "pin-people", "person-people-longest");
+        foreach (var name in longest.Append(KioskHarness.Operator).Append(KioskHarness.Admin))
+        {
+            people.Should().ContainKey($"pin-user-{name}", "every person is on a page of their own or beside another");
+        }
+
+        await harness.UnlockAsync(longest[0]);
+        await UntilAsync(() => screen.Visible("nav-history"), "History offered once unlocked");
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.History));
+        await UntilAsync(() => screen.Shell.History is { Reading: false, Person: not null }, "the person");
+        (await ReadEveryPageAsync(screen, "history-pages", "person-history-longest")).Should().ContainKey("history-names");
+    }
+
     // Olga has a display name and a short name (#209), set by an admin; Ada has neither.
     private static async Task NameOlgaAsync(KioskHarness harness)
     {
@@ -274,20 +354,22 @@ public sealed class KioskPersonHistoryTests
     }
 
     // Every page of the bounded document called pager in turn, each laid out and checked as a render is (nothing cut off,
-    // overlapping or off the screen): what each named text on it says. It ends back on the first page.
-    private static async Task<IReadOnlyDictionary<string, string?>> ReadEveryPageAsync(KioskScreen screen, string pager)
+    // overlapping or off the screen): each named control on it, with what it says when it is a text. It ends back on the
+    // first page. With a render name, each page is drawn and saved too (render-p1, render-p2, …), Stop checked on it.
+    private async Task<IReadOnlyDictionary<string, string?>> ReadEveryPageAsync(KioskScreen screen, string pager, string? render = null)
     {
         var shown = new Dictionary<string, string?>();
         var pages = await OnUiAsync(() => ((KioskPager)screen.Find(pager)!).PageCount);
         for (var page = 0; page < pages; page++)
         {
-            await screen.CheckAsync($"{pager} page {page + 1}");
+            if (render is null) await screen.CheckAsync($"{pager} page {page + 1}");
+            else await screen.RenderAsync($"{render}-p{page + 1}", TestContext);
             await OnUiAsync(() =>
             {
                 screen.OffScreen(name => name.StartsWith(pager.Split('-')[0] + "-", StringComparison.Ordinal) && name != pager).Should().BeEmpty();
-                foreach (var block in screen.Find(pager)!.GetVisualDescendants().OfType<TextBlock>().Where(block => block.Name is not null))
+                foreach (var control in screen.Find(pager)!.GetVisualDescendants().OfType<Control>().Where(control => control.Name is not null))
                 {
-                    shown[block.Name!] = block.Text;
+                    shown[control.Name!] = (control as TextBlock)?.Text;
                 }
 
                 ((KioskPager)screen.Find(pager)!).Move(1);

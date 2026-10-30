@@ -367,12 +367,21 @@ public sealed class KioskConsole : IAsyncDisposable
     /// <summary>
     /// The unlocking person's most recent roof commands, newest first (#206), for a view of the person's details; null
     /// while the kiosk is locked, or when it locked before the answer came. A refusal or an unreachable controller
-    /// throws, as any read does.
+    /// throws, as any read does; a controller that cannot list only the person's own throws
+    /// <see cref="NotSupportedException"/> (<see cref="OwnHistoryUnsupported"/>).
     /// </summary>
     public Task<RoofCommandHistoryPage?> ReadRecentHistoryAsync(int take = 10, CancellationToken cancellationToken = default)
-        // The person's own name: a PIN session reads only its own anyway, and an admin's password session (the Mac
-        // app's) would otherwise read everyone's.
-        => ReadAsPersonAsync(session => _client.Roof.GetHistoryAsync(new RoofHistoryQuery { User = session.Name, Take = take }, cancellationToken));
+        // The person's own, matched by their identifier: a PIN session reads only its own anyway, and an admin's password
+        // session (the Mac app's) would otherwise read everyone's, or by name a key named like them too.
+        => ReadAsPersonAsync(async () =>
+        {
+            var page = await _client.Roof.GetHistoryAsync(new RoofHistoryQuery { Mine = true, Take = take }, cancellationToken).ConfigureAwait(false);
+            // A controller from before "mine" gives an admin everyone's: never shown as the person's own.
+            return page.AllUsers ? throw new NotSupportedException(OwnHistoryUnsupported) : page;
+        });
+
+    /// <summary>Said when the controller cannot list only the person's own roof commands (it is older than the kiosk).</summary>
+    public const string OwnHistoryUnsupported = "This controller lists everyone's roof commands, not only yours: update it to see your own here.";
 
     /// <summary>
     /// Who unlocked the kiosk, as the controller knows them (<c>GET Auth/Me</c>, #208): their names, role and how they sign
@@ -380,10 +389,10 @@ public sealed class KioskConsole : IAsyncDisposable
     /// A refusal or an unreachable controller throws, as any read does.
     /// </summary>
     public Task<RoofCallerResponse?> ReadSignedInPersonAsync(CancellationToken cancellationToken = default)
-        => ReadAsPersonAsync(_ => _client.Auth.GetCallerAsync(cancellationToken));
+        => ReadAsPersonAsync(() => _client.Auth.GetCallerAsync(cancellationToken));
 
     // Reads with the unlocking person's session; null while locked, or when the session ended before the answer came.
-    private async Task<T?> ReadAsPersonAsync<T>(Func<RoofSessionResponse, Task<T>> read)
+    private async Task<T?> ReadAsPersonAsync<T>(Func<Task<T>> read)
         where T : class
     {
         RoofSessionResponse session;
@@ -397,7 +406,7 @@ public sealed class KioskConsole : IAsyncDisposable
             session = _session;
         }
 
-        var answer = await read(session).ConfigureAwait(false);
+        var answer = await read().ConfigureAwait(false);
         lock (_gate)
         {
             // Sent after the session ended, the request went with the device key, whose answer this would be.

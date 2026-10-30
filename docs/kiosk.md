@@ -83,7 +83,8 @@ changed); then their short name when they have one (`Short name: Olga`) and thei
 (`Last sign-in: 2026-10-30 12:00:00Z`, or `none recorded`).
 A card only chooses: names are not changed at the kiosk, which has no keyboard: people change their own in the web UI
 (their account) or the terminal (Setup), an admin anyone's, and a Linux account's come from the operating system
-(#209). People are paginated only when the list overflows the page. Choosing a card opens a separate keypad step: a
+(#209). People are paginated only when the list overflows the page, and two cards too tall for a page together (the
+longest names) are shown one under the other. Choosing a card opens a separate keypad step: a
 compact, centred keypad of fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the keypad, with the person
 chosen before still chosen; the keypad's **Cancel** leaves Unlock. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
@@ -140,7 +141,7 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
 **History**, offered only while the kiosk is unlocked, shows who unlocked it as the controller knows them
 (`GET Auth/Me`): their name, their session's role (Operator, for an admin's PIN too), how they sign in, `Signed in with a
 PIN` and their short name, read-only. Under that are their own 20 most recent roof commands, newest first
-(`GET api/v4.0/RoofControl/History`, with their PIN session, which reads only its own; [the command
+(`GET api/v4.0/RoofControl/History?mine=true`, with their PIN session, matched by their identifier; [the command
 history](security.md#the-command-history)): each one's time, the command, the controller's answer (`Accepted`, or
 `Refused [InterlockActive]` in amber with the controller's code), the roof after it and where it came from (`From
 kiosk`, `From web UI, 192.0.2.20`), in the words the web UI and the terminal use. Commands sent from the web UI or the

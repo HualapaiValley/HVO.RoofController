@@ -142,6 +142,39 @@ public sealed class RoofHistoryApiTests
     }
 
     [TestMethod]
+    public async Task Mine_ReadsOnlyTheCallersOwnCommands_AnAdminsToo()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        await RoofClientApiTests.AddUserAsync(host, "ada", RoofControllerApiContract.AdminRole);
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
+        var key = await admin.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = "ada", Role = RoofControllerApiContract.OperatorRole });
+        using var ada = await SignedInAsync(host, "ada");
+        using var namesake = CreateClient(host, new RoofApiKeyCredential(key.Secret));
+        using var olive = await SignedInAsync(host, "olive");
+
+        await ada.Roof.OpenAsync();
+        await namesake.StopAsync();
+        await olive.StopAsync();
+        await admin.StopAsync();
+
+        // An admin's own: not a key named like them, nor anyone else's.
+        var own = await ada.Roof.GetHistoryAsync(new RoofHistoryQuery { Mine = true });
+        own.AllUsers.Should().BeFalse("the page holds only the caller's own commands");
+        own.Entries.Should().ContainSingle().Which.Should().Match<RoofCommandHistoryEntry>(entry =>
+            entry.User == "ada" && entry.PrincipalKind == RoofHistoryPrincipalKind.Person && entry.Command == RoofHistoryCommand.Open);
+        (await ada.Roof.GetHistoryAsync(new RoofHistoryQuery { User = "ada" })).TotalCount.Should().Be(2, "a search by name finds the key too");
+        (await admin.Roof.GetHistoryAsync(new RoofHistoryQuery { Mine = true })).Entries
+            .Should().ContainSingle().Which.User.Should().Be("test-admin", "an admin key's own are its own");
+        (await olive.Roof.GetHistoryAsync(new RoofHistoryQuery { Mine = true })).Entries
+            .Should().ContainSingle().Which.User.Should().Be("olive", "anyone else reads their own, as without it");
+
+        // Asking for one's own and someone else's at once is asking for someone else's.
+        (await RoofClientApiTests.RefusedAsync(() => ada.Roof.GetHistoryAsync(new RoofHistoryQuery { Mine = true, User = "olive" })))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [TestMethod]
     public async Task ARotatedKey_IsANewCredential_ItsEarlierCommandsStayUnderTheOldIdentifier()
     {
         using var host = RoofClientApiTests.CreateHost();

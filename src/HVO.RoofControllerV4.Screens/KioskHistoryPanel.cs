@@ -84,7 +84,8 @@ public sealed class KioskHistoryPanel
         catch (Exception error)
         {
             // After a reset nothing is shown, so nothing is said either.
-            problem = reset.IsCancellationRequested ? null : $"Your roof commands could not be read. {RoofText.DescribeFailure(error)}";
+            problem = reset.IsCancellationRequested ? null
+                : $"Your roof commands could not be read. {(error is NotSupportedException ? error.Message : RoofText.DescribeFailure(error))}";
         }
 
         if (reset.IsCancellationRequested)

@@ -81,6 +81,11 @@ internal static class RoofApiRoutes
             parameters.Add("principalId=" + Uri.EscapeDataString(query.PrincipalId.Trim()));
         }
 
+        if (query.Mine)
+        {
+            parameters.Add("mine=true");
+        }
+
         if (query.From is { } from)
         {
             parameters.Add("from=" + Uri.EscapeDataString(from.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
