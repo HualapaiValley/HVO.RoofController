@@ -109,22 +109,23 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         public async Task<ActionResult<RoofStatusResponse>> DoRoofOpen([FromQuery] bool overrideSafety = false)
         {
             var safety = await _safetyInterlock.CheckOpenAsync(User, HttpContext, overrideSafety).ConfigureAwait(false);
-
-            // The command history shows the conditions an Open was sent in when they were not Safe, and an override (#206).
-            RoofCommandHistory.NoteSafety(
-                HttpContext,
-                safety.Safety.State == RoofSafetyState.Safe ? null : safety.Safety.State.ToString(),
-                safety.Overridden);
             return RunCommand("open", () =>
             {
+                Result<RoofControllerStatus> result;
                 if (safety.Refusal is { } refusal)
                 {
-                    return Result<RoofControllerStatus>.Failure(refusal);
+                    result = Result<RoofControllerStatus>.Failure(refusal);
+                }
+                else
+                {
+                    // An override is audited only once the controller's own checks have accepted Open.
+                    result = _roofController.Open();
+                    _safetyInterlock.ReportOutcome(safety, result.IsSuccessful ? null : result.Error);
                 }
 
-                // An override is audited only once the controller's own checks have accepted Open.
-                var result = _roofController.Open();
-                _safetyInterlock.ReportOutcome(safety, result.IsSuccessful ? null : result.Error);
+                // The command history shows the conditions an Open was sent in when they were not Safe, and an override
+                // (#206); not the Unknown of an Open accepted while nothing watches the conditions (#216).
+                RoofCommandHistory.NoteSafety(HttpContext, safety.HistorySafetyState(result.IsSuccessful), safety.Overridden);
                 return result;
             });
         }
