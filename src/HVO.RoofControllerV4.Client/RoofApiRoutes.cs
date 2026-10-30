@@ -38,6 +38,7 @@ internal static class RoofApiRoutes
     public const string SettingsDiscard = V4 + "Settings/Discard";
 
     public const string Restart = V4 + "System/Restart";
+    public const string SystemSummary = V4 + "System/Summary";
     public const string SystemInformation = V1 + "System/info";
     public const string SystemMetrics = V1 + "System/metrics";
 

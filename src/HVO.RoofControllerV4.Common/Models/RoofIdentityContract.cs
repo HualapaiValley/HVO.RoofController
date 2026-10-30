@@ -1,5 +1,7 @@
 using System.Linq;
 using System.ComponentModel.DataAnnotations;
+using System.Buffers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json.Serialization;
 
@@ -48,6 +50,12 @@ public static class RoofIdentityContract
     /// <summary>Existing PIN hashes are retained until their owner changes them.</summary>
     public const int MaximumAcceptedPinLength = 12;
 
+    /// <summary>A person's display name (the friendly name, "Ana Example") has at most this many characters.</summary>
+    public const int MaximumDisplayNameLength = 64;
+
+    /// <summary>A person's short name (for narrow places such as a kiosk, "Ana" or "AE") has at most this many characters.</summary>
+    public const int MaximumShortNameLength = 16;
+
     /// <summary>True when <paramref name="name"/> is a valid user or API key name.</summary>
     public static bool IsValidName(string? name)
     {
@@ -93,6 +101,62 @@ public static class RoofIdentityContract
     /// <summary>True when <paramref name="password"/> has an allowed length.</summary>
     public static bool IsValidPassword(string? password)
         => password is not null && password.Length >= MinimumPasswordLength && password.Length <= MaximumPasswordLength;
+
+    /// <summary>
+    /// True when <paramref name="displayName"/> is a valid display name: 1 to <see cref="MaximumDisplayNameLength"/>
+    /// characters with no space at either end, and no control, formatting or private-use character (so a name cannot
+    /// reorder or hide the text around it).
+    /// </summary>
+    public static bool IsValidDisplayName(string? displayName) => IsValidLabel(displayName, MaximumDisplayNameLength);
+
+    /// <summary>True when <paramref name="shortName"/> is a valid short name: the display name's rules, at most <see cref="MaximumShortNameLength"/> characters.</summary>
+    public static bool IsValidShortName(string? shortName) => IsValidLabel(shortName, MaximumShortNameLength);
+
+    /// <summary>
+    /// A display or short name as the controller keeps it: trimmed, and null when nothing is left. Validate the result
+    /// with <see cref="IsValidDisplayName"/> or <see cref="IsValidShortName"/>.
+    /// </summary>
+    public static string? NormalizeLabel(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static bool IsValidLabel(string? value, int maximumLength)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length > maximumLength || char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[^1]))
+        {
+            return false;
+        }
+
+        var rest = value.AsSpan();
+        while (!rest.IsEmpty)
+        {
+            if (Rune.DecodeFromUtf16(rest, out var rune, out var used) != OperationStatus.Done
+                || Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator
+                    or UnicodeCategory.ParagraphSeparator or UnicodeCategory.PrivateUse or UnicodeCategory.Surrogate
+                    or UnicodeCategory.OtherNotAssigned)
+            {
+                return false;
+            }
+
+            rest = rest[used..];
+        }
+
+        return true;
+    }
+}
+
+/// <summary>
+/// How a person signs in, from where their account lives (#209): <see cref="Local"/> for a person in the controller's
+/// identity store (a password, a PIN or both), <see cref="Linux"/> for an enrolled Linux account (its Linux password,
+/// checked by the host). Sent as a string, so a later type does not break an older client.
+/// </summary>
+public static class RoofLoginTypes
+{
+    public const string Local = "Local";
+
+    public const string Linux = "Linux";
+
+    /// <summary>The login type of a principal's provider: <c>linux</c> is <see cref="Linux"/>; <c>virtual</c> or none is <see cref="Local"/>.</summary>
+    public static string FromProvider(string? provider)
+        => string.Equals(provider, "linux", StringComparison.OrdinalIgnoreCase) ? Linux : Local;
 }
 
 /// <summary>How a caller proved who it is.</summary>
@@ -216,7 +280,14 @@ public sealed record RoofCallerResponse(
     string? Device,
     string? SessionId,
     DateTimeOffset? ExpiresUtc,
-    bool IsKiosk);
+    bool IsKiosk)
+{
+    /// <summary>For a person in the identity store, their display name, or null (#209).</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>For a person in the identity store, their short name, or null (#209).</summary>
+    public string? ShortName { get; init; }
+}
 
 /// <summary>A person who may sign in with a PIN at a kiosk, from <c>GET Auth/Pin/Users</c>.</summary>
 public sealed record RoofPinUserResponse(string Name, string Role)
@@ -224,6 +295,18 @@ public sealed record RoofPinUserResponse(string Name, string Role)
     public string? PrincipalId { get; init; }
     public string? Provider { get; init; }
     public bool SetupPending { get; init; }
+
+    /// <summary>The person's display name, or null when none is set (#209).</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>The person's short name, for a narrow place such as a kiosk button, or null (#209).</summary>
+    public string? ShortName { get; init; }
+
+    /// <summary>When the person last signed in, with a password or a PIN, or null when it is not known (#209).</summary>
+    public DateTimeOffset? LastLoginUtc { get; init; }
+
+    /// <summary>How the person signs in, derived from <see cref="Provider"/> (<see cref="RoofLoginTypes"/>).</summary>
+    public string LoginType => RoofLoginTypes.FromProvider(Provider);
 }
 
 /// <summary>A person, as the admin endpoints show them. Secrets are never returned: only whether each is set.</summary>
@@ -238,6 +321,21 @@ public sealed record RoofUserResponse(
 {
     /// <summary>The account has an explicit initial emulator commissioning grant, not a personal PIN.</summary>
     public bool HasTemporaryPin { get; init; }
+
+    /// <summary>The person's display name (friendly name), or null when none is set (#209).</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>The person's short name, for a narrow place such as a kiosk, or null (#209).</summary>
+    public string? ShortName { get; init; }
+
+    /// <summary>
+    /// When the person last signed in, with a password or a PIN, or null when they have not since the controller began
+    /// recording it (#209).
+    /// </summary>
+    public DateTimeOffset? LastLoginUtc { get; init; }
+
+    /// <summary>How the person signs in (<see cref="RoofLoginTypes"/>): <see cref="RoofLoginTypes.Local"/> for everyone in the identity store.</summary>
+    public string LoginType { get; init; } = RoofLoginTypes.Local;
 }
 
 /// <summary>Body of <c>POST Identity/Users</c>. A person needs a password, a PIN or both.</summary>
@@ -261,10 +359,17 @@ public sealed record class RoofUserCreateRequest
     /// <summary>Explicit emulator-only temporary kiosk access before a personal PIN is set. Requires a password and no PIN.</summary>
     public bool TemporaryPin { get; init; }
 
+    /// <summary>Optional friendly name (<see cref="RoofIdentityContract.IsValidDisplayName"/>); empty means none.</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>Optional short name (<see cref="RoofIdentityContract.IsValidShortName"/>); empty means none.</summary>
+    public string? ShortName { get; init; }
+
     // The password and PIN are left out, so the request can be logged.
     private bool PrintMembers(StringBuilder builder)
     {
-        builder.Append($"Name = {Name}, Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}");
+        builder.Append($"Name = {Name}, Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}, ")
+            .Append($"DisplayName = {DisplayName}, ShortName = {ShortName}");
         return true;
     }
 }
@@ -272,7 +377,7 @@ public sealed record class RoofUserCreateRequest
 /// <summary>
 /// Body of <c>PUT Identity/Users/{name}</c>. <see cref="Role"/> is always sent; a null password or PIN leaves it as it
 /// is. Changing the role or the password ends every session of the person; changing or removing the PIN ends their PIN
-/// sessions.
+/// sessions. A null display or short name leaves it as it is, an empty one removes it; neither ends a session.
 /// </summary>
 public sealed record class RoofUserUpdateRequest
 {
@@ -288,11 +393,17 @@ public sealed record class RoofUserUpdateRequest
 
     public bool RemovePin { get; init; }
 
+    /// <summary>A new friendly name; null leaves it as it is, empty removes it (#209).</summary>
+    public string? DisplayName { get; init; }
+
+    /// <summary>A new short name; null leaves it as it is, empty removes it (#209).</summary>
+    public string? ShortName { get; init; }
+
     // The password and PIN are left out, so the request can be logged.
     private bool PrintMembers(StringBuilder builder)
     {
         builder.Append($"Role = {Role}, Password = {(Password is null ? "(none)" : "(set)")}, Pin = {(Pin is null ? "(none)" : "(set)")}, ")
-            .Append($"RemovePassword = {RemovePassword}, RemovePin = {RemovePin}");
+            .Append($"RemovePassword = {RemovePassword}, RemovePin = {RemovePin}, DisplayName = {DisplayName}, ShortName = {ShortName}");
         return true;
     }
 }

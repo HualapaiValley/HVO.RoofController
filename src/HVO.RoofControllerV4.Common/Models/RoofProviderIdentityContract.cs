@@ -34,7 +34,11 @@ public sealed record RoofPrincipalUpdateRequest
     public bool Enabled { get; init; } = true;
 }
 /// <summary>Public provider identity; secrets are never returned.</summary>
-public sealed record RoofPrincipalResponse(string Id, string Provider, string Subject, string Name, string Role, bool Enabled);
+public sealed record RoofPrincipalResponse(string Id, string Provider, string Subject, string Name, string Role, bool Enabled)
+{
+    /// <summary>When the principal last signed in (password, PIN or a local grant), or null when it is not known (#209).</summary>
+    public DateTimeOffset? LastLoginUtc { get; init; }
+}
 /// <summary>Creates a personal automation key bounded by owner role and scopes.</summary>
 public sealed record RoofOwnedKeyCreateRequest
 {

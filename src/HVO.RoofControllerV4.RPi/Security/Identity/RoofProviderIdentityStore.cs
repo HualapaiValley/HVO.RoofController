@@ -44,13 +44,14 @@ public sealed partial class RoofIdentityStore
         get
         {
             lock (_gate)
-                return _document.Users.Select(user => new RoofPrincipalResponse(user.PrincipalId ?? "", "virtual", user.PrincipalId ?? "", user.Name, user.Role, true))
+                return _document.Users.Select(user => new RoofPrincipalResponse(user.PrincipalId ?? "", "virtual", user.PrincipalId ?? "", user.Name, user.Role, true)
+                    { LastLoginUtc = user.LastLoginUtc })
                     .Concat(_document.LinuxPrincipals.Select(LinuxResponse)).ToArray();
         }
     }
 
     private static RoofPrincipalResponse LinuxResponse(StoredLinuxPrincipal principal)
-        => new(principal.Id, "linux", principal.Subject, principal.Name, principal.Role, principal.Enabled);
+        => new(principal.Id, "linux", principal.Subject, principal.Name, principal.Role, principal.Enabled) { LastLoginUtc = principal.LastLoginUtc };
 
     public RoofIdentityResult<RoofPrincipalResponse> EnrollLinux(RoofPrincipalEnrollRequest request)
         => Mutate<RoofPrincipalResponse>((document, now) =>
@@ -102,6 +103,20 @@ public sealed partial class RoofIdentityStore
         return linux is null ? null : (id, linux.Name, linux.Role, linux.Stamp, "linux");
     }
 
+    /// <summary>Records a successful sign-in of the principal <paramref name="id"/> as its last (#209). Changes no stamp.</summary>
+    private static void RecordSignIn(RoofIdentityDocument document, string id, DateTimeOffset now)
+    {
+        var user = document.Users.FindIndex(candidate => candidate.PrincipalId == id);
+        if (user >= 0)
+        {
+            document.Users[user] = document.Users[user] with { LastLoginUtc = now };
+            return;
+        }
+
+        var linux = document.LinuxPrincipals.FindIndex(candidate => candidate.Id == id);
+        if (linux >= 0) document.LinuxPrincipals[linux] = document.LinuxPrincipals[linux] with { LastLoginUtc = now };
+    }
+
     private bool ProviderSessionIsCurrent(StoredSession session)
     {
         if (!ProviderEnabled) return false;
@@ -134,6 +149,7 @@ public sealed partial class RoofIdentityStore
                 RoofCredentialKind.Session, null, null, now, expires)
             { PrincipalId = principalId, PrincipalStamp = expectedStamp, Provider = principal.Value.Provider, Scope = scope };
             document.Sessions.Add(session);
+            RecordSignIn(document, principalId, now);
             return RoofIdentityResult<RoofIssuedSession>.Success(new RoofIssuedSession(token, session));
         });
 

@@ -207,6 +207,8 @@ public class Program
         services.AddSingleton<RoofSettingsValidator>();
         services.AddSingleton<RoofSettingsStore>();
         services.AddSingleton<RoofRestartSignal>();
+        // The version and basic host summary every role may read (GET System/Summary, #209).
+        services.AddSingleton<RoofHostMetrics>();
         services.Configure<RoofControllerUiOptions>(Configuration.GetSection(RoofControllerUiOptions.SectionName));
 
         // Give the hosted-service stop path (verified roof stop) and long-lived camera streams time to finish on

@@ -111,7 +111,10 @@ public sealed class AuthController : ControllerBase
     }
 
     /// <summary>The people who can sign in with a PIN, for a kiosk's picker (the kiosk's key in <c>X-Api-Key</c>).</summary>
-    /// <response code="200">Names and roles, sorted by name. Nothing secret.</response>
+    /// <response code="200">
+    /// Names and roles, sorted by name, with each person's display and short name, login type and last sign-in (#209).
+    /// Nothing secret.
+    /// </response>
     /// <response code="403">The API key is not a kiosk key (<c>KioskKeyRequired</c>).</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpGet("Pin/Users", Name = nameof(GetPinUsers))]
@@ -133,16 +136,37 @@ public sealed class AuthController : ControllerBase
 
         var credential = _identity.GetKioskCredential();
         var owner = credential is null ? null : _identity.ProviderPrincipals.FirstOrDefault(p => p.Id == credential.PrincipalId && p.Enabled);
+        StoredUser? ownerPerson = null;
+        if (owner?.Provider == "virtual")
+        {
+            _identity.TryGetUser(owner.Name, out ownerPerson);
+        }
+
         var commissioned = owner is null ? Array.Empty<RoofPinUserResponse>() : new[] { new RoofPinUserResponse(owner.Name, RoofControllerApiContract.OperatorRole)
-            { PrincipalId = owner.Id, Provider = owner.Provider, SetupPending = credential!.State == "pending" } };
+            {
+                PrincipalId = owner.Id,
+                Provider = owner.Provider,
+                SetupPending = credential!.State == "pending",
+                DisplayName = ownerPerson?.DisplayName,
+                ShortName = ownerPerson?.ShortName,
+                LastLoginUtc = owner.LastLoginUtc
+            } };
         return _identity.Users
             .Where(user => (user.PinHash is not null || _identity.CanUseTemporaryPin(user)) && user.Role != RoofControllerApiContract.ViewerRole)
             .OrderBy(user => user.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(user => new RoofPinUserResponse(user.Name, user.Role))
+            .Select(user => new RoofPinUserResponse(user.Name, user.Role)
+            {
+                DisplayName = user.DisplayName,
+                ShortName = user.ShortName,
+                LastLoginUtc = user.LastLoginUtc
+            })
             .Concat(commissioned).ToArray();
     }
 
-    /// <summary>Who the caller is: the person or API key, its role and how it signed in (any credential).</summary>
+    /// <summary>
+    /// Who the caller is: the person or API key, its role and how it signed in, and a person's display and short name
+    /// (any credential).
+    /// </summary>
     /// <response code="200">The caller.</response>
     [HttpGet("Me", Name = nameof(GetCaller))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
@@ -158,6 +182,13 @@ public sealed class AuthController : ControllerBase
             _identity.TryGetLiveSession(sessionId, out session);
         }
 
+        // A person in the identity store, not an API key or an enrolled Linux account of the same name.
+        StoredUser? person = null;
+        if (kind != RoofCredentialKind.ApiKey && !User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux"))
+        {
+            _identity.TryGetUser(User.Identity!.Name, out person);
+        }
+
         return new RoofCallerResponse(
             User.Identity!.Name!,
             RoofPrincipalFactory.GetHighestRole(User)!,
@@ -165,7 +196,11 @@ public sealed class AuthController : ControllerBase
             User.FindFirst(RoofPrincipalFactory.DeviceClaimType)?.Value,
             sessionId,
             session?.ExpiresUtc,
-            User.HasClaim(RoofPrincipalFactory.KioskClaimType, "true"));
+            User.HasClaim(RoofPrincipalFactory.KioskClaimType, "true"))
+        {
+            DisplayName = person?.DisplayName,
+            ShortName = person?.ShortName
+        };
     }
 
     /// <summary>Signs out: ends the session whose token was sent (sessions only).</summary>
