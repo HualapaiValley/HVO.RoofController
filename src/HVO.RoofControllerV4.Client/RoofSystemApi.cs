@@ -3,7 +3,9 @@ using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Client;
 
-/// <summary>Restart and the host's information and metrics (admin).</summary>
+/// <summary>
+/// The controller's summary (any role), and restart and the host's detailed information and metrics (admin).
+/// </summary>
 public sealed class RoofSystemApi
 {
     private readonly RoofHttp _http;
@@ -22,9 +24,18 @@ public sealed class RoofSystemApi
             new RoofRestartRequest { ConfirmSafetyCriticalChange = confirmSafetyCriticalChange },
             cancellationToken);
 
+    /// <summary>
+    /// The controller's version and its machine's CPU, temperature, memory, disk, addresses and uptime (#209). Any role:
+    /// a viewer, an operator, an admin, a kiosk key or a PIN session. A value the controller could not read is null.
+    /// </summary>
+    public Task<SystemSummaryResponse> GetSummaryAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<SystemSummaryResponse>(RoofApiRoutes.SystemSummary, cancellationToken);
+
+    /// <summary>The application, host, operating system and runtime (admin).</summary>
     public Task<SystemInformationResponse> GetInformationAsync(CancellationToken cancellationToken = default)
         => _http.GetAsync<SystemInformationResponse>(RoofApiRoutes.SystemInformation, cancellationToken);
 
+    /// <summary>The controller process's memory, threads and CPU time (admin).</summary>
     public Task<SystemRuntimeMetricsResponse> GetMetricsAsync(CancellationToken cancellationToken = default)
         => _http.GetAsync<SystemRuntimeMetricsResponse>(RoofApiRoutes.SystemMetrics, cancellationToken);
 }

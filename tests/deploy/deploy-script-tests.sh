@@ -592,6 +592,114 @@ test_malformed_publish_address_is_refused_before_any_docker_call() {
   assert_container roof-controller old true unless-stopped
 }
 
+# web_ui_env <docker run argv as JSON>: the RoofHost settings it gives the controller (#209), one NAME=value a line, in
+# the order Addresses, WebUiUrls, WebUiAccess ("missing" for one it does not give).
+web_ui_env() {
+  jq -r '. as $a | ["RoofHost__Addresses=", "RoofHost__WebUiUrls=", "RoofHost__WebUiAccess="][] as $key
+    | ([$a[] | select(startswith($key))] | last) // ($key + "missing")' <<<"$1"
+}
+
+# assert_web_ui <addresses> <urls> <access>: the pre-flight container and the controller both get exactly these.
+assert_web_ui() {
+  local expected call
+  expected=$(printf 'RoofHost__Addresses=%s\nRoofHost__WebUiUrls=%s\nRoofHost__WebUiAccess=%s' "$1" "$2" "$3")
+  for call in "$(preflight_args)" "$(controller_run_args)"; do
+    [[ -n "${call}" ]] || { fail_test "a docker run is missing"; continue; }
+    [[ "$(web_ui_env "${call}")" == "${expected}" ]] \
+      || fail_test "unexpected web UI settings:"$'\n'"      got:      $(web_ui_env "${call}" | paste -sd ' ' -)"$'\n'"      expected: ${expected//$'\n'/ }"
+  done
+}
+
+test_the_web_ui_urls_are_built_from_the_host_addresses_ipv4_first() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" HOST_ADDRESSES="2001:DB8::10; 192.0.2.10,[2001:db8::20] 192.0.2.10"
+
+  assert_status 0
+  assert_web_ui "192.0.2.10;2001:db8::10;2001:db8::20" \
+    "https://192.0.2.10:8088/;https://[2001:db8::10]:8088/;https://[2001:db8::20]:8088/" Network
+  assert_output_contains "[deploy] Web UI, as the controller will show it: https://192.0.2.10:8088/, https://[2001:db8::10]:8088/, https://[2001:db8::20]:8088/"
+  jq -e 'map(select(startswith("RoofHost__") and contains("172.17."))) | length == 0' <<<"$(controller_run_args)" >/dev/null \
+    || fail_test "a bridge address reached the controller"
+}
+
+test_without_host_addresses_the_web_ui_url_is_pi_hosts_over_its_scheme() {
+  seed_container roof-controller old true 8080:8080
+  deploy ALLOW_INSECURE_HTTP=true WEB_HOST_PORT=8090
+
+  assert_status 0
+  assert_web_ui "" "http://pi.test:8090/" Network
+
+  setup_fresh_state
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" PI_HOST=192.0.2.30
+  assert_status 0
+  assert_web_ui "192.0.2.30" "https://192.0.2.30:8088/" Network
+}
+
+test_a_loopback_pi_host_gives_no_web_ui_url() {
+  local host
+  for host in localhost 127.0.0.1; do
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" PI_HOST="${host}"
+    assert_status 0
+    assert_web_ui "" "" Network
+    assert_output_contains "Web UI, as the controller will show it: published to the network at an address not known here (set HOST_ADDRESSES)"
+  done
+}
+
+test_ports_published_on_loopback_make_the_web_ui_local_only() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=127.0.0.1 PI_HOST=localhost HOST_ADDRESSES=192.0.2.10
+
+  assert_status 0
+  assert_web_ui "192.0.2.10" "https://localhost:8088/" LocalOnly
+  assert_output_contains "Web UI, as the controller will show it: only on this host (https://localhost:8088/): it is not published to the network"
+}
+
+test_ports_published_on_one_address_are_where_the_web_ui_is_reached() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" PUBLISH_ADDRESS=192.0.2.40 PI_HOST=192.0.2.40 HOST_ADDRESSES="192.0.2.10 2001:db8::10"
+
+  assert_status 0
+  assert_web_ui "192.0.2.40" "https://192.0.2.40:8088/" Network
+}
+
+test_malformed_host_addresses_are_refused_before_any_docker_call() {
+  seed_container roof-controller old true 8443:8443
+  local entry
+  for entry in roofpi.local 192.0.2.256 "fe80::1%eth0" "1::2::3" "192.0.2.10:8088" "1:2:3:4:5:6:7:8:9" "-p"; do
+    : > "${FAKE_STATE_DIR}/calls.log"
+    deploy "${HTTPS_ENV[@]}" HOST_ADDRESSES="192.0.2.10;${entry}"
+    assert_status 1
+    assert_output_contains "HOST_ADDRESSES must be the host's IP addresses (IPv4 or IPv6) separated by semicolons, commas or spaces, got '${entry}'. Nothing was changed."
+    assert_no_docker_calls "HOST_ADDRESSES with ${entry}"
+  done
+  assert_container roof-controller old true unless-stopped
+}
+
+test_a_dry_run_says_where_the_web_ui_will_be_reached() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" HOST_ADDRESSES=192.0.2.10 -- --dry-run
+
+  assert_status 0
+  assert_output_contains "[dry-run] Web UI, as the controller will show it: https://192.0.2.10:8088/"
+  [[ -z "$(docker_calls run)" ]] || fail_test "the dry run ran a container"
+}
+
+test_a_rollback_keeps_the_restored_versions_own_web_ui_settings() {
+  seed_container roof-controller current true 8443:8443
+  seed_container roof-controller-previous old false 8443:8443
+  seed_env roof-controller-previous "RoofHost__WebUiUrls=https://192.0.2.99:8088/" "RoofHost__WebUiAccess=Network"
+  deploy "${HTTPS_ENV[@]}" HOST_ADDRESSES=192.0.2.10 -- --rollback
+
+  assert_status 0
+  assert_container roof-controller old true unless-stopped
+  [[ -z "$(docker_calls run)" ]] || fail_test "--rollback ran a new container"
+  jq -e '.containers["roof-controller"].options | index("RoofHost__WebUiUrls=https://192.0.2.99:8088/")' \
+    "${FAKE_STATE_DIR}/state.json" >/dev/null || fail_test "the restored version lost the settings it was deployed with"
+}
+
 test_empty_otlp_endpoint_turns_export_off() {
   seed_container roof-controller old true 8443:8443
   deploy "${HTTPS_ENV[@]}"

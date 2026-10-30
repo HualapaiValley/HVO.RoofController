@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Screens;
 
@@ -112,7 +113,9 @@ public sealed class KioskPinPage : UserControl
                 foreach (var user in _pad.Users)
                 {
                     var name = KioskPinPad.SelectionKey(user);
-                    var label = user.Provider is null ? user.Name : $"{user.Name} ({user.Provider})";
+                    // The friendly name when set (#209), and the login type for a Linux account.
+                    var person = RoofIdentityText.DescribePerson(user.Name, user.DisplayName);
+                    var label = user.LoginType == RoofLoginTypes.Linux ? $"{person} ({RoofIdentityText.DescribeLoginType(user.LoginType)})" : person;
                     items.Add(KioskTheme.TouchButton(label, $"pin-user-{name}", _metrics, () => _pad.Select(name)));
                 }
                 items.Add(KioskTheme.TouchButton("Cancel", "pin-cancel", _metrics, Cancel));

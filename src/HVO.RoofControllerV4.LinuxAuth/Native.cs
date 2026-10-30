@@ -56,6 +56,27 @@ internal static class Native
         }
         finally { Marshal.FreeHGlobal(buffer); }
     }
+    /// <summary>
+    /// The account's full name: the first comma-separated field of its GECOS entry, trimmed (#209). Null when the account
+    /// is not <paramref name="userName"/> with <paramref name="uid"/>, or has no full name. Display only.
+    /// </summary>
+    internal static string? FullName(string userName, uint uid)
+    {
+        var buffer = Marshal.AllocHGlobal(65536);
+        try
+        {
+            if (getpwnam_r(userName, out var record, buffer, 65536, out var result) != 0 || result == IntPtr.Zero || record.Uid != uid
+                || !string.Equals(Marshal.PtrToStringUTF8(record.Name), userName, StringComparison.Ordinal))
+                return null;
+            return GecosFullName(record.Gecos == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(record.Gecos));
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    /// <summary>The full name in a GECOS field (<c>Full Name,Room,Work phone,Home phone,Other</c>), or null.</summary>
+    internal static string? GecosFullName(string? gecos)
+        => gecos?.Split(',', 2)[0].Trim() is { Length: > 0 and <= 256 } name ? name : null;
+
     internal static bool PasswordIsUnlocked(string userName) => PasswordUnlocked(userName) == true;
     internal static bool? PasswordUnlocked(string userName)
     {

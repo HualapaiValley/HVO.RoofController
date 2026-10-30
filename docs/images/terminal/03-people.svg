@@ -106,12 +106,15 @@
 <text x="28.80" y="163.50" fill="#f7f9fc" textLength="596.40" lengthAdjust="spacingAndGlyphs">No people yet: Add one. The first admin can also be made on Setup (F5).</text>
 <text x="45.60" y="181.50" fill="#3a4a60" textLength="142.80" lengthAdjust="spacingAndGlyphs">PEOPLE / ACCOUNTS</text>
 <text x="37.20" y="199.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">NAME</text>
-<text x="87.60" y="199.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">ROLE</text>
-<text x="138.00" y="199.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">PASSWORD</text>
-<text x="222.00" y="199.50" fill="#f7f9fc" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">PIN</text>
-<text x="264.00" y="199.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">SESSIONS</text>
-<text x="348.00" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">UPDATED</text>
-<text x="28.80" y="505.50" fill="#f7f9fc" textLength="529.20" lengthAdjust="spacingAndGlyphs">[ Add ] [ Role ] [ Password ] [ PIN ] [ Remove PIN ] [ Remove ]</text>
+<text x="87.60" y="199.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">DISPLAY NAME</text>
+<text x="205.20" y="199.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">SHORT NAME</text>
+<text x="306.00" y="199.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">ROLE</text>
+<text x="356.40" y="199.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">LOGIN</text>
+<text x="415.20" y="199.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">PASSWORD</text>
+<text x="499.20" y="199.50" fill="#f7f9fc" textLength="25.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">PIN</text>
+<text x="541.20" y="199.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">SESSIONS</text>
+<text x="625.20" y="199.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">LAST SIGN-IN</text>
+<text x="28.80" y="505.50" fill="#f7f9fc" textLength="613.20" lengthAdjust="spacingAndGlyphs">[ Add ] [ Role ] [ Names ] [ Password ] [ PIN ] [ Remove PIN ] [ Remove ]</text>
 <text x="20.40" y="541.50" fill="#f7f9fc" textLength="277.20" lengthAdjust="spacingAndGlyphs">0 people, 5 API keys, 0 sessions.</text>
 <text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
 <text x="188.40" y="559.50" fill="#3fb950" textLength="470.40" lengthAdjust="spacingAndGlyphs">Stop acknowledged. Relay register verified de-energized.</text>

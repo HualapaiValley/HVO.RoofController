@@ -338,6 +338,8 @@ public sealed class WebSignInTests
     [DataRow(null, "/")]
     [DataRow("", "/")]
     [DataRow("/account/password", "/account/password")]
+    [DataRow("/account/names", "/account/names")]
+    [DataRow("/account/keys", "/")]
     [DataRow("/settings?tab=roof#x", "/settings?tab=roof#x")]
     [DataRow("https://evil.example/", "/")]
     [DataRow("//evil.example/", "/")]

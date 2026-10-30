@@ -164,6 +164,17 @@ public sealed class RoofAuthApi
         }
     }
 
+    /// <summary>
+    /// Changes the signed-in person's own display and short name (#209): null leaves one as it is, empty removes it.
+    /// Only with a password session: a PIN session is refused (CredentialNotAllowed), and so is a Linux account, whose
+    /// names come from the operating system (IdentityReadOnly). Returns the caller with the new names.
+    /// </summary>
+    public Task<RoofCallerResponse> ChangeNamesAsync(RoofNamesChangeRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return _http.SendAsync<RoofCallerResponse>(HttpMethod.Post, RoofApiRoutes.Names, request, cancellationToken);
+    }
+
     /// <summary>Changes the signed-in person's password. The controller ends their other sessions.</summary>
     public Task ChangePasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default)
     {

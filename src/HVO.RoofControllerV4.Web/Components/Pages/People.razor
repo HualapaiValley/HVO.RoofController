@@ -56,6 +56,12 @@ else if (_tab == UsersTab)
                 <input id="user-name" class="form-control form-control-sm" autocomplete="off" data-testid="user-name" @bind="_name" @bind:event="oninput" />
                 <label for="user-role" class="form-label">Role</label>
                 <RoleSelect Id="user-role" TestId="user-role" @bind-Value="_role" />
+                <label for="user-display-name" class="form-label">Display name</label>
+                <input id="user-display-name" class="form-control form-control-sm" autocomplete="off" maxlength="@RoofIdentityContract.MaximumDisplayNameLength" aria-describedby="user-display-name-rule" data-testid="user-display-name" @bind="_displayName" @bind:event="oninput" />
+                <p id="user-display-name-rule" class="web-muted web-editor-help">@RoofIdentityText.DisplayNameRule</p>
+                <label for="user-short-name" class="form-label">Short name</label>
+                <input id="user-short-name" class="form-control form-control-sm" autocomplete="off" maxlength="@RoofIdentityContract.MaximumShortNameLength" aria-describedby="user-short-name-rule" data-testid="user-short-name" @bind="_shortName" @bind:event="oninput" />
+                <p id="user-short-name-rule" class="web-muted web-editor-help">@RoofIdentityText.ShortNameRule</p>
                 <label for="user-password" class="form-label">Password</label>
                 <input id="user-password" type="password" class="form-control form-control-sm" autocomplete="new-password" data-testid="user-password" @bind="_password" @bind:event="oninput" />
                 <label for="user-password-again" class="form-label">Password again</label>
@@ -76,21 +82,25 @@ else if (_tab == UsersTab)
             <div class="table-responsive">
                 <table class="table table-dark table-sm web-table">
                     <thead>
-                        <tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Password</th><th scope="col">PIN</th><th scope="col">Sessions</th><th scope="col">Changed</th></tr>
+                        <tr><th scope="col">Name</th><th scope="col">Display name</th><th scope="col">Short name</th><th scope="col">Role</th><th scope="col">Login</th><th scope="col">Password</th><th scope="col">PIN</th><th scope="col">Sessions</th><th scope="col">Last sign-in</th><th scope="col">Changed</th></tr>
                     </thead>
                     <tbody>
                         @foreach (var user in _users)
                         {
                             <tr data-testid="user" data-name="@user.Name">
                                 <th scope="row">@user.Name</th>
+                                <td data-label="Display name">@user.DisplayName</td>
+                                <td data-label="Short name">@user.ShortName</td>
                                 <td data-label="Role">@WebRoles.Describe(user.Role)</td>
+                                <td data-label="Login">@RoofIdentityText.DescribeLoginType(user.LoginType)</td>
                                 <td data-label="Password">@YesNo(user.HasPassword)</td>
                                 <td data-label="PIN">@(user.HasTemporaryPin ? "temporary" : YesNo(user.HasPin))</td>
                                 <td data-label="Sessions">@user.ActiveSessions</td>
+                                <td data-label="Last sign-in">@RoofIdentityText.DescribeLastLogin(user.LastLoginUtc)</td>
                                 <td data-label="Changed">@RoofStatusText.Time(user.UpdatedUtc)</td>
                             </tr>
                             <tr class="web-row-actions">
-                                <td colspan="6">
+                                <td colspan="10">
                                     @if (_target == user.Name && _panel is { } panel && panel != AddUserPanel)
                                     {
                                         <div class="web-editor" data-testid="user-panel" data-panel="@panel">
@@ -101,6 +111,16 @@ else if (_tab == UsersTab)
                                                     <label for="user-new-role" class="form-label">Role of @user.Name</label>
                                                     <RoleSelect Id="user-new-role" TestId="user-new-role" @bind-Value="_role" />
                                                     <PanelActions Error="@_panelError" Action="Change" TestId="user-panel-send" Busy="Busy" OnAction="() => ChangeRoleAsync(user)" OnCancel="Close" />
+                                                    break;
+                                                case NamesPanel:
+                                                    <p class="web-muted">@RoofIdentityText.NamesChangeEndsNothing</p>
+                                                    <label for="user-new-display-name" class="form-label">Display name of @user.Name</label>
+                                                    <input id="user-new-display-name" class="form-control form-control-sm" autocomplete="off" maxlength="@RoofIdentityContract.MaximumDisplayNameLength" aria-describedby="user-new-display-name-rule" data-testid="user-new-display-name" @bind="_displayName" @bind:event="oninput" />
+                                                    <p id="user-new-display-name-rule" class="web-muted web-editor-help">@RoofIdentityText.DisplayNameRule</p>
+                                                    <label for="user-new-short-name" class="form-label">Short name of @user.Name</label>
+                                                    <input id="user-new-short-name" class="form-control form-control-sm" autocomplete="off" maxlength="@RoofIdentityContract.MaximumShortNameLength" aria-describedby="user-new-short-name-rule" data-testid="user-new-short-name" @bind="_shortName" @bind:event="oninput" />
+                                                    <p id="user-new-short-name-rule" class="web-muted web-editor-help">@RoofIdentityText.ShortNameRule</p>
+                                                    <PanelActions Error="@_panelError" Action="Save" TestId="user-panel-send" Busy="Busy" OnAction="() => SetNamesAsync(user)" OnCancel="Close" />
                                                     break;
                                                 case PasswordPanel:
                                                     <p class="web-muted">@RoofIdentityText.PasswordRule @RoofIdentityText.PasswordChangeEndsSessions</p>
@@ -133,6 +153,7 @@ else if (_tab == UsersTab)
                                     {
                                         <div class="web-actions">
                                             <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-role-change" disabled="@Busy" @onclick="() => Open(RolePanel, user.Name, user.Role)">Role</button>
+                                            <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-names-change" disabled="@Busy" @onclick="() => OpenNames(user)">Names</button>
                                             <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-password-set" disabled="@Busy" @onclick="() => Open(PasswordPanel, user.Name)">Password</button>
                                             <button type="button" class="btn btn-sm btn-outline-light" data-testid="user-pin-set" disabled="@Busy" @onclick="() => Open(PinPanel, user.Name)">PIN</button>
                                             @if (user.HasPin || user.HasTemporaryPin)
@@ -174,6 +195,8 @@ else if (_tab == LinuxTab)
             <div class="web-editor" data-testid="linux-user" data-id="@person.Id">
                 <h3>@person.Name</h3>
                 <p>@WebRoles.Describe(person.Role) · @(person.Enabled ? "Enabled" : "Disabled")</p>
+                <p class="web-muted" data-testid="linux-user-full-name">Full name: @(person.DisplayName ?? "none recorded"), from the operating system (read-only).</p>
+                <p class="web-muted" data-testid="linux-user-last-login">Last sign-in: @RoofIdentityText.DescribeLastLogin(person.LastLoginUtc)</p>
                 @if (_target == person.Id && _panel == LinuxTab)
                 {
                     <label for="linux-role" class="form-label">Controller role</label>
@@ -340,6 +363,7 @@ else
     private const string SessionsTab = "sessions";
     private const string AddUserPanel = "add-user";
     private const string RolePanel = "role";
+    private const string NamesPanel = "names";
     private const string PasswordPanel = "password";
     private const string PinPanel = "pin";
     private const string RemovePinPanel = "remove-pin";
@@ -374,6 +398,8 @@ else
     private string _passwordAgain = string.Empty;
     private string _pin = string.Empty;
     private string _pinAgain = string.Empty;
+    private string _displayName = string.Empty;
+    private string _shortName = string.Empty;
     private bool _kiosk;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -444,7 +470,16 @@ else
         _name = string.Empty;
         _role = WebRoles.Normalize(role) ?? WebRoles.Viewer;
         _password = _passwordAgain = _pin = _pinAgain = string.Empty;
+        _displayName = _shortName = string.Empty;
         _kiosk = kiosk;
+    }
+
+    /// <summary>Opens a person's names, filled in with the names they have now.</summary>
+    private void OpenNames(RoofUserResponse user)
+    {
+        Open(NamesPanel, user.Name);
+        _displayName = user.DisplayName ?? string.Empty;
+        _shortName = user.ShortName ?? string.Empty;
     }
 
     private void Close()
@@ -485,7 +520,8 @@ else
         var name = _name.Trim();
         _panelError = !RoofIdentityContract.IsValidName(name) ? $"'{name}' is not a valid name: {RoofIdentityText.NameRule}"
             : _password.Length == 0 && _pin.Length == 0 ? "Give a password, a PIN, or both."
-            : RoofIdentityText.CheckNewPassword(_password, _passwordAgain) ?? RoofIdentityText.CheckNewPin(_pin, _pinAgain);
+            : RoofIdentityText.CheckNewPassword(_password, _passwordAgain) ?? RoofIdentityText.CheckNewPin(_pin, _pinAgain)
+                ?? RoofIdentityText.CheckNames(_displayName, _shortName);
         if (_panelError is not null)
         {
             return Task.CompletedTask;
@@ -496,7 +532,9 @@ else
             Name = name,
             Role = _role,
             Password = _password.Length > 0 ? _password : null,
-            Pin = _pin.Length > 0 ? _pin : null
+            Pin = _pin.Length > 0 ? _pin : null,
+            DisplayName = RoofIdentityContract.NormalizeLabel(_displayName),
+            ShortName = RoofIdentityContract.NormalizeLabel(_shortName)
         };
         return ChangeAsync($"{name} could not be added.", async (client, cancellationToken) =>
         {
@@ -507,6 +545,22 @@ else
 
     private Task ChangeRoleAsync(RoofUserResponse user)
         => UpdateAsync(user, new RoofUserUpdateRequest { Role = _role }, $"{user.Name} is now {WebRoles.Describe(_role)}.");
+
+    /// <summary>Sets both names as typed; an empty one is removed (sent as empty, which the controller takes as remove).</summary>
+    private Task SetNamesAsync(RoofUserResponse user)
+    {
+        _panelError = RoofIdentityText.CheckNames(_displayName, _shortName);
+        return _panelError is not null
+            ? Task.CompletedTask
+            : UpdateAsync(
+                user,
+                new RoofUserUpdateRequest
+                {
+                    DisplayName = RoofIdentityContract.NormalizeLabel(_displayName) ?? string.Empty,
+                    ShortName = RoofIdentityContract.NormalizeLabel(_shortName) ?? string.Empty
+                },
+                $"Set the names of {user.Name}.");
+    }
 
     private Task SetPasswordAsync(RoofUserResponse user)
     {

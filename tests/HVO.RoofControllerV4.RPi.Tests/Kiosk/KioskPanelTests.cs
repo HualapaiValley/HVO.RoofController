@@ -511,9 +511,11 @@ public sealed class KioskPanelTests
 
         system.Health.Should().NotBeNullOrWhiteSpace();
         system.Checks.Should().NotBeEmpty();
-        system.Information.Should().BeEmpty();
+        system.Information.Should().BeEmpty("the host's details are an admin's");
         system.Self.Should().Be(("This kiosk", RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly)),
-            "everyone may see the kiosk's own version, but not the controller's");
+            "everyone may see the kiosk's own version");
+        system.Summary.Select(row => row.Label).Should().Equal("Controller", "Web UI", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+        system.SummaryProblem.Should().BeNull("every role reads the controller's summary (#209)");
         system.Message!.Text.Should().Be($"Health: {system.Health}.");
 
         await system.AskRestartAsync();
@@ -594,6 +596,73 @@ public sealed class KioskPanelTests
         system.Question.Answers.Select(answer => answer.Label).Should().Equal("Confirm and restart");
         await system.Question.Answers[0].Act();
         harness.Host.Services.GetRequiredService<RoofRestartSignal>().Requested.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task ALockedKiosk_ReadsTheSummaryWithItsOwnKey_AndAnUnreachableControllerSaysSo()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        harness.ControllerVersion = "9.8.7-rc.2+abcdef1234567890";
+        await harness.StartLiveAsync();
+        var system = new KioskSystemPanel(harness.Console);
+
+        await system.LoadSummaryAsync();
+
+        harness.Console.View.IsUnlocked.Should().BeFalse();
+        system.Summary.Should().Contain(("Controller", "9.8.7-rc.2 (commit abcdef123456)"));
+        system.Summary.Should().Contain(("Web UI", "https://192.0.2.10:8088/"), "where people reach the web UI, from the host's address");
+        system.Summary.Should().Contain(("Addresses", "192.0.2.10"), "the host's address, never the container's own");
+        system.SummaryProblem.Should().BeNull();
+        system.ReadingSummary.Should().BeFalse();
+        system.Health.Should().BeNull("About reads the summary alone");
+        system.Busy.Should().BeNull("About's read does not hold up the system page");
+        harness.Sent(HttpMethod.Get, RoofApiRoutes.SystemSummary).Should().Be(1);
+        harness.Sent(HttpMethod.Get, RoofApiRoutes.SystemInformation).Should().Be(0, "a kiosk key is not an admin");
+
+        harness.Reachable = false;
+        await system.LoadSummaryAsync();
+
+        system.Summary.Should().BeEmpty();
+        system.SummaryProblem.Should().Be(RoofSystemText.ControllerUnreachable);
+        system.Reset();
+        system.SummaryProblem.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task ASummaryAnsweredAfterTheLock_IsNotShownToTheNextPerson()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        var system = new KioskSystemPanel(harness.Console);
+        await using var held = HoldNext(harness, HttpMethod.Get, RoofApiRoutes.SystemSummary);
+        var before = system.LoadSummaryAsync();
+        await held.WaitAsync();
+        system.ReadingSummary.Should().BeTrue();
+
+        system.Reset();
+        held.Release();
+        await before.WaitAsync(TimeSpan.FromSeconds(10));
+
+        system.Summary.Should().BeEmpty("what was asked for before the reset is not shown after it");
+        system.SummaryProblem.Should().BeNull();
+        system.ReadingSummary.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task ASummaryThatCannotBeRead_LeavesTheHealthToShow()
+    {
+        await using var harness = await KioskHarness.CreateAsync();
+        await harness.StartLiveAsync();
+        await harness.PasswordAsync(KioskHarness.Admin);
+        var system = new KioskSystemPanel(harness.Console);
+        harness.CutAnswer = request => request.RequestUri!.AbsolutePath.TrimStart('/') == RoofApiRoutes.SystemSummary;
+
+        await system.LoadAsync();
+
+        system.Health.Should().NotBeNullOrWhiteSpace("an older controller without the summary still reports its health");
+        system.Summary.Should().BeEmpty();
+        system.SummaryProblem.Should().Be(RoofSystemText.ControllerUnreachable);
+        system.Information.Should().NotBeEmpty("an admin still gets the host's details");
     }
 
     [TestMethod]

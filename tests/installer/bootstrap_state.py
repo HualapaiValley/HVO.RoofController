@@ -13,6 +13,14 @@ def snapshot(root=Path("/")):
     def hash_value(value):
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
+    # The controller records each sign-in as lastLoginUtc (#209), and the rig signs in after the upgrade: a sign-in is
+    # not a change to the preserved people or native principals. Every other field still counts.
+    def without_last_login(entries):
+        if not isinstance(entries, list):
+            return entries
+        return [{key: value for key, value in entry.items() if key != "lastLoginUtc"} if isinstance(entry, dict) else entry
+                for entry in entries]
+
     identity = json.loads(path("/var/lib/hvo-roof/identity/identity.json").read_text())
     assert identity.get("kioskCredential") is None, "existing installation gained commissioning access"
     assert not path("/var/lib/hvo-roof-commissioning/first-install-claimed").exists(), "existing installation gained a fresh claim"
@@ -35,8 +43,8 @@ def snapshot(root=Path("/")):
     if isinstance(controller, dict) and "resources" not in controller:
         controller["resources"] = {"pidsLimit": 512}
     return {
-        "users": hash_value(identity.get("users")),
-        "nativePrincipals": hash_value(identity.get("linuxPrincipals")),
+        "users": hash_value(without_last_login(identity.get("users"))),
+        "nativePrincipals": hash_value(without_last_login(identity.get("linuxPrincipals"))),
         "files": files,
         "choices": hash_value({key: record.get(key) for key in ["roles", "hat", "controller", "kiosk"]}),
     }

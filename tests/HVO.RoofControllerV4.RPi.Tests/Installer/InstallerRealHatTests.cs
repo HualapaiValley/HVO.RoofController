@@ -148,7 +148,8 @@ public sealed partial class InstallerRealHatTests
         ("MANAGED_SECRETS_DIR", "/var/lib/hvo-roof/settings-secrets", false),
         ("HTTPS_CERT_DIR", "", true),
         ("HTTPS_CERT_FILE", "roof-controller.pfx", true),
-        ("ALLOWED_HOSTS", "", true)
+        ("ALLOWED_HOSTS", "", true),
+        ("HOST_ADDRESSES", "", true)
     ];
 
     // The deploy script's container_args, line for line and in its order, each group with the setting it needs: set, or
@@ -158,6 +159,9 @@ public sealed partial class InstallerRealHatTests
         (null,
         [
             "--env \"HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI}\"",
+            "--env \"RoofHost__Addresses=${ROOF_HOST_ADDRESSES}\"",
+            "--env \"RoofHost__WebUiUrls=${ROOF_WEB_UI_URLS}\"",
+            "--env \"RoofHost__WebUiAccess=${WEB_UI_ACCESS}\"",
             "--env \"RoofControllerOptionsV4__IgnorePhysicalLimitSwitches=${IGNORE_PHYSICAL_LIMIT_SWITCHES}\"",
             "--env \"OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME}\"",
             "--env \"OTEL_RESOURCE_ATTRIBUTES=service.instance.id=${OTEL_SERVICE_INSTANCE_ID}\"",
@@ -344,6 +348,7 @@ public sealed partial class InstallerRealHatTests
             ["DOCKER_CONTEXT"] = "default",
             ["EXTRA_DOCKER_ARGS"] = "--env RoofWeb__StopKeyFile=/run/secrets/RoofControllerSecurity__ApiKeys__2__Key",
             ["HAT_EMULATOR_ENDPOINT"] = "",
+            ["HOST_ADDRESSES"] = "192.168.1.50",
             ["HOST_PORT"] = "8080",
             ["HTTPS_CERT_DIR"] = "/etc/hvo-roof/https",
             ["HTTPS_CERT_FILE"] = "roof-controller.pfx",
@@ -549,6 +554,13 @@ public sealed partial class InstallerRealHatTests
         }
 
         variables["HAT_EMULATOR_ENDPOINT"].Should().BeEmpty("the real HAT: the script maps its devices, and no emulator");
+
+        // Where people reach the web UI, as the script works it out (#209; tests/deploy covers how): it only describes,
+        // and the check reads none of it.
+        variables["ROOF_HOST_ADDRESSES"] = variables["HOST_ADDRESSES"];
+        variables["ROOF_WEB_UI_URLS"] = string.Join(';', variables["HOST_ADDRESSES"].Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(address => $"https://{(address.Contains(':', StringComparison.Ordinal) ? $"[{address}]" : address)}:{variables["WEB_HOST_PORT"]}/"));
+        variables["WEB_UI_ACCESS"] = variables["PUBLISH_ADDRESS"].StartsWith("127.", StringComparison.Ordinal) ? "LocalOnly" : "Network";
         var key = settings["ROOF_OPERATOR_API_KEY"] is { Length: > 0 } given
             ? given
             : pi.Read(variables["OPERATOR_KEY_FILE"]).Replace("\r", string.Empty, StringComparison.Ordinal).Replace("\n", string.Empty, StringComparison.Ordinal);

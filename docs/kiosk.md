@@ -72,7 +72,10 @@ Open, Close and Clear fault are hidden:
 `Locked: unlock the kiosk with a PIN to open or close the roof. Stop is always available.`
 
 **Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key).
-People are paginated. Choosing a name opens a separate keypad step; **Person** returns to the list. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
+A person with a display name is shown by it, with the name they sign in by: `Olga Example (olga)`; an enrolled Linux
+account adds `(Linux)`. Names are not changed at the kiosk, which has no keyboard: people change their own in the web UI
+(their account) or the terminal (Setup), an admin anyone's, and a Linux account's come from the operating system
+(#209). People are paginated. Choosing a name opens a separate keypad step; **Person** returns to the list. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
 ([Lockout](security.md#signing-in)). When no one has a PIN yet, the page says how to give one:
 `hvo-roof users set <name> --pin` or `hvo-roof pins set <name>` ([cli.md](cli.md#commands)), or the web UI's People
@@ -123,8 +126,14 @@ screens remain available in the password-authenticated Mac app. PIN sessions can
 
 ### System
 
-Use an authorized administrative password session or local CLI/TUI for host information and restart. A PIN
-session does not gain these rights, even when its account is an administrator.
+The PIN kiosk has no System page: its controller summary is on **About**. Use an authorized administrative password
+session or local CLI/TUI for the host's details and restart. A PIN session does not gain these rights, even when its
+account is an administrator. A kiosk set to password sign-in shows System to every role: this kiosk's version, the
+controller's summary (version, uptimes, CPU, temperature, memory, disk and addresses, `GET System/Summary`) and its
+health checks; for an admin, the host's details and **Restart**, while others read
+`The host's details (its name, system, runtime and the controller's process) need the Admin role.`
+
+![An admin's System page: this kiosk's version, the controller's summary, and Restart](images/kiosk/admin-system-1280x720.png)
 
 ## The status
 
@@ -576,7 +585,17 @@ See [Authentication and interface rights](authentication-interfaces.md) for pers
 
 ### Finding the installed version
 
-Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. Controller version is shown separately when an administrator session can read it; the PIN kiosk reports that it is unavailable rather than substituting the local build. Stop remains available in its own column.
+Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. Each time About
+opens, the kiosk reads the controller's summary with its device key (`GET System/Summary`, any role, #209): the
+controller's version, labelled separately as last read, and right after it **where the web UI is**: `Web UI:` and its
+URLs (`https://192.0.2.10:8088/` in the picture), built from the host's address, the published port and the scheme the
+installer recorded, so people at the kiosk know where to open it. When the web UI is not published to the network it
+says `only on the controller's machine`, and when the deployment did not record it, `address not known`; a container's
+own address is never given as where to reach it. Then the controller's uptime and its machine's CPU, temperature,
+memory, disk and host addresses. A PIN session is not needed. When the controller cannot be reached, About says
+`Controller version: unavailable. Controller unreachable.` and shows no figures last read; while the status is not live
+it says so instead. A summary that cannot be read (a controller older than the summary, say) says why. The local build
+is never substituted for the controller's. Stop remains available in its own column.
 
 ![Locked kiosk About view](images/kiosk/about-locked-800x480.png)
 

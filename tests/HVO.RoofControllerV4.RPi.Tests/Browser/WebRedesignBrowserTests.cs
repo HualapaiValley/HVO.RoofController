@@ -40,7 +40,7 @@ public sealed class WebRedesignBrowserTests
         await page.GotoAsync("/signin");
         await FitAndStopAsync();
         await browser.SignInAsync(longName);
-        foreach (var route in new[] { "/", "/health", "/settings", "/people", "/system", "/account/keys", "/account/password", "/denied", "/missing-redesign-address" })
+        foreach (var route in new[] { "/", "/health", "/settings", "/people", "/system", "/account/keys", "/account/password", "/account/names", "/denied", "/missing-redesign-address" })
         {
             await page.GotoAsync(route);
             await Expect(page.Locator("main h1")).ToHaveCountAsync(1);

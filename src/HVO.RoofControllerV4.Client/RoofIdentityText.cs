@@ -30,6 +30,59 @@ public static class RoofIdentityText
 
     public const string RotateEndsOldSecret = "The old secret stops working at once.";
 
+    public static readonly string DisplayNameRule = string.Create(
+        CultureInfo.InvariantCulture,
+        $"A display name is optional: up to {RoofIdentityContract.MaximumDisplayNameLength} characters, without control characters.");
+
+    public static readonly string ShortNameRule = string.Create(
+        CultureInfo.InvariantCulture,
+        $"A short name is optional: up to {RoofIdentityContract.MaximumShortNameLength} characters, for narrow places such as the kiosk.");
+
+    /// <summary>Changing a display or short name ends nothing.</summary>
+    public const string NamesChangeEndsNothing = "Leave a name empty to remove it. Changing the names ends no session.";
+
+    /// <summary>Where a Linux account's names come from, and that they cannot be changed here (#209).</summary>
+    public const string LinuxNamesReadOnly = "A Linux account's names come from the operating system: its full name and its user name. Change the full name on the controller's machine.";
+
+    /// <summary>Where a person changes their own names: with a keyboard, not at the kiosk (#209).</summary>
+    public const string OwnNamesWhere = "Change your own names in the web UI (your account) or the terminal (Setup); an admin can change anyone's.";
+
+    /// <summary>
+    /// In place of a last sign-in the controller has not recorded: none since the person was added, or since the
+    /// controller began recording them (#209).
+    /// </summary>
+    public const string NoSignInRecorded = "none recorded";
+
+    /// <summary>
+    /// Checks a display or short name a person typed. Empty means none and is accepted; returns what is wrong, or null.
+    /// </summary>
+    public static string? CheckNames(string? displayName, string? shortName)
+    {
+        var display = RoofIdentityContract.NormalizeLabel(displayName);
+        var @short = RoofIdentityContract.NormalizeLabel(shortName);
+        return display is not null && !RoofIdentityContract.IsValidDisplayName(display) ? DisplayNameRule
+            : @short is not null && !RoofIdentityContract.IsValidShortName(@short) ? ShortNameRule
+            : null;
+    }
+
+    /// <summary>A person as a list shows them: "Roy Salisbury (roys)" with a display name, otherwise the name.</summary>
+    public static string DescribePerson(string name, string? displayName)
+        => string.IsNullOrWhiteSpace(displayName) || string.Equals(displayName, name, StringComparison.Ordinal)
+            ? name
+            : $"{displayName} ({name})";
+
+    /// <summary>How a person signs in (<see cref="RoofLoginTypes"/>): "local" or "Linux".</summary>
+    public static string DescribeLoginType(string? loginType) => loginType switch
+    {
+        RoofLoginTypes.Linux => "Linux",
+        null or RoofLoginTypes.Local => "local",
+        _ => loginType
+    };
+
+    /// <summary>A last sign-in: its time, or <see cref="NoSignInRecorded"/>.</summary>
+    public static string DescribeLastLogin(DateTimeOffset? lastLoginUtc)
+        => lastLoginUtc is { } at ? RoofStatusText.Time(at) : NoSignInRecorded;
+
     public const string SecretShownOnce = "Copy it now: it is not shown again.";
 
     /// <summary>

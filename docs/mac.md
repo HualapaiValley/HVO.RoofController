@@ -74,10 +74,11 @@ What the app offers depends on the person's role, as the controller gives it, an
   value. The change is shown for review before anything is sent, and a safety-critical change needs
   **Confirm and send**. Secrets are not typed here:
   `Secrets are not typed in this app: set them in the web UI or with hvo-roof.`
-- **System**: the app's own version, the controller's health checks and readiness, and for an admin its version, host
-  and resource use, and **Restart**.
+- **System**: the app's own version, the controller's summary for every role (its version, uptimes, CPU, temperature,
+  memory, disk and addresses), its health checks and readiness, and for an admin the host's details and **Restart**.
 
-People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here.
+People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here; so are display and short names:
+your own in the web UI (your account) or the terminal (Setup), anyone's by an admin (#209).
 
 ![Changing a text setting: the value in a text box, with Save and Cancel](images/mac/settings-edit-1280x800.png)
 
@@ -350,7 +351,12 @@ cp /tmp/mac-icon/icon-256.png ../docs/images/mac/icon-256.png
 
 ### Finding the installed version
 
-Choose **About** for this app's installed build and commit. After an administrator reads **System**, About shows the separately labelled controller build as last read. A stale connection or sign-out removes that value; the local version remains available.
+Choose **About** for this app's installed build and commit. Each time About opens, the app reads the controller's
+summary with its device key, signed in or not (`GET System/Summary`, any role, #209), and shows the separately
+labelled controller build as last read; right after it, where the web UI is (`Web UI:` and its URLs from the host's
+address, or `only on the controller's machine` when it is not published to the network, never a container's own
+address); then the controller's uptime and its machine's CPU, temperature, memory, disk and host addresses. A stale connection removes them, an unreachable controller says `Controller unreachable.`, and a sign-in
+or sign-out drops them until they are read again; the local version remains available.
 
 ![App and controller build identification](images/mac/mac-about-960x600.png)
 

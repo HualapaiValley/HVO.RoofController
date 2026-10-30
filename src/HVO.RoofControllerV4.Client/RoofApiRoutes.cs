@@ -27,6 +27,7 @@ internal static class RoofApiRoutes
     public const string PinUsers = V4 + "Auth/Pin/Users";
     public const string Me = V4 + "Auth/Me";
     public const string Password = V4 + "Auth/Password";
+    public const string Names = V4 + "Auth/Names";
 
     public const string Principals = V4 + "Identity/Principals";
     public const string Users = V4 + "Identity/Users";
@@ -39,6 +40,7 @@ internal static class RoofApiRoutes
     public const string SettingsDiscard = V4 + "Settings/Discard";
 
     public const string Restart = V4 + "System/Restart";
+    public const string SystemSummary = V4 + "System/Summary";
     public const string SystemInformation = V1 + "System/info";
     public const string SystemMetrics = V1 + "System/metrics";
 

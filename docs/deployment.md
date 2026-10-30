@@ -302,6 +302,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
 | `WEB_HOST_PORT` | `8088` | Published port of the [web UI](#the-containers-two-processes): HTTPS with the controller's certificate, or plain HTTP with `ALLOW_INSECURE_HTTP=true`. It must differ from the controller's published port. |
 | `PUBLISH_ADDRESS` | (empty) | Host address the ports are published on: empty for every interface, or an IPv4 address. `127.0.0.1` keeps the controller and the web UI to the machine itself, for a test rig that is not open to the network. `PI_HOST` is then `localhost`, or a name the certificate has with `REMOTE_CONNECT_TO=::127.0.0.1:`. |
+| `HOST_ADDRESSES` | (empty) | The host's LAN addresses (IPv4 or IPv6, separated by `;`, `,` or spaces; an IPv6 address with or without brackets), from which the script tells the controller where people reach its web UI. See [Where people reach the web UI](#where-people-reach-the-web-ui). Anything that is not an IP address is refused before anything changes. The [installer](install.md) gives them. |
 | `SECRETS_DIR` | `/etc/hvo-roof/secrets` | Secrets directory on the Pi |
 | `HTTPS_CERT_DIR` | (empty) | Certificate directory on the Pi. Required unless `ALLOW_INSECURE_HTTP=true`. |
 | `HTTPS_CERT_FILE` | `roof-controller.pfx` | PFX file name inside `HTTPS_CERT_DIR` |
@@ -337,6 +338,33 @@ treated as unverified. It also needs `setsid` (standard on Linux) or `perl` (mac
 docker runs in its own session, detached from the terminal. So the Docker context must connect without prompting; an
 SSH context needs a key or `ssh-agent` and a known host key, not a prompt. The script checks this before it changes
 anything.
+
+### Where people reach the web UI
+
+The controller's summary (`GET api/v4.0/System/Summary`, every role; [security.md](security.md)) says where people reach
+the web UI, so the kiosk's About page, the web UI's System page and `hvo-roof info` can show it. A controller in a
+container sees only its own address on Docker's bridge network, which nothing on the network reaches, so at every
+deploy the script tells it, and a redeploy refreshes it (`--rollback` restores a version with the settings it was
+deployed with):
+
+| Setting the controller gets | What it holds |
+|---|---|
+| `RoofHost__WebUiUrls` | The web UI's URLs, from the host's addresses, `WEB_HOST_PORT` and the scheme (`https` with `HTTPS_CERT_DIR`, else `http`), separated by `;`: `https://192.0.2.10:8088/;https://[2001:db8::10]:8088/` |
+| `RoofHost__WebUiAccess` | `Network` when the ports are published to the network; `LocalOnly` when `PUBLISH_ADDRESS` is a loopback address, so the web UI answers on the host alone |
+| `RoofHost__Addresses` | The host's addresses, IPv4 first, separated by `;` |
+
+The script works them out this way:
+
+- `PUBLISH_ADDRESS` on loopback (`127.0.0.1`, a rig not open to the network): `LocalOnly`, with the one URL
+  `<scheme>://localhost:<WEB_HOST_PORT>/`. The host's addresses (`HOST_ADDRESSES`) still go with it.
+- `PUBLISH_ADDRESS` another address: `Network`, with that address and its URL alone.
+- `PUBLISH_ADDRESS` empty (every interface): `Network`, with a URL for each of `HOST_ADDRESSES`, IPv4 first. Without
+  `HOST_ADDRESSES`, the one URL is `PI_HOST`'s (an IP address there counts as the host's address too), unless
+  `PI_HOST` is a loopback name or address (`localhost`, `127.x`, `::1`); then no URL is given and the controller says
+  the web UI's address is not known.
+
+A container's or a bridge's address is never given. `--dry-run` prints the result, and so does a deploy, before its
+pre-flight. For a hand deploy on the Pi itself (`PI_HOST=localhost`), give `HOST_ADDRESSES` to have URLs.
 
 ### What the script does, in order
 
@@ -780,7 +808,11 @@ Both Pi profiles mirror the script: the secrets directory at `/run/secrets` (`HV
 `/etc/hvo-roof/secrets`), the identity store directory (`HVO_ROOF_IDENTITY_DIR`, default `/var/lib/hvo-roof/identity`),
 the [settings directories](#4-the-settings-directories) (`HVO_ROOF_CONFIG_DIR` and `HVO_ROOF_MANAGED_SECRETS_DIR`),
 `stop_grace_period: 30s`, `restart: unless-stopped`, the [supervisor](#the-containers-two-processes) with the
-controller and the web UI, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. The secrets,
+controller and the web UI, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. Compose cannot work out
+[where people reach the web UI](#where-people-reach-the-web-ui): give `HVO_ROOF_WEB_UI_URLS` (such as
+`https://192.0.2.10:8088/`), `HVO_ROOF_WEB_UI_ACCESS` (`Network` or `LocalOnly`) and `HVO_ROOF_HOST_ADDRESSES`, or the
+controller says the web UI's address is not known. The emulator profile says its web UI is on this machine alone
+(`http://localhost:<HVO_EMULATED_WEB_PORT>/`, `LocalOnly`). The secrets,
 certificate, identity and settings
 directories must exist, and be root's; compose does not create them. Every controller and deployment check has the
 script's [privileges and limits](#the-containers-privileges-and-limits) (`x-hardening`), with the limits from

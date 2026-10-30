@@ -77,6 +77,12 @@ set -euo pipefail
 #   thermal sensor), so a test rig need not be a Pi, and BUILD_PLATFORM=linux/amd64 builds the image for a PC.
 #   PUBLISH_ADDRESS=127.0.0.1 publishes the ports on that address only, for a rig that is not open to the network;
 #   PI_HOST is then localhost, or a name its certificate has with REMOTE_CONNECT_TO=::127.0.0.1:.
+# Where people reach the web UI (#209): a container sees only its own bridge address, so at every deploy the script
+#   tells the controller the web UI's URLs, built from the host's addresses, WEB_HOST_PORT and the scheme (https with
+#   HTTPS_CERT_DIR), and whether it is published to the network (RoofHost__WebUiUrls, RoofHost__WebUiAccess and
+#   RoofHost__Addresses; the controller's summary shows them to every role). HOST_ADDRESSES=<the host's LAN addresses>
+#   (the installer gives them) builds them; without it, PI_HOST does when it is not a loopback name. PUBLISH_ADDRESS
+#   on loopback makes the web UI LocalOnly: reachable on the host alone.
 # Compose: the script replaces only controllers it created. A <name> or <name>-previous that Docker Compose created is
 #   refused before anything changes; docs/deployment.md describes moving between Compose and the script. Check a
 #   Compose controller from this machine with --verify-remote.
@@ -140,6 +146,10 @@ WEB_HOST_PORT=${WEB_HOST_PORT:-8088}
 # The host address the ports are published on: empty for every interface, or an IPv4 address such as 127.0.0.1 to
 # keep them to this machine (a test rig that is not open to the network).
 PUBLISH_ADDRESS=${PUBLISH_ADDRESS:-}
+# The host's LAN addresses (IPv4 or IPv6, separated by semicolons, commas or spaces; an IPv6 address with or without
+# brackets), from which the web UI's URLs the controller shows are built (#209). Never a container's or a bridge's
+# address. Empty: PI_HOST builds the one URL, unless it is a loopback name or address; then the URL is not known.
+HOST_ADDRESSES=${HOST_ADDRESSES:-}
 # Extra `docker run` options for the controller, split on whitespace (no quoting). Also applied to the pre-flight
 # container. Options the script sets itself (name, detach, --rm, restart policy, cidfile, published ports, graceful
 # stop, platform) are refused: use CONTAINER_NAME, HOST_PORT, HTTPS_HOST_PORT, WEB_HOST_PORT, STOP_TIMEOUT_SECONDS and
@@ -606,6 +616,101 @@ else
 fi
 if (( WEB_HOST_PORT == controller_host_port )); then
   fail "WEB_HOST_PORT (${WEB_HOST_PORT}) is the controller's published port too: give the web UI a port of its own. Nothing was changed."
+fi
+
+# ipv4_address <text>: the IPv4 address in plain decimal (010.0.0.1 as 10.0.0.1), or nothing (status 1) for anything else.
+ipv4_address() {
+  local pattern='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$'
+  [[ "$1" =~ ${pattern} ]] || return 1
+  (( 10#${BASH_REMATCH[1]} <= 255 && 10#${BASH_REMATCH[2]} <= 255 && 10#${BASH_REMATCH[3]} <= 255 && 10#${BASH_REMATCH[4]} <= 255 )) || return 1
+  printf '%d.%d.%d.%d' "$((10#${BASH_REMATCH[1]}))" "$((10#${BASH_REMATCH[2]}))" "$((10#${BASH_REMATCH[3]}))" "$((10#${BASH_REMATCH[4]}))"
+}
+
+# ipv6_address <text>: the IPv6 address (without brackets or a zone), in lower case, or nothing (status 1): eight groups
+# of up to four hex digits, or fewer with one '::', the last two optionally an IPv4 address.
+ipv6_address() {
+  local text=${1#[} groups=() group count=0 tail
+  text=${text%]}
+  [[ "${text}" == *:* && "${text}" =~ ^[0-9A-Fa-f:.]+$ && "${text}" != *:::* ]] || return 1
+  tail=${text##*:}
+  if [[ "${tail}" == *.* ]]; then
+    ipv4_address "${tail}" >/dev/null || return 1
+    count=2
+    text=${text%:*}:
+  fi
+  [[ "${text}" != *::*::* ]] || return 1
+  IFS=: read -r -a groups <<<"${text//::/:}"
+  for group in ${groups[@]+"${groups[@]}"}; do
+    [[ -z "${group}" ]] && continue
+    [[ "${group}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+    count=$(( count + 1 ))
+  done
+  if [[ "${1}" == *::* ]]; then
+    (( count <= 7 )) || return 1
+  else
+    (( count == 8 )) || return 1
+    [[ "${text}" != :* && "${text%:}" != *: ]] || return 1
+  fi
+  printf '%s' "${1#[}" | tr 'A-F' 'a-f' | sed 's/]$//'
+}
+
+# Where people reach the web UI (#209), for the controller's summary: its URLs (RoofHost__WebUiUrls), whether it is
+# published to the network (RoofHost__WebUiAccess) and the host's addresses (RoofHost__Addresses), at every deploy.
+WEB_UI_SCHEME=http
+if [[ -n "${HTTPS_CERT_DIR}" ]]; then WEB_UI_SCHEME=https; fi
+host_v4=() host_v6=()
+for entry in ${HOST_ADDRESSES//[;,]/ }; do
+  if address=$(ipv4_address "${entry}"); then
+    [[ " ${host_v4[*]-} " == *" ${address} "* ]] || host_v4+=("${address}")
+  elif address=$(ipv6_address "${entry}"); then
+    [[ " ${host_v6[*]-} " == *" ${address} "* ]] || host_v6+=("${address}")
+  else
+    fail "HOST_ADDRESSES must be the host's IP addresses (IPv4 or IPv6) separated by semicolons, commas or spaces, got '${entry}'. Nothing was changed."
+  fi
+done
+# web_ui_url <host>: the web UI's URL at that host (an IPv6 address in brackets).
+web_ui_url() {
+  if [[ "$1" == *:* ]]; then printf '%s://[%s]:%s/' "${WEB_UI_SCHEME}" "$1" "${WEB_HOST_PORT}"
+  else printf '%s://%s:%s/' "${WEB_UI_SCHEME}" "$1" "${WEB_HOST_PORT}"; fi
+}
+host_addresses=(${host_v4[@]+"${host_v4[@]}"} ${host_v6[@]+"${host_v6[@]}"})
+web_ui_urls=()
+if [[ "${PUBLISH_ADDRESS}" == 127.* ]]; then
+  # Published on loopback (a rig not open to the network): the web UI answers on the host alone.
+  WEB_UI_ACCESS=LocalOnly
+  web_ui_urls=("$(web_ui_url localhost)")
+elif [[ -n "${PUBLISH_ADDRESS}" ]]; then
+  WEB_UI_ACCESS=Network
+  host_addresses=("${PUBLISH_ADDRESS}")
+  web_ui_urls=("$(web_ui_url "${PUBLISH_ADDRESS}")")
+else
+  WEB_UI_ACCESS=Network
+  for address in ${host_addresses[@]+"${host_addresses[@]}"}; do
+    web_ui_urls+=("$(web_ui_url "${address}")")
+  done
+  pi_host=$(printf '%s' "${PI_HOST}" | tr '[:upper:]' '[:lower:]')
+  if (( ${#host_addresses[@]} == 0 )); then
+    case "${pi_host}" in
+      localhost|localhost.*|*.localhost|127.*|::1|\[::1\]|ip6-localhost|ip6-loopback) ;;
+      *)
+        if address=$(ipv4_address "${PI_HOST}") || address=$(ipv6_address "${PI_HOST}"); then
+          host_addresses=("${address}")
+          web_ui_urls=("$(web_ui_url "${address}")")
+        else
+          web_ui_urls=("$(web_ui_url "${PI_HOST}")")
+        fi
+        ;;
+    esac
+  fi
+fi
+ROOF_HOST_ADDRESSES=$(IFS=';'; printf '%s' "${host_addresses[*]-}")
+ROOF_WEB_UI_URLS=$(IFS=';'; printf '%s' "${web_ui_urls[*]-}")
+if [[ "${WEB_UI_ACCESS}" == LocalOnly ]]; then
+  WEB_UI_SUMMARY="only on this host (${ROOF_WEB_UI_URLS}): it is not published to the network"
+elif [[ -n "${ROOF_WEB_UI_URLS}" ]]; then
+  WEB_UI_SUMMARY=${ROOF_WEB_UI_URLS//;/, }
+else
+  WEB_UI_SUMMARY="published to the network at an address not known here (set HOST_ADDRESSES)"
 fi
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -2847,6 +2952,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     fi
     echo "[dry-run] Would ${image_step}, run the pre-flight check on the Pi, request a verified Stop, stop ${CONTAINER_NAME} (-t ${STOP_TIMEOUT_SECONDS}) and keep it as ${PREVIOUS_CONTAINER_NAME}, start the new container and verify it (ready within ${READY_TIMEOUT_SECONDS}s, then Status and Stop at ${REMOTE_BASE_URL}), rolling back on failure."
     echo "[dry-run] HAT: ${HAT_SUMMARY}"
+    echo "[dry-run] Web UI, as the controller will show it: ${WEB_UI_SUMMARY}"
   fi
   echo "[dry-run] The container: a read-only root filesystem, only the capabilities CHOWN, KILL, SETGID and SETUID, no-new-privileges, and ${LIMITS_SUMMARY}"
   echo "[dry-run] Secrets dir on Pi: ${SECRETS_DIR}; identity dir: ${IDENTITY_DIR:-<none, kept in memory>}; HTTPS cert dir: ${HTTPS_CERT_DIR:-<none, insecure HTTP>}"
@@ -3065,6 +3171,11 @@ hardening_args=(
 # shellcheck disable=SC2054 # commas are part of --mount values
 container_args=(
   --env "HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI}"
+  # Where people reach the web UI, for the controller's summary (#209): written at every deploy, so a redeploy
+  # refreshes them.
+  --env "RoofHost__Addresses=${ROOF_HOST_ADDRESSES}"
+  --env "RoofHost__WebUiUrls=${ROOF_WEB_UI_URLS}"
+  --env "RoofHost__WebUiAccess=${WEB_UI_ACCESS}"
   --env "RoofControllerOptionsV4__IgnorePhysicalLimitSwitches=${IGNORE_PHYSICAL_LIMIT_SWITCHES}"
   --env "OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME}"
   --env "OTEL_RESOURCE_ATTRIBUTES=service.instance.id=${OTEL_SERVICE_INSTANCE_ID}"
@@ -3162,6 +3273,7 @@ container_args+=(${extra_args[@]+"${extra_args[@]}"})
 # Pre-flight on the Pi with the new image and the final container's configuration, before touching the running
 # controller. Docker checks the devices and mount sources; --validate-deployment checks the configuration (it does
 # not open the HAT). The key's SHA-256 lets it confirm this script's key is configured without passing the key.
+echo "[deploy] Web UI, as the controller will show it: ${WEB_UI_SUMMARY}"
 echo "[deploy] Pre-flight: validating the new container's configuration on the Pi"
 deploy_key_sha256=$(printf '%s' "${OPERATOR_KEY}" | sha256_hex)
 if ! dockerc run --rm ${image_platform_args[@]+"${image_platform_args[@]}"} "${hardening_args[@]}" "${container_args[@]}" \
