@@ -335,32 +335,26 @@ public static partial class RoofCli
             });
 
             var setName = NameArgument("The person (an operator or an admin).");
-            var set = new Command("set", "Set or change a person's PIN (4 digits). Ends their PIN sessions.") { setName };
+            var set = new Command("set", "Set or change a person's PIN (4 digits). Their role is kept; their PIN sessions end.") { setName };
             SetAction(set, async (context, parseResult, cancellationToken) =>
             {
                 var person = parseResult.GetRequiredValue(setName);
                 var newPin = ReadNewPin(context, $"PIN for {person}: ");
                 using var client = context.Connect();
-                var current = await client.Identity.GetUserAsync(person, cancellationToken).ConfigureAwait(false);
-                var user = await client.Identity.UpdateUserAsync(
-                    person,
-                    new RoofUserUpdateRequest { Role = current.Role, Pin = newPin },
-                    cancellationToken).ConfigureAwait(false);
+
+                // Only the PIN is sent: the person keeps the role the controller has for them now.
+                var user = await client.Identity.SetPinAsync(person, newPin, cancellationToken).ConfigureAwait(false);
                 return ReportDone(context, user, $"PIN set for {user.Name}. Their PIN sessions were ended.");
             });
 
             var removeName = NameArgument("The person.");
-            var remove = new Command("remove", "Remove a person's PIN. Ends their PIN sessions.") { removeName };
+            var remove = new Command("remove", "Remove a person's PIN, or their temporary commissioning PIN. Their role is kept; their PIN sessions end.") { removeName };
             SetAction(remove, async (context, parseResult, cancellationToken) =>
             {
                 var person = parseResult.GetRequiredValue(removeName);
                 using var client = context.Connect();
-                var current = await client.Identity.GetUserAsync(person, cancellationToken).ConfigureAwait(false);
-                var user = await client.Identity.UpdateUserAsync(
-                    person,
-                    new RoofUserUpdateRequest { Role = current.Role, RemovePin = true },
-                    cancellationToken).ConfigureAwait(false);
-                return ReportDone(context, user, $"PIN removed for {user.Name}.");
+                var user = await client.Identity.RemovePinAsync(person, cancellationToken).ConfigureAwait(false);
+                return ReportDone(context, user, $"PIN removed for {user.Name}. Their PIN sessions were ended.");
             });
 
             command.Add(list);

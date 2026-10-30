@@ -8,7 +8,8 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// <summary>
 /// The connection, as <c>hvo-roof setup</c>, <c>login</c> and <c>logout</c> keep it: the controller's address, the
 /// certificate pin or CA, and an API key in the credentials file, a check of the connection, signing in and out, the
-/// signed-in person's own display and short name (#209), and adding the first admin person with an admin API key.
+/// signed-in person's own display and short name (#209) and PIN (#205), and adding the first admin person with an admin
+/// API key.
 /// </summary>
 internal sealed class RoofUiSetupPage : RoofUiPage
 {
@@ -21,18 +22,21 @@ internal sealed class RoofUiSetupPage : RoofUiPage
         : base(ui, "Setup")
     {
         _setup = new RoofCliSetup(ui.Context);
-        _lines = new TerminalReadingView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1), CanFocus = true };
-        var connectionPanel = new FrameView { Title = "CONNECTION / TRUST", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(1) };
+        _lines = new TerminalReadingView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(2), CanFocus = true };
+        var connectionPanel = new FrameView { Title = "CONNECTION / TRUST", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(2) };
         Ui.Theme.SetFrame(connectionPanel);
         _lines.Height = Dim.Fill();
         connectionPanel.Add(_lines);
         Add(connectionPanel);
-        var connection = AddButton("Connection", null, EditConnection);
-        var check = AddButton("Check", connection, () => CheckConnection());
-        var signIn = AddButton("Sign in", check, SignIn);
-        var signOut = AddButton("Sign out", signIn, SignOut);
-        var names = AddButton("Names", signOut, ChangeNames);
-        AddButton("First admin", names, AddFirstAdmin);
+        // The connection's actions, then the signed-in person's own (#209, #205) on a row of their own, so both rows fit
+        // 80 columns.
+        var connection = AddButton("Connection", null, EditConnection, Pos.AnchorEnd(2));
+        var check = AddButton("Check", connection, () => CheckConnection(), Pos.AnchorEnd(2));
+        var signIn = AddButton("Sign in", check, SignIn, Pos.AnchorEnd(2));
+        var signOut = AddButton("Sign out", signIn, SignOut, Pos.AnchorEnd(2));
+        AddButton("First admin", signOut, AddFirstAdmin, Pos.AnchorEnd(2));
+        var names = AddButton("Names", null, ChangeNames);
+        AddButton("PIN", names, ChangePin);
     }
 
     /// <summary>The last check of the connection, while it is still the one in use.</summary>
@@ -350,6 +354,77 @@ internal sealed class RoofUiSetupPage : RoofUiPage
                     Ui.Post(() => Ui.Say(
                         $"Saved your names: {RoofIdentityText.DescribePerson(after.Name, after.DisplayName)}"
                         + (after.ShortName is { } shortName ? $", short name {shortName}." : ", no short name.")));
+                });
+                return null;
+            })]));
+    }
+
+    /// <summary>
+    /// The signed-in person's own PIN (#205): the current one, then the new one twice, in private fields. Only a person
+    /// with a PIN of their own is asked; an API key, a Linux account and a person without a PIN are told why not. This
+    /// session stays open; the controller ends the person's other PIN sessions.
+    /// </summary>
+    internal void ChangePin()
+    {
+        if (Ui.Context.Local)
+        {
+            Ui.Say(RoofIdentityText.LinuxHasNoPin);
+            return;
+        }
+
+        _ = Ui.Run("Reading your account…", async (client, cancellationToken) =>
+        {
+            var me = await client.Auth.GetCallerAsync(cancellationToken).ConfigureAwait(false);
+            Ui.Post(() => ShowPin(me));
+        });
+    }
+
+    private void ShowPin(RoofCallerResponse me)
+    {
+        if (me.Kind == RoofCredentialKind.ApiKey)
+        {
+            Ui.Say("A PIN is a person's: sign in with your name and password first (Sign in).", error: true);
+            return;
+        }
+
+        if (me.LoginType == RoofLoginTypes.Linux)
+        {
+            Ui.Say(RoofIdentityText.LinuxHasNoPin, error: true);
+            return;
+        }
+
+        if (me.HasPin == false)
+        {
+            Ui.Say(RoofIdentityText.NoPinYet, error: true);
+            return;
+        }
+
+        Ui.Ask(new RoofUiPrompt(
+            $"Your PIN ({me.Name})",
+            $"{RoofIdentityText.PinRule}\n{RoofIdentityText.OwnPinChangeEndsSessions}",
+            [new RoofUiField("Current PIN", Secret: true), new RoofUiField("New PIN", Secret: true), new RoofUiField("New PIN again", Secret: true)],
+            [new RoofUiAction("Change", values =>
+            {
+                if (RoofIdentityText.CheckPinChange(values[0], values[1], values[2]) is { } error)
+                {
+                    return error;
+                }
+
+                var (current, replacement) = (values[0], values[1]);
+                _ = Ui.Run("Changing your PIN…", async (client, cancellationToken) =>
+                {
+                    try
+                    {
+                        await client.Auth.ChangePinAsync(current, replacement, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (RoofApiException wrong) when (wrong.Code == RoofControllerErrorCode.SignInFailed)
+                    {
+                        // Only the current PIN was wrong: the session is still valid, so sign-in is not offered.
+                        Ui.Post(() => Ui.Say("The current PIN is not correct. Your PIN was not changed.", error: true));
+                        return;
+                    }
+
+                    Ui.Post(() => Ui.Say(RoofIdentityText.OwnPinChanged));
                 });
                 return null;
             })]));

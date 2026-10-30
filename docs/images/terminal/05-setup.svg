@@ -53,9 +53,9 @@
 <rect x="994.80" y="420" width="25.60" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="438" width="25.60" height="18.4" fill="#05070d"/>
 <rect x="994.80" y="438" width="25.60" height="18.4" fill="#05070d"/>
-<rect x="12.00" y="456" width="25.60" height="18.4" fill="#05070d"/>
-<rect x="994.80" y="456" width="25.60" height="18.4" fill="#05070d"/>
-<rect x="12.00" y="474" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="456" width="1008.40" height="18.4" fill="#05070d"/>
+<rect x="12.00" y="474" width="17.20" height="18.4" fill="#05070d"/>
+<rect x="1003.20" y="474" width="17.20" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="492" width="17.20" height="18.4" fill="#05070d"/>
 <rect x="1003.20" y="492" width="17.20" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="510" width="1008.40" height="18.4" fill="#05070d"/>
@@ -75,7 +75,7 @@
 <line x1="276.60" y1="41.40" x2="276.60" y2="60.60" stroke="#98a7bb" stroke-width="1.2"/>
 <line x1="1015.80" y1="50.40" x2="1015.80" y2="609.60" stroke="#98a7bb" stroke-width="1.2"/>
 <line x1="33.00" y1="95.40" x2="33.00" y2="114.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="33.00" y1="131.40" x2="33.00" y2="474.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="33.00" y1="131.40" x2="33.00" y2="456.60" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="28.20" y1="105.00" x2="33.60" y2="105.00" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="108.00" y1="105.00" x2="1003.80" y2="105.00" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="108.60" y1="95.40" x2="108.60" y2="114.60" stroke="#3a4a60" stroke-width="1.2"/>
@@ -85,16 +85,16 @@
 <line x1="200.40" y1="123.00" x2="995.40" y2="123.00" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="201.00" y1="113.40" x2="201.00" y2="132.60" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="1007.40" y1="113.40" x2="1007.40" y2="510.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="999.00" y1="131.40" x2="999.00" y2="474.60" stroke="#3a4a60" stroke-width="1.2"/>
-<line x1="36.60" y1="483.00" x2="995.40" y2="483.00" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="999.00" y1="131.40" x2="999.00" y2="456.60" stroke="#3a4a60" stroke-width="1.2"/>
+<line x1="36.60" y1="465.00" x2="995.40" y2="465.00" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="28.20" y1="519.00" x2="1003.80" y2="519.00" stroke="#3a4a60" stroke-width="1.2"/>
 <line x1="15.60" y1="609.00" x2="1016.40" y2="609.00" stroke="#98a7bb" stroke-width="1.2"/>
 <path d="M28.80,105.00 Q24.60,105.00 24.60,114.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M1003.20,105.00 Q1007.40,105.00 1007.40,114.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M37.20,123.00 Q33.00,123.00 33.00,132.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M994.80,123.00 Q999.00,123.00 999.00,132.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<path d="M33.00,474.00 Q33.00,483.00 37.20,483.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
-<path d="M999.00,474.00 Q999.00,483.00 994.80,483.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M33.00,456.00 Q33.00,465.00 37.20,465.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
+<path d="M999.00,456.00 Q999.00,465.00 994.80,465.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M24.60,510.00 Q24.60,519.00 28.80,519.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <path d="M1007.40,510.00 Q1007.40,519.00 1003.20,519.00" fill="none" stroke="#3a4a60" stroke-width="1.2"/>
 <text x="37.20" y="55.50" fill="#98a7bb" textLength="226.80" lengthAdjust="spacingAndGlyphs">HVO roof: http://localhost/</text>
@@ -108,9 +108,10 @@
 <text x="146.40" y="145.50" fill="#f7f9fc" textLength="378.00" lengthAdjust="spacingAndGlyphs">http://localhost/ (from the credentials file)</text>
 <text x="37.20" y="163.50" fill="#f7f9fc" textLength="504.00" lengthAdjust="spacingAndGlyphs">Certificate: not pinned (the system's trust store checks it)</text>
 <text x="37.20" y="181.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">Credential:</text>
-<text x="146.40" y="181.50" fill="#f7f9fc" textLength="739.20" lengthAdjust="spacingAndGlyphs">API key (from /tmp/hvo-roof-cli-tests/5ae7aef9319042efbdc45aa669c068c0/credentials.json)</text>
-<text x="37.20" y="199.50" fill="#f7f9fc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Credentials file: /tmp/hvo-roof-cli-tests/5ae7aef9319042efbdc45aa669c068c0/credentials.json</text>
-<text x="28.80" y="505.50" fill="#f7f9fc" textLength="630.00" lengthAdjust="spacingAndGlyphs">[ Connection ] [ Check ] [ Sign in ] [ Sign out ] [ Names ] [ First admin ]</text>
+<text x="146.40" y="181.50" fill="#f7f9fc" textLength="739.20" lengthAdjust="spacingAndGlyphs">API key (from /tmp/hvo-roof-cli-tests/dcbb4f16bc5941ea9e3433bdc253709b/credentials.json)</text>
+<text x="37.20" y="199.50" fill="#f7f9fc" textLength="764.40" lengthAdjust="spacingAndGlyphs">Credentials file: /tmp/hvo-roof-cli-tests/dcbb4f16bc5941ea9e3433bdc253709b/credentials.json</text>
+<text x="28.80" y="487.50" fill="#f7f9fc" textLength="546.00" lengthAdjust="spacingAndGlyphs">[ Connection ] [ Check ] [ Sign in ] [ Sign out ] [ First admin ]</text>
+<text x="28.80" y="505.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">[ Names ] [ PIN ]</text>
 <text x="20.40" y="541.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">Health: Degraded.</text>
 <text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
 <text x="188.40" y="559.50" fill="#3fb950" textLength="470.40" lengthAdjust="spacingAndGlyphs">Stop acknowledged. Relay register verified de-energized.</text>
