@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using HVO.RoofControllerV4.Installer.Answers;
 using HVO.RoofControllerV4.Installer.Certificates;
@@ -287,6 +289,17 @@ public sealed class ControllerStep(
     /// <summary>The platform the release's image is pulled for: the machine's processor, as Docker names it.</summary>
     public static string Platform(InstallerMachine machine)
         => machine.Architecture == Architecture.X64 ? "linux/amd64" : "linux/arm64";
+
+    /// <summary>
+    /// The host's LAN addresses for the deploy script's HOST_ADDRESSES (#209), IPv4 first, separated by semicolons: the
+    /// private addresses the controller's names hold (container and virtual networks are never among them), without
+    /// loopback. The script builds the web UI's URLs from them, with its published port and scheme.
+    /// </summary>
+    public string HostAddresses
+        => string.Join(';', names.Addresses
+            .Where(address => !IPAddress.IsLoopback(address))
+            .OrderBy(address => address.AddressFamily == AddressFamily.InterNetwork ? 0 : 1)
+            .Select(address => address.ToString()));
 
     /// <summary>The one address a rig publishes its ports on, unless it is open to the network; null for every address.</summary>
     public string? PublishAddress => rig && settings.Rig is not { OpenToLan: true } ? HatEmulatorStep.ControlAddress : null;
@@ -741,6 +754,11 @@ public sealed class ControllerStep(
             ["HTTPS_CERT_FILE"] = Path.GetFileName(layout.Pfx),
             ["ALLOW_INSECURE_HTTP"] = settings.UsesHttps ? "false" : "true",
             ["ALLOWED_HOSTS"] = names.AllowedHosts,
+
+            // The host's LAN addresses, from which the script builds the web UI's URLs the controller shows every role
+            // (#209): a container sees only its own bridge address. They are among its names (AllowedHosts), so a
+            // changed address already redeploys the controller, which refreshes them; nothing more is compared.
+            ["HOST_ADDRESSES"] = HostAddresses,
             ["REMOTE_CA_CERT"] = trust ?? string.Empty,
             ["SKIP_REMOTE_CHECK"] = "false",
 

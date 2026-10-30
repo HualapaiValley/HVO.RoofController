@@ -1015,13 +1015,19 @@ scenario_install() {
   wait_for "the controller" 60 ready
   sign_in
   emulated_status
+  # Where people reach its web UI (#209): a rig not open to the network says it is on this machine alone.
+  local summary
+  summary=$(roof_call GET System/Summary)
+  [[ "$(tail -n 1 <<<"${summary}")" == 200 ]] || fail "System/Summary answered HTTP $(tail -n 1 <<<"${summary}")"
+  sed '$d' <<<"${summary}" | jq -e --arg url "${web}/" '.webUiAccess == "LocalOnly" and .webUiUrls == [$url]' >/dev/null \
+    || fail "the summary does not say the web UI is on this machine alone at ${web}/: $(sed '$d' <<<"${summary}" | jq -c '{webUiAccess, webUiUrls}')"
   [[ "$(curl -sS --max-time 10 --cacert "${ca}" -o /dev/null -w '%{http_code}' "${web}/")" =~ ^(200|302)$ ]] || fail "the web UI does not answer at ${web}"
   openssl verify -CAfile "${ca}" <(openssl s_client -connect "127.0.0.1:${https_port}" -servername localhost </dev/null 2>/dev/null | openssl x509) >/dev/null \
     || fail "the controller's certificate does not verify with the installer's CA"
   confined "${controller}" all
   sudo -n jq -e '.controller.resources == {pidsLimit: 512}' /etc/hvo-roof/install.json >/dev/null \
     || fail "the install record does not keep the controller's limits: $(sudo -n jq -c '.controller.resources' /etc/hvo-roof/install.json)"
-  pass "ready over HTTPS with the installer's CA, the web UI answers, ${admin} signs in as an admin with the password in the file, and Status says hatMode Emulated; read-only, with only the supervisor's capabilities and the default limits, which the record keeps"
+  pass "ready over HTTPS with the installer's CA, the web UI answers (its summary says on this machine alone), ${admin} signs in as an admin with the password in the file, and Status says hatMode Emulated; read-only, with only the supervisor's capabilities and the default limits, which the record keeps"
 
   current_check="install: no secret shown"
   collect_secrets
