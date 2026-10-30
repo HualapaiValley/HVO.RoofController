@@ -119,6 +119,7 @@ public sealed class RoofWebHostTests
         html.Should().Contain("href=\"history\"", "everyone may read their own roof commands");
         html.Contains("href=\"people\"", StringComparison.Ordinal).Should().Be(admin);
         html.Should().Contain("href=\"system\"", "every role reads the controller's summary");
+        html.Contains("href=\"account/pin\"", StringComparison.Ordinal).Should().Be(name != "vic", "only operators and admins have a PIN (#205)");
     }
 
     [TestMethod]

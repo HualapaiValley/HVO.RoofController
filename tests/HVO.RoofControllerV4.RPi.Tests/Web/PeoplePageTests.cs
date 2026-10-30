@@ -260,13 +260,47 @@ public sealed class PeoplePageTests
         Row(cut.Find("[data-testid=user][data-name=olga]")).Should().StartWith("olga |  |  | Operator | local | yes | yes | ");
 
         UserAction(cut, "olga", "user-pin-remove");
-        cut.WaitForElement("[data-testid=user-panel]").TextContent.Should().Contain("Remove the PIN of olga? Their PIN sessions end.");
+        cut.WaitForElement("[data-testid=user-panel]").TextContent.Should().Contain($"Remove the PIN of olga? {RoofIdentityText.PinRemoveEndsSessions}");
         cut.Click("[data-testid=user-panel-send]");
         cut.WaitForAssertion(() => Message(cut).Should().Be("Removed the PIN of olga."));
         Row(cut.Find("[data-testid=user][data-name=olga]")).Should().StartWith("olga |  |  | Operator | local | yes | no | ");
 
         using var anonymous = ClientTestSupport.CreateClient(harness.Host);
         (await anonymous.Auth.SignInAsync("olga", NewPassword)).Role.Should().Be(RoofControllerApiContract.OperatorRole, "the role was kept");
+    }
+
+    [TestMethod]
+    public async Task APinSetOrRemoved_GoesToThePinsOwnEndpoint_AndNeverSendsARole()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await RoofClientApiTests.AddUserAsync(harness.Host, "olga", RoofControllerApiContract.OperatorRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        using var admin = harness.Admin();
+        await admin.Identity.UpdateUserAsync("olga", new RoofUserUpdateRequest { Role = RoofControllerApiContract.AdminRole });
+        var sent = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        harness.LoseAnswer = request =>
+        {
+            sent.Enqueue($"{request.Method} {request.RequestUri!.AbsolutePath}");
+            return false;
+        };
+
+        UserAction(cut, "olga", "user-pin-set");
+        cut.WaitForElement("[data-testid=user-new-pin]");
+        cut.Input("[data-testid=user-new-pin]", NewPin);
+        cut.Input("[data-testid=user-new-pin-again]", NewPin);
+        cut.Click("[data-testid=user-panel-send]");
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Set the PIN of olga."));
+        UserAction(cut, "olga", "user-pin-remove");
+        cut.WaitForElement("[data-testid=user-panel-send]");
+        cut.Click("[data-testid=user-panel-send]");
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Removed the PIN of olga."));
+
+        sent.Should().Contain("PUT /api/v4.0/Identity/Users/olga/Pin").And.Contain("DELETE /api/v4.0/Identity/Users/olga/Pin");
+        sent.Should().NotContain(request => request.EndsWith("/Identity/Users/olga", StringComparison.Ordinal),
+            "a PIN change neither reads nor sends the person's role");
+        (await admin.Identity.GetUserAsync("olga")).Role.Should().Be(RoofControllerApiContract.AdminRole, "another admin's role change stands");
     }
 
     [TestMethod]

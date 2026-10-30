@@ -48,6 +48,13 @@
                             <a class="navbar-text web-user-name" href="@WebAccountEndpoints.NamesPath.TrimStart('/')" title="Your display and short names" data-testid="your-names">
                                 <i class="bi bi-person-vcard" aria-hidden="true"></i> Your names
                             </a>
+                            @if (context.User.IsInRole(WebRoles.Operator))
+                            {
+                                @* Only operators and admins have a PIN; the page says when there is none to change (#205). *@
+                                <a class="navbar-text web-user-name" href="@WebAccountEndpoints.PinPath.TrimStart('/')" title="Change the PIN you unlock a kiosk with" data-testid="your-pin">
+                                    <i class="bi bi-123" aria-hidden="true"></i> Your PIN
+                                </a>
+                            }
                             <form method="post" action="@WebAuthentication.SignOutPostPath.TrimStart('/')" class="web-signout">
                                 <button type="submit" class="btn btn-sm btn-outline-light" data-testid="sign-out">
                                     <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Sign out
