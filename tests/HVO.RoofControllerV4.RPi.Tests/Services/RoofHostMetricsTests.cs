@@ -100,6 +100,29 @@ public sealed class RoofHostMetricsTests
     }
 
     [TestMethod]
+    public async Task SummariesAskedTogether_ShareOneCpuSample()
+    {
+        var reads = 0;
+        var metrics = new RoofHostMetrics(
+            new ManualClock(DateTimeOffset.UtcNow),
+            new TestHostEnvironment(),
+            new TestOptionsMonitor<RoofIdentityOptions>(new RoofIdentityOptions()),
+            path => path == RoofHostMetrics.StatPath ? (Interlocked.Increment(ref reads) == 1 ? Stat : StatLater) : null,
+            _ => null,
+            () => [],
+            () => false,
+            TimeSpan.FromMilliseconds(200));
+
+        var summaries = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => metrics.GetSummaryAsync(CancellationToken.None)));
+        var again = await metrics.GetSummaryAsync(CancellationToken.None);
+
+        reads.Should().Be(2, "one sample of two readings serves every summary asked for while it ran");
+        summaries.Should().OnlyContain(summary => summary.CpuUsagePercent == 66.7);
+        again.CpuUsagePercent.Should().Be(66.7, "within a second the figure is cached");
+        reads.Should().Be(2);
+    }
+
+    [TestMethod]
     public void TheParsers_ReadTheKernelsFormats()
     {
         RoofHostMetrics.ParseLoadAverage(LoadAverage).Should().Be((0.52, 0.58, 0.61));

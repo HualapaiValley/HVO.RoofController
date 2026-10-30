@@ -52,6 +52,7 @@ public sealed class RoofHostMetrics
     private readonly object _gate = new();
     private CpuReading? _lastCpu;
     private double? _lastCpuPercent;
+    private Task<double?>? _sampling;
 
     public RoofHostMetrics(
         TimeProvider time,
@@ -139,47 +140,77 @@ public sealed class RoofHostMetrics
     }
 
     /// <summary>
-    /// CPU use since the previous reading when that is between <see cref="MinimumCpuWindow"/> and
-    /// <see cref="MaximumCpuWindow"/> old; the last figure when it is more recent; otherwise over a fresh sample.
+    /// CPU use, cached for about a second: the last figure when it was read less than <see cref="MinimumCpuWindow"/>
+    /// ago, so callers polling together share it; since the previous reading when that is at most
+    /// <see cref="MaximumCpuWindow"/> old; otherwise over a fresh sample, which callers arriving meanwhile share instead
+    /// of each waiting for one of their own.
     /// </summary>
     private async Task<double?> ReadCpuPercentAsync(CancellationToken cancellationToken)
     {
         var now = _time.GetUtcNow();
-        CpuReading? baseline;
+        Task<double?> fresh;
         lock (_gate)
         {
-            baseline = _lastCpu;
-            if (baseline is not null && now - baseline.At < MinimumCpuWindow && _lastCpuPercent is not null)
+            if (_lastCpu is { } last && now - last.At < MinimumCpuWindow && _lastCpuPercent is not null)
             {
                 return _lastCpuPercent;
             }
-        }
 
-        if (baseline is null || now - baseline.At > MaximumCpuWindow || now - baseline.At < MinimumCpuWindow)
-        {
-            baseline = ParseCpu(_readFile(StatPath), now);
-            if (baseline is null)
+            if (_lastCpu is { } baseline && now - baseline.At >= MinimumCpuWindow && now - baseline.At <= MaximumCpuWindow)
             {
-                return null;
+                var current = ParseCpu(_readFile(StatPath), now);
+                return current is null ? null : Record(current, CpuPercent(baseline, current));
             }
 
-            // Real time, whatever the clock: the kernel counts real clock ticks.
-            await Task.Delay(_cpuSample, cancellationToken).ConfigureAwait(false);
+            fresh = _sampling ??= SampleCpuAsync();
         }
 
+        try
+        {
+            return await fresh.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                // The next fresh sample starts anew once this one has been answered.
+                if (ReferenceEquals(_sampling, fresh) && fresh.IsCompleted)
+                {
+                    _sampling = null;
+                }
+            }
+        }
+    }
+
+    /// <summary>Two readings of <c>/proc/stat</c> a short sample apart; not cancelled by one caller, as others may share it.</summary>
+    private async Task<double?> SampleCpuAsync()
+    {
+        var baseline = ParseCpu(_readFile(StatPath), _time.GetUtcNow());
+        if (baseline is null)
+        {
+            return null;
+        }
+
+        // Real time, whatever the clock: the kernel counts real clock ticks.
+        await Task.Delay(_cpuSample).ConfigureAwait(false);
         var current = ParseCpu(_readFile(StatPath), _time.GetUtcNow());
         if (current is null)
         {
             return null;
         }
 
-        var percent = CpuPercent(baseline, current);
         lock (_gate)
         {
-            _lastCpu = current;
-            _lastCpuPercent = percent ?? _lastCpuPercent;
-            return _lastCpuPercent;
+            return Record(current, CpuPercent(baseline, current));
         }
+    }
+
+    /// <summary>Keeps <paramref name="current"/> as the last reading and returns the figure (the previous one when none).</summary>
+    private double? Record(CpuReading current, double? percent)
+    {
+        _lastCpu = current;
+        _lastCpuPercent = percent ?? _lastCpuPercent;
+        return _lastCpuPercent;
     }
 
     /// <summary>Busy time over the time between two readings of the <c>cpu</c> line, in percent; null when no time passed.</summary>
