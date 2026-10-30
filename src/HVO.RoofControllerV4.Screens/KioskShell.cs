@@ -130,10 +130,7 @@ public sealed class KioskShell : UserControl
             BorderThickness = new Thickness(3),
             Content = new TextBlock { Text = RoofStopText.ButtonLabel, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center }
         };
-        KioskTheme.Colour(Stop, RoofUiPalette.StopButton, RoofUiPalette.StopButtonText, RoofUiPalette.Danger);
-        // The permanent action retains its exact red pair under pointer, press and keyboard focus.
-        Stop.Resources["ButtonBackgroundPointerOver"] = KioskTheme.Brush(RoofUiPalette.StopButton);
-        Stop.Resources["ButtonBackgroundPressed"] = KioskTheme.Brush(RoofUiPalette.StopButton);
+        ColourStop(false);
         Stop.Click += (_, _) => _ = _console.StopAsync();
         _stopMessage = KioskTheme.Label(RoofStopText.AlwaysAvailable, metrics.Font);
         _stopMessage.Name = "stop-message";
@@ -183,6 +180,12 @@ public sealed class KioskShell : UserControl
 
     /// <summary>Stop: at the right of every page.</summary>
     public Button Stop { get; }
+
+    /// <summary>
+    /// True while Stop is drawn bright: the newest status, live or last known, shows the roof moving
+    /// (<see cref="RoofActionStates.IsStopActive"/>). Idle, Stop is the dim red; in both it is enabled and acts the same.
+    /// </summary>
+    public bool StopActive { get; private set; }
 
     public KioskPinPad PinPad { get; }
 
@@ -251,6 +254,7 @@ public sealed class KioskShell : UserControl
                 PasswordForm.Clear();
                 break;
             case KioskPage.Unlock:
+                PinPage.Reset();
                 PinPad.Select(PinPad.Users.Count == 1 ? PinPad.Selected : null);
                 _ = PinPad.LoadUsersAsync();
                 break;
@@ -311,8 +315,21 @@ public sealed class KioskShell : UserControl
         };
 
         // Stop is never disabled: not while a Stop is on its way, not while locked, not while the controller is unreachable.
+        // Only its colour follows the roof: bright while it moves (or was last seen moving), dim while there is nothing to stop.
         Stop.IsEnabled = true;
+        if (RoofActionStates.IsStopActive(view.Status) != StopActive) ColourStop(!StopActive);
         _blank.IsVisible = view.IsBlank;
+    }
+
+    private void ColourStop(bool active)
+    {
+        StopActive = active;
+        var (background, foreground, border) = KioskTheme.StopColours(active);
+        KioskTheme.Colour(Stop, background, foreground, border);
+        // The permanent action retains its exact red pair under pointer, press and keyboard focus.
+        Stop.Resources["ButtonBackgroundPointerOver"] = KioskTheme.Brush(background);
+        Stop.Resources["ButtonBackgroundPressed"] = KioskTheme.Brush(background);
+        Stop.Classes.Set("active", active);
     }
 
     private void FitStopResult()

@@ -193,6 +193,41 @@ public sealed class RoofTerminalUiTests
     // ---- Colours -----------------------------------------------------------------------------------------------------
 
     [TestMethod]
+    public void StopOpenAndClose_AreColouredByTheRoofsState_AndStopStaysEnabled()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        var stop = $"{RoofStopText.ButtonLabel} (F9)";
+
+        tui.Ui.StopButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Stop, "nothing to stop: the dim red");
+        ShouldHaveColours(tui.ColoursOf(stop), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton);
+        page.OpenButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Open);
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionDisabled);
+        ShouldHaveColours(tui.ColoursOf(" Close "), RoofUiPalette.MotionDisabledText, RoofUiPalette.MotionDisabled, "a disabled Close is neutral, not a faded green");
+
+        host.RoofService.Raise(service => service.StatusChanged += null,
+            new RoofStatusChangedEventArgs(RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening) with { StatusVersion = 50 }));
+        tui.WaitIdle("the opening roof", () => tui.Ui.Status?.StatusVersion == 50);
+        tui.Ui.StopButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.StopMoving, "the roof is moving: bright red");
+        tui.Ui.StopButton.Enabled.Should().BeTrue();
+        ShouldHaveColours(tui.ColoursOf(stop), RoofUiPalette.StopButtonActiveText, RoofUiPalette.StopButtonActive);
+        page.OpenButton.Enabled.Should().BeFalse("the roof is already opening");
+        page.OpenButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionRunning);
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.MotionRunningText, RoofUiPalette.MotionRunning, "running keeps its bright green while not pressable");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionDisabled);
+
+        host.RoofService.Raise(service => service.StatusChanged += null,
+            new RoofStatusChangedEventArgs(RoofServiceMock.Snapshot(RoofControllerStatus.PartiallyOpen) with { StatusVersion = 51 }));
+        tui.WaitIdle("the stopped roof", () => tui.Ui.Status?.StatusVersion == 51);
+        tui.Ui.StopButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Stop);
+        page.OpenButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Open);
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close);
+    }
+
+    [TestMethod]
     public void TheScreen_IsDrawnInTheWebUisColours()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -203,8 +238,8 @@ public sealed class RoofTerminalUiTests
 
         ShouldHaveColours(tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)"), RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, "Stop retains the canonical red action pair");
         tui.ColoursOf($"{RoofStopText.ButtonLabel} (F9)").Style.Should().HaveFlag(TextStyle.Bold);
-        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.OpenButtonText, RoofUiPalette.OpenButton, "Open uses the canonical raised action surface");
-        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.Close, "Close uses the raised action surface (disabled while the roof is closed)");
+        ShouldHaveColours(tui.ColoursOf(" Open "), RoofUiPalette.MotionAvailableText, RoofUiPalette.MotionAvailable, "an offered Open is green");
+        page.CloseButton.GetScheme().Should().BeSameAs(RoofUiTheme.HvoDark.MotionDisabled, "Close is neutral while the roof is closed");
         ShouldHaveColours(tui.ColoursOf(RoofStopText.AlwaysAvailable), RoofUiPalette.Text, RoofUiPalette.Background);
         ShouldHaveColours(tui.ColoursOf("Status at"), RoofUiPalette.Text, RoofUiPalette.Surface, "the page is HVO Dark's");
         ShouldHaveColours(tui.ColoursOf("· status live"), RoofUiPalette.Text, RoofUiPalette.Surface, "the header is the web UI's navigation bar");

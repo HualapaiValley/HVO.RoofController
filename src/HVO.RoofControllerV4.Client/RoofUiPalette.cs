@@ -77,21 +77,66 @@ public static class RoofUiPalette
     /// <summary><c>--hvo-info-bg</c>.</summary>
     public const string InfoBackground = "#123548";
 
-    /// <summary>Permanent red Stop action; retains the danger pair while focused.</summary>
+    /// <summary>
+    /// Permanent red Stop action, idle (nothing to stop): the dim danger pair, retained while focused. Stop is never
+    /// disabled; only its colour follows <see cref="RoofActionStates.IsStopActive"/>.
+    /// </summary>
     public const string StopButton = DangerBackground;
 
     /// <summary>The Stop action's text, paired with StopButton.</summary>
     public const string StopButtonText = DangerText;
 
-    /// <summary>Raised directional action; eligibility and label supply its meaning.</summary>
-    public const string OpenButton = SurfaceRaised;
+    /// <summary>Stop's edge while idle.</summary>
+    public const string StopButtonBorder = Danger;
+
+    /// <summary>Stop while the roof is moving, or last known to be: the bright danger tone, so the action that acts stands out.</summary>
+    public const string StopButtonActive = Danger;
+
+    /// <summary>Active Stop's text: the page background on bright danger (about 6:1).</summary>
+    public const string StopButtonActiveText = Background;
+
+    /// <summary>Active Stop's edge.</summary>
+    public const string StopButtonActiveBorder = DangerText;
+
+    /// <summary>Open or Close offered (<see cref="RoofActionState.Available"/>): the success notice pair.</summary>
+    public const string MotionAvailable = SuccessBackground;
+
+    /// <summary>An offered Open or Close's text.</summary>
+    public const string MotionAvailableText = SuccessText;
+
+    /// <summary>An offered Open or Close's edge.</summary>
+    public const string MotionAvailableBorder = Success;
+
+    /// <summary>Open or Close while the roof moves its way (<see cref="RoofActionState.Running"/>): bright success.</summary>
+    public const string MotionRunning = Success;
+
+    /// <summary>A running Open or Close's text: the page background on bright success (about 8:1).</summary>
+    public const string MotionRunningText = Background;
+
+    /// <summary>A running Open or Close's edge.</summary>
+    public const string MotionRunningBorder = SuccessText;
+
+    /// <summary>
+    /// Open or Close not offered (<see cref="RoofActionState.Disabled"/>): neutral, not green, so it reads as disabled; its
+    /// label stays readable and its reason is shown beside it.
+    /// </summary>
+    public const string MotionDisabled = Surface;
+
+    /// <summary>A disabled Open or Close's text.</summary>
+    public const string MotionDisabledText = Muted;
+
+    /// <summary>A disabled Open or Close's edge.</summary>
+    public const string MotionDisabledBorder = Border;
+
+    /// <summary>Compatibility alias: an offered Open (<see cref="MotionAvailable"/>).</summary>
+    public const string OpenButton = MotionAvailable;
 
     /// <summary>The Open action's text.</summary>
-    public const string OpenButtonText = Text;
+    public const string OpenButtonText = MotionAvailableText;
 
-    /// <summary>Raised directional action; Stop owns the red emphasis.</summary>
-    public const string CloseButton = SurfaceRaised;
+    /// <summary>Compatibility alias: an offered Close (<see cref="MotionAvailable"/>); Stop owns the red emphasis.</summary>
+    public const string CloseButton = MotionAvailable;
 
     /// <summary>The Close action's text.</summary>
-    public const string CloseButtonText = Text;
+    public const string CloseButtonText = MotionAvailableText;
 }

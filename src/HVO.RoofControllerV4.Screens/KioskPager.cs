@@ -9,6 +9,8 @@ namespace HVO.RoofControllerV4.Screens;
 /// <summary>
 /// Bounded touch pages for lists and explanatory text. Pages are measured with the configured text and target sizes;
 /// they never scale the contents or scroll the whole screen. Only the current page participates in focus navigation.
+/// Previous, Next and the page count are shown only when the contents overflow one page; contents that fit have the
+/// whole height and no page controls.
 /// </summary>
 public sealed class KioskPager : UserControl
 {
@@ -18,6 +20,7 @@ public sealed class KioskPager : UserControl
     private readonly TextBlock _position;
     private readonly Button _previous;
     private readonly Button _next;
+    private readonly Grid _bar;
     private readonly List<Control> _items = [];
     private List<List<Control>> _pages = [];
     private Size _measured;
@@ -33,16 +36,16 @@ public sealed class KioskPager : UserControl
         _next = KioskTheme.TouchButton("Next", $"{name}-next", metrics, () => Move(1));
         _position = KioskTheme.Label(string.Empty, metrics.Small, KioskTheme.Muted);
         _position.HorizontalAlignment = HorizontalAlignment.Center;
-        var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = metrics.Gap };
-        bar.Children.Add(_previous);
+        _bar = new Grid { Name = $"{name}-bar", ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = metrics.Gap, IsVisible = false };
+        _bar.Children.Add(_previous);
         Grid.SetColumn(_position, 1);
-        bar.Children.Add(_position);
+        _bar.Children.Add(_position);
         Grid.SetColumn(_next, 2);
-        bar.Children.Add(_next);
-        _root = new Grid { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = metrics.Gap };
+        _bar.Children.Add(_next);
+        _root = new Grid { RowDefinitions = new RowDefinitions("*,Auto") };
         _root.Children.Add(_body);
-        Grid.SetRow(bar, 1);
-        _root.Children.Add(bar);
+        Grid.SetRow(_bar, 1);
+        _root.Children.Add(_bar);
         Content = _root;
     }
 
@@ -51,6 +54,9 @@ public sealed class KioskPager : UserControl
 
     /// <summary>The current zero-based page.</summary>
     public int CurrentPage => _current;
+
+    /// <summary>True when the contents overflow one page, so Previous, Next and the page count are shown.</summary>
+    public bool IsPaged => _pages.Count > 1;
 
     /// <summary>Replaces the document. Items retain their actions; the current page is preserved unless reset is requested.</summary>
     public void SetItems(IEnumerable<Control> items, bool reset = false)
@@ -74,25 +80,35 @@ public sealed class KioskPager : UserControl
         if (double.IsFinite(availableSize.Width) && double.IsFinite(availableSize.Height) && availableSize != _measured)
         {
             _measured = availableSize;
-            var room = Math.Max(_metrics.Font * 2, availableSize.Height - _metrics.Touch - _metrics.Gap);
-            _pages = [[]];
-            var used = 0d;
-            foreach (var item in ExpandText(_items, availableSize.Width, room))
-            {
-                item.Measure(new Size(availableSize.Width, double.PositiveInfinity));
-                var height = item.DesiredSize.Height;
-                if (used > 0 && used + _metrics.Gap + height > room)
-                {
-                    _pages.Add([]);
-                    used = 0;
-                }
-                _pages[^1].Add(item);
-                used += height + _metrics.Gap;
-            }
+            // Contents that fit on one page have the whole height; only overflowing contents give up the page controls' room.
+            _pages = Paginate(availableSize.Width, Math.Max(_metrics.Font * 2, availableSize.Height));
+            if (_pages.Count > 1)
+                _pages = Paginate(availableSize.Width, Math.Max(_metrics.Font * 2, availableSize.Height - _metrics.Touch - _metrics.Gap));
+            _bar.IsVisible = _pages.Count > 1;
+            _root.RowSpacing = _bar.IsVisible ? _metrics.Gap : 0;
             _current = Math.Min(_current, _pages.Count - 1);
             Show();
         }
         return base.MeasureOverride(availableSize);
+    }
+
+    private List<List<Control>> Paginate(double width, double room)
+    {
+        List<List<Control>> pages = [[]];
+        var used = 0d;
+        foreach (var item in ExpandText(_items, width, room))
+        {
+            item.Measure(new Size(width, double.PositiveInfinity));
+            var height = item.DesiredSize.Height;
+            if (used > 0 && used + _metrics.Gap + height > room)
+            {
+                pages.Add([]);
+                used = 0;
+            }
+            pages[^1].Add(item);
+            used += height + _metrics.Gap;
+        }
+        return pages;
     }
 
     private IEnumerable<Control> ExpandText(IEnumerable<Control> items, double width, double height)

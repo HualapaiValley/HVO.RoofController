@@ -351,14 +351,16 @@ cp /tmp/mac-icon/icon-256.png ../docs/images/mac/icon-256.png
 
 ### Finding the installed version
 
-Choose **About** for this app's installed build and commit. Each time About opens, the app reads the controller's
-summary with its device key, signed in or not (`GET System/Summary`, any role, #209), and shows the separately
-labelled controller build as last read; right after it, where the web UI is (`Web UI:` and its URLs from the host's
-address, or `only on the controller's machine` when it is not published to the network, never a container's own
-address); then the controller's uptime and its machine's CPU, temperature, memory, disk and host addresses. A stale connection removes them, an unreachable controller says `Controller unreachable.`, and a sign-in
-or sign-out drops them until they are read again; the local version remains available.
+Choose **About** for this app's installed build and commit. About is labelled cards for this app, the controller and
+the controller's host, as on the kiosk. Each time About opens, the app reads the controller's summary with its device
+key, signed in or not (`GET System/Summary`, any role, #209): the Controller card has the controller's version, right
+after it where the web UI is (its URLs from the host's address, or `only on the controller's machine` when it is not
+published to the network, never a container's own address); the host card the uptimes and the machine's CPU,
+temperature, memory, disk and host addresses. A stale connection or an unreachable controller shows
+`Controller unreachable.` instead, and a sign-in or sign-out drops them until they are read again; the local version
+remains available.
 
-![App and controller build identification](images/mac/mac-about-960x600.png)
+![App and controller build identification in labelled cards](images/mac/mac-about-960x600.png)
 
 ## Native redesign validation
 

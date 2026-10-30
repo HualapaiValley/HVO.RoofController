@@ -49,15 +49,15 @@ public sealed class MacScreenTests
         {
             screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly))
                 .And.NotContain("9.8.7");
-            screen.Text("about-controller-version").Should().Contain("Controller (last read):").And.Contain("9.8.7-rc.2 (commit abcdef123456)");
-            screen.Text("about-web-ui").Should().Be("Web UI: https://192.0.2.10:8088/", "where the web UI is, from the host's address (#209)");
+            screen.Text("about-controller-version").Should().Be("9.8.7-rc.2 (commit abcdef123456)");
+            screen.Text("about-web-ui").Should().Be("https://192.0.2.10:8088/", "where the web UI is, from the host's address (#209)");
         });
         await screen.RenderAsync("mac-about", TestContext);
         await OnUiAsync(() =>
         {
             screen.Shell.Update(harness.Console.View with { StaleSince = DateTimeOffset.UtcNow });
             screen.Window.UpdateLayout();
-            screen.Text("about-controller-version").Should().Contain("unavailable").And.NotContain("9.8.7");
+            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.Unreachable).And.NotContain("9.8.7");
             screen.Shell.Update(harness.Console.View with { UnlockedBy = null, Role = null });
             screen.Shell.ShowPage(KioskPage.About);
             screen.Window.UpdateLayout();
@@ -69,7 +69,7 @@ public sealed class MacScreenTests
         await OnUiAsync(() =>
         {
             screen.Window.UpdateLayout();
-            screen.Text("about-controller-version").Should().Be("Controller (last read): 9.8.7-rc.2 (commit abcdef123456)");
+            screen.Text("about-controller-version").Should().Be("9.8.7-rc.2 (commit abcdef123456)");
         });
     }
 

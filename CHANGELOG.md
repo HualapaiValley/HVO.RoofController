@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   role's navigation), `hvo-roof info`, the terminal's System page, and the kiosk's and Mac app's About and System pages
   show them to every role, a locked kiosk too; the host's details and the restarts stay admin-only. A controller that
   cannot be reached is said so (`Controller unreachable.`) (#209).
+- Stop, Open and Close show the roof's state in colour in the kiosk, the Mac app, the web UI and `hvo-roof ui`: Stop
+  is a dim red while there is nothing to stop and bright red while the roof moves (never disabled); Open and Close are
+  green while offered, bright green while the roof moves their way, and neutral grey while not offered. The colours are
+  shared aliases of the canonical HVO Dark roles (#208).
+- Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person shows their display name, role, login type,
+  last sign-in and short name, two a row; Cancel on the people step returns to the keypad (#208).
+- Kiosk pages show Previous, Next and the page count only when their contents overflow (#208).
+- Kiosk and Mac About: labelled cards for the device, the controller (its version, then where the web UI is) and the
+  controller's host (the summary's uptimes, CPU, temperature, memory, disk and addresses), saying
+  `Controller not configured yet.`, `Controller unreachable.`, `Reading…` or `Not available` where a value is not
+  known (#208).
+- Kiosk Terminal: **Exit UI to terminal** is at the top of the page, always on screen, above the explanation (#208).
 
 ## [4.2.0] - 2026-10-30
 

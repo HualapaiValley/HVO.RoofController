@@ -70,3 +70,12 @@
 .rc-open .bi { color: var(--roof-success); }
 
 .rc-close .bi { color: var(--roof-accent); }
+
+/* #208: Open/Close state colours, RoofUiPalette's Motion* aliases of canonical roles. Offered: the success pair. Running
+   (not pressable while the roof moves): bright success, kept at full opacity. Disabled: neutral, never a faded green. */
+.rc2-action.rc-action--available { --bs-btn-color: var(--roof-success-text); --bs-btn-bg: var(--roof-success-background); --bs-btn-border-color: var(--roof-success); --bs-btn-hover-color: var(--roof-success-text); --bs-btn-hover-bg: var(--roof-success-background); --bs-btn-hover-border-color: var(--roof-success-text); --bs-btn-active-color: var(--roof-success-text); --bs-btn-active-bg: var(--roof-success-background); --bs-btn-active-border-color: var(--roof-success-text); }
+.rc2-action.rc-action--running { --bs-btn-color: var(--roof-background); --bs-btn-bg: var(--roof-success); --bs-btn-border-color: var(--roof-success-text); --bs-btn-disabled-color: var(--roof-background); --bs-btn-disabled-bg: var(--roof-success); --bs-btn-disabled-border-color: var(--roof-success-text); --bs-btn-disabled-opacity: 1; }
+.rc2-action.rc-action--disabled { --bs-btn-disabled-color: var(--roof-muted); --bs-btn-disabled-bg: var(--roof-surface); --bs-btn-disabled-border-color: var(--roof-border); --bs-btn-disabled-opacity: 1; }
+.rc2-action.rc-action--running .bi { color: inherit; }
+.rc2-action.rc-action--disabled .bi { color: var(--roof-muted); }
+.rc2-action.rc-action--disabled strong { font-weight: 400; }

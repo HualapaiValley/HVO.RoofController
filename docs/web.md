@@ -96,6 +96,9 @@ The page follows the controller's live status: the hub sends a full status at ea
 - **Open, Close and Clear fault** need the Operator role. A Viewer sees them disabled, with
   `Open, Close and Clear fault need the Operator role. Stop is always available.` A button that cannot be used says
   why, for example that the roof is already closed.
+- **Open and Close show their state** as the kiosk and the terminal UI do: green while offered, bright green while the
+  roof moves their way (`Opening…`, `Closing…`; not pressable), and a neutral grey, never a faded green, while not
+  offered (`data-state` is `available`, `running` or `disabled`).
 - **The operator lease.** When the controller has a lease (`OperatorLeaseTimeout`), a move started from the page holds
   it, and the page renews it while the roof moves (`Renewing lease (12 s left)`). The page renews it only while its
   live connection is up. When the page closes, or its connection is lost, it stops renewing, and the roof stops when the
@@ -237,7 +240,10 @@ read-only and says to change the full name on the controller's machine.
 
 **Stop roof** is on every page, the sign-in page too, in a bar fixed to the bottom of the screen. It is never
 disabled, needs no role and no PIN, and uses the same words as every other client. The page keeps room for the bar at
-its end, so the bar never covers the end of a page.
+its end, so the bar never covers the end of a page. It is a dim red while there is nothing to stop, and bright red
+while the Roof page's newest status, live or last known, shows the roof moving (the page's `data-roof-motion`, read
+by the stylesheet alone, so Stop's own script is unchanged); other pages, which show no roof status, keep the dim red.
+Only the colour changes.
 
 - The Stop bar is outside the live page. `wwwroot/js/stop.js` posts it (`POST /stop`) with `fetch` and shows the
   answer next to the button, so Stop works while the page's live connection is down. Without the script, the browser
