@@ -35,8 +35,8 @@ public sealed class YourNamesPageTests
         var cut = Loaded(context);
         cut.Find("[data-testid=names-display-name]").GetAttribute("value").Should().BeEmpty();
 
-        cut.Find("[data-testid=names-display-name]").Input("  Ada Example ");
-        cut.Find("[data-testid=names-short-name]").Input("Ada");
+        cut.Input("[data-testid=names-display-name]", "  Ada Example ");
+        cut.Input("[data-testid=names-short-name]", "Ada");
         cut.Click("[data-testid=names-save]");
 
         cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
@@ -46,15 +46,42 @@ public sealed class YourNamesPageTests
         saved.DisplayName.Should().Be("Ada Example");
         saved.ShortName.Should().Be("Ada");
 
-        cut.Find("[data-testid=names-short-name]").Input("");
+        cut.Input("[data-testid=names-short-name]", "");
         cut.Click("[data-testid=names-save]");
 
-        cut.WaitForAssertion(() => cut.Find("[data-testid=names-short-name]").GetAttribute("value").Should().BeEmpty());
+        // The click took the first save's result away; it comes back only when this save has been made. (The short name
+        // is empty as soon as it is typed, so it says nothing about the save.)
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
+        cut.Find("[data-testid=names-short-name]").GetAttribute("value").Should().BeEmpty();
         var cleared = await admin.Identity.GetUserAsync("ada");
         cleared.DisplayName.Should().Be("Ada Example");
         cleared.ShortName.Should().BeNull("an empty name removes it");
         session.IsOpen.Should().BeTrue("changing your names ends no session");
         (await session.Client.Auth.GetCallerAsync()).DisplayName.Should().Be("Ada Example");
+    }
+
+    [TestMethod]
+    public async Task ASecondSave_ShowsNoResult_UntilItsOwnAnswerComes()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.OperatorRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        cut.Input("[data-testid=names-display-name]", "Ada Example");
+        cut.Click("[data-testid=names-save]");
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.HoldAnswer = request => request.RequestUri!.AbsolutePath.TrimStart('/') == NamesPath ? answer.Task : Task.CompletedTask;
+
+        cut.Input("[data-testid=names-short-name]", "Ada");
+        cut.Click("[data-testid=names-save]");
+
+        cut.FindAll("[data-testid=page-message]").Should().BeEmpty("the first save's result is not this save's");
+        cut.Find("[data-testid=names-save]").HasAttribute("disabled").Should().BeTrue("the save is on its way");
+        answer.SetResult();
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
+        using var admin = harness.Admin();
+        (await admin.Identity.GetUserAsync("ada")).ShortName.Should().Be("Ada");
     }
 
     [TestMethod]
