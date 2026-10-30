@@ -69,14 +69,15 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | Roof (`/`) | everyone | The position, what was commanded, Open, Close and Clear fault (Operator and Admin), the operator lease while a move started here runs, the roof camera, and the status in detail. |
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
+| History (`/history`) | everyone | The roof commands the controller was sent, accepted or refused, newest first: the person's own, or everyone's for an admin, who may pick one person or key. |
 | People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove) and sessions (end). |
 | System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
 | Your names (`/account/names`) | everyone | The person's own display and short name; for a Linux account, its names from the operating system, read-only. **Your names** in the header opens it. |
 
-A Viewer and an Operator see Roof, Health, Settings and System in the navigation; System shows them the controller's
-summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role says so, and
-shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
+A Viewer and an Operator see Roof, Health, Settings, History and System in the navigation; System shows them the
+controller's summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role
+says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
 not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
 mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
 which says only how the roof is driven. The sign-in page, with its Stop, is sent at once, and the banner and the
@@ -180,6 +181,22 @@ A setting that cannot be changed here says why, as the controller gives it.
 1. **Clear secret** on the camera's user name or password (both are cleared).
 2. **Change** `BlueIris:BaseUrl` to the new server.
 3. **Change** the user name or password, and type both for the new server.
+
+### History
+
+![The History page: the roof commands, newest first, with who sent each, the result, the roof afterwards and where it came from](images/web/17-history-desktop.jpg)
+
+The roof command history (#206), as the controller records it: each Open, Close, Stop and Clear fault, accepted or
+refused (with the controller's code), and each refused lease renewal. Each row says when (UTC), who sent it and how
+they signed in, the result, the roof's position afterwards, and the program and address it came from: for a command sent
+from the web UI, the address of the person's browser, which the web UI names to the controller in `X-Forwarded-For`
+([The command history](security.md#the-command-history)). An admin reads everyone's commands and may give a person's or
+key's name (whoever is named so now); anyone else reads only their own, matched by their identifier, never by name. An
+Open sent while the [safety conditions](safety-service.md) were not safe says so, such as
+`Accepted (safety override, conditions unsafe)`, and one the safety interlock refused shows its code, such as
+`Refused [SafetyOverrideRequired]`. **From** and **To** pick whole UTC days. Newer and Older
+page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the page says when it keeps
+them in memory only.
 
 ### People
 

@@ -55,6 +55,14 @@ public sealed class RoofControlApi
     }
 
     /// <summary>
+    /// A page of the roof command history, newest first. Viewer role: an admin reads everyone's commands (one person's or
+    /// key's with <see cref="RoofHistoryQuery.User"/>); anyone else reads their own, and naming someone else is refused
+    /// with 403.
+    /// </summary>
+    public Task<RoofCommandHistoryPage> GetHistoryAsync(RoofHistoryQuery? query = null, CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofCommandHistoryPage>(RoofApiRoutes.HistoryPage(query ?? new RoofHistoryQuery()), cancellationToken);
+
+    /// <summary>
     /// The safety conditions (telescope park, weather): Safe, Unsafe or Unknown, the reasons, each source and how Open
     /// treats them. Every status snapshot carries the same in <see cref="RoofStatusResponse.Safety"/>. Viewer role.
     /// </summary>

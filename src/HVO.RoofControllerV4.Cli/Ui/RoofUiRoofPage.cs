@@ -8,24 +8,30 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// <summary>
 /// The roof: its status from the hub, and Open, Close and Clear fault. A stale status is shown only as the last known
 /// state, and motion is not offered on it: the roof could not be watched. Open and Close hold the operator lease while
-/// the roof moves, as <c>hvo-roof open</c> does.
+/// the roof moves, as <c>hvo-roof open</c> does. History shows the roof command history (#206) in place of the
+/// controller's readings: the caller's own commands, or everyone's for an admin.
 /// </summary>
 internal sealed class RoofUiRoofPage : RoofUiPage
 {
     private const string NotConfigured = "no controller is configured";
+    private const string ReadingsTitle = "CONTROLLER READINGS";
+    private const string HistoryTitle = "COMMAND HISTORY";
 
     private readonly Label _status;
     private readonly Label _blocked;
     private readonly TerminalReadingView _state;
     private readonly TerminalReadingView _readings;
+    private readonly FrameView _readingsFrame;
     private bool _commandInFlight;
+    private string[]? _history;
 
     public RoofUiRoofPage(RoofTerminalUi ui)
         : base(ui, "Roof")
     {
         _status = TextBlock(0, 1);
         var state = new FrameView { Title = "ROOF STATE", X = 0, Y = 1, Width = Dim.Percent(50), Height = Dim.Fill(3) };
-        var readings = new FrameView { Title = "CONTROLLER READINGS", X = Pos.Right(state), Y = 1, Width = Dim.Fill(), Height = Dim.Fill(3) };
+        var readings = new FrameView { Title = ReadingsTitle, X = Pos.Right(state), Y = 1, Width = Dim.Fill(), Height = Dim.Fill(3) };
+        _readingsFrame = readings;
         Ui.Theme.SetFrame(state);
         Ui.Theme.SetFrame(readings);
         _state = new TerminalReadingView { Width = Dim.Fill(), Height = Dim.Fill(), CanFocus = true };
@@ -39,7 +45,8 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         OpenButton.SetScheme(Ui.Theme.Open);
         CloseButton.SetScheme(Ui.Theme.Close);
         ClearFaultButton = AddButton("Clear fault", CloseButton, ClearFault);
-        AddButton("Refresh", ClearFaultButton, Refresh);
+        var refresh = AddButton("Refresh", ClearFaultButton, Refresh);
+        HistoryButton = AddButton("History", refresh, ToggleHistory);
     }
 
     public Button OpenButton { get; }
@@ -48,9 +55,24 @@ internal sealed class RoofUiRoofPage : RoofUiPage
 
     public Button ClearFaultButton { get; }
 
+    /// <summary>Shows the command history in place of the readings, or the readings again.</summary>
+    public Button HistoryButton { get; }
+
+    /// <summary>True while the command history is shown in place of the controller's readings.</summary>
+    public bool ShowsHistory { get; private set; }
+
     public override void Shown() => StatusChanged();
 
-    public override void ConnectionChanged() => StatusChanged();
+    public override void ConnectionChanged()
+    {
+        _history = null;
+        if (ShowsHistory && ReferenceEquals(Ui.CurrentPage, this))
+        {
+            ReadHistory();
+        }
+
+        StatusChanged();
+    }
 
     public override void StatusChanged()
     {
@@ -58,7 +80,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         if (status is null)
         {
             _state.Show([]);
-            _readings.Show([]);
+            ShowReadings([]);
             _status.Text = Ui.Connection is null
                 ? "No controller is configured. Use Setup (F5) to add its address and a credential."
                 : "No status from the controller yet.";
@@ -73,7 +95,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             var rows = RoofCliFormat.DescribeStatus(status);
             _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error")
                 .Select(row => $"{row.Label}:  {row.Value}").Prepend(heading).ToArray());
-            _readings.Show(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error"))
+            ShowReadings(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error"))
                 .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status)).ToArray());
         }
 
@@ -190,15 +212,101 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         }, motion: false);
     }
 
-    private void Refresh() => _ = Ui.Run("Reading the status…", async (client, cancellationToken) =>
+    private void Refresh()
     {
-        var status = await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
-        Ui.Post(() =>
+        _ = Ui.Run("Reading the status…", async (client, cancellationToken) =>
         {
-            Ui.Apply(status);
-            Ui.Say($"Read the status at {RoofCliFormat.Time(status.SnapshotUtc)}.");
+            var status = await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+            Ui.Post(() =>
+            {
+                Ui.Apply(status);
+                Ui.Say($"Read the status at {RoofCliFormat.Time(status.SnapshotUtc)}.");
+            });
         });
-    });
+        if (ShowsHistory)
+        {
+            ReadHistory();
+        }
+    }
+
+    /// <summary>Shows the command history in place of the readings, reading it again; or the readings again.</summary>
+    internal void ToggleHistory()
+    {
+        ShowsHistory = !ShowsHistory;
+        _readingsFrame.Title = ShowsHistory ? HistoryTitle : ReadingsTitle;
+        HistoryButton.Text = ShowsHistory ? "Readings" : "History";
+        if (ShowsHistory)
+        {
+            _history = null;
+            ReadHistory();
+        }
+
+        StatusChanged();
+    }
+
+    /// <summary>The readings, unless the history is shown in their place.</summary>
+    private void ShowReadings(string[] lines)
+    {
+        if (!ShowsHistory)
+        {
+            _readings.Show(lines);
+            return;
+        }
+
+        _readings.Show(_history ?? [Ui.Connection is null ? "No controller is configured." : "Reading the command history…"]);
+    }
+
+    private void ReadHistory()
+    {
+        if (Ui.Connection is null)
+        {
+            return;
+        }
+
+        _ = Ui.Run(null, async (client, cancellationToken) =>
+        {
+            string[] lines;
+            try
+            {
+                var page = await client.Roof.GetHistoryAsync(new RoofHistoryQuery(), cancellationToken).ConfigureAwait(false);
+                lines = DescribeHistory(page);
+            }
+            catch (Exception error) when (error is RoofApiException or RoofProtocolException or HttpRequestException or TimeoutException)
+            {
+                lines = [$"The command history could not be read: {RoofText.DescribeFailure(error)}"];
+            }
+
+            Ui.Post(() =>
+            {
+                _history = lines;
+                StatusChanged();
+            });
+        });
+    }
+
+    /// <summary>Two lines an entry, newest first, to fit beside the roof's state; then the range and how long they are kept.</summary>
+    internal static string[] DescribeHistory(RoofCommandHistoryPage page)
+    {
+        var lines = new List<string> { RoofHistoryText.DescribeScope(page) };
+        if (page.Entries.Count == 0)
+        {
+            lines.Add(RoofHistoryText.Empty);
+        }
+
+        foreach (var entry in page.Entries)
+        {
+            lines.Add(RoofHistoryText.DescribeLine(entry));
+            lines.Add($"  {RoofHistoryText.DescribeWho(entry)}; roof {RoofHistoryText.DescribeOutcome(entry)}; from {RoofHistoryText.DescribeSource(entry)}");
+        }
+
+        if (page.Entries.Count > 0)
+        {
+            lines.Add(RoofHistoryText.DescribeRange(page) + $" '{RoofCli.CommandName} history' reads more.");
+        }
+
+        lines.Add(RoofHistoryText.DescribeRetention(page));
+        return [.. lines];
+    }
 
     /// <summary>
     /// Sends one command at a time; a refusal's status (the controller attaches it) is shown too. <paramref name="motion"/>

@@ -365,6 +365,35 @@ public sealed class KioskConsole : IAsyncDisposable
     }
 
     /// <summary>
+    /// The unlocking person's most recent roof commands, newest first (#206), for a view of the person's details; null
+    /// while the kiosk is locked, or when it locked before the answer came. A refusal or an unreachable controller
+    /// throws, as any read does.
+    /// </summary>
+    public async Task<RoofCommandHistoryPage?> ReadRecentHistoryAsync(int take = 10, CancellationToken cancellationToken = default)
+    {
+        RoofSessionResponse session;
+        lock (_gate)
+        {
+            if (_disposed || _session is null)
+            {
+                return null;
+            }
+
+            session = _session;
+        }
+
+        // The person's own name: a PIN session reads only its own anyway, and an admin's password session (the Mac
+        // app's) would otherwise read everyone's.
+        var page = await _client.Roof.GetHistoryAsync(new RoofHistoryQuery { User = session.Name, Take = take }, cancellationToken)
+            .ConfigureAwait(false);
+        lock (_gate)
+        {
+            // Sent after the session ended, the request went with the device key, whose commands these would be.
+            return ReferenceEquals(_session, session) ? page : null;
+        }
+    }
+
+    /// <summary>
     /// Stops the feed and the timers. Stops still on their way are answered first (each within the client's
     /// <see cref="RoofConnectionOptions.StopTimeout"/>). The PIN session is not ended: <see cref="LockAsync"/> does that.
     /// </summary>

@@ -122,8 +122,9 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 ### HTTP API
 
 - Routes are under `api/v4.0/RoofControl`. Commands (`Open`, `Close`, `Stop`, `ClearFault`, `Lease`) are `POST`;
-  `GET Status` and `GET`/`POST Configuration` complete the surface, with `GET api/v4.0/Safety` beside it. There are no
-  GET command routes.
+  `GET Status`, `GET History` (the roof command history: an admin's is everyone's, anyone else's their own) and
+  `GET`/`POST Configuration` complete the surface, with `GET api/v4.0/Safety` beside it. There are no GET command
+  routes.
 - Every protected request needs an `X-Api-Key` header or a person's session (`Authorization: Bearer`). Roles are
   `RoofViewer`, `RoofOperator` and `RoofAdmin` (Admin includes Operator includes Viewer); Stop accepts any
   authenticated role. Failures are RFC 7807 ProblemDetails with `code` and `roofStatus` extensions.

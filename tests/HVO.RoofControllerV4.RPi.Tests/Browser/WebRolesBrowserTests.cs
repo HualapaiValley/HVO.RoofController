@@ -50,10 +50,10 @@ public sealed class WebRolesBrowserTests
         await Expect(page.GetByTestId("signed-in-role")).ToHaveTextAsync(role);
 
         var links = page.Locator(".web-nav-links .nav-link");
-        await Expect(links).ToHaveTextAsync(["Roof", "Health", "Settings", "System"]);
+        await Expect(links).ToHaveTextAsync(["Roof", "Health", "Settings", "History", "System"]);
         await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
 
-        foreach (var path in new[] { "/health", "/settings", "/account/password", "/account/names" })
+        foreach (var path in new[] { "/health", "/settings", "/history", "/account/password", "/account/names" })
         {
             await page.GotoAsync(path);
             await Expect(page.Locator("main h1").First).ToBeVisibleAsync();
@@ -86,7 +86,7 @@ public sealed class WebRolesBrowserTests
         var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(), WebDevices.Tablet);
         var page = browser.Page;
         await browser.SignInAsync(WebBrowser.Admin);
-        await Expect(page.Locator(".web-nav-links .nav-link")).ToHaveTextAsync(["Roof", "Health", "Settings", "People", "System"]);
+        await Expect(page.Locator(".web-nav-links .nav-link")).ToHaveTextAsync(["Roof", "Health", "Settings", "History", "People", "System"]);
 
         var keysTab = page.Locator("[data-testid=people-tab][data-tab=keys]");
         await page.GotoAsync("/people");

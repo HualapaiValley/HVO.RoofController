@@ -11,6 +11,7 @@ using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
+using HVO.RoofControllerV4.RPi.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -39,6 +40,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         private readonly RoofSettingsStore _settings;
         private readonly IRoofSafetyService _safety;
         private readonly RoofSafetyInterlock _safetyInterlock;
+        private readonly RoofCommandHistory _history;
 
         public RoofController(
             ILogger<RoofController> logger,
@@ -47,7 +49,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             IEnumerable<IValidateOptions<RoofControllerOptionsV4>> configurationValidators,
             RoofSettingsStore settings,
             IRoofSafetyService safety,
-            RoofSafetyInterlock safetyInterlock)
+            RoofSafetyInterlock safetyInterlock,
+            RoofCommandHistory history)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _roofController = roofController ?? throw new ArgumentNullException(nameof(roofController));
@@ -56,6 +59,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _safety = safety ?? throw new ArgumentNullException(nameof(safety));
             _safetyInterlock = safetyInterlock ?? throw new ArgumentNullException(nameof(safetyInterlock));
+            _history = history ?? throw new ArgumentNullException(nameof(history));
         }
 
         /// <summary>
@@ -105,6 +109,12 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         public async Task<ActionResult<RoofStatusResponse>> DoRoofOpen([FromQuery] bool overrideSafety = false)
         {
             var safety = await _safetyInterlock.CheckOpenAsync(User, HttpContext, overrideSafety).ConfigureAwait(false);
+
+            // The command history shows the conditions an Open was sent in when they were not Safe, and an override (#206).
+            RoofCommandHistory.NoteSafety(
+                HttpContext,
+                safety.Safety.State == RoofSafetyState.Safe ? null : safety.Safety.State.ToString(),
+                safety.Overridden);
             return RunCommand("open", () =>
             {
                 if (safety.Refusal is { } refusal)
@@ -182,9 +192,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             var result = await _roofController.ClearFault(pulseMs, cancellationToken).ConfigureAwait(false);
             RoofControllerTelemetry.CompleteCommand(activity, "clear_fault", result.IsSuccessful, startTimestamp);
 
-            return result.IsSuccessful
-                ? Ok(_safety.WithSafety(_roofController.GetCurrentStatusSnapshot()))
-                : RoofProblem(result.Error, "clear_fault");
+            return Answer("clear_fault", result.IsSuccessful, result.Error);
         }
 
         /// <summary>
@@ -319,9 +327,38 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             var result = execute();
             RoofControllerTelemetry.CompleteCommand(activity, command, result.IsSuccessful, startTimestamp);
 
-            return result.IsSuccessful
-                ? Ok(_safety.WithSafety(_roofController.GetCurrentStatusSnapshot()))
-                : RoofProblem(result.Error, command);
+            return Answer(command, result.IsSuccessful, result.Error);
+        }
+
+        /// <summary>A command's answer, recorded in the command history (#206) whether it was carried out or refused.</summary>
+        private ActionResult<RoofStatusResponse> Answer(string command, bool succeeded, Exception? error)
+        {
+            if (succeeded)
+            {
+                var status = _safety.WithSafety(_roofController.GetCurrentStatusSnapshot());
+                Record(command, status, refusal: null);
+                return Ok(status);
+            }
+
+            var problem = RoofProblem(error, command);
+            Record(command, status: null, problem.Value as ProblemDetails);
+            return problem;
+        }
+
+        /// <summary>Never fails the command: the roof has already done what it was told, and a Stop's answer must say so.</summary>
+        private void Record(string command, RoofStatusResponse? status, ProblemDetails? refusal)
+        {
+            try
+            {
+                if (RoofCommandHistory.CommandFor(command) is { } recorded)
+                {
+                    _history.Record(_history.Describe(HttpContext, recorded, status, refusal));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Roof command {Command} could not be recorded in the command history", command);
+            }
         }
 
         private void LogCommand(string command)

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Roof command history (#206): the controller records every Open, Close, Stop and Clear fault sent to its API,
+  accepted or refused (with the refusal's code and explanation), and refused lease renewals, with who sent it (person
+  or key, how they signed in, the kiosk for a PIN, the person a key acted for), the address and the program it came
+  from (the person's browser for the web UI, which names it in `X-Forwarded-For`; the controller believes that only
+  from its own loopback, `RoofCommandHistory:TrustedProxies`), and the roof's status afterwards. Who sent a command is
+  matched by an identifier (a person's principal ID, or their name and creation; a key's ID), never by a name alone.
+  Stop is never limited; anonymous Stops from one source are one entry with a count, under a cap of their own. An Open
+  sent while the safety conditions are not Safe (#207) records them, with the safety interlock's refusals
+  (`SafetyOverrideRequired`, `SafetyInterlockActive`) and whether it went ahead on a safety override. It keeps
+  them in `command-history.jsonl` next to the identity store (so backups hold it), or at
+  `RoofCommandHistory:StorePath`, for 90 days and up to 10,000 commands (`RoofCommandHistory:Retention`,
+  `RoofCommandHistory:MaximumEntries`). `GET api/v4.0/RoofControl/History` pages them, newest first, with `user`,
+  `principalId`, `from`, `to`, `skip` and `take`: an admin reads everyone's, anyone else (a kiosk PIN session included)
+  only their own. The web UI's new **History** page, the terminal interface's **History** on the Roof page and
+  `hvo-roof history [--user] [--since] [--until]` show them; the kiosk has a hook for a person's recent commands. The
+  client library now names the program in each request's `User-Agent`.
 - Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
   Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
   age) and bounded, non-overlapping reads. It is on every status snapshot and status hub message (`safety`), at

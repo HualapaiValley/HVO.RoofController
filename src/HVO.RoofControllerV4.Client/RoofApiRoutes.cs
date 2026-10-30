@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace HVO.RoofControllerV4.Client;
 
 /// <summary>Relative paths of the controller's endpoints, as the client calls them.</summary>
@@ -14,6 +16,7 @@ internal static class RoofApiRoutes
     public const string Lease = V4 + "RoofControl/Lease";
     public const string ClearFault = V4 + "RoofControl/ClearFault";
     public const string Configuration = V4 + "RoofControl/Configuration";
+    public const string History = V4 + "RoofControl/" + Common.Models.RoofCommandHistoryContract.Route;
     public const string Safety = V4 + "Safety";
 
     public const string Session = V4 + "Auth/Session";
@@ -62,6 +65,40 @@ internal static class RoofApiRoutes
     public static string SettingsGroup(string group) => $"{Settings}/{Segment(group)}";
 
     public static string Camera(int cameraId) => $"{V1}Camera/{cameraId}/mjpeg";
+
+    /// <summary>The command history with <paramref name="query"/>'s filters as the query string.</summary>
+    public static string HistoryPage(RoofHistoryQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var parameters = new List<string>();
+        if (!string.IsNullOrWhiteSpace(query.User))
+        {
+            parameters.Add("user=" + Uri.EscapeDataString(query.User.Trim()));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.PrincipalId))
+        {
+            parameters.Add("principalId=" + Uri.EscapeDataString(query.PrincipalId.Trim()));
+        }
+
+        if (query.From is { } from)
+        {
+            parameters.Add("from=" + Uri.EscapeDataString(from.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+        }
+
+        if (query.To is { } to)
+        {
+            parameters.Add("to=" + Uri.EscapeDataString(to.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+        }
+
+        if (query.Skip != 0)
+        {
+            parameters.Add("skip=" + query.Skip.ToString(CultureInfo.InvariantCulture));
+        }
+
+        parameters.Add("take=" + query.Take.ToString(CultureInfo.InvariantCulture));
+        return History + "?" + string.Join('&', parameters);
+    }
 
     /// <summary>Escapes a name for one path segment, so a name can never reach another route.</summary>
     private static string Segment(string value)
