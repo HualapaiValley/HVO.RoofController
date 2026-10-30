@@ -52,7 +52,7 @@ public sealed class SystemPageTests
         var cut = Loaded(context);
 
         cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
-            .Should().Equal("Controller", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+            .Should().Equal("Controller", "Web UI", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
         cut.FindAll("[data-testid=system-information] [data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
             .Should().Equal("Application", "Host", "System", "Runtime", "Started", "Memory", "CPU");
         Fact(cut, SystemPage.WebUiLabel).Should().Be(RoofProductVersion.Describe(typeof(RoofWebOptions).Assembly));
@@ -62,6 +62,29 @@ public sealed class SystemPageTests
         Detail(cut, "Memory").Should().MatchRegex(@"^\d+\.\d (KiB|MiB) working set, \d+\.\d (KiB|MiB) managed$");
         cut.Find("[data-testid=system-summary]").TextContent.Should().Contain("Read at 2026-09-29 12:00:00Z.");
         cut.Find("[data-testid=forced-restart-last]").TextContent.Should().Be("The web UI is not running under the container's supervisor.");
+    }
+
+    [TestMethod]
+    [DataRow("Network", "https://192.0.2.10:8088/", "https://192.0.2.10:8088/")]
+    [DataRow("LocalOnly", "https://localhost:8088/", "only on the controller's machine (https://localhost:8088/): it is not published to the network")]
+    [DataRow("", "", "address not known (the deployment did not record it)")]
+    public async Task TheWebUi_IsWhereTheDeploymentSaysPeopleReachIt(string access, string urls, string expected)
+    {
+        // As the deploy script passes them (RoofHost__*), with a documentation address.
+        using var harness = new WebAdminHarness(new Dictionary<string, string?>
+        {
+            ["RoofHost:Addresses"] = "192.0.2.10",
+            ["RoofHost:WebUiUrls"] = urls,
+            ["RoofHost:WebUiAccess"] = access
+        });
+        var session = await harness.SignInAsync("vera", RoofControllerApiContract.ViewerRole);
+        await using var context = harness.Context(session);
+
+        var cut = context.Render<SystemPage>();
+
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().NotBeEmpty());
+        Fact(cut, "Web UI").Should().Be(expected);
+        Fact(cut, "Addresses").Should().Be("192.0.2.10");
     }
 
     [TestMethod]
@@ -264,7 +287,7 @@ public sealed class SystemPageTests
 
         var cut = context.Render<SystemPage>();
 
-        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().HaveCount(7,
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().HaveCount(8,
             cut.FindAll("[data-testid=page-message]").FirstOrDefault()?.TextContent ?? "the summary to be read"));
         Fact(cut, "Controller").Should().Be(RoofProductVersion.Describe(typeof(Program).Assembly));
         cut.FindAll("[data-testid=page-message]").Should().BeEmpty("the summary needs no admin");

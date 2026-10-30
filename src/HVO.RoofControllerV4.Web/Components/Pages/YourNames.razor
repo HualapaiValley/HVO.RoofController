@@ -1,0 +1,88 @@
+@page "/account/names"
+@inherits WebClientPage
+
+<PageTitle>Your names · HVO Roof Controller</PageTitle>
+
+<PageHeading Title="Your names" Description="The friendly name and short name the web UI, the terminal and the kiosk show for you." />
+
+<PageMessage Message="Message" />
+
+@if (_caller is null)
+{
+    <p class="web-muted" role="status" data-testid="names-loading">@(Busy || Message is null ? "Reading your account…" : "Your names are not read.")</p>
+}
+else if (_caller.LoginType == RoofLoginTypes.Linux)
+{
+    <section class="web-card web-narrow" aria-label="Your names" data-testid="names-read-only">
+        <dl class="web-facts">
+            <dt>Display name</dt>
+            <dd data-testid="names-display-name">@(_caller.DisplayName ?? NoneSet)</dd>
+            <dt>Short name</dt>
+            <dd data-testid="names-short-name">@(_caller.ShortName ?? _caller.Name)</dd>
+        </dl>
+        <p class="web-muted">@RoofIdentityText.LinuxNamesReadOnly</p>
+    </section>
+}
+else
+{
+    <section class="web-card web-narrow" aria-label="Your names" data-testid="names-form">
+        <p class="web-muted">@RoofIdentityText.NamesChangeEndsNothing</p>
+        <label for="names-display-name" class="form-label">Display name</label>
+        <input id="names-display-name" class="form-control" autocomplete="name" maxlength="@RoofIdentityContract.MaximumDisplayNameLength"
+               aria-describedby="names-display-name-rule" data-testid="names-display-name" @bind="_displayName" @bind:event="oninput" />
+        <p id="names-display-name-rule" class="web-muted web-editor-help">@RoofIdentityText.DisplayNameRule</p>
+        <label for="names-short-name" class="form-label">Short name</label>
+        <input id="names-short-name" class="form-control" autocomplete="nickname" maxlength="@RoofIdentityContract.MaximumShortNameLength"
+               aria-describedby="names-short-name-rule" data-testid="names-short-name" @bind="_shortName" @bind:event="oninput" />
+        <p id="names-short-name-rule" class="web-muted web-editor-help">@RoofIdentityText.ShortNameRule</p>
+        <button type="button" class="btn btn-primary" data-testid="names-save" disabled="@Busy" @onclick="SaveAsync">
+            <i class="bi bi-person-check" aria-hidden="true"></i> Save
+        </button>
+    </section>
+}
+
+@code {
+    /// <summary>In place of a display name the person has not set.</summary>
+    public const string NoneSet = "none";
+
+    private RoofCallerResponse? _caller;
+    private string _displayName = string.Empty;
+    private string _shortName = string.Empty;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await SendAsync("Your account could not be read.", async (session, cancellationToken) =>
+                Show(await session.Client.Auth.GetCallerAsync(cancellationToken)));
+        }
+    }
+
+    /// <summary>Sends both names as typed: an empty one is removed (sent empty, which the controller takes as remove).</summary>
+    private async Task SaveAsync()
+    {
+        if (RoofIdentityText.CheckNames(_displayName, _shortName) is { } problem)
+        {
+            Message = Danger(problem);
+            return;
+        }
+
+        var request = new RoofNamesChangeRequest
+        {
+            DisplayName = RoofIdentityContract.NormalizeLabel(_displayName) ?? string.Empty,
+            ShortName = RoofIdentityContract.NormalizeLabel(_shortName) ?? string.Empty
+        };
+        if (await SendAsync("Your names were not changed.", async (session, cancellationToken) =>
+            Show(await session.Client.Auth.ChangeNamesAsync(request, cancellationToken))))
+        {
+            Message = Success("Your names were saved.");
+        }
+    }
+
+    private void Show(RoofCallerResponse caller)
+    {
+        _caller = caller;
+        _displayName = caller.DisplayName ?? string.Empty;
+        _shortName = caller.ShortName ?? string.Empty;
+    }
+}

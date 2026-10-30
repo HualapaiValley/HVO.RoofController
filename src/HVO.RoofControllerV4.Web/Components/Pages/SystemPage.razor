@@ -129,8 +129,11 @@
 }
 
 @code {
-    /// <summary>The label of the web UI's own version among the controller's facts.</summary>
-    public const string WebUiLabel = "Web UI";
+    /// <summary>
+    /// The label of the web UI's own version among the controller's facts; not "Web UI", which the summary uses for where
+    /// people reach the web UI (#209).
+    /// </summary>
+    public const string WebUiLabel = "Web UI version";
 
     /// <summary>What an admin types to confirm a forced restart.</summary>
     public const string ConfirmWord = "restart";

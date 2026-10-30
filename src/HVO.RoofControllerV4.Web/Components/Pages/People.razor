@@ -195,6 +195,7 @@ else if (_tab == LinuxTab)
             <div class="web-editor" data-testid="linux-user" data-id="@person.Id">
                 <h3>@person.Name</h3>
                 <p>@WebRoles.Describe(person.Role) · @(person.Enabled ? "Enabled" : "Disabled")</p>
+                <p class="web-muted" data-testid="linux-user-full-name">Full name: @(person.DisplayName ?? "none recorded"), from the operating system (read-only).</p>
                 <p class="web-muted" data-testid="linux-user-last-login">Last sign-in: @RoofIdentityText.DescribeLastLogin(person.LastLoginUtc)</p>
                 @if (_target == person.Id && _panel == LinuxTab)
                 {

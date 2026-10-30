@@ -32,6 +32,7 @@ public sealed class WebStopBrowserTests
         // The host's details are read after the summary (an admin signs in here): the page is whole once they show.
         ("/system", "[data-testid=system-information] [data-testid=system-fact]"),
         ("/account/password", "main h1"),
+        ("/account/names", "[data-testid=names-form]"),
     ];
 
     private WebBrowser? _browser;

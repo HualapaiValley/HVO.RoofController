@@ -72,6 +72,7 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove) and sessions (end). |
 | System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
+| Your names (`/account/names`) | everyone | The person's own display and short name; for a Linux account, its names from the operating system, read-only. **Your names** in the header opens it. |
 
 A Viewer and an Operator see Roof, Health, Settings and System in the navigation; System shows them the controller's
 summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role says so, and
@@ -184,16 +185,24 @@ Each person's row shows their **display name** (a friendly name, up to 64 charac
 narrow places such as the kiosk), both optional; how they sign in (**Login**: `local` for a person in the controller's
 identity store); and their **last sign-in**, with a password or a PIN (`none recorded` until they sign in after the
 controller began recording it). An admin gives the names when adding a person, or with **Names**; an empty name is
-removed, and a name change ends no session. The **Linux users** tab shows each enrolled account's last sign-in too.
+removed, and a name change ends no session. The **Linux users** tab shows each enrolled account's last sign-in too, and
+its full name from the operating system (its GECOS field, as the controller recorded it at the last sign-in), read-only:
+a Linux account's names are changed on the controller's machine, not here.
 
 ### System
 
 ![The System page: the web UI's version, the controller's summary, the host's details, Restart, and Forced restart](images/web/07-system-desktop.jpg)
 
-Every role sees the web UI's own version and the **controller's summary** (`GET System/Summary`): its version and
-uptime, the machine's uptime, CPU use, load and temperature, memory, the disk it keeps its data on, and its addresses
-(in a container, the container's). A value the controller could not read says `unavailable`; when the controller
-cannot be reached the page says `Controller unreachable.`, and **Refresh** reads it again. An admin also sees:
+Every role sees the web UI's own version (**Web UI version**) and the **controller's summary** (`GET System/Summary`):
+its version; **Web UI**, where people reach the web UI; its uptime, the machine's uptime, CPU use, load and
+temperature, memory and the disk it keeps its data on; and the host's addresses. The installer and the deploy script
+record the web UI's URLs at each deploy, from the host's LAN addresses, the web UI's published port and its scheme
+(for example `https://192.0.2.10:8088/`). When the web UI is published only on the controller's machine (a rig not
+open to the network) it says `only on the controller's machine`, and when the deployment did not record them it says
+the address is not known. A container's own address is never given as where to reach the web UI: when only that is
+known, **Addresses** says it is the container's, which the network does not reach. A value the controller could not
+read says `unavailable`; when the controller cannot be reached the page says `Controller unreachable.`, and
+**Refresh** reads it again. An admin also sees:
 
 - **Host details**: the application, host, operating system, runtime, start time and the controller process's memory
   and CPU (`GET System/info` and `metrics`).
@@ -207,6 +216,17 @@ cannot be reached the page says `Controller unreachable.`, and **Refresh** reads
   verified off (otherwise it holds it stopped, and the page says so; once the hold has ended, it says the restart was
   held). The page says to use the stop control at the roof
   if the roof is moving. To send it, type `restart`.
+
+### Your names
+
+![Your names: the display name and short name, with their rules](images/web/16-names-desktop.jpg)
+
+**Your names** in the header opens the person's own names: a **display name** (a friendly name, up to 64 characters)
+and a **short name** (up to 16, for narrow places such as the kiosk). Leave one empty to remove it; saving ends no
+session (`POST Auth/Names`). Names are changed only where there is a keyboard: here and in the terminal's Setup page;
+the kiosk shows them but does not change them, and a PIN session cannot. An admin changes anyone's on the People page.
+A Linux account's names come from the operating system (its full name and its user name), so the page shows them
+read-only and says to change the full name on the controller's machine.
 
 ## Stop
 
@@ -324,7 +344,9 @@ Nothing here needs the Pi, the HAT or the roof.
 
 - **The screenshots** above come from `WebScreenshotTests`, which signs in as an admin against the emulated roof and
   camera and visits every page on a phone, a tablet and a desktop. It checks that no page scrolls sideways and that no
-  page holds a key or a password; the key panel is never opened and the controller's host name and addresses are masked. To refresh
+  page holds a key or a password; the key panel is never opened, the controller's host name is masked, and the
+  controller is given a documentation address (`192.0.2.10`) for the web UI and the host, checked before the System
+  page is captured, so no address of the machine the tests run on is published. To refresh
   them, from `src/`:
 
   ```bash

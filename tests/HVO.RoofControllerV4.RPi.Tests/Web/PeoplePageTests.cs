@@ -7,6 +7,7 @@ using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Sessions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Web;
 
@@ -39,6 +40,7 @@ public sealed class PeoplePageTests
         cut.Click("[data-testid=linux-users] button");
         cut.WaitForElement("[data-testid=linux-user]");
         cut.Find("[data-testid=linux-user-last-login]").TextContent.Should().Be($"Last sign-in: {RoofIdentityText.NoSignInRecorded}");
+        cut.Find("[data-testid=linux-user-full-name]").TextContent.Should().Be("Full name: none recorded, from the operating system (read-only).");
         cut.Click("[data-testid=linux-user] button");
         cut.Change("[data-testid=linux-role]", RoofControllerApiContract.OperatorRole);
         cut.Change("[data-testid=linux-user] input[type=checkbox]", false);
@@ -48,6 +50,42 @@ public sealed class PeoplePageTests
         changed.Enabled.Should().BeFalse();
         changed.Role.Should().Be(RoofControllerApiContract.OperatorRole);
         (await admin.Identity.GetUsersAsync()).Should().ContainSingle(item => item.Name == "ada");
+    }
+
+    [TestMethod]
+    public async Task ALinuxUsersFullName_IsTheOperatingSystems_ShownWithoutAnEditor()
+    {
+        using var directory = new TemporaryDirectory();
+        using var harness = new WebAdminHarness(new Dictionary<string, string?>
+        {
+            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
+            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true"
+        });
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        var store = harness.Host.Services.GetRequiredService<HVO.RoofControllerV4.RPi.Security.Identity.RoofIdentityStore>();
+        var enrollment = new RoofPrincipalEnrollRequest
+        {
+            Provider = "linux",
+            Subject = Guid.NewGuid().ToString(),
+            Name = "fixture-linux",
+            EnrollmentStamp = Guid.NewGuid().ToString(),
+            Role = RoofControllerApiContract.OperatorRole
+        };
+        var principal = store.EnrollLinux(enrollment).Value!;
+        // A sign-in records the full name the native worker gave (no worker here: the store is given it directly).
+        store.CreateProviderSession(principal.Id, store.FindLinux(enrollment.Subject)!.Stamp,
+            assertion: new HVO.RoofControllerV4.RPi.Security.Identity.StoredAssertionNonce(
+                Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)), DateTimeOffset.UtcNow.AddSeconds(30)),
+            osDisplayName: "Fixture Owner").Succeeded.Should().BeTrue();
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+
+        cut.Click("[data-testid=people-tab][data-tab=linux]");
+        cut.Click("[data-testid=linux-users] button");
+        cut.WaitForElement("[data-testid=linux-user]");
+
+        cut.Find("[data-testid=linux-user-full-name]").TextContent.Should().Be("Full name: Fixture Owner, from the operating system (read-only).");
+        cut.FindAll("[data-testid=linux-user] [data-testid=user-names-change]").Should().BeEmpty("a Linux account's names are not edited here");
     }
 
     [TestMethod]

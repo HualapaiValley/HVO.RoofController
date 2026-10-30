@@ -53,7 +53,7 @@ public sealed class WebRolesBrowserTests
         await Expect(links).ToHaveTextAsync(["Roof", "Health", "Settings", "System"]);
         await Expect(browser.ModeBanner).ToHaveTextAsync(RoofStatusText.EmulatedHat);
 
-        foreach (var path in new[] { "/health", "/settings", "/account/password" })
+        foreach (var path in new[] { "/health", "/settings", "/account/password", "/account/names" })
         {
             await page.GotoAsync(path);
             await Expect(page.Locator("main h1").First).ToBeVisibleAsync();
