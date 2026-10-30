@@ -83,6 +83,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         OpenButton.Enabled = open is null;
         CloseButton.Enabled = close is null;
         ClearFaultButton.Enabled = clear is null;
+        // Green while offered, bright green while the roof moves that way, neutral while not offered (the reason is below).
+        OpenButton.SetScheme(Ui.Theme.ForMotion(RoofActionStates.ForMotion(RoofMotionDirection.Opening, Ui.Status, Ui.IsStale, open), RoofMotionDirection.Opening));
+        CloseButton.SetScheme(Ui.Theme.ForMotion(RoofActionStates.ForMotion(RoofMotionDirection.Closing, Ui.Status, Ui.IsStale, close), RoofMotionDirection.Closing));
         _blocked.Text = RoofCommandRules.DescribeMotionBlocks(open, close) ?? string.Empty;
     }
 

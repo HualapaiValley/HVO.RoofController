@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common.Models;
 using Terminal.Gui.App;
 using Terminal.Gui.Configuration;
 using System.Reflection;
@@ -40,8 +41,14 @@ public sealed class RoofUiTheme
         Key = new(Base) { Normal = Of(Role.Accent, Role.Badge, TextStyle.Bold, TextStyle.Bold) };
         KeyName = new(Base) { Normal = Of(Role.Muted, Role.Badge) };
         Stop = ButtonScheme(Role.DangerText, Role.DangerBackground, filled: true);
-        Open = ButtonScheme(Role.Text, Role.Badge, filled: false);
-        Close = ButtonScheme(Role.Text, Role.Badge, filled: false);
+        StopMoving = ButtonScheme(Role.Background, Role.Danger, filled: true);
+        Open = ButtonScheme(Role.SuccessText, Role.SuccessBackground, filled: false);
+        Close = ButtonScheme(Role.SuccessText, Role.SuccessBackground, filled: false);
+        // A running button is not pressable (the roof is moving), so it keeps its bright colours while disabled; a
+        // disabled one is neutral, never a faded green.
+        MotionRunning = ButtonScheme(Role.Background, Role.Success, filled: true, keepWhenDisabled: true);
+        MotionDisabled = new(Base) { Disabled = Of(Role.Muted, Role.Surface, plain: TextStyle.Faint) };
+        Outcome = ButtonScheme(Role.Text, Role.Badge, filled: false);
         Warning = new(Base) { Normal = Of(Role.WarningText, Role.WarningBackground, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
         Danger = new(Base) { Normal = Of(Role.DangerText, Role.DangerBackground, TextStyle.Bold, TextStyle.Reverse | TextStyle.Bold) };
         Panel = new(Base)
@@ -94,11 +101,26 @@ public sealed class RoofUiTheme
     /// <summary>The Stop button: red, as on the web UI, in every state; focus underlines it.</summary>
     public Scheme Stop { get; }
 
-    /// <summary>The Open button.</summary>
+    /// <summary>
+    /// The Stop button while the roof moves, or was last seen moving (<see cref="RoofActionStates.IsStopActive"/>): bright
+    /// red. <see cref="Stop"/> is the idle, dimmer red. Both are always enabled.
+    /// </summary>
+    public Scheme StopMoving { get; }
+
+    /// <summary>The Open button while offered: the success pair.</summary>
     public Scheme Open { get; }
 
-    /// <summary>The Close button.</summary>
+    /// <summary>The Close button while offered: the success pair.</summary>
     public Scheme Close { get; }
+
+    /// <summary>Open or Close while the roof moves its way: bright green, kept while the button is not pressable.</summary>
+    public Scheme MotionRunning { get; }
+
+    /// <summary>Open or Close while not offered: neutral and faint without colour; the reason is shown under the buttons.</summary>
+    public Scheme MotionDisabled { get; }
+
+    /// <summary>A finished task's headline (the installer's "The install finished."): bold text on the raised surface.</summary>
+    public Scheme Outcome { get; }
 
     /// <summary>A stale status, and anything else the operator should notice before acting.</summary>
     public Scheme Warning { get; }
@@ -130,6 +152,17 @@ public sealed class RoofUiTheme
         RoofStopOutcome.RelayUnverified => _stopUnverified,
         RoofStopOutcome.Failed => _stopFailed,
         _ => Base
+    };
+
+    /// <summary>The Stop button's scheme: <see cref="StopMoving"/> while <paramref name="active"/>, else <see cref="Stop"/>.</summary>
+    public Scheme StopButtonFor(bool active) => active ? StopMoving : Stop;
+
+    /// <summary>The scheme of Open (<see cref="RoofMotionDirection.Opening"/>) or Close in <paramref name="state"/> (<see cref="RoofActionStates.ForMotion"/>).</summary>
+    public Scheme ForMotion(RoofActionState state, RoofMotionDirection direction) => state switch
+    {
+        RoofActionState.Running => MotionRunning,
+        RoofActionState.Disabled => MotionDisabled,
+        _ => direction == RoofMotionDirection.Opening ? Open : Close
     };
 
     /// <summary>The key bar at the foot of a window: each key in the accent colour, and what it does, on the navigation bar's grey.</summary>
@@ -206,11 +239,11 @@ public sealed class RoofUiTheme
 
     // A coloured button keeps its colour when focused, so Stop is always the red button: focus underlines the text.
     // Without colour, Stop is always in reverse video (filled) and the others are bold, in reverse video when focused.
-    private Scheme ButtonScheme(Role text, Role background, bool filled)
+    private Scheme ButtonScheme(Role text, Role background, bool filled, bool keepWhenDisabled = false)
     {
         var plain = filled ? TextStyle.Reverse | TextStyle.Bold : TextStyle.Bold;
         var plainFocus = TextStyle.Reverse | TextStyle.Bold | (filled ? TextStyle.Underline : TextStyle.None);
-        return new(Base)
+        var scheme = new Scheme(Base)
         {
             Normal = Of(text, background, TextStyle.Bold, plain),
             Focus = Of(text, background, TextStyle.Bold | TextStyle.Underline, plainFocus),
@@ -218,6 +251,7 @@ public sealed class RoofUiTheme
             HotFocus = Of(text, background, TextStyle.Bold | TextStyle.Underline, plainFocus),
             Highlight = Of(text, background, TextStyle.Bold, plain)
         };
+        return keepWhenDisabled ? new Scheme(scheme) { Disabled = scheme.Normal } : scheme;
     }
 
     // The colours and style, or without colour, the terminal's own colours and the plain style.

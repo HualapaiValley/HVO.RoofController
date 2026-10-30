@@ -267,6 +267,7 @@ internal sealed class RoofTerminalUi : IDisposable
     {
         Disconnect();
         Status = null;
+        ShowStopState();
         StaleSince = null;
         Caller = null;
         ConnectionProblem = null;
@@ -664,6 +665,9 @@ internal sealed class RoofTerminalUi : IDisposable
         _pages.OfType<RoofUiSetupPage>().Single().SignIn();
     }
 
+    // Stop's colour follows the roof: bright red while the newest status, live or last known, shows motion. Never disabled.
+    private void ShowStopState() => StopButton.SetScheme(Theme.StopButtonFor(RoofActionStates.IsStopActive(Status)));
+
     /// <summary>Takes <paramref name="status"/> when it is newer than the one shown, and tells the page.</summary>
     public void Apply(RoofStatusResponse status)
     {
@@ -673,6 +677,7 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         Status = status;
+        ShowStopState();
         _statusTakenAt = _context.Host.Time.GetUtcNow();
         if (!status.IsMoving)
         {

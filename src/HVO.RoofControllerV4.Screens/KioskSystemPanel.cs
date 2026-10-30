@@ -38,6 +38,9 @@ public sealed class KioskSystemPanel
     /// <summary>The version, host and resource use (admin), as label and value.</summary>
     public IReadOnlyList<(string Label, string Value)> Information { get; private set; } = [];
 
+    /// <summary>The controller's version and resource use as About shows them (admin, last read), or <see cref="KioskControllerFacts.None"/>.</summary>
+    public KioskControllerFacts Facts { get; private set; } = KioskControllerFacts.None;
+
     /// <summary>What is on its way to the controller, or null.</summary>
     public string? Busy { get; private set; }
 
@@ -61,6 +64,7 @@ public sealed class KioskSystemPanel
         Health = null;
         Checks = [];
         Information = [];
+        Facts = KioskControllerFacts.None;
         Busy = null;
         Message = null;
         Question = null;
@@ -72,11 +76,13 @@ public sealed class KioskSystemPanel
     {
         var report = await _console.Client.Health.GetReportAsync(reset);
         IReadOnlyList<(string Label, string Value)> information = [];
+        var facts = KioskControllerFacts.None;
         if (_console.View.IsAdmin)
         {
             var info = await _console.Client.System.GetInformationAsync(reset);
             var metrics = await _console.Client.System.GetMetricsAsync(reset);
             information = [.. RoofSystemText.DescribeInformation(info, metrics)];
+            facts = KioskControllerFacts.From(info, metrics);
         }
 
         return () =>
@@ -84,6 +90,7 @@ public sealed class KioskSystemPanel
             Health = report.Status;
             Checks = [.. report.Checks.Select(check => (check.Name, check.Status, check.Description ?? string.Empty))];
             Information = information;
+            Facts = facts;
             Message = new KioskNotice($"Health: {report.Status}.", report.Status == "Healthy" ? KioskNoticeLevel.Info : KioskNoticeLevel.Warning, Now);
         };
     });

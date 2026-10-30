@@ -49,14 +49,17 @@ public sealed class MacScreenTests
         {
             screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly))
                 .And.NotContain("9.8.7");
-            screen.Text("about-controller-version").Should().Contain("Controller (last read):").And.Contain("9.8.7-rc.2 (commit abcdef123456)");
+            screen.Text("about-controller-version").Should().Be("9.8.7-rc.2 (commit abcdef123456)");
+            screen.Text("about-host-note").Should().Contain("as last read in System");
+            screen.Text("about-cpu").Should().Contain("% (controller process)");
+            screen.Text("about-disk").Should().Be(KioskAboutInfo.NotAvailable, "the controller reports no disk use yet");
         });
         await screen.RenderAsync("mac-about", TestContext);
         await OnUiAsync(() =>
         {
             screen.Shell.Update(harness.Console.View with { StaleSince = DateTimeOffset.UtcNow });
             screen.Window.UpdateLayout();
-            screen.Text("about-controller-version").Should().Contain("unavailable").And.NotContain("9.8.7");
+            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.Unreachable).And.NotContain("9.8.7");
             screen.Shell.Update(harness.Console.View with { UnlockedBy = null, Role = null });
             screen.Shell.ShowPage(KioskPage.About);
             screen.Window.UpdateLayout();

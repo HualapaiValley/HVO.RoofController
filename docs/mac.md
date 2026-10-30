@@ -350,9 +350,13 @@ cp /tmp/mac-icon/icon-256.png ../docs/images/mac/icon-256.png
 
 ### Finding the installed version
 
-Choose **About** for this app's installed build and commit. After an administrator reads **System**, About shows the separately labelled controller build as last read. A stale connection or sign-out removes that value; the local version remains available.
+Choose **About** for this app's installed build and commit. About is labelled cards for this app, the controller and
+the controller's host (CPU, memory, disk, IP addresses), as on the kiosk. After an administrator reads **System**, the
+Controller card shows the controller's version and uptime and the host card its process's CPU and memory, as last
+read; disk use and addresses say `Not available` until the controller reports them. A stale connection shows
+`Controller unreachable` instead, and sign-out removes those values; the local version remains available.
 
-![App and controller build identification](images/mac/mac-about-960x600.png)
+![App and controller build identification in labelled cards](images/mac/mac-about-960x600.png)
 
 ## Native redesign validation
 

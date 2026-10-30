@@ -159,6 +159,12 @@ input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-
     color: var(--roof-danger-text) !important; background: var(--roof-danger-background) !important; border: 1px solid var(--roof-danger) !important; font-weight: 600;
 }
 .web-stop-action:focus-visible { outline: 3px solid var(--roof-danger-text); outline-offset: 3px; text-decoration: underline; }
+/* #208: while the dashboard's last known status shows the roof moving, Stop is the bright danger tone (RoofUiPalette's
+   StopButtonActive pair); idle it keeps the dim pair above. Colour only: Stop is never disabled. */
+body:has([data-roof-motion="moving"]) .web-stop-action, body:has([data-roof-motion="moving"]) .web-stop-action:hover,
+body:has([data-roof-motion="moving"]) .web-stop-action:focus, body:has([data-roof-motion="moving"]) .web-stop-action:active {
+    color: var(--roof-background) !important; background: var(--roof-danger) !important; border: 1px solid var(--roof-danger-text) !important;
+}
 .web-stop-button { flex: 0 0 auto; min-height: 62px; min-width: 220px; font-size: 16px; }
 .web-stop-result, .reconnect-stop-result { margin: 0; min-width: 0; font-size: 13px; }
 [data-web-stop-result][data-state="sent"] { color: var(--roof-info); }

@@ -410,11 +410,12 @@ internal sealed class KioskScreen : IAsyncDisposable
         (hit is Visual visual && (visual == stop || visual.GetVisualAncestors().Contains(stop)))
             .Should().BeTrue($"nothing covers Stop on {name}; a touch on it reached {hit?.GetType().Name ?? "nothing"}");
 
-        // Inside its black edge, beside its label: Stop is drawn in HVO Dark's Stop colour.
+        // Inside its edge, beside its label: Stop is drawn in HVO Dark's Stop colour, bright while the roof moves.
         var colour = pixels.At((int)(bounds.X + 6), (int)bounds.Center.Y);
-        var expected = Color.Parse(RoofUiPalette.StopButton);
+        var stopColour = KioskTheme.StopColours(Shell.StopActive).Background;
+        var expected = Color.Parse(stopColour);
         new[] { colour.R - expected.R, colour.G - expected.G, colour.B - expected.B }
-            .Should().OnlyContain(difference => Math.Abs(difference) <= 2, $"Stop is {RoofUiPalette.StopButton}, drawn {colour}");
+            .Should().OnlyContain(difference => Math.Abs(difference) <= 2, $"Stop is {stopColour}, drawn {colour}");
     }
 
     private static KioskPixels Read(WriteableBitmap frame)

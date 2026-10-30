@@ -377,7 +377,11 @@ and the Settings page's header then says the file was edited by hand.
 ![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
 
 - **F9 sends Stop from every page, even over an open prompt**, and the result appears next to the button. The Stop
-  button is never disabled.
+  button is never disabled. It is a dim red while there is nothing to stop and bright red while the newest status,
+  live or last known, shows the roof moving.
+- **Open and Close show their state** as the kiosk and the web UI do: green while offered, bright green while the
+  roof moves their way (not pressable), and neutral while not offered, with the reason under the buttons. Without
+  colour (`NO_COLOR`), a running button is in reverse video and a disabled one is faint.
 - **Esc** closes a prompt, and never closes the interface.
 - **F10** quits. A termination signal (the terminal closing, or SIGTERM) closes the interface the same way, and
   `hvo-roof ui` then exits 130.

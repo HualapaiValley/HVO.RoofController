@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Stop, Open and Close show the roof's state in colour in the kiosk, the Mac app, the web UI and `hvo-roof ui`: Stop
+  is a dim red while there is nothing to stop and bright red while the roof moves (never disabled); Open and Close are
+  green while offered, bright green while the roof moves their way, and neutral grey while not offered. The colours are
+  shared aliases of the canonical HVO Dark roles (#208).
+- Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person shows their role and login type; Cancel on
+  the people step returns to the keypad (#208).
+- Kiosk pages show Previous, Next and the page count only when their contents overflow (#208).
+- Kiosk and Mac About: labelled cards for the device, the controller and its host (version, CPU, memory, disk, IP
+  addresses), saying `Controller not configured yet`, `Controller unreachable` or `Not available` where a value is not
+  known (#208).
+- Kiosk Terminal: **Exit UI to terminal** is at the top of the page, always on screen, above the explanation (#208).
+
 ## [4.2.0] - 2026-10-30
 
 ### Added

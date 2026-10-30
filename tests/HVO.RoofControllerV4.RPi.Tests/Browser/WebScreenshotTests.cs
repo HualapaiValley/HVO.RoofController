@@ -63,6 +63,11 @@ public sealed class WebScreenshotTests
         await browser.SignInAsync(WebBrowser.Admin);
         await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
         await Expect(browser.Position).ToHaveTextAsync("Closed");
+        // #208: dim Stop while idle; Open offered in green, Close neutral while the roof is closed.
+        await Expect(browser.Stop).ToHaveCSSAsync("background-color", Rgb(RoofUiPalette.StopButton));
+        await Expect(browser.Open).ToHaveCSSAsync("background-color", Rgb(RoofUiPalette.MotionAvailable));
+        await Expect(page.GetByTestId("close")).ToHaveCSSAsync("background-color", Rgb(RoofUiPalette.MotionDisabled));
+        await Expect(page.GetByTestId("close")).ToHaveCSSAsync("opacity", "1");
         await shots.TakeAsync("02-roof");
         if (name == "desktop")
         {
@@ -80,10 +85,15 @@ public sealed class WebScreenshotTests
         await browser.Rig.WaitForControllerAsync(s => s.IsMoving, "the roof to open");
         await browser.Rig.WaitForPlantAsync(p => p.PositionMeters > 0.5, "the roof to be well under way");
         await Expect(browser.Lease).ToBeVisibleAsync();
+        // #208: bright Stop while the roof moves (it stays enabled); the running Open in bright green.
+        await Expect(browser.Stop).ToHaveCSSAsync("background-color", Rgb(RoofUiPalette.StopButtonActive));
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        await Expect(browser.Open).ToHaveCSSAsync("background-color", Rgb(RoofUiPalette.MotionRunning));
         await shots.TakeAsync("03-roof-opening");
         await browser.Stop.ClickAsync();
         await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
         await browser.Rig.WaitForRestAsync("the Stop after the opening image");
+        await Expect(browser.Stop).ToHaveCSSAsync("background-color", Rgb(RoofUiPalette.StopButton), new() { Timeout = 15_000 });
 
         await page.GotoAsync("/health");
         await Expect(page.GetByTestId("health-check").First).ToBeVisibleAsync();
@@ -244,4 +254,8 @@ public sealed class WebScreenshotTests
             test.TestContext.AddResultFile(file);
         }
     }
+
+    // A #rrggbb palette colour as the browser's computed style says it.
+    private static string Rgb(string colour)
+        => $"rgb({Convert.ToInt32(colour[1..3], 16)}, {Convert.ToInt32(colour[3..5], 16)}, {Convert.ToInt32(colour[5..7], 16)})";
 }

@@ -45,6 +45,17 @@ public static class RoofIdentityText
     /// <summary>How a session signed in: "PIN" or "password".</summary>
     public static string DescribeKind(RoofCredentialKind kind) => kind == RoofCredentialKind.Pin ? "PIN" : "password";
 
+    /// <summary>
+    /// How a person's account signs in, from its provider (<see cref="RoofPinUserResponse.Provider"/>): the controller's
+    /// own accounts (no provider, or "virtual"), a Linux account through the host ("linux"), or another provider's.
+    /// </summary>
+    public static string DescribeLoginType(string? provider) => provider switch
+    {
+        null or "" or "virtual" => "Controller account",
+        "linux" => "Linux account",
+        _ => $"{provider} account"
+    };
+
     private static string? CheckNewSecret(string? value, string? again, Func<string?, bool> isValid, string rule, string plural)
     {
         value ??= string.Empty;

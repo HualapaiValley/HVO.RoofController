@@ -46,9 +46,10 @@ public sealed class KioskRenderTests
         await screen.DrawAsync();
         await OnUiAsync(() =>
         {
-            screen.Text("about-client-version").Should().Contain("This kiosk version:")
-                .And.Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
-            screen.Text("about-controller-version").Should().Contain("unavailable in the PIN kiosk");
+            screen.Shell.AboutPage.Info.Device.Title.Should().Be("This kiosk");
+            screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
+            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.NotAvailable);
+            screen.Text("about-host-note").Should().Contain("administrator's password session");
             screen.Shell.Page.Should().Be(KioskPage.About);
         });
         await screen.RenderAsync("about-locked", TestContext);
@@ -56,8 +57,9 @@ public sealed class KioskRenderTests
         {
             screen.Shell.Update(harness.Console.View with { IsUnreachable = true, StaleSince = DateTimeOffset.UtcNow });
             screen.Window.UpdateLayout();
-            screen.Text("about-client-version").Should().Contain("This kiosk version:");
-            screen.Text("about-controller-version").Should().Contain("unavailable").And.Contain("not live");
+            screen.Text("about-client-version").Should().Contain(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
+            screen.Text("about-controller-version").Should().Be(KioskAboutInfo.Unreachable);
+            screen.Text("about-controller-state").Should().Be("Unreachable");
         });
         await screen.RenderAsync("about-offline", TestContext);
     }

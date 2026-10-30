@@ -54,8 +54,10 @@ confirms the correction after a coordinated restart.
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
 - **Safety summary** under the header: connecting, simulation/safety-mode warning, stale/refused/unreachable status,
   latched fault or unhealthy I/O. **Readings** retains every full warning before the controller-backed status values;
-  Previous/Next pages keep long answers reachable without shrinking text or touch targets.
-- **Stop roof** in permanent red at the right of every page ([Stop](#stop)), enabled through focus, PIN entry and errors. Long answers have a **Full result** page; it preserves the complete shared controller response.
+  Previous/Next pages keep long answers reachable without shrinking text or touch targets. Page controls appear only
+  when a page's contents overflow; contents that fit show no Previous, Next or page count.
+- **Stop roof** in permanent red at the right of every page ([Stop](#stop)), enabled through focus, PIN entry and errors:
+  a dim red while there is nothing to stop, bright red while the roof moves. Long answers have a **Full result** page; it preserves the complete shared controller response.
 - Every button is at least 12 mm in both directions, and the text scales with it, so it can be used with gloves and
   read from a step back. The sizes come from `PixelsPerMillimetre`: 8.2 for the Raspberry Pi Touch Display 2
   (1280x720 in landscape), about 5.2 for the first 7-inch touch display (800x480).
@@ -72,13 +74,20 @@ Open, Close and Clear fault are hidden:
 `Locked: unlock the kiosk with a PIN to open or close the roof. Stop is always available.`
 
 **Unlock** asks `Who are you?`. The names are the people with a PIN (`GET Auth/Pin/Users`, read with the device key).
-People are paginated. Choosing a name opens a separate keypad step; **Person** returns to the list. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
+Each person shows their name, their role and how their account signs in (`Operator · Controller account`, or
+`Linux account` for a Linux account through the host), and `first-time setup` while their temporary PIN is still to be
+changed. People are paginated only when the list overflows the page. Choosing a name opens a separate keypad step: a
+compact, centred keypad of fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the
+keypad, with the person chosen before still chosen; the keypad's **Cancel** leaves Unlock. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name
 ([Lockout](security.md#signing-in)). When no one has a PIN yet, the page says how to give one:
 `hvo-roof users set <name> --pin` or `hvo-roof pins set <name>` ([cli.md](cli.md#commands)), or the web UI's People
 page.
 
-![The private PIN step: the chosen person, full-size keys and masked digits](images/kiosk/pin-1280x720.png)
+<p>
+  <img src="images/kiosk/people-1280x720.png" alt="Who are you? Each person with their role and login type, and Cancel back to the keypad" width="480">
+  <img src="images/kiosk/pin-1280x720.png" alt="The private PIN step: a compact, centred keypad of fixed-size keys, the chosen person and masked digits" width="480">
+</p>
 
 **Lock** ends the person's PIN session at the controller, then locks. The kiosk also locks by itself:
 
@@ -101,6 +110,9 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
 - **Open, Close and Clear fault** need the Operator role. A button that cannot be used says why under it, for example
   `Open and Close: the roof is moving: stop it first.` Open and Close are not offered on a stale status: the roof could
   not be watched.
+- **Open and Close show their state in colour and words:** green while offered, bright green while the roof moves
+  their way (`↑  Opening…`, `↓  Closing…`; not pressable), and a neutral grey, never a faded green, while not offered.
+  The web UI and `hvo-roof ui` use the same states ([design contract](ui-redesign/design-contract.md#actions-focus-and-selection)).
 - **The operator lease.** When the controller has a lease (`OperatorLeaseTimeout`), a move started here holds it, and
   the kiosk renews it while the roof moves (the `Renewing lease` badge). It stops renewing when the roof stops, when
   Stop is sent, and when the kiosk locks; the controller then stops the roof when the lease runs out
@@ -109,7 +121,7 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
   controller restarting, and safety alerts (`SAFETY: …`).
 
 <p>
-  <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display" width="400">
+  <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display: Opening… in bright green, Close not offered, and Stop bright red" width="400">
   <img src="images/kiosk/fault-800x480.png" alt="A latched fault: the fault banner, Clear fault offered, Open and Close refused" width="400">
 </p>
 
@@ -159,6 +171,10 @@ black, and on again at the touch.
 **Stop roof** is at the right of every page, locked or not. It is never disabled, needs no PIN and no role, and uses
 the same words as every other client.
 
+- Its colour says whether there is something to stop: a dim red while the newest status shows no motion, bright red
+  while the roof is moving or commanded to move. A stale status that last showed motion keeps it bright, since the roof
+  may still be moving. Only the colour changes: it is pressable, and does the same, in every state.
+
 - It is sent at once, on a connection of its own, with the device key (and the PIN session when there is one): it never
   waits for a command, a lock or the status.
 - The answer shows under it, for example `Stop acknowledged. Relay register verified de-energized.`, or why Stop
@@ -167,7 +183,8 @@ the same words as every other client.
 
 ## Exit UI to terminal and return
 
-Choose **Terminal → Exit UI to terminal**, read the bounded pages, then **Confirm exit**. An unlocked operator
+Choose **Terminal → Exit UI to terminal** (the button at the top of the page, beside its title), read what exiting
+does and how to come back, then **Confirm exit**. An unlocked operator
 PIN is required (an administrator's PIN is still capped at Operator). The kiosk checks that the same session is
 still valid at the controller immediately before exiting. A locked/device-only session, viewer, expired/revoked
 session or unavailable controller cannot authorize exit. **Cancel**, Escape, or leaving Terminal keeps the UI
@@ -457,10 +474,11 @@ Nothing here needs the Pi, the display or the roof.
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests"
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests"
   for f in ../docs/images/kiosk/*.png; do
     if [ -f "/tmp/kiosk-renders/$(basename "$f")" ]; then cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; fi
   done
+  cp /tmp/kiosk-renders/polish-people-1280x720.png ../docs/images/kiosk/people-1280x720.png
   cp /tmp/kiosk-renders/terminal-locked-8.2-p1-1280x720.png ../docs/images/kiosk/terminal-1280x720.png
   cp /tmp/kiosk-renders/terminal-confirm-5.2-p1-800x480.png ../docs/images/kiosk/terminal-confirm-800x480.png
   cp /tmp/kiosk-renders/terminal-confirm-9.0-p1-1920x1200.png ../docs/images/kiosk/terminal-confirm-1920x1200.png
@@ -573,9 +591,15 @@ See [Authentication and interface rights](authentication-interfaces.md) for pers
 
 ### Finding the installed version
 
-Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. Controller version is shown separately when an administrator session can read it; the PIN kiosk reports that it is unavailable rather than substituting the local build. Stop remains available in its own column.
+Choose **About**, even while locked or offline, to read this kiosk's installed build and commit. About is labelled
+cards: **This kiosk** (its version and the PIN policy), **Controller** (the connection, its name, its version and how
+long it has been running) and **Controller host** (CPU, memory, disk and IP addresses). A value not known says why:
+`Controller not configured yet` (the controller refused this kiosk's device key), `Controller unreachable` (no live
+status), or `Not available`. The controller gives its version and resource use only to an administrator's password
+session today, so the PIN kiosk shows `Not available` for them rather than substituting the local build; the Mac app
+signed in as an administrator shows what System last read. Stop remains available in its own column.
 
-![Locked kiosk About view](images/kiosk/about-locked-800x480.png)
+![Locked kiosk About view: labelled cards for this kiosk, the controller and its host, with fallback text](images/kiosk/about-locked-800x480.png)
 
 ## First-install owner PIN
 

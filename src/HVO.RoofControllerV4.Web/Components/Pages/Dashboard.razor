@@ -7,9 +7,12 @@
 @{
     var status = View.Status;
     var stale = View.IsStale;
+    // #208: the state colours every client shares; app.css brightens the Stop bar from data-roof-motion.
+    var openState = State(RoofActionStates.ForMotion(RoofMotionDirection.Opening, status, stale, View.OpenBlock));
+    var closeState = State(RoofActionStates.ForMotion(RoofMotionDirection.Closing, status, stale, View.CloseBlock));
 }
 
-<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel">
+<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel" data-roof-motion="@(RoofActionStates.IsStopActive(status) ? "moving" : "idle")">
     <header class="rc2-header">
         <div class="rc2-header-text">
             <p class="web-eyebrow">Hualapai Valley Observatory</p>
@@ -130,15 +133,15 @@
             <div class="rc2-card-body">
                 <div class="rc-position-line"><i class="bi bi-house" aria-hidden="true"></i><div><strong>@(status is null ? "Position unknown" : RoofText.DescribePosition(status.Status))@(stale && status is not null ? " (last known)" : string.Empty)</strong><span>One direction at a time. The controller enforces its safety settings.</span></div></div>
                 <div class="rc2-action-grid">
-                    <button class="btn btn-outline-light btn-lg rc2-action rc-open" type="button" data-testid="open"
+                    <button class="btn btn-outline-light btn-lg rc2-action rc-open rc-action--@openState" type="button" data-testid="open" data-state="@openState"
                             disabled="@(View.OpenBlock is not null)" title="@(View.OpenBlock is { } open ? RoofCommandRules.Capitalize(open) : "Open the roof")"
                             @onclick="Roof.OpenAsync">
-                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i><span><strong>Open roof</strong><small>@(View.OpenBlock ?? "Begin opening")</small></span>
+                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i><span><strong>@(openState == "running" ? "Opening…" : "Open roof")</strong><small>@(View.OpenBlock ?? "Begin opening")</small></span>
                     </button>
-                    <button class="btn btn-outline-light btn-lg rc2-action rc-close" type="button" data-testid="close"
+                    <button class="btn btn-outline-light btn-lg rc2-action rc-close rc-action--@closeState" type="button" data-testid="close" data-state="@closeState"
                             disabled="@(View.CloseBlock is not null)" title="@(View.CloseBlock is { } close ? RoofCommandRules.Capitalize(close) : "Close the roof")"
                             @onclick="Roof.CloseAsync">
-                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i><span><strong>Close roof</strong><small>@(View.CloseBlock ?? "Begin closing")</small></span>
+                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i><span><strong>@(closeState == "running" ? "Closing…" : "Close roof")</strong><small>@(View.CloseBlock ?? "Begin closing")</small></span>
                     </button>
                     <button class="btn btn-outline-light rc2-action rc2-action--small" type="button" data-testid="clear-fault"
                             disabled="@(View.ClearFaultBlock is not null)" title="@(View.ClearFaultBlock is { } clear ? RoofCommandRules.Capitalize(clear) : "Clear the latched fault")"
@@ -277,6 +280,9 @@
         null => "bi-question-circle",
         _ => "bi-pause-circle"
     };
+
+    // The state's class and data-state word: available, running or disabled.
+    private static string State(RoofActionState state) => state.ToString().ToLowerInvariant();
 
     private static string LimitChipClass(bool? active) => active switch
     {
