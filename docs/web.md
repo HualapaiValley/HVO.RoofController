@@ -178,9 +178,10 @@ A setting that cannot be changed here says why, as the controller gives it.
 
 The roof command history (#206), as the controller records it: each Open, Close, Stop and Clear fault, accepted or
 refused (with the controller's code), and each refused lease renewal. Each row says when (UTC), who sent it and how
-they signed in, the result, the roof's position afterwards, and the program and address it came from; the web UI sends
-from the controller's own host, so its commands show that address. An admin reads everyone's commands and may give a
-person's or key's name; anyone else reads only their own. **From** and **To** pick whole UTC days. Newer and Older
+they signed in, the result, the roof's position afterwards, and the program and address it came from: for a command sent
+from the web UI, the address of the person's browser, which the web UI names to the controller in `X-Forwarded-For`
+([The command history](security.md#the-command-history)). An admin reads everyone's commands and may give a person's or
+key's name (whoever is named so now); anyone else reads only their own, matched by their identifier, never by name. **From** and **To** pick whole UTC days. Newer and Older
 page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the page says when it keeps
 them in memory only.
 

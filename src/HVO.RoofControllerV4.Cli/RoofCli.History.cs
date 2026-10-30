@@ -15,7 +15,11 @@ public static partial class RoofCli
         {
             var user = new Option<string?>("--user", "-u")
             {
-                Description = "Only the commands of this person or key, or sent for them (admin; anyone else reads only their own)."
+                Description = "Only the commands of the person or key named so now (admin; anyone else reads only their own)."
+            };
+            var principal = new Option<string?>("--principal-id")
+            {
+                Description = "Only the commands recorded under this identifier, as an entry's principalId shows it: someone since removed, or a key since rotated (admin)."
             };
             var since = new Option<string?>("--since")
             {
@@ -53,7 +57,7 @@ public static partial class RoofCli
                 "history",
                 "The roof commands the controller was sent, accepted or refused, newest first: yours, or everyone's for an admin.")
             {
-                user, since, until, take, skip
+                user, principal, since, until, take, skip
             };
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
@@ -61,6 +65,7 @@ public static partial class RoofCli
                 var query = new RoofHistoryQuery
                 {
                     User = parseResult.GetValue(user) is { } name && !string.IsNullOrWhiteSpace(name) ? name.Trim() : null,
+                    PrincipalId = parseResult.GetValue(principal) is { } id && !string.IsNullOrWhiteSpace(id) ? id.Trim() : null,
                     From = parseResult.GetValue(since) is { } from ? ParseHistoryTime(from, now, "--since") : null,
                     To = parseResult.GetValue(until) is { } to ? ParseHistoryTime(to, now, "--until") : null,
                     Skip = parseResult.GetValue(skip),
@@ -82,7 +87,7 @@ public static partial class RoofCli
                 context.Out.WriteLine(RoofHistoryText.DescribeScope(page));
                 if (page.Entries.Count == 0)
                 {
-                    context.Out.WriteLine(query.User is null && query.From is null && query.To is null ? RoofHistoryText.Empty : RoofHistoryText.EmptyFiltered);
+                    context.Out.WriteLine(query is { User: null, PrincipalId: null, From: null, To: null } ? RoofHistoryText.Empty : RoofHistoryText.EmptyFiltered);
                 }
                 else
                 {

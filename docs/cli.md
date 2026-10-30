@@ -210,7 +210,7 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `open`, `close [--no-wait]` | operator | Starts the motion and follows it to the end, renewing the operator lease. Ctrl+C sends Stop. |
 | `lease` | operator | Renews the operator lease of the motion in progress (for scripts that use `--no-wait`). |
 | `clear-fault [--pulse-ms]` | operator | Clears a latched fault once its cause is resolved. |
-| `history [--user] [--since] [--until] [--take] [--skip]` | viewer | The roof command history, newest first: your own, or everyone's for an admin (see [History](#history)). |
+| `history [--user] [--principal-id] [--since] [--until] [--take] [--skip]` | viewer | The roof command history, newest first: your own, or everyone's for an admin (see [History](#history)). |
 | `whoami` | any | The controller in use, and who the controller takes the credential to be. |
 | `login`, `logout`, `passwd` | any | Signing in with a password (see [Setup](#setup)). |
 | `config show\|get\|set\|set-secret\|diff\|apply\|discard` | operator (UI group), admin | The controller's settings (see [Settings](#settings)). |
@@ -275,11 +275,13 @@ lease, the command says so, and the roof stops when the lease runs out unless so
 `hvo-roof history` shows the roof commands the controller recorded (#206), newest first: each Open, Close, Stop and
 Clear fault, accepted or refused, and each refused lease renewal, with when (UTC), who sent it, the result (the
 controller's code for a refusal), the roof afterwards and where it came from. An admin reads everyone's; anyone else
-reads only their own, and `--user` naming someone else is refused (exit 6).
+reads only their own, matched by their identifier rather than their name, and `--user` or `--principal-id` naming
+someone else is refused (exit 6). Anonymous Stops from one source are one row, such as `Stop (12 times, last …)`.
 
 | Option | What it does |
 |--------|--------------|
-| `--user`, `-u` | Only the commands of this person or key, or sent by a key on their behalf (admin). |
+| `--user`, `-u` | Only the commands of the person or key named so now (admin). |
+| `--principal-id` | Only the commands recorded under this identifier, as an entry's `principalId` shows it: someone since removed, or a key since rotated (admin). |
 | `--since`, `--until` | Only commands from, or before, a time: a date or time in ISO 8601 (UTC unless it gives an offset), such as `2026-10-30` or `2026-10-30T18:00Z`, or how long ago, such as `30m`, `12h` or `7d`. |
 | `--take`, `-n` | How many to show, 1 to 500 (default 50). |
 | `--skip` | How many of the newest to skip, to read older ones. |

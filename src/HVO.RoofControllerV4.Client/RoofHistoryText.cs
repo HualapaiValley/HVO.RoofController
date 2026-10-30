@@ -26,6 +26,19 @@ public static class RoofHistoryText
         _ => command.ToString()
     };
 
+    /// <summary>
+    /// The command, and for anonymous Stops kept as one entry, how many and when the last came:
+    /// "Stop (12 times, last 2026-10-30 18:05:09Z)".
+    /// </summary>
+    public static string DescribeCommand(RoofCommandHistoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var command = DescribeCommand(entry.Command);
+        return entry.Count > 1
+            ? $"{command} ({entry.Count.ToString(CultureInfo.InvariantCulture)} times, last {RoofStatusText.Time(entry.LastTimestampUtc ?? entry.TimestampUtc)})"
+            : command;
+    }
+
     /// <summary>Who sent it: "ada (signed in)", "ada (PIN at kiosk-1)", "ada (personal key)", "web (API key) for ada" or "anonymous".</summary>
     public static string DescribeWho(RoofCommandHistoryEntry entry)
     {
@@ -65,8 +78,8 @@ public static class RoofHistoryText
     }
 
     /// <summary>
-    /// Where it came from: the program, as it named itself, and the address ("web UI, 127.0.0.1"). The web UI sends from
-    /// the controller's own host, so its address is the controller's.
+    /// Where it came from: the program, as it named itself, and the address ("web UI, 192.168.1.20"). For a command the
+    /// web UI sent, the address is the person's browser, as the web UI forwarded it.
     /// </summary>
     public static string DescribeSource(RoofCommandHistoryEntry entry)
     {
@@ -104,7 +117,7 @@ public static class RoofHistoryText
     public static string DescribeLine(RoofCommandHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return $"{RoofStatusText.Time(entry.TimestampUtc)}  {DescribeCommand(entry.Command)}  {DescribeResult(entry)}";
+        return $"{RoofStatusText.Time(entry.TimestampUtc)}  {DescribeCommand(entry)}  {DescribeResult(entry)}";
     }
 
     /// <summary>An entry's cells, in the order of <see cref="Headers"/>.</summary>
@@ -114,7 +127,7 @@ public static class RoofHistoryText
         return
         [
             RoofStatusText.Time(entry.TimestampUtc),
-            DescribeCommand(entry.Command),
+            DescribeCommand(entry),
             DescribeWho(entry),
             DescribeResult(entry),
             DescribeOutcome(entry),

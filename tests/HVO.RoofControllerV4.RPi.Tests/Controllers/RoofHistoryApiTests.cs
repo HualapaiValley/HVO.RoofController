@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using FluentAssertions;
 using HVO.Core.Results;
 using HVO.RoofControllerV4.Client;
@@ -7,7 +8,9 @@ using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Storage;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Security;
+using HVO.RoofControllerV4.Web.Sessions;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using static HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -66,20 +69,137 @@ public sealed class RoofHistoryApiTests
     }
 
     [TestMethod]
-    public async Task AnAnonymousStop_IsRecordedAsAnonymous()
+    public async Task AnonymousStops_AllReachTheRoof_AndFromOneSourceAreOneEntry()
     {
-        using var host = new RoofApiTestHost(settings: new Dictionary<string, string?> { ["RoofControllerSecurity:AllowAnonymousStop"] = "true" });
+        using var host = new RoofApiTestHost(
+            settings: new Dictionary<string, string?> { ["RoofControllerSecurity:AllowAnonymousStop"] = "true" },
+            remoteIp: IPAddress.Parse("192.168.1.66"));
         using var anonymous = host.CreateApiClient();
         using var admin = host.CreateApiClient(TestApiKeys.Admin);
 
-        (await anonymous.PostAsync("/api/v4.0/RoofControl/Stop", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        for (var i = 0; i < 10; i++)
+        {
+            (await anonymous.PostAsync("/api/v4.0/RoofControl/Stop", null)).StatusCode.Should().Be(HttpStatusCode.OK, "Stop is never limited");
+        }
 
+        host.RoofService.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Exactly(10));
         var page = await ApiJson.ReadAsync<RoofCommandHistoryPage>(await admin.GetAsync(HistoryPath));
         var entry = page.Entries.Should().ContainSingle().Which;
         entry.Command.Should().Be(RoofHistoryCommand.Stop);
         entry.PrincipalKind.Should().Be(RoofHistoryPrincipalKind.Anonymous);
+        entry.PrincipalId.Should().BeNull();
         entry.User.Should().BeNull();
         entry.Accepted.Should().BeTrue();
+        entry.Count.Should().Be(10);
+        entry.RemoteAddress.Should().Be("192.168.1.66");
+    }
+
+    [TestMethod]
+    public async Task APersonRemovedAndAddedAgain_UnderTheSameName_DoesNotReadTheFormerOnesCommands()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
+        string formerId;
+        using (var former = await SignedInAsync(host, "olive"))
+        {
+            await former.Roof.OpenAsync();
+            formerId = (await former.Roof.GetHistoryAsync()).Entries.Single().PrincipalId!;
+        }
+
+        await admin.Identity.RemoveUserAsync("olive");
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
+        using var olive = await SignedInAsync(host, "olive");
+        await olive.Roof.CloseAsync();
+
+        var own = await olive.Roof.GetHistoryAsync();
+        own.Entries.Should().ContainSingle().Which.Command.Should().Be(RoofHistoryCommand.Close);
+        own.Entries[0].PrincipalId.Should().NotBe(formerId);
+        (await admin.Roof.GetHistoryAsync(new RoofHistoryQuery { User = "olive" })).Entries
+            .Should().ContainSingle("the name finds whoever has it now").Which.Command.Should().Be(RoofHistoryCommand.Close);
+        (await admin.Roof.GetHistoryAsync(new RoofHistoryQuery { PrincipalId = formerId })).Entries
+            .Should().ContainSingle("the identifier finds someone since removed").Which.Command.Should().Be(RoofHistoryCommand.Open);
+        (await RoofClientApiTests.RefusedAsync(() => olive.Roof.GetHistoryAsync(new RoofHistoryQuery { PrincipalId = formerId })))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [TestMethod]
+    public async Task AKeyNamedLikeAPerson_ReadsOnlyItsOwnCommands()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
+        var key = await admin.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = "olive", Role = RoofControllerApiContract.OperatorRole });
+        using var person = await SignedInAsync(host, "olive");
+        using var namesake = CreateClient(host, new RoofApiKeyCredential(key.Secret));
+
+        await person.Roof.OpenAsync();
+        await namesake.StopAsync();
+
+        (await namesake.Roof.GetHistoryAsync()).Entries.Should().ContainSingle().Which.Command.Should().Be(RoofHistoryCommand.Stop);
+        (await person.Roof.GetHistoryAsync()).Entries.Should().ContainSingle().Which.Command.Should().Be(RoofHistoryCommand.Open);
+        (await admin.Roof.GetHistoryAsync(new RoofHistoryQuery { User = "olive" })).TotalCount.Should().Be(2, "an admin's search finds both now named so");
+    }
+
+    [TestMethod]
+    public async Task ARotatedKey_IsANewCredential_ItsEarlierCommandsStayUnderTheOldIdentifier()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        var key = await admin.Identity.AddApiKeyAsync(new RoofApiKeyCreateRequest { Name = "script", Role = RoofControllerApiContract.OperatorRole });
+        string oldId;
+        using (var before = CreateClient(host, new RoofApiKeyCredential(key.Secret)))
+        {
+            await before.Roof.OpenAsync();
+            oldId = (await before.Roof.GetHistoryAsync()).Entries.Single().PrincipalId!;
+        }
+
+        var rotated = await admin.Identity.RotateApiKeyAsync("script");
+        using var after = CreateClient(host, new RoofApiKeyCredential(rotated.Secret));
+        await after.Roof.CloseAsync();
+
+        oldId.Should().StartWith("key:");
+        (await after.Roof.GetHistoryAsync()).Entries.Should().ContainSingle().Which.Command.Should().Be(RoofHistoryCommand.Close);
+        (await admin.Roof.GetHistoryAsync(new RoofHistoryQuery { PrincipalId = oldId })).Entries
+            .Should().ContainSingle().Which.Command.Should().Be(RoofHistoryCommand.Open);
+    }
+
+    [TestMethod]
+    public async Task TheWebUisForwardedAddress_IsRecorded_FromTheLoopback()
+    {
+        using var host = RoofClientApiTests.CreateHost(remoteIp: IPAddress.Loopback);
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole);
+        using var anonymous = CreateClient(host);
+        var credential = new RoofWebCredential(await anonymous.Auth.SignInAsync("olive", TestSecrets.Password), stopKey: null);
+        credential.ForwardFor(IPAddress.Parse("::ffff:192.168.1.20"));
+        using var web = CreateClient(host, credential);
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+
+        await web.Roof.OpenAsync();
+        await web.StopAsync();
+
+        var entries = (await admin.Roof.GetHistoryAsync()).Entries;
+        entries.Should().HaveCount(2).And.AllSatisfy(entry =>
+        {
+            entry.RemoteAddress.Should().Be("192.168.1.20", "the person's browser, as the web UI named it");
+            entry.ForwardedBy.Should().Be("127.0.0.1");
+            entry.User.Should().Be("olive");
+        });
+    }
+
+    [TestMethod]
+    public async Task AForwardedAddress_FromTheNetwork_IsIgnored()
+    {
+        using var host = new RoofApiTestHost(remoteIp: IPAddress.Parse("192.168.1.5"));
+        using var operatorClient = host.CreateApiClient(TestApiKeys.Operator);
+        operatorClient.DefaultRequestHeaders.Add(RoofCommandHistoryContract.ForwardedForHeaderName, "10.1.2.3");
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+
+        (await operatorClient.PostAsync("/api/v4.0/RoofControl/Open", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var entry = (await ApiJson.ReadAsync<RoofCommandHistoryPage>(await admin.GetAsync(HistoryPath))).Entries.Single();
+        entry.RemoteAddress.Should().Be("192.168.1.5", "only the controller's own loopback is believed");
+        entry.ForwardedBy.Should().BeNull();
     }
 
     [TestMethod]

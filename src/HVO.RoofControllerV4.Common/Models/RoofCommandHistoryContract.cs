@@ -20,6 +20,18 @@ public static class RoofCommandHistoryContract
 
     /// <summary>How many entries the controller keeps unless configured otherwise; the oldest go first.</summary>
     public const int DefaultMaximumEntries = 10_000;
+
+    /// <summary>
+    /// How many anonymous entries the controller keeps, apart from <see cref="DefaultMaximumEntries"/>: anonymous Stops
+    /// (<c>AllowAnonymousStop</c>) never push anyone's commands out.
+    /// </summary>
+    public const int MaximumAnonymousEntries = 500;
+
+    /// <summary>
+    /// The header in which the web UI names the address of the person it sends a command for. The controller believes it
+    /// only from an address it trusts as a proxy (<c>RoofCommandHistory:TrustedProxies</c>, its own loopback by default).
+    /// </summary>
+    public const string ForwardedForHeaderName = "X-Forwarded-For";
 }
 
 /// <summary>A roof command the history records.</summary>
@@ -58,8 +70,15 @@ public sealed record RoofCommandHistoryEntry
 
     public RoofHistoryCommand Command { get; init; }
 
-    /// <summary>The person or the API key's name; null for an anonymous Stop.</summary>
+    /// <summary>The person or the API key's name, as it was then; null for an anonymous Stop. Shown, never matched.</summary>
     public string? User { get; init; }
+
+    /// <summary>
+    /// Who sent it, as the history matches it: <c>principal:&lt;id&gt;</c> or <c>person:&lt;name&gt;@&lt;created&gt;</c> for a
+    /// person (a person removed and added again is a new one), <c>key:&lt;key id&gt;</c> for an API key (a rotated key is
+    /// a new one); null for an anonymous Stop.
+    /// </summary>
+    public string? PrincipalId { get; init; }
 
     public RoofHistoryPrincipalKind PrincipalKind { get; init; }
 
@@ -72,8 +91,14 @@ public sealed record RoofCommandHistoryEntry
     /// <summary>For a PIN session, the kiosk key it was opened at.</summary>
     public string? Device { get; init; }
 
-    /// <summary>The address the request came from. The web UI sends from the controller's own host.</summary>
+    /// <summary>
+    /// The address the command came from: the person's browser for a command the web UI forwarded
+    /// (<see cref="ForwardedBy"/>), otherwise the address that connected.
+    /// </summary>
     public string? RemoteAddress { get; init; }
+
+    /// <summary>For a command the web UI forwarded, the web UI's address; null otherwise.</summary>
+    public string? ForwardedBy { get; init; }
 
     /// <summary>The program that sent it, as its <c>User-Agent</c> said (for example <c>hvo-roof/4.2.0</c>); not verified.</summary>
     public string? Client { get; init; }
@@ -95,6 +120,15 @@ public sealed record RoofCommandHistoryEntry
 
     /// <summary>Whether a fault was latched after the command.</summary>
     public bool? IsFaultLatched { get; init; }
+
+    /// <summary>
+    /// How many commands the entry stands for: 1, or more for anonymous Stops from one source with the same answer, each
+    /// within 10 minutes of the last, which are kept as one entry.
+    /// </summary>
+    public int Count { get; init; } = 1;
+
+    /// <summary>When the last of <see cref="Count"/> commands came, when there was more than one.</summary>
+    public DateTimeOffset? LastTimestampUtc { get; init; }
 }
 
 /// <summary>A page of the command history, newest first.</summary>

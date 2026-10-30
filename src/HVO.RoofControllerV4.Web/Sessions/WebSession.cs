@@ -83,6 +83,12 @@ public sealed class WebSession : IDisposable
     /// <summary>True once the person signed out (<see cref="SignOutAsync"/>), rather than the session ending without them.</summary>
     public bool SignedOut => Volatile.Read(ref _signedOut) == 1;
 
+    /// <summary>
+    /// The person's browser is at <paramref name="browser"/>: the address the controller's command history records for
+    /// what is sent for them from now on.
+    /// </summary>
+    public void ForwardFor(IPAddress? browser) => Credential.ForwardFor(browser);
+
     /// <summary>Marks the session ended.</summary>
     public void End() => Credential.Session.End();
 

@@ -320,7 +320,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             {
                 if (RoofCommandHistory.CommandFor(command) is { } recorded)
                 {
-                    _history.Record(RoofCommandHistory.Describe(HttpContext, recorded, status, refusal));
+                    _history.Record(_history.Describe(HttpContext, recorded, status, refusal));
                 }
             }
             catch (Exception ex)

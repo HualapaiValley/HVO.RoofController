@@ -51,7 +51,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
 | `POST /api/v4.0/RoofControl/Lease`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409 (`LeaseNotActive`), 503 |
 | `POST /api/v4.0/RoofControl/ClearFault?pulseMs=250`      | Operator          | 200 `RoofStatusResponse` | 400 (`pulseMs` outside 50-2000), 401, 403, 409, 503 |
-| `GET  /api/v4.0/RoofControl/History?user=&from=&to=&skip=&take=` | Viewer (own commands; Admin: everyone's) | 200 `RoofCommandHistoryPage`, newest first ([The command history](#the-command-history)) | 400 (`take` outside 1-500, a negative `skip`, `to` before `from`), 401, 403 (not an admin, and `user` names someone else) |
+| `GET  /api/v4.0/RoofControl/History?user=&principalId=&from=&to=&skip=&take=` | Viewer (own commands; Admin: everyone's) | 200 `RoofCommandHistoryPage`, newest first ([The command history](#the-command-history)) | 400 (`take` outside 1-500, a negative `skip`, `to` before `from`), 401, 403 (not an admin, and `user` or `principalId` is someone else) |
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
 | `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409, 503 (`SettingsStoreUnavailable`) |
 | `GET  /api/v4.0/Settings`, `GET /api/v4.0/Settings/Catalogue` | Viewer (API key or session) | 200 `RoofSettingsResponse`, `RoofSettingsCatalogueResponse` (only the settings the caller may read) | 401 |
@@ -408,28 +408,51 @@ Back the directory up with the secrets directory.
 
 The controller records every roof command its API is sent (#206): Open, Close, Stop and Clear fault, accepted or
 refused, and refused lease renewals (an accepted renewal only keeps a recorded motion going). Each entry has the time,
-the person or key (`principalKind` `Person`, `ApiKey` or `Anonymous`; a person's own key counts as the person), how
-they signed in, the kiosk for a PIN session, the person an API key said it acted for (`X-On-Behalf-Of`, which grants
-nothing), the remote address, the program the request's `User-Agent` names (not verified; the client library sends
-`<program>/<version>`), the result with the refusal's code and explanation, and the roof's status, stop reason and
-fault latch afterwards. A request refused before it reaches the roof (no credential, or a role too low) is not a
-command and is not recorded, so nobody unauthenticated can push real commands out of the history.
+the name of the person or key as it was then, the identifier it is matched by (`principalId`, below), `principalKind`
+(`Person`, `ApiKey` or `Anonymous`; a person's own key counts as the person), how they signed in, the kiosk for a PIN
+session, the person an API key said it acted for (`X-On-Behalf-Of`, shown, never matched), the address and the program
+the request's `User-Agent` names (not verified; the client library sends `<program>/<version>`), the result with the
+refusal's code and explanation, and the roof's status, stop reason and fault latch afterwards. A request refused before
+it reaches the roof (no credential, or a role too low) is not a command and is not recorded.
 
-- **Who reads it.** `GET RoofControl/History` needs the Viewer role. An admin reads everyone's commands, and `user`
-  picks those sent by, or on behalf of, one person or key. Anyone else, a PIN session included (a PIN session is never
-  an admin's), reads only their own: those sent with their own credential, and, for a person, those a key sent on their
-  behalf. Naming someone else is refused with 403.
+- **Identifiers, never names.** The history matches who sent a command by an identifier, never by a name alone:
+  `principal:<id>` for a person the identity store gives a principal ID (schema 2 and later, and every Linux principal),
+  `person:<name>@<created>` for one it does not (schema 1; a person keeps this one when the store later gives them a
+  principal ID, so their earlier commands stay theirs), and `key:<key id>` for an API key (the non-reversible
+  identifier of its value). So a person removed and added again under the same name, or a key named like a person,
+  never reads another's commands, and a rotated key is a new credential whose earlier commands stay under the old
+  identifier.
+- **Who reads it.** `GET RoofControl/History` needs the Viewer role. Anyone but an admin, a PIN session included (a PIN
+  session is never an admin's), reads only the commands recorded under their own identifiers; naming anyone else, by
+  `user` or `principalId`, is refused with 403. An admin reads everyone's, and may pick one person's or key's: `user`
+  finds whoever is named so now, and `principalId` the identifier an entry shows, for someone since removed or a key
+  since rotated.
+- **Where from.** The address is the one that connected, except for a command the web UI sends for a person: the web
+  UI names the person's browser in `X-Forwarded-For` (the address that connected to the web UI, never a header the
+  browser sent), and the controller believes it only from `RoofCommandHistory:TrustedProxies` (by default its own
+  loopback, 127.0.0.0/8 and ::1, which only the web UI and the supervisor in its container use: everything else reaches
+  it through Docker's bridge) and only when the header holds one address. The entry then gives the browser's address and
+  the web UI's (`forwardedBy`). The header is used for nothing else: sign-in limits and the HTTPS rule still see the
+  address that connected.
+- **Anonymous Stops.** Stop is never limited. With `AllowAnonymousStop`, anonymous Stops from one source (an IPv6
+  address from another network by its /64) with the same answer, each within 10 minutes of the last, are one entry with
+  a `count` and `lastTimestampUtc`, and anonymous entries have a cap of their own (500), apart from
+  `MaximumEntries`, so nobody signed out can push anyone's commands out of the history.
 - **Where it is kept.** `RoofCommandHistory:StorePath`, or `command-history.jsonl` in the identity store's directory
   when that is not set; with neither, in memory only (logged, and the page's `isPersistent` is false). One JSON object
-  per line, mode 0600. A command is kept in memory at once and appended to the file in the background, so a slow or
-  failing disk never delays a command's answer; a write that fails is logged and retried, and the controller writes
-  what was recorded when it stops. A line cut short by a power cut is skipped when the file is read. A file or
-  directory that cannot be read leaves the history in memory only, and the file as it is.
-- **How long.** `RoofCommandHistory:Retention` (default 90 days, 1 to 3650 days) and `RoofCommandHistory:MaximumEntries`
-  (default 10,000, 100 to 25,000), the oldest going first. The file is compacted when it holds a quarter more lines
-  than are kept. A value out of range is logged, and its default used: the history never stops the controller from
-  starting. These are read at startup. The installer's backups hold the identity store's directory whole, so they hold
-  the history too: about 4 MB at the default, and at most about 27 MB at 25,000, inside the 64 MB a backup takes.
+  per line, mode 0600. A command is kept in memory at once, and written in the background within about a second, with
+  whatever else came meanwhile, so a slow or failing disk never delays a command's answer; a write that fails is logged
+  and retried, and the controller writes what was recorded when it stops. A changed entry (a count) is one more line,
+  and the last line of an entry counts. A last line cut short by a power cut, or a tail of zeroes, is skipped when the
+  file is read, the entries before it are kept, and the next write leaves it out. A file or directory that cannot be
+  read leaves the history in memory only, and the file as it is.
+- **How long, and how big.** `RoofCommandHistory:Retention` (default 90 days, 1 to 3650 days) and
+  `RoofCommandHistory:MaximumEntries` (default 10,000, 100 to 20,000), the oldest going first. The file is compacted
+  once it holds a quarter more lines than are kept. A value out of range is logged, and its default used: the history
+  never stops the controller from starting. These are read at startup. The installer's backups hold the identity
+  store's directory whole, so they hold the history too, and a restore puts it back: about 4 MB at the default, and at
+  most about 30 MB at 20,000 (every line the longest it can be), inside half the 64 MB a backup takes in all
+  (`RoofCommandHistoryTests.TheLargestFile_FitsWellInsideABackup` checks it).
 
 ## Settings
 

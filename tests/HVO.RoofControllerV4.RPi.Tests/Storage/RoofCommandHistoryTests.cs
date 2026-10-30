@@ -63,25 +63,28 @@ public sealed class RoofCommandHistoryTests
     }
 
     [TestMethod]
-    public void AnOwner_ReadsOnlyTheirOwn_IncludingWhatAKeySentForThem()
+    public void Entries_AreMatchedByIdentifier_NeverByName()
     {
         using var history = Create(new ManualTimeProvider(Start));
-        history.Record(Entry(RoofHistoryCommand.Open, "ada"));
-        history.Record(Entry(RoofHistoryCommand.Close, "bob"));
-        history.Record(Entry(RoofHistoryCommand.Stop, "web-stop", RoofHistoryPrincipalKind.ApiKey, onBehalfOf: "ada"));
-        history.Record(Entry(RoofHistoryCommand.Stop, "ada", RoofHistoryPrincipalKind.ApiKey));
+        history.Record(Entry(RoofHistoryCommand.Open, "ada", principalId: "person:ada@1"));
+        history.Record(Entry(RoofHistoryCommand.Close, "ada", principalId: "person:ada@2"));
+        history.Record(Entry(RoofHistoryCommand.Stop, "web-stop", RoofHistoryPrincipalKind.ApiKey, onBehalfOf: "ada", principalId: "key:web"));
+        history.Record(Entry(RoofHistoryCommand.Stop, "ada", RoofHistoryPrincipalKind.ApiKey, principalId: "key:ada"));
 
-        var ada = history.Query(new RoofCommandHistoryFilter { Owner = new(RoofHistoryPrincipalKind.Person, "ADA") });
-        var adaKey = history.Query(new RoofCommandHistoryFilter { Owner = new(RoofHistoryPrincipalKind.ApiKey, "ada") });
+        var ada = history.Query(new RoofCommandHistoryFilter { PrincipalIds = ["person:ada@1"] });
 
-        ada.AllUsers.Should().BeFalse();
-        ada.Entries.Select(entry => (entry.User, entry.Command)).Should().Equal(("web-stop", RoofHistoryCommand.Stop), ("ada", RoofHistoryCommand.Open));
-        adaKey.Entries.Should().ContainSingle("a key named like a person is not that person")
-            .Which.PrincipalKind.Should().Be(RoofHistoryPrincipalKind.ApiKey);
+        ada.AllUsers.Should().BeFalse("a request for some identifiers is someone's own unless it says otherwise");
+        history.Query(new RoofCommandHistoryFilter { PrincipalIds = ["person:ada@1"], AllUsers = true }).AllUsers.Should().BeTrue();
+        ada.Entries.Should().ContainSingle(
+                "a person added again under the same name, a key named like them, and a key that only said it acted for them are others")
+            .Which.Command.Should().Be(RoofHistoryCommand.Open);
+        history.Query(new RoofCommandHistoryFilter { PrincipalIds = ["person:ada@1", "person:ada@2"] }).TotalCount
+            .Should().Be(2, "an admin's search may name several identifiers");
+        history.Query(new RoofCommandHistoryFilter { PrincipalIds = [] }).TotalCount.Should().Be(0, "no identifier matches nothing");
     }
 
     [TestMethod]
-    public void TheUserAndTimeFilters_AndPaging_Apply()
+    public void TheIdentifierAndTimeFilters_AndPaging_Apply()
     {
         var clock = new ManualTimeProvider(Start);
         using var history = Create(clock);
@@ -91,7 +94,7 @@ public sealed class RoofCommandHistoryTests
             clock.AdvanceWithoutTimers(TimeSpan.FromHours(1));
         }
 
-        history.Query(new RoofCommandHistoryFilter { User = "Bob" }).Entries.Select(entry => entry.Id).Should().Equal(6, 4, 2);
+        history.Query(new RoofCommandHistoryFilter { PrincipalIds = ["person:bob@1"] }).Entries.Select(entry => entry.Id).Should().Equal(6, 4, 2);
         history.Query(new RoofCommandHistoryFilter { From = Start.AddHours(2), To = Start.AddHours(4) }).Entries
             .Select(entry => entry.Id).Should().Equal([4, 3], "from is included and to is not");
 
@@ -138,7 +141,7 @@ public sealed class RoofCommandHistoryTests
     [TestMethod]
     [DataRow(0, 10_000)]
     [DataRow(99, 10_000)]
-    [DataRow(25_001, 10_000)]
+    [DataRow(20_001, 10_000)]
     [DataRow(250, 250)]
     public void AMaximumOutOfRange_IsLogged_AndTheDefaultUsed(int configured, int expected)
     {
@@ -339,6 +342,7 @@ public sealed class RoofCommandHistoryTests
     [TestMethod]
     public void Describe_ARefusedPinCommand_NamesThePersonTheKioskTheCodeAndTheStatus()
     {
+        using var history = Create(new ManualTimeProvider(Start));
         var context = Context(
             Session("ada", RoofCredentialKind.Pin, RoofControllerApiContract.OperatorRole, device: "kiosk-1"),
             IPAddress.Parse("::ffff:192.168.1.20"),
@@ -347,12 +351,13 @@ public sealed class RoofCommandHistoryTests
         refusal.Extensions[RoofControllerApiContract.ProblemCodeExtension] = nameof(RoofControllerErrorCode.FaultLatched);
         refusal.Extensions[RoofControllerApiContract.ProblemStatusExtension] = Snapshot(RoofControllerStatus.Closed, faultLatched: true);
 
-        var entry = RoofCommandHistory.Describe(context, RoofHistoryCommand.Open, status: null, refusal);
+        var entry = history.Describe(context, RoofHistoryCommand.Open, status: null, refusal);
 
         entry.Should().BeEquivalentTo(new RoofCommandHistoryEntry
         {
             Command = RoofHistoryCommand.Open,
             User = "ada",
+            PrincipalId = "session:session-1",
             PrincipalKind = RoofHistoryPrincipalKind.Person,
             CredentialKind = RoofCredentialKind.Pin,
             Device = "kiosk-1",
@@ -364,16 +369,18 @@ public sealed class RoofCommandHistoryTests
             Status = RoofControllerStatus.Closed,
             StopReason = RoofControllerStopReason.NormalStop,
             IsFaultLatched = true
-        }, "the escape character a terminal would act on is removed");
+        }, "the escape character a terminal would act on is removed; without the people, only the session is known");
     }
 
     [TestMethod]
     public void Describe_KeysAndAnonymousStops()
     {
+        using var history = Create(new ManualTimeProvider(Start));
         var key = RoofPrincipalFactory.Create(
             new RoofApiKeyIdentity("web-stop", RoofControllerApiContract.ViewerRole, "key-1"), RoofControllerSecurityDefaults.ApiKeyScheme, onBehalfOf: "ada");
-        var keyEntry = RoofCommandHistory.Describe(Context(key, IPAddress.Loopback, null), RoofHistoryCommand.Stop, Snapshot(RoofControllerStatus.Stopped), null);
+        var keyEntry = history.Describe(Context(key, IPAddress.Parse("192.168.1.9"), null), RoofHistoryCommand.Stop, Snapshot(RoofControllerStatus.Stopped), null);
         keyEntry.User.Should().Be("web-stop");
+        keyEntry.PrincipalId.Should().Be("key:key-1", "a key is matched by its identifier");
         keyEntry.PrincipalKind.Should().Be(RoofHistoryPrincipalKind.ApiKey);
         keyEntry.CredentialKind.Should().Be(RoofCredentialKind.ApiKey);
         keyEntry.OnBehalfOf.Should().Be("ada");
@@ -381,13 +388,26 @@ public sealed class RoofCommandHistoryTests
         keyEntry.Client.Should().BeNull();
         keyEntry.Status.Should().Be(RoofControllerStatus.Stopped);
 
-        var anonymous = RoofCommandHistory.Describe(Context(new ClaimsPrincipal(new ClaimsIdentity()), null, "curl/8"), RoofHistoryCommand.Stop, null, null);
+        var anonymous = history.Describe(Context(new ClaimsPrincipal(new ClaimsIdentity()), null, "curl/8"), RoofHistoryCommand.Stop, null, null);
         anonymous.User.Should().BeNull();
+        anonymous.PrincipalId.Should().BeNull();
         anonymous.PrincipalKind.Should().Be(RoofHistoryPrincipalKind.Anonymous);
         anonymous.CredentialKind.Should().BeNull();
         anonymous.RemoteAddress.Should().BeNull();
-        RoofCommandHistory.OwnerOf(new ClaimsPrincipal(new ClaimsIdentity())).Should().BeNull();
-        RoofCommandHistory.OwnerOf(key).Should().Be(new RoofCommandHistoryOwner(RoofHistoryPrincipalKind.ApiKey, "web-stop"));
+        history.Principals.IdsOf(new ClaimsPrincipal(new ClaimsIdentity())).Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void APerson_IsKnownByTheirPrincipalId_AndByTheirNameAndCreation_NeverByNameAlone()
+    {
+        var created = new DateTimeOffset(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var legacy = new StoredUser("Ada", RoofControllerApiContract.OperatorRole, null, null, "stamp", created, created);
+
+        RoofCommandHistoryPrincipals.IdsOf(legacy).Should().Equal($"person:ada@{created.UtcTicks}");
+        RoofCommandHistoryPrincipals.IdsOf(legacy with { PrincipalId = "0123abcd" })
+            .Should().Equal("principal:0123abcd", $"person:ada@{created.UtcTicks}");
+        RoofCommandHistoryPrincipals.IdsOf(legacy with { CreatedUtc = created.AddDays(1) })
+            .Should().NotIntersectWith(RoofCommandHistoryPrincipals.IdsOf(legacy), "a person added again under the name is someone else");
     }
 
     [TestMethod]
@@ -402,6 +422,258 @@ public sealed class RoofCommandHistoryTests
     [TestMethod]
     public void AnOperationThatIsNotARoofCommand_IsNotRecorded()
         => RoofCommandHistory.CommandFor("update_configuration").Should().BeNull();
+
+    // ---- From where -----------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    [DataRow("127.0.0.1", "192.168.1.20", "192.168.1.20", "127.0.0.1")]
+    [DataRow("::1", "192.168.1.20", "192.168.1.20", "::1")]
+    [DataRow("::ffff:127.0.0.1", "::ffff:192.168.1.20", "192.168.1.20", "127.0.0.1")]
+    [DataRow("192.168.1.5", "10.9.9.9", "192.168.1.5", null)]
+    [DataRow("172.17.0.1", "10.9.9.9", "172.17.0.1", null)]
+    [DataRow("127.0.0.1", "10.9.9.9, 192.168.1.20", "127.0.0.1", null)]
+    [DataRow("127.0.0.1", "not-an-address", "127.0.0.1", null)]
+    [DataRow("127.0.0.1", null, "127.0.0.1", null)]
+    public void TheForwardedAddress_IsBelievedOnlyFromTheLoopback_AndOnlyWhenItIsOne(
+        string connection, string? forwarded, string expectedAddress, string? expectedForwardedBy)
+    {
+        using var history = Create(new ManualTimeProvider(Start));
+        var context = Context(Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.OperatorRole), IPAddress.Parse(connection), null);
+        if (forwarded is not null)
+        {
+            context.Request.Headers[RoofCommandHistoryContract.ForwardedForHeaderName] = forwarded;
+        }
+
+        var entry = history.Describe(context, RoofHistoryCommand.Open, null, null);
+
+        entry.RemoteAddress.Should().Be(expectedAddress);
+        entry.ForwardedBy.Should().Be(expectedForwardedBy);
+    }
+
+    [TestMethod]
+    public void TrustedProxies_ReplaceTheLoopback()
+    {
+        var logger = new CapturingLogger<RoofCommandHistory>();
+        using var history = Create(
+            new ManualTimeProvider(Start),
+            new RoofCommandHistoryOptions { TrustedProxies = ["10.0.0.2", "nonsense"] },
+            logger: logger);
+        logger.Contains(LogLevel.Error, "'nonsense', which is not an IP address").Should().BeTrue();
+
+        var throughProxy = Context(Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.OperatorRole), IPAddress.Parse("10.0.0.2"), null);
+        throughProxy.Request.Headers[RoofCommandHistoryContract.ForwardedForHeaderName] = "192.168.1.20";
+        var fromLoopback = Context(Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.OperatorRole), IPAddress.Loopback, null);
+        fromLoopback.Request.Headers[RoofCommandHistoryContract.ForwardedForHeaderName] = "192.168.1.20";
+
+        history.Describe(throughProxy, RoofHistoryCommand.Open, null, null).RemoteAddress.Should().Be("192.168.1.20");
+        history.Describe(fromLoopback, RoofHistoryCommand.Open, null, null).RemoteAddress.Should().Be("127.0.0.1", "only the configured proxies are believed");
+    }
+
+    // ---- Anonymous Stops ------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void AnonymousStopsFromOneSource_AreOneEntry_WithACount_WhileEachComesWithinTenMinutes()
+    {
+        var clock = new ManualTimeProvider(Start);
+        using var history = Create(clock);
+
+        for (var i = 0; i < 3; i++)
+        {
+            history.Record(AnonymousStop("192.168.1.66"));
+            clock.AdvanceWithoutTimers(TimeSpan.FromMinutes(9));
+        }
+
+        history.Record(AnonymousStop("192.168.1.67"));
+        history.Record(AnonymousStop("192.168.1.66", accepted: false, code: "RelayStateUnverified"));
+        clock.AdvanceWithoutTimers(TimeSpan.FromMinutes(11));
+        history.Record(AnonymousStop("192.168.1.66"));
+
+        var entries = history.Query(new RoofCommandHistoryFilter()).Entries;
+        entries.Select(entry => (entry.RemoteAddress, entry.Accepted, entry.Count)).Should().Equal(
+            ("192.168.1.66", true, 1),
+            ("192.168.1.66", false, 1),
+            ("192.168.1.67", true, 1),
+            ("192.168.1.66", true, 3));
+        entries[3].TimestampUtc.Should().Be(Start);
+        entries[3].LastTimestampUtc.Should().Be(Start.AddMinutes(18));
+    }
+
+    [TestMethod]
+    public void AnonymousStopsFromOneIpv6Network_AreOneSource()
+    {
+        using var history = Create(new ManualTimeProvider(Start));
+
+        history.Record(AnonymousStop("2001:db8:1:2::10"));
+        history.Record(AnonymousStop("2001:db8:1:2::99"));
+
+        history.Query(new RoofCommandHistoryFilter()).Entries.Should().ContainSingle("a new address from the same /64 is the same source")
+            .Which.Count.Should().Be(2);
+    }
+
+    [TestMethod]
+    public void SignedInStops_AreNeverCounted_EachIsAnEntry()
+    {
+        using var history = Create(new ManualTimeProvider(Start));
+
+        history.Record(Entry(RoofHistoryCommand.Stop, "ada") with { RemoteAddress = "192.168.1.66" });
+        history.Record(Entry(RoofHistoryCommand.Stop, "ada") with { RemoteAddress = "192.168.1.66" });
+
+        history.Query(new RoofCommandHistoryFilter()).TotalCount.Should().Be(2);
+    }
+
+    [TestMethod]
+    public void AnonymousStops_FromEverywhere_NeverPushAnyonesCommandsOut()
+    {
+        using var history = Create(new ManualTimeProvider(Start), new RoofCommandHistoryOptions { MaximumEntries = 100 });
+        for (var i = 0; i < 100; i++)
+        {
+            history.Record(Entry(RoofHistoryCommand.Open, "ada"));
+        }
+
+        for (var i = 0; i < 2_000; i++)
+        {
+            // A new source for each: no two are counted as one.
+            history.Record(AnonymousStop($"10.{i / 250}.{i % 250}.1"));
+        }
+
+        var all = history.Query(new RoofCommandHistoryFilter { Take = 500 });
+        history.Query(new RoofCommandHistoryFilter { PrincipalIds = ["person:ada@1"] }).TotalCount.Should().Be(100, "every Open is still there");
+        all.TotalCount.Should().Be(100 + RoofCommandHistoryContract.MaximumAnonymousEntries, "anonymous entries have a cap of their own");
+        all.Entries[0].RemoteAddress.Should().Be("10.7.249.1", "the newest anonymous Stops are the ones kept");
+    }
+
+    [TestMethod]
+    public void ACountedStop_IsSaved_AndReadBackWithItsCount()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.File("history.jsonl");
+        var clock = new ManualTimeProvider(Start);
+        using (var history = Create(clock, new RoofCommandHistoryOptions { StorePath = path }))
+        {
+            history.Record(AnonymousStop("192.168.1.66"));
+            history.Flush().Should().BeTrue();
+            clock.AdvanceWithoutTimers(TimeSpan.FromMinutes(1));
+            history.Record(AnonymousStop("192.168.1.66"));
+            history.Record(AnonymousStop("192.168.1.66"));
+            history.Flush().Should().BeTrue();
+        }
+
+        File.ReadAllLines(path).Should().HaveCount(2, "a change is one more line, not one per Stop");
+        using var restarted = Create(clock, new RoofCommandHistoryOptions { StorePath = path });
+        var entry = restarted.Query(new RoofCommandHistoryFilter()).Entries.Should().ContainSingle().Which;
+        entry.Count.Should().Be(3);
+        entry.LastTimestampUtc.Should().Be(Start.AddMinutes(1));
+        restarted.Record(AnonymousStop("192.168.1.66"))!.Count.Should().Be(1, "after a restart the next Stop starts a new entry");
+    }
+
+    // ---- A torn file, and its size ---------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void ALastLineCutShortAnywhere_NeverLosesTheEntriesBeforeIt()
+    {
+        using var directory = new TemporaryDirectory();
+        var clock = new ManualTimeProvider(Start);
+        var whole = directory.File("whole.jsonl");
+        using (var history = Create(clock, new RoofCommandHistoryOptions { StorePath = whole }))
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                history.Record(Entry(RoofHistoryCommand.Open, "ada") with { Detail = "näive détail" });
+            }
+
+            history.Flush().Should().BeTrue();
+        }
+
+        var bytes = File.ReadAllBytes(whole);
+        var lastLineStart = Array.LastIndexOf(bytes, (byte)'\n', bytes.Length - 2) + 1;
+
+        // Only the newline lost: the line is whole, and kept; the next entry starts a line of its own.
+        var unfinished = directory.File("unfinished.jsonl");
+        File.WriteAllBytes(unfinished, bytes[..^1]);
+        using (var history = Create(clock, new RoofCommandHistoryOptions { StorePath = unfinished }))
+        {
+            history.Query(new RoofCommandHistoryFilter()).TotalCount.Should().Be(3);
+            history.Record(Entry(RoofHistoryCommand.Close, "ada"));
+            history.Flush().Should().BeTrue();
+        }
+
+        using (var history = Create(clock, new RoofCommandHistoryOptions { StorePath = unfinished }))
+        {
+            history.Query(new RoofCommandHistoryFilter()).Entries.Select(entry => entry.Id).Should().Equal(4, 3, 2, 1);
+        }
+
+        for (var cut = lastLineStart; cut < bytes.Length - 1; cut++)
+        {
+            var path = directory.File($"cut-{cut}.jsonl");
+            File.WriteAllBytes(path, bytes[..cut]);
+            using (var history = Create(clock, new RoofCommandHistoryOptions { StorePath = path }))
+            {
+                history.Query(new RoofCommandHistoryFilter()).Entries.Select(entry => entry.Id)
+                    .Should().Equal([2, 1], "cut at byte {0}, only the last line is lost", cut);
+                history.Flush().Should().BeTrue();
+            }
+
+            using var again = Create(clock, new RoofCommandHistoryOptions { StorePath = path });
+            again.Query(new RoofCommandHistoryFilter()).TotalCount.Should().Be(2, "the file is kept, without the torn line");
+        }
+    }
+
+    [TestMethod]
+    public void ATailOfZeroes_AfterAPowerCut_IsSkipped_AndTheFileKept()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.File("history.jsonl");
+        var clock = new ManualTimeProvider(Start);
+        using (var history = Create(clock, new RoofCommandHistoryOptions { StorePath = path }))
+        {
+            history.Record(Entry(RoofHistoryCommand.Open, "ada"));
+            history.Flush().Should().BeTrue();
+        }
+
+        File.AppendAllText(path, new string('\0', 4096));
+
+        using var restarted = Create(clock, new RoofCommandHistoryOptions { StorePath = path });
+        restarted.Query(new RoofCommandHistoryFilter()).Entries.Should().ContainSingle().Which.Id.Should().Be(1);
+        restarted.Record(Entry(RoofHistoryCommand.Close, "ada"))!.Id.Should().Be(2);
+        restarted.Flush().Should().BeTrue();
+        File.ReadAllLines(path).Should().HaveCount(2);
+    }
+
+    [TestMethod]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void TheLargestFile_FitsWellInsideABackup()
+    {
+        // The longest entry the controller can record: every text at its limit, a refusal with an explanation.
+        var longest = new RoofCommandHistoryEntry
+        {
+            Id = long.MaxValue,
+            TimestampUtc = DateTimeOffset.MaxValue,
+            Command = RoofHistoryCommand.ClearFault,
+            User = new string('u', RoofIdentityContract.MaximumNameLength),
+            PrincipalId = "person:" + new string('u', RoofIdentityContract.MaximumNameLength) + "@" + long.MaxValue,
+            PrincipalKind = RoofHistoryPrincipalKind.ApiKey,
+            CredentialKind = RoofCredentialKind.Session,
+            OnBehalfOf = new string('o', RoofIdentityContract.MaximumNameLength),
+            Device = new string('d', RoofIdentityContract.MaximumNameLength),
+            RemoteAddress = "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255",
+            ForwardedBy = "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255",
+            Client = new string('c', 100),
+            Accepted = false,
+            Code = nameof(RoofControllerErrorCode.ConfigurationVersionConflict),
+            Detail = new string('x', 200),
+            Status = RoofControllerStatus.PartiallyClose,
+            StopReason = RoofControllerStopReason.DepartureLimitNotReleased,
+            IsFaultLatched = false,
+            Count = int.MaxValue,
+            LastTimestampUtc = DateTimeOffset.MaxValue
+        };
+        var line = JsonSerializer.SerializeToUtf8Bytes(longest, RoofCommandHistoryJsonContext.Default.RoofCommandHistoryEntry).Length + 1;
+        var kept = RoofCommandHistoryOptions.MostEntries + RoofCommandHistoryContract.MaximumAnonymousEntries;
+        var largestFile = (long)line * (kept + Math.Max(kept / 4, 50));
+
+        largestFile.Should().BeLessThan(HVO.RoofControllerV4.Installer.BackupCommands.MaxBytes / 2,
+            "a backup holds the identity store's directory whole, and takes {0} bytes in all", HVO.RoofControllerV4.Installer.BackupCommands.MaxBytes);
+    }
 
     // ---- Support --------------------------------------------------------------------------------------------------
 
@@ -424,11 +696,13 @@ public sealed class RoofCommandHistoryTests
         string? code = null,
         string? onBehalfOf = null,
         string? device = null,
-        RoofCredentialKind? credential = null)
+        RoofCredentialKind? credential = null,
+        string? principalId = null)
         => new()
         {
             Command = command,
             User = user,
+            PrincipalId = principalId ?? (kind == RoofHistoryPrincipalKind.ApiKey ? $"key:{user}" : $"person:{user}@1"),
             PrincipalKind = kind,
             CredentialKind = credential ?? (kind == RoofHistoryPrincipalKind.ApiKey ? RoofCredentialKind.ApiKey : RoofCredentialKind.Session),
             OnBehalfOf = onBehalfOf,
@@ -436,6 +710,17 @@ public sealed class RoofCommandHistoryTests
             Accepted = accepted,
             Code = code,
             Status = RoofControllerStatus.Closed
+        };
+
+    private static RoofCommandHistoryEntry AnonymousStop(string address, bool accepted = true, string? code = null)
+        => new()
+        {
+            Command = RoofHistoryCommand.Stop,
+            PrincipalKind = RoofHistoryPrincipalKind.Anonymous,
+            RemoteAddress = address,
+            Accepted = accepted,
+            Code = code,
+            Status = RoofControllerStatus.Stopped
         };
 
     private static ClaimsPrincipal Session(string name, RoofCredentialKind kind, string role, string? device = null)

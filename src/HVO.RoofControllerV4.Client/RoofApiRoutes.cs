@@ -73,6 +73,11 @@ internal static class RoofApiRoutes
             parameters.Add("user=" + Uri.EscapeDataString(query.User.Trim()));
         }
 
+        if (!string.IsNullOrWhiteSpace(query.PrincipalId))
+        {
+            parameters.Add("principalId=" + Uri.EscapeDataString(query.PrincipalId.Trim()));
+        }
+
         if (query.From is { } from)
         {
             parameters.Add("from=" + Uri.EscapeDataString(from.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));

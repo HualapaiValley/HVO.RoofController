@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.Net;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using Microsoft.AspNetCore.Http;
@@ -17,28 +17,20 @@ using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Storage;
 
-/// <summary>Whose commands a history request reads: one caller's own, or (null) everyone's.</summary>
-/// <param name="Kind">A person, or an API key that is not a person's own.</param>
-/// <param name="Name">The person or the key's name.</param>
-public sealed record RoofCommandHistoryOwner(RoofHistoryPrincipalKind Kind, string Name)
-{
-    /// <summary>
-    /// True for the owner's own commands: sent as them, or, for a person, by an API key whose holder said it acted for
-    /// them (the web UI's Stop key, say).
-    /// </summary>
-    public bool Owns(RoofCommandHistoryEntry entry)
-        => (entry.PrincipalKind == Kind && RoofCommandHistory.SameName(entry.User, Name))
-            || (Kind == RoofHistoryPrincipalKind.Person && RoofCommandHistory.SameName(entry.OnBehalfOf, Name));
-}
-
 /// <summary>A request for a page of the history, newest first.</summary>
 public sealed record RoofCommandHistoryFilter
 {
-    /// <summary>Only this caller's own commands; null for everyone's (an admin's request).</summary>
-    public RoofCommandHistoryOwner? Owner { get; init; }
+    /// <summary>
+    /// Only commands recorded under one of these identifiers (<see cref="RoofCommandHistoryPrincipals"/>): the caller's
+    /// own, or those an admin asked for. Null: everyone's (an admin's request). Never a name.
+    /// </summary>
+    public IReadOnlyCollection<string>? PrincipalIds { get; init; }
 
-    /// <summary>Only commands sent by, or on behalf of, this name (case-insensitive).</summary>
-    public string? User { get; init; }
+    /// <summary>
+    /// Whether the page says it may hold everyone's commands: true for an admin's request, filtered or not. Null: when
+    /// <see cref="PrincipalIds"/> is null.
+    /// </summary>
+    public bool? AllUsers { get; init; }
 
     /// <summary>Only commands at or after this time.</summary>
     public DateTimeOffset? From { get; init; }
@@ -51,27 +43,38 @@ public sealed record RoofCommandHistoryFilter
     public int Take { get; init; } = RoofCommandHistoryContract.DefaultTake;
 
     internal bool Matches(RoofCommandHistoryEntry entry)
-        => (Owner is null || Owner.Owns(entry))
-            && (string.IsNullOrEmpty(User) || RoofCommandHistory.SameName(entry.User, User) || RoofCommandHistory.SameName(entry.OnBehalfOf, User))
-            && (From is not { } from || entry.TimestampUtc >= from)
+        => (PrincipalIds is null || (entry.PrincipalId is { } id && PrincipalIds.Contains(id)))
+            && (From is not { } from || (entry.LastTimestampUtc ?? entry.TimestampUtc) >= from)
             && (To is not { } to || entry.TimestampUtc < to);
 }
 
 /// <summary>
 /// The roof command history (#206): every Open, Close, Stop and Clear fault the API was sent, accepted or refused, and
-/// refused lease renewals, with who sent it, from where, and the roof's status afterwards. Kept in memory and in the
-/// history file (<see cref="RoofCommandHistoryOptions.StorePath"/>), for <see cref="RoofCommandHistoryOptions.Retention"/>
-/// and up to <see cref="RoofCommandHistoryOptions.MaximumEntries"/> entries.
+/// refused lease renewals, with who sent it (by <see cref="RoofCommandHistoryPrincipals">identifier</see>, never by name
+/// alone), from where, and the roof's status afterwards. Kept in memory and in the history file
+/// (<see cref="RoofCommandHistoryOptions.StorePath"/>), for <see cref="RoofCommandHistoryOptions.Retention"/> and up to
+/// <see cref="RoofCommandHistoryOptions.MaximumEntries"/> entries, besides up to
+/// <see cref="RoofCommandHistoryContract.MaximumAnonymousEntries"/> anonymous ones.
 /// </summary>
 /// <remarks>
-/// Recording never waits for the disk and never throws for it: an entry is kept in memory at once, and this hosted
-/// service appends it to the file in the background, so a slow or failing disk never delays a command's answer (a
-/// Stop's above all). A file that cannot be read leaves the history in memory only, and the file as it is.
+/// <para>Recording never waits for the disk and never throws for it: an entry is kept in memory at once, and this hosted
+/// service appends it to the file in the background (within about a second, in one write for what came meanwhile), so a
+/// slow or failing disk never delays a command's answer (a Stop's above all). A file that cannot be read leaves the
+/// history in memory only, and the file as it is.</para>
+/// <para>Stop is never limited. Anonymous Stops (<c>AllowAnonymousStop</c>) from one source with the same answer, each
+/// within <see cref="AnonymousStopWindow"/> of the last, are kept as one entry with a count, and anonymous entries have a
+/// cap of their own, so nobody signed out can push anyone's commands out of the history.</para>
 /// </remarks>
 public sealed class RoofCommandHistory : BackgroundService
 {
     /// <summary>How soon a write that failed is tried again.</summary>
     internal static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long the writer gathers what is recorded before it writes: one write, not one per command.</summary>
+    internal static readonly TimeSpan WriteDelay = TimeSpan.FromSeconds(1);
+
+    /// <summary>Anonymous Stops from one source with the same answer, each this soon after the last, are one entry.</summary>
+    internal static readonly TimeSpan AnonymousStopWindow = TimeSpan.FromMinutes(10);
 
     private const int MaximumDetailLength = 200;
     private const int MaximumClientLength = 100;
@@ -81,16 +84,22 @@ public sealed class RoofCommandHistory : BackgroundService
     private readonly SemaphoreSlim _wake = new(0, 1);
     private readonly TimeProvider _time;
     private readonly ILogger<RoofCommandHistory> _logger;
+    private readonly RoofCommandHistoryPrincipals _principals;
     private readonly RoofCommandHistoryFile? _file;
     private readonly TimeSpan _retention;
     private readonly int _maximumEntries;
+    private readonly IReadOnlyList<IPAddress>? _trustedProxies;
 
-    // Oldest first. Guarded by _gate, as are _pending, _lastId and _compact.
+    // Oldest first (by identifier). Guarded by _gate, as are _pending, _lastId, _sequence, _compact and _anonymousStops.
     private readonly List<RoofCommandHistoryEntry> _entries = [];
 
-    // Recorded and not yet written to the file.
-    private readonly List<RoofCommandHistoryEntry> _pending = [];
+    // Recorded or changed and not yet written to the file, each with the sequence number it was queued at.
+    private readonly List<(long Sequence, RoofCommandHistoryEntry Entry)> _pending = [];
+
+    // For each anonymous source, the identifier of its latest anonymous Stop entry.
+    private readonly Dictionary<string, long> _anonymousStops = new(StringComparer.Ordinal);
     private long _lastId;
+    private long _sequence;
     private bool _compact;
 
     // Guarded by _fileGate: only the writer touches the file.
@@ -102,12 +111,14 @@ public sealed class RoofCommandHistory : BackgroundService
         IOptions<RoofCommandHistoryOptions> options,
         IOptions<RoofIdentityOptions> identity,
         TimeProvider time,
-        ILogger<RoofCommandHistory> logger)
+        ILogger<RoofCommandHistory> logger,
+        RoofCommandHistoryPrincipals? principals = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(identity);
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _principals = principals ?? new RoofCommandHistoryPrincipals();
 
         var settings = options.Value;
         foreach (var problem in settings.Validate())
@@ -121,6 +132,7 @@ public sealed class RoofCommandHistory : BackgroundService
         _maximumEntries = settings.MaximumEntries is >= RoofCommandHistoryOptions.MinimumEntries and <= RoofCommandHistoryOptions.MostEntries
             ? settings.MaximumEntries
             : RoofCommandHistoryContract.DefaultMaximumEntries;
+        _trustedProxies = settings.ParseTrustedProxies();
 
         var path = ResolvePath(settings.StorePath, identity.Value.StorePath);
         if (path is null)
@@ -139,6 +151,8 @@ public sealed class RoofCommandHistory : BackgroundService
             _file = file;
             _fileLines = contents.Lines;
             _fileEndsWithNewline = contents.EndsWithNewline;
+
+            // An entry changed after it was written (a count of anonymous Stops) is on a later line: the last one counts.
             var loaded = contents.Entries
                 .GroupBy(entry => entry.Id)
                 .Select(group => group.Last())
@@ -148,7 +162,7 @@ public sealed class RoofCommandHistory : BackgroundService
             _entries.AddRange(loaded);
             PruneLocked(_time.GetUtcNow());
 
-            // Lines that are expired, beyond the limit or unreadable are left out of the file at the next write.
+            // Lines that are expired, beyond the limits, repeated or unreadable are left out of the file at the next write.
             _compact = _entries.Count != contents.Lines;
             if (contents.Unreadable > 0)
             {
@@ -182,7 +196,10 @@ public sealed class RoofCommandHistory : BackgroundService
 
     public int MaximumEntries => _maximumEntries;
 
-    /// <summary>How many entries are kept now.</summary>
+    /// <summary>The identifiers commands are recorded and matched by.</summary>
+    public RoofCommandHistoryPrincipals Principals => _principals;
+
+    /// <summary>How many entries are kept now, anonymous ones included.</summary>
     public int Count
     {
         get
@@ -196,8 +213,9 @@ public sealed class RoofCommandHistory : BackgroundService
     }
 
     /// <summary>
-    /// Records a command's answer: <paramref name="entry"/> with the next identifier and the time now. Returns the
-    /// entry kept, or null when this kind of entry is not kept (an accepted lease renewal). Never waits for the disk.
+    /// Records a command's answer: <paramref name="entry"/> with the next identifier and the time now, or, for an anonymous
+    /// Stop like the last from its source within <see cref="AnonymousStopWindow"/>, that entry counted once more. Returns
+    /// the entry kept, or null when this kind of entry is not kept (an accepted lease renewal). Never waits for the disk.
     /// </summary>
     public RoofCommandHistoryEntry? Record(RoofCommandHistoryEntry entry)
     {
@@ -211,17 +229,23 @@ public sealed class RoofCommandHistory : BackgroundService
         lock (_gate)
         {
             var now = _time.GetUtcNow();
-            stored = entry with { Id = ++_lastId, TimestampUtc = now };
-            _entries.Add(stored);
             PruneLocked(now);
-            if (_file is not null)
+            var source = IsAnonymousStop(entry) ? SourceOf(entry) : null;
+            if (source is not null && TryCountAgainLocked(source, entry, now) is { } counted)
             {
-                _pending.Add(stored);
-                if (_pending.Count > _maximumEntries)
+                stored = counted;
+            }
+            else
+            {
+                stored = entry with { Id = ++_lastId, TimestampUtc = now, Count = 1, LastTimestampUtc = null };
+                _entries.Add(stored);
+                if (source is not null)
                 {
-                    // The file cannot be written; keep no more than the history would.
-                    _pending.RemoveRange(0, _pending.Count - _maximumEntries);
+                    RememberAnonymousStopLocked(source, stored.Id);
                 }
+
+                PruneLocked(now);
+                QueueLocked(stored);
             }
         }
 
@@ -267,7 +291,7 @@ public sealed class RoofCommandHistory : BackgroundService
             TotalCount = total,
             Skip = skip,
             Take = take,
-            AllUsers = filter.Owner is null,
+            AllUsers = filter.AllUsers ?? filter.PrincipalIds is null,
             RetentionDays = _retention.TotalDays,
             MaximumEntries = _maximumEntries,
             IsPersistent = IsPersistent
@@ -298,11 +322,13 @@ public sealed class RoofCommandHistory : BackgroundService
                 }
 
                 PruneLocked(_time.GetUtcNow());
-                batch = _pending.ToArray();
-                upTo = _lastId;
-                if (_compact || _fileLines + batch.Length > _maximumEntries + Math.Max(_maximumEntries / 4, 50))
+                batch = _pending.Select(item => item.Entry).ToArray();
+                upTo = _sequence;
+                // Compacted once a quarter more lines than are kept are no longer kept (expired, beyond a limit, or an
+                // earlier version of an entry since changed).
+                if (_compact || _fileLines + batch.Length > _entries.Count + Math.Max(_entries.Count / 4, 50))
                 {
-                    // Everything up to upTo is in kept, or no longer kept at all.
+                    // Everything queued up to upTo is in kept as it is now, or no longer kept at all.
                     kept = _entries.ToArray();
                 }
             }
@@ -341,7 +367,8 @@ public sealed class RoofCommandHistory : BackgroundService
 
             lock (_gate)
             {
-                _pending.RemoveAll(entry => entry.Id <= upTo);
+                // A change queued meanwhile has a later sequence number, and is written next time.
+                _pending.RemoveAll(item => item.Sequence <= upTo);
                 if (kept is not null)
                 {
                     _compact = false;
@@ -366,6 +393,7 @@ public sealed class RoofCommandHistory : BackgroundService
             while (true)
             {
                 await _wake.WaitAsync(stoppingToken).ConfigureAwait(false);
+                await Task.Delay(WriteDelay, _time, stoppingToken).ConfigureAwait(false);
                 while (!Flush())
                 {
                     await Task.Delay(RetryDelay, _time, stoppingToken).ConfigureAwait(false);
@@ -418,11 +446,13 @@ public sealed class RoofCommandHistory : BackgroundService
     }
 
     /// <summary>
-    /// The entry for a roof command sent with <paramref name="context"/>: who sent it, from where and with what program,
-    /// and the controller's answer (<paramref name="status"/> when it carried it out, <paramref name="refusal"/> when it
-    /// did not). Identifier and time are given by <see cref="Record"/>.
+    /// The entry for a roof command sent with <paramref name="context"/>: who sent it (and their identifier), from where
+    /// and with what program, and the controller's answer (<paramref name="status"/> when it carried it out,
+    /// <paramref name="refusal"/> when it did not). The address is the person's when the request came from a trusted proxy
+    /// (the web UI) naming one address in <c>X-Forwarded-For</c>; otherwise the header is ignored. Identifier and time are
+    /// given by <see cref="Record"/>.
     /// </summary>
-    public static RoofCommandHistoryEntry Describe(
+    public RoofCommandHistoryEntry Describe(
         HttpContext context,
         RoofHistoryCommand command,
         RoofStatusResponse? status,
@@ -437,15 +467,22 @@ public sealed class RoofCommandHistory : BackgroundService
             status ??= attached as RoofStatusResponse;
         }
 
+        var connection = Normalize(context.Connection.RemoteIpAddress);
+        var forwarded = connection is not null && IsTrustedProxy(connection)
+            ? SingleForwardedAddress(context.Request.Headers[RoofCommandHistoryContract.ForwardedForHeaderName])
+            : null;
+
         return new RoofCommandHistoryEntry
         {
             Command = command,
             User = name,
+            PrincipalId = name is null ? null : _principals.IdOf(user),
             PrincipalKind = PrincipalKindOf(user),
             CredentialKind = credential,
             OnBehalfOf = name is null ? null : Present(user.FindFirst(RoofPrincipalFactory.OnBehalfOfClaimType)?.Value),
             Device = credential == RoofCredentialKind.Pin ? Present(user.FindFirst(RoofPrincipalFactory.DeviceClaimType)?.Value) : null,
-            RemoteAddress = Address(context.Connection.RemoteIpAddress),
+            RemoteAddress = (forwarded ?? connection)?.ToString(),
+            ForwardedBy = forwarded is null ? null : connection!.ToString(),
             Client = Printable(context.Request.Headers.UserAgent.ToString(), MaximumClientLength),
             Accepted = refusal is null,
             Code = refusal?.Extensions.TryGetValue(RoofControllerApiContract.ProblemCodeExtension, out var code) == true ? code as string : null,
@@ -454,15 +491,6 @@ public sealed class RoofCommandHistory : BackgroundService
             StopReason = status?.LastStopReason,
             IsFaultLatched = status?.IsFaultLatched
         };
-    }
-
-    /// <summary>The history <paramref name="user"/> may read as their own; null when they are not signed in.</summary>
-    public static RoofCommandHistoryOwner? OwnerOf(ClaimsPrincipal user)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        return user.Identity is { IsAuthenticated: true, Name: { Length: > 0 } name }
-            ? new RoofCommandHistoryOwner(PrincipalKindOf(user), name)
-            : null;
     }
 
     /// <summary>The history's command for one of <c>RoofController</c>'s operations; null for one it does not record.</summary>
@@ -476,10 +504,7 @@ public sealed class RoofCommandHistory : BackgroundService
         _ => null
     };
 
-    internal static bool SameName(string? left, string? right)
-        => left is not null && right is not null && string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
-
-    private static RoofHistoryPrincipalKind PrincipalKindOf(ClaimsPrincipal user)
+    private static RoofHistoryPrincipalKind PrincipalKindOf(System.Security.Claims.ClaimsPrincipal user)
     {
         if (user.Identity is not { IsAuthenticated: true, Name.Length: > 0 })
         {
@@ -492,8 +517,18 @@ public sealed class RoofCommandHistory : BackgroundService
             : RoofHistoryPrincipalKind.ApiKey;
     }
 
-    private static string? Address(IPAddress? address)
-        => address is null ? null : (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
+    private bool IsTrustedProxy(IPAddress address)
+        => _trustedProxies is null ? IPAddress.IsLoopback(address) : _trustedProxies.Contains(address);
+
+    /// <summary>The one address in <c>X-Forwarded-For</c>; null for none, several (a chain this controller does not know) or a malformed one.</summary>
+    private static IPAddress? SingleForwardedAddress(Microsoft.Extensions.Primitives.StringValues values)
+    {
+        var parts = string.Join(',', values.ToArray()).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1 && IPAddress.TryParse(parts[0], out var address) ? Normalize(address) : null;
+    }
+
+    private static IPAddress? Normalize(IPAddress? address)
+        => address is { IsIPv4MappedToIPv6: true } ? address.MapToIPv4() : address;
 
     private static string? Present(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
@@ -507,6 +542,110 @@ public sealed class RoofCommandHistory : BackgroundService
 
         var text = new string(value.Where(c => c is >= ' ' and <= '~').Take(length).ToArray()).Trim();
         return text.Length == 0 ? null : text;
+    }
+
+    private static bool IsAnonymousStop(RoofCommandHistoryEntry entry)
+        => entry is { PrincipalKind: RoofHistoryPrincipalKind.Anonymous, Command: RoofHistoryCommand.Stop };
+
+    /// <summary>
+    /// An anonymous source, as the sign-in limit counts one (<see cref="RoofCallerAddress"/>): an IPv6 address from another
+    /// network by its /64, so picking a new address for each Stop does not make each a new source.
+    /// </summary>
+    private static string SourceOf(RoofCommandHistoryEntry entry)
+        => IPAddress.TryParse(entry.RemoteAddress, out var address) ? RoofCallerAddress.Of(address) : "unknown";
+
+    /// <summary>The source's latest anonymous Stop, counted once more when this one is like it and soon enough after; else null.</summary>
+    private RoofCommandHistoryEntry? TryCountAgainLocked(string source, RoofCommandHistoryEntry entry, DateTimeOffset now)
+    {
+        if (!_anonymousStops.TryGetValue(source, out var id) || IndexOfLocked(id) is not { } index)
+        {
+            return null;
+        }
+
+        var last = _entries[index];
+        if (last.Accepted != entry.Accepted || !string.Equals(last.Code, entry.Code, StringComparison.Ordinal)
+            || now - (last.LastTimestampUtc ?? last.TimestampUtc) > AnonymousStopWindow)
+        {
+            return null;
+        }
+
+        var counted = last with
+        {
+            Count = last.Count + 1,
+            LastTimestampUtc = now,
+            RemoteAddress = entry.RemoteAddress,
+            Client = entry.Client,
+            Detail = entry.Detail,
+            Status = entry.Status,
+            StopReason = entry.StopReason,
+            IsFaultLatched = entry.IsFaultLatched
+        };
+        _entries[index] = counted;
+        QueueLocked(counted);
+        return counted;
+    }
+
+    private void RememberAnonymousStopLocked(string source, long id)
+    {
+        _anonymousStops[source] = id;
+        if (_anonymousStops.Count > 2 * RoofCommandHistoryContract.MaximumAnonymousEntries)
+        {
+            // Forget the sources whose entries are gone.
+            foreach (var (gone, _) in _anonymousStops.Where(pair => IndexOfLocked(pair.Value) is null).ToList())
+            {
+                _anonymousStops.Remove(gone);
+            }
+        }
+    }
+
+    private int? IndexOfLocked(long id)
+    {
+        var low = 0;
+        var high = _entries.Count - 1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            var found = _entries[middle].Id;
+            if (found == id)
+            {
+                return middle;
+            }
+
+            if (found < id)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Queues an entry to be written; a newer version of one already queued takes its place.</summary>
+    private void QueueLocked(RoofCommandHistoryEntry entry)
+    {
+        if (_file is null)
+        {
+            return;
+        }
+
+        var sequence = ++_sequence;
+        var queued = _pending.FindLastIndex(item => item.Entry.Id == entry.Id);
+        if (queued >= 0)
+        {
+            _pending.RemoveAt(queued);
+        }
+
+        _pending.Add((sequence, entry));
+        var most = _maximumEntries + RoofCommandHistoryContract.MaximumAnonymousEntries;
+        if (_pending.Count > most)
+        {
+            // The file cannot be written; keep no more than the history would.
+            _pending.RemoveRange(0, _pending.Count - most);
+        }
     }
 
     private void Wake()
@@ -525,6 +664,10 @@ public sealed class RoofCommandHistory : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Drops expired entries, then the oldest anonymous entries beyond their own cap, then the oldest of the others beyond
+    /// <see cref="MaximumEntries"/>.
+    /// </summary>
     private void PruneLocked(DateTimeOffset now)
     {
         var expired = 0;
@@ -534,15 +677,34 @@ public sealed class RoofCommandHistory : BackgroundService
             expired++;
         }
 
-        var excess = Math.Max(0, _entries.Count - expired - _maximumEntries);
-        if (expired + excess > 0)
+        if (expired > 0)
         {
-            _entries.RemoveRange(0, expired + excess);
+            _entries.RemoveRange(0, expired);
+        }
+
+        var anonymous = _entries.Count(entry => entry.PrincipalKind == RoofHistoryPrincipalKind.Anonymous);
+        RemoveOldest(anonymous - RoofCommandHistoryContract.MaximumAnonymousEntries, anonymous: true);
+        RemoveOldest(_entries.Count - Math.Min(anonymous, RoofCommandHistoryContract.MaximumAnonymousEntries) - _maximumEntries, anonymous: false);
+
+        void RemoveOldest(int excess, bool anonymous)
+        {
+            for (var i = 0; excess > 0 && i < _entries.Count;)
+            {
+                if ((_entries[i].PrincipalKind == RoofHistoryPrincipalKind.Anonymous) == anonymous)
+                {
+                    _entries.RemoveAt(i);
+                    excess--;
+                }
+                else
+                {
+                    i++;
+                }
+            }
         }
     }
 }
 
-/// <summary>Registers the roof command history and its background writer.</summary>
+/// <summary>Registers the roof command history, the identifiers it records, and its background writer.</summary>
 public static class RoofCommandHistoryServiceCollectionExtensions
 {
     public static IServiceCollection AddRoofCommandHistory(this IServiceCollection services, Microsoft.Extensions.Configuration.IConfiguration configuration)
@@ -550,7 +712,15 @@ public static class RoofCommandHistoryServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
         services.AddOptions<RoofCommandHistoryOptions>().Bind(configuration.GetSection(RoofCommandHistoryOptions.SectionName));
-        services.AddSingleton<RoofCommandHistory>();
+        services.AddSingleton(provider => new RoofCommandHistoryPrincipals(
+            provider.GetRequiredService<RoofIdentityStore>(),
+            provider.GetRequiredService<RoofApiKeyStore>()));
+        services.AddSingleton(provider => new RoofCommandHistory(
+            provider.GetRequiredService<IOptions<RoofCommandHistoryOptions>>(),
+            provider.GetRequiredService<IOptions<RoofIdentityOptions>>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<ILogger<RoofCommandHistory>>(),
+            provider.GetRequiredService<RoofCommandHistoryPrincipals>()));
         services.AddHostedService(provider => provider.GetRequiredService<RoofCommandHistory>());
         return services;
     }

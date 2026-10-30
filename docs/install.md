@@ -1523,7 +1523,9 @@ says so, puts nothing back, and the rollback is a swap.
 before it changes anything: [State contracts](#state-contracts)):
 
 - `/etc/hvo-roof`: the settings, the secrets, the certificate, the CA with its key, and the install record;
-- `/var/lib/hvo-roof`: the people, the API keys and the settings set through the API;
+- `/var/lib/hvo-roof`: the people, the API keys, the settings set through the API, and the roof command history
+  (`identity/command-history.jsonl`, about 4 MB at its default 10,000 commands and at most about 30 MB, so a backup
+  stays well inside the 64 MB it takes in all: [The command history](security.md#the-command-history));
 - `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
 
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,

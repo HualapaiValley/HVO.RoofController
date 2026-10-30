@@ -164,6 +164,7 @@ public static class WebAccountEndpoints
         try
         {
             session = store.Open(credential);
+            session.ForwardFor(remote);
         }
         catch (ArgumentException)
         {
