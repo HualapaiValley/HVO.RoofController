@@ -48,7 +48,8 @@ confirms the correction after a coordinated restart.
 
 ## The screen
 
-- **Navigation** along the bottom: Roof, Readings, Notices, About, Terminal and Unlock (Lock while unlocked). Administration belongs in the CLI/TUI or web UI. Terminal appears only in the systemd-managed direct-display kiosk.
+- **Navigation** along the bottom: Roof, Readings, Notices, About, Terminal and Unlock (Lock while unlocked, with
+  [Change PIN](#change-your-pin) before it). Administration belongs in the CLI/TUI or web UI. Terminal appears only in the systemd-managed direct-display kiosk.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the kiosk renews it (`Renewing lease (6 s left)`), and
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
@@ -131,6 +132,38 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
   <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display: Opening… in bright green, Close not offered, and Stop bright red" width="400">
   <img src="images/kiosk/fault-800x480.png" alt="A latched fault: the fault banner, Clear fault offered, Open and Close refused" width="400">
 </p>
+
+### Change your PIN
+
+While the kiosk is unlocked with a PIN, **Change PIN** in the bottom bar changes the unlocked person's own PIN (#205),
+on the same keypad as Unlock: `Change your PIN: first enter your current PIN.`, then `Choose your new four-digit PIN.`,
+then `Enter your new PIN again to confirm.`, and **Change PIN** sends it (`POST Auth/Pin/Change`, with this kiosk's
+PIN session; [Changing a PIN](security.md#changing-a-pin)). Every PIN shows as dots, and each is held only until it is
+sent.
+
+- A new PIN that cannot be right is refused before anything is sent: one that is not four digits, the reserved
+  temporary PIN, or the current one. Two new PINs that differ are chosen again.
+- A wrong current PIN says `The current PIN is not correct. Your PIN was not changed.` The kiosk stays unlocked, and
+  **Try again** starts over from the current PIN. A wrong current PIN counts towards the same lockouts as a wrong PIN
+  at Unlock: that name at every kiosk, and this kiosk for every name ([Lockout](security.md#signing-in)).
+- Once it changed: `Your PIN was changed. Your other PIN sessions were ended.` The kiosk stays unlocked: this PIN
+  session is kept, and the person's PIN sessions at other kiosks end. Their password sessions (the web UI, the
+  terminal) are not touched. **Done** returns to the roof.
+- **Cancel**, another page, and the kiosk locking (Lock, the idle lock, the controller ending the session) end the
+  change and forget every PIN typed. An answer that arrives after that is dropped. When the answer never comes, the
+  kiosk says the PIN may have changed: unlock with the new one next time to find out, and if it is refused, the
+  current one still works.
+- The first PIN is an admin's to give (the web UI's People page, `hvo-roof pins set <name>`); a person changes it from
+  then on. The owner of the kiosk's commissioned PIN ([kiosk-commissioning.md](kiosk-commissioning.md)) changes it the
+  same way, after unlocking with it. People change their PIN in the web UI and the terminal too.
+- The Mac app, which signs in with a password, does not offer it.
+
+<p>
+  <img src="images/kiosk/change-pin-1280x720.png" alt="Change PIN: the keypad asks for the current PIN, shown as dots, with Next and Cancel, and Stop at the right" width="480">
+  <img src="images/kiosk/change-pin-800x480.png" alt="Change PIN on the first 7-inch display" width="300">
+</p>
+
+![The PIN changed: the kiosk stays unlocked, and Done returns to the roof](images/kiosk/change-pin-done-1280x720.png)
 
 ### Settings
 
@@ -461,6 +494,9 @@ Nothing here needs the Pi, the display or the roof.
   the lease (renewed only while this kiosk moves the roof), Stop's answers, the stale, unreachable and refused status,
   the screen timeout, the settings editors and their refusals, System and Restart, and that an answer that arrives
   after the kiosk locks is not shown to the next person. Against the controller's API in process, with a mocked roof.
+  `KioskPinChangeTests` changes a PIN on the keypad (a personal PIN and the commissioned one): the kiosk stays
+  unlocked, a wrong current PIN ends nothing, a new PIN that cannot be right is never sent, and every PIN typed is
+  forgotten on Cancel, on another page and when the kiosk locks, with Stop whole on every step.
 - **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.
@@ -487,7 +523,7 @@ Nothing here needs the Pi, the display or the roof.
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests"
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests|FullyQualifiedName~KioskPinChangeTests"
   for f in ../docs/images/kiosk/*.png; do
     if [ -f "/tmp/kiosk-renders/$(basename "$f")" ]; then cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; fi
   done
