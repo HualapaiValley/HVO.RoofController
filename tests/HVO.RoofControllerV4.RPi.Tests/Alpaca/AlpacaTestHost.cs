@@ -56,6 +56,13 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
         bool waitForStatus = true)
         => StartAsync(controller is null ? null : () => controller.Server, controller, settings, remote, apiKey, waitForStatus);
 
+    /// <summary>
+    /// Starts the server in front of a controller whose every REST request <paramref name="answer"/> answers, and whose
+    /// status hub cannot be reached (for the answers a real controller would not give).
+    /// </summary>
+    public static Task<AlpacaTestHost> StartAsync(Func<HttpRequestMessage, HttpResponseMessage> answer)
+        => StartAsync(null, null, null, null, TestApiKeys.Viewer, waitForStatus: false, answer);
+
     /// <summary>Starts the server in front of the controller <paramref name="server"/> serves (the emulated rig's).</summary>
     public static Task<AlpacaTestHost> StartAsync(Func<TestServer> server, IReadOnlyDictionary<string, string?>? settings = null)
         => StartAsync(server, null, settings, null, TestApiKeys.Viewer, waitForStatus: true);
@@ -66,7 +73,8 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
         IReadOnlyDictionary<string, string?>? settings,
         IPAddress? remote,
         string apiKey,
-        bool waitForStatus)
+        bool waitForStatus,
+        Func<HttpRequestMessage, HttpResponseMessage>? answer = null)
     {
         var directory = Directory.CreateTempSubdirectory("hvo-alpaca-tests-").FullName;
         var keyFile = Path.Combine(directory, "key");
@@ -100,7 +108,7 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
                 {
                     BaseAddress = new Uri("http://localhost/"),
                     Credential = new RoofApiKeyCredential(apiKey),
-                    CreateHandler = () => new UnreachableHandler(),
+                    CreateHandler = () => answer is null ? new UnreachableHandler() : new HVO.RoofControllerV4.RPi.Tests.Web.WebTestSupport.StubHandler(answer),
                     WebSocketFactory = (_, _, _) => throw new HttpRequestException("The controller cannot be reached (test)."),
                     StatusFeed = ClientTestSupport.FastFeed,
                     RequestTimeout = TimeSpan.FromSeconds(5),

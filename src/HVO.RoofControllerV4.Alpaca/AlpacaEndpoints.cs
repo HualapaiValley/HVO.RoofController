@@ -20,6 +20,9 @@ internal static class AlpacaEndpoints
 
     public const string Manufacturer = "Hualapai Valley Observatory";
 
+    /// <summary>The device route's value naming the member.</summary>
+    public const string MemberRouteValue = "member";
+
     public static void MapAlpaca(this WebApplication app)
     {
         app.MapGet("/management/apiversions", (HttpContext context, AlpacaTransactions transactions) => ManagementAsync(context, transactions, writer =>

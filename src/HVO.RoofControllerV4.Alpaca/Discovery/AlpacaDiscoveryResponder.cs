@@ -10,8 +10,9 @@ namespace HVO.RoofControllerV4.Alpaca.Discovery;
 /// Answers Alpaca discovery: a UDP datagram <c>alpacadiscovery1</c> to <see cref="AlpacaDiscoveryOptions.Port"/> (32227),
 /// broadcast on IPv4 or, with <see cref="AlpacaDiscoveryOptions.IPv6"/>, sent to the multicast group ff12::a1:9aca, is
 /// answered to its sender with <c>{"AlpacaPort":11111}</c> (the advertised port). Only clients within
-/// <see cref="AlpacaOptions.AllowedNetworks"/> are answered, and only loopback ones when the server listens on loopback
-/// alone. The sockets share the port (SO_REUSEADDR), so another Alpaca server on the same computer can answer too.
+/// <see cref="AlpacaOptions.AllowedNetworks"/> are answered, and of those only loopback ones when the server listens on
+/// loopback alone. The sockets share the port (SO_REUSEADDR), so another Alpaca server on the same computer can answer
+/// too.
 /// </summary>
 /// <remarks>
 /// A container on Docker's bridge network never receives the LAN's broadcasts. There the responder runs by itself on
@@ -31,6 +32,7 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
 
     private readonly AlpacaOptions _options;
     private readonly IReadOnlyList<IPNetwork> _networks;
+    private readonly bool _loopbackOnly;
     private readonly byte[] _answer;
     private readonly ILogger<AlpacaDiscoveryResponder> _logger;
     private readonly TaskCompletionSource<int> _bound = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -39,10 +41,10 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
     {
         _options = options;
         _logger = logger;
-        // The server listening on loopback alone can be reached from this computer only, so only it is told of the server.
-        _networks = !discoveryOnly && options.ListenAddresses.Length > 0 && AlpacaNetworks.AllLoopback(options.ParsedListenAddresses)
-            ? [IPNetwork.Parse("127.0.0.0/8"), IPNetwork.Parse("::1/128")]
-            : options.EffectiveAllowedNetworks;
+        _networks = options.EffectiveAllowedNetworks;
+        // The server listening on loopback alone can be reached from this computer only, so only it is told of the server,
+        // and only when the allowed networks include it.
+        _loopbackOnly = !discoveryOnly && options.ListenAddresses.Length > 0 && AlpacaNetworks.AllLoopback(options.ParsedListenAddresses);
         _answer = Encoding.ASCII.GetBytes($"{{\"AlpacaPort\":{options.AdvertisedPort}}}");
     }
 
@@ -159,7 +161,8 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
 
             if (received.RemoteEndPoint is not IPEndPoint sender
                 || !IsDiscovery(buffer.AsSpan(0, received.ReceivedBytes))
-                || !AlpacaNetworks.Contains(_networks, sender.Address))
+                || !AlpacaNetworks.Contains(_networks, sender.Address)
+                || (_loopbackOnly && !IPAddress.IsLoopback(AlpacaNetworks.Normalize(sender.Address))))
             {
                 continue;
             }

@@ -10,12 +10,14 @@ namespace HVO.RoofControllerV4.Alpaca.Roof;
 /// Alpaca read is served from the last status published, never by asking the controller, and never from a status that
 /// is not current: while the controller cannot be reached, before its first status, or once its hub has been silent
 /// for 3 s (<see cref="RoofStatusFeedOptions.StaleAfter"/>), a read is an Alpaca error
-/// (<see cref="AlpacaErrors.ControllerUnavailable"/>).
+/// (<see cref="AlpacaErrors.ControllerUnavailable"/>). The 3 s are checked on every read against when the last message
+/// arrived, so a read never depends on the feed's timer having run.
 /// </summary>
 /// <remarks>
-/// A command's answer carries the controller's status straight after it. It is merged with the hub's in the
-/// controller's order (<see cref="RoofStatusRules.ShouldApply"/>), so an older hub message cannot overwrite it, and a
-/// read straight after the command reflects it. Thread-safe.
+/// A command's answer carries the controller's status straight after it. It is served once it is newer than the hub's
+/// status from the same controller instance, so a read straight after the command reflects it and an older hub
+/// message cannot undo it. An answer from another instance (a controller that has since restarted) is never served:
+/// only the hub moves the server to a new instance. Thread-safe.
 /// </remarks>
 public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
 {
@@ -23,6 +25,8 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
     private readonly ILogger<AlpacaRoof> _logger;
     private readonly object _gate = new();
     private readonly RoofStatusFeed _feed;
+    private readonly TimeProvider _time;
+    private readonly TimeSpan _staleAfter;
     private RoofStatusResponse? _latest;
     private int _keyChecked;
 
@@ -30,6 +34,8 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
     {
         _client = client;
         _logger = logger;
+        _time = client.Options.TimeProvider;
+        _staleAfter = client.Options.StatusFeed.StaleAfter;
         _feed = client.CreateStatusFeed();
         _feed.StatusReceived += OnStatus;
         _feed.StateChanged += OnStateChanged;
@@ -57,6 +63,10 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
                 "The roof controller refused the Alpaca server's API key, so the roof's state is unknown. Check Alpaca:ControllerApiKeyFile.");
         }
 
+        // When the last message arrived is read before the message, so a message arriving in between is judged by the
+        // earlier time: never fresher than it is.
+        var now = _time.GetUtcNow();
+        var lastMessage = _feed.LastMessageUtc;
         var status = _feed.Status;
         if (status is null)
         {
@@ -71,9 +81,16 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
                 $"The roof controller's status is not current (nothing from it since {since.UtcDateTime:yyyy-MM-dd HH:mm:ss} UTC); the roof's state is unknown.");
         }
 
+        if (lastMessage is not { } last || now - last >= _staleAfter)
+        {
+            throw new AlpacaException(
+                AlpacaErrors.ControllerUnavailable,
+                $"The roof controller's status is not current (nothing from it for {_staleAfter.TotalSeconds:0.#} s or more); the roof's state is unknown.");
+        }
+
         lock (_gate)
         {
-            return _latest is not null && RoofStatusRules.ShouldApply(status, _latest) ? _latest : status;
+            return IsNewerFromTheSameInstance(status, _latest) ? _latest! : status;
         }
     }
 
@@ -103,18 +120,34 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
     {
         var result = await _client.StopAsync(CancellationToken.None).ConfigureAwait(false);
         Offer(result.Status);
+        var verified = result.Outcome == RoofStopOutcome.Acknowledged && ShowsRelaysVerifiedOff(result.Status);
         _logger.LogInformation(
-            "Alpaca AbortSlew from {RemoteAddress} (ClientID {ClientId}, ClientTransactionID {ClientTransactionId}): Stop {Outcome}",
-            client, clientId, clientTransactionId, result.Outcome);
+            "Alpaca AbortSlew from {RemoteAddress} (ClientID {ClientId}, ClientTransactionID {ClientTransactionId}): Stop {Outcome}, relays verified off: {Verified}",
+            client, clientId, clientTransactionId, result.Outcome, verified);
         return result.Outcome switch
         {
-            RoofStopOutcome.Acknowledged => result.Status,
-            RoofStopOutcome.RelayUnverified => throw new AlpacaException(AlpacaErrors.RelayStateUnverified, result.Message),
+            RoofStopOutcome.Acknowledged when verified => result.Status,
+            RoofStopOutcome.Acknowledged or RoofStopOutcome.RelayUnverified => throw new AlpacaException(AlpacaErrors.RelayStateUnverified, UnconfirmedStop),
             _ => throw new AlpacaException(ErrorNumberFor(result.Error), result.Message),
         };
     }
 
-    /// <summary>Takes a status a command returned, when it is newer than the one held.</summary>
+    /// <summary>What AbortSlew answers when the controller's answer to Stop does not show the relays verified off.</summary>
+    public const string UnconfirmedStop =
+        "The controller answered Stop, but its answer does not show the relay register verified all off: confirm at the roof that the motor has stopped.";
+
+    /// <summary>
+    /// True when <paramref name="status"/>, a Stop's answer, shows the stop done: the relay register read back and verified
+    /// all off (zero), and no motion commanded. Anything less (no status, one that could not be read, a register not read
+    /// back, a relay on, motion still commanded) is not a verified stop.
+    /// </summary>
+    public static bool ShowsRelaysVerifiedOff(RoofStatusResponse? status)
+        => status is { RelayRegisterState: RoofRelayRegisterState.Verified, RelayRegisterMask: 0, IsMoving: false, CommandedMotion: RoofMotionDirection.None };
+
+    /// <summary>
+    /// Takes a status a command returned, when it is newer than the one held from the same controller instance. An answer
+    /// from another instance (one that has since restarted) is dropped.
+    /// </summary>
     public void Offer(RoofStatusResponse? status)
     {
         if (status is null)
@@ -124,12 +157,19 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
 
         lock (_gate)
         {
-            if (RoofStatusRules.ShouldApply(_latest, status))
+            if (IsNewerFromTheSameInstance(_latest, status))
             {
                 _latest = status;
             }
         }
     }
+
+    // Statuses compare only within one controller instance; equal versions count as newer, as RoofStatusRules has it for
+    // controllers that report 0 for every snapshot.
+    private static bool IsNewerFromTheSameInstance(RoofStatusResponse? current, RoofStatusResponse? candidate)
+        => current is not null && candidate is not null
+            && string.Equals(current.ControllerInstanceId, candidate.ControllerInstanceId, StringComparison.Ordinal)
+            && candidate.StatusVersion >= current.StatusVersion;
 
     /// <summary>The Alpaca error number for a failed request to the controller.</summary>
     public static int ErrorNumberFor(Exception? error) => error switch
@@ -150,7 +190,15 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
 
     private void OnStatus(object? sender, RoofStatusReceivedEventArgs e)
     {
-        Offer(e.Status);
+        // The hub decides which controller instance is current: its status replaces one from another instance.
+        lock (_gate)
+        {
+            if (RoofStatusRules.ShouldApply(_latest, e.Status))
+            {
+                _latest = e.Status;
+            }
+        }
+
         if (Interlocked.Exchange(ref _keyChecked, 1) == 0)
         {
             _ = CheckKeyAsync();

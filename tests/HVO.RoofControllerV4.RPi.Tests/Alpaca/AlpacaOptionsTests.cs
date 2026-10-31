@@ -213,6 +213,35 @@ public sealed class AlpacaOptionsTests
     }
 
     [TestMethod]
+    public void ServersStartingTogether_AllServeTheIdentityThatIsKept()
+    {
+        for (var round = 0; round < 50; round++)
+        {
+            using var directory = new TempDirectory();
+            const int servers = 4;
+            using var start = new Barrier(servers);
+            var served = new string?[servers];
+            Parallel.For(0, servers, new ParallelOptions { MaxDegreeOfParallelism = servers }, i =>
+            {
+                start.SignalAndWait();
+                try
+                {
+                    served[i] = AlpacaDeviceIds.Load(directory.Path).Dome;
+                }
+                catch (AlpacaSettingsException)
+                {
+                    served[i] = null;
+                }
+            });
+
+            var kept = AlpacaDeviceIds.Load(directory.Path).Dome;
+            served.Should().AllBe(kept, $"every server that started serves the identity in the file (round {round})");
+            Directory.GetFiles(directory.Path).Select(Path.GetFileName).Where(name => name != AlpacaDeviceIds.LockFileName)
+                .Should().Equal([AlpacaDeviceIds.FileName], "no temporary file is left");
+        }
+    }
+
+    [TestMethod]
     [DataRow("not json")]
     [DataRow("{}")]
     [DataRow("{\"dome/0\":\"not-a-guid\"}")]

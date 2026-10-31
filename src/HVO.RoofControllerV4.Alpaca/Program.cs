@@ -252,11 +252,12 @@ public class Program
             services.AddHostedService(provider => new AlpacaDiscoveryResponder(options, provider.GetRequiredService<ILogger<AlpacaDiscoveryResponder>>()));
         }
 
-        // Polling is limited per client address; AbortSlew never is.
+        // Polling is limited per client address; AbortSlew never is. Routing has run by then (WebApplication routes first),
+        // so the exemption is the member the device route matched, however the path was written.
         services.AddRateLimiter(limiter =>
         {
             limiter.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, IPAddress>(context =>
-                IsAbortSlew(context.Request)
+                IsAbortSlew(context)
                     ? RateLimitPartition.GetNoLimiter(IPAddress.None)
                     : RateLimitPartition.GetTokenBucketLimiter(context.Connection.RemoteIpAddress ?? IPAddress.None, _ => new TokenBucketRateLimiterOptions
                     {
@@ -275,8 +276,12 @@ public class Program
         });
     }
 
-    private static bool IsAbortSlew(HttpRequest request)
-        => HttpMethods.IsPut(request.Method) && request.Path.Value is { } path && path.EndsWith("/abortslew", StringComparison.Ordinal);
+    /// <summary>True for a request the device route takes as AbortSlew: a PUT whose matched member is <c>abortslew</c>.</summary>
+    internal static bool IsAbortSlew(HttpContext context)
+        => HttpMethods.IsPut(context.Request.Method)
+            && context.GetEndpoint() is not null
+            && context.GetRouteValue(AlpacaEndpoints.MemberRouteValue) is string member
+            && string.Equals(member, AlpacaDome.AbortSlewMember, StringComparison.Ordinal);
 
     private static void Configure(WebApplication app)
     {

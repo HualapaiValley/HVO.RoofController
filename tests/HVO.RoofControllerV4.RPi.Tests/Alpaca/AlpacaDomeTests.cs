@@ -280,6 +280,38 @@ public sealed class AlpacaDomeTests
     }
 
     [TestMethod]
+    [DataRow("not-json", DisplayName = "an answer that is not JSON")]
+    [DataRow("null", DisplayName = "no status")]
+    [DataRow("{}", DisplayName = "an empty status")]
+    [DataRow("{\"relayRegisterState\":\"Unknown\",\"relayRegisterMask\":0}", DisplayName = "relays not read back")]
+    [DataRow("{\"relayRegisterState\":\"Verified\",\"relayRegisterMask\":3}", DisplayName = "a relay still on")]
+    [DataRow("{\"relayRegisterState\":\"Verified\"}", DisplayName = "no register value")]
+    [DataRow("{\"relayRegisterState\":\"Verified\",\"relayRegisterMask\":0,\"isMoving\":true,\"commandedMotion\":\"Opening\"}", DisplayName = "motion still commanded")]
+    public async Task AbortSlew_IsASuccessOnlyWhenTheAnswerShowsTheRelaysVerifiedOff(string body)
+    {
+        await using var alpaca = await AlpacaTestHost.StartAsync(request => StopAnswer(request, body));
+
+        var answer = await alpaca.PutAsync("abortslew");
+
+        answer.GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.RelayStateUnverified, "the controller's answer does not show the relays verified off");
+        answer.GetProperty("ErrorMessage").GetString().Should().Contain("confirm at the roof", Exactly.Once());
+    }
+
+    [TestMethod]
+    public async Task AbortSlew_IsASuccess_WhenTheAnswerShowsTheRelaysVerifiedOff()
+    {
+        var body = System.Text.Json.JsonSerializer.Serialize(RoofServiceMock.Snapshot(RoofControllerStatus.PartiallyOpen), HVO.RoofControllerV4.Client.RoofClientJson.Options);
+        await using var alpaca = await AlpacaTestHost.StartAsync(request => StopAnswer(request, body));
+
+        (await alpaca.PutAsync("abortslew")).GetProperty("ErrorNumber").GetInt32().Should().Be(0);
+    }
+
+    private static HttpResponseMessage StopAnswer(HttpRequestMessage request, string body)
+        => request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/RoofControl/Stop", StringComparison.Ordinal)
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+
+    [TestMethod]
     public async Task AbortSlew_ReportsARefusal_WithTheControllersCode()
     {
         var roof = RoofServiceMock.Create();

@@ -31,7 +31,8 @@ closes it: `OpenShutter` and `CloseShutter` are refused. Later phases of #220 ad
 The roof is `/api/v1/dome/0` (IDomeV3, `InterfaceVersion` 3). Every read comes from the last status the controller
 published on its status hub. A read never asks the controller and never touches the HAT. A status the server can no
 longer vouch for is never served: the controller cannot be reached, it has sent no status yet, or its hub has been
-silent for more than 3 s (three heartbeats). Then the read is error `0x500` ([Error numbers](#error-numbers)).
+silent for 3 s (three heartbeats). Each read checks the 3 s itself, against when the last message arrived. Then the
+read is error `0x500` ([Error numbers](#error-numbers)).
 
 ### The shutter
 
@@ -85,13 +86,17 @@ members: `Connected`, `Connecting`, `Name`, `Description`, `DriverInfo`, `Driver
 after a restart forgot the client, with a fault latched, and past the polling limit ([Security](#security)). Its answer
 claims only what the controller said:
 
-- success: the controller stopped the roof and verified the relay register de-energized;
-- `0x504`: the controller could not verify the relays off. Confirm at the roof that the motor has stopped;
+- success: the controller's answer shows the stop done: the relay register read back and verified all off (zero), and
+  no motion commanded;
+- `0x504`: the controller could not verify the relays off, or its answer does not show them verified off (an answer
+  it could not read, a register not read back, a relay still on, motion still commanded). Confirm at the roof that the
+  motor has stopped;
 - another error: the Stop was refused or did not arrive ([Error numbers](#error-numbers)).
 
-Stop's answer carries the controller's status straight after it. That status replaces the one the server held, merged
-in the controller's order with the hub's messages, so the next read reflects the stop even before the hub's next
-message, and an older hub message cannot undo it. The command history records the Stop under the server's API key, with
+Stop's answer carries the controller's status straight after it. That status is served once it is newer than the
+hub's status from the same controller instance, so the next read reflects the stop even before the hub's next message,
+and an older hub message cannot undo it. An answer from a controller instance the hub has moved on from (one that has
+since restarted) is never served: only the hub moves the server to a new instance. The command history records the Stop under the server's API key, with
 the server's program and version as its `User-Agent`. Naming the Alpaca client there comes with phase 3.
 
 ## Error numbers
@@ -105,11 +110,11 @@ Alpaca errors are answered with HTTP 200, `ErrorNumber` and `ErrorMessage`. The 
 | `0x407` (1031) | NotConnected | The client has not connected. Never for `AbortSlew`. |
 | `0x40B` (1035) | InvalidOperation | `OpenShutter` and `CloseShutter` (commands disabled), and the controller's refusals for the roof's state: `FaultLatched`, `InterlockActive`, `OperationInProgress`, `LeaseNotActive`, `SafetyInterlockActive`, `SafetyOverrideRequired`. |
 | `0x40C` (1036) | ActionNotImplemented | An action other than `status`. |
-| `0x500` (1280) | Controller unavailable | The roof's state is unknown: the controller cannot be reached, has sent no status yet, or has been silent for more than 3 s. |
+| `0x500` (1280) | Controller unavailable | The roof's state is unknown: the controller cannot be reached, has sent no status yet, or has been silent for 3 s. |
 | `0x501` (1281) | Controller not initialized | The controller's `NotInitialized`. |
 | `0x502` (1282) | Controller shutting down | The controller's `ShuttingDown`. |
 | `0x503` (1283) | Hardware unavailable | The controller's `HardwareUnavailable`: it cannot read its safety inputs. |
-| `0x504` (1284) | Relay state unverified | The controller's `RelayStateUnverified`: a Stop whose relays it could not verify off. |
+| `0x504` (1284) | Relay state unverified | The controller's `RelayStateUnverified`, or a Stop's answer that does not show the relays verified off. |
 | `0x505` (1285) | Controller refused the key | The controller does not accept the server's API key (revoked, rotated, or not allowed). |
 | `0x50F` (1295) | Controller error | Any other failure. |
 
@@ -136,8 +141,10 @@ does not see a roof that is fine.
   manufacturer, its version and `Location`) and `/management/v1/configureddevices` (Dome 0 and its `UniqueID`). Its
   answers carry `Value`, `ClientTransactionID` and `ServerTransactionID`.
 - **The `UniqueID`** is made the first time the server starts, kept in `alpaca-devices.json` in its data directory, and
-  never changed, so a client recognises the roof across restarts and upgrades. Back the file up with the server's
-  settings. A file that cannot be read stops the server rather than being replaced: restore it from a backup.
+  never changed, so a client recognises the roof across restarts and upgrades. It is written whole and then put in
+  place, and servers starting at the same moment take turns (`alpaca-devices.json.lock`), so each serves the one kept.
+  Back the file up with the server's settings. A file that cannot be read stops the server rather than being replaced:
+  restore it from a backup.
 - **The setup pages**, `/setup` and `/setup/v1/dome/0/setup`, show what the server is and does, the roof's
   `UniqueID` and state, and the connected clients, in HVO Dark. They only read: there is no form, and the settings are
   changed where the server is installed.
@@ -164,7 +171,8 @@ The Alpaca API has no real authentication, so the server keeps itself small and 
   another host) is refused (403), and the server sends no CORS headers, so a browser never lets another site read an
   answer.
 - **Polling is limited** to `RequestsPerSecondPerAddress` (100 a second, bursts of 200) per client address (429 past
-  it). `AbortSlew` is never limited.
+  it). `AbortSlew` is never limited: the exemption is the member the device route matched, however the path is
+  written.
 - **No commands.** Phase 1 never sends Open, Close, Clear fault or a lease renewal to the controller. Commands, with an
   Alpaca-only credential, the history's Alpaca source and the owner's lease and unattended-Close decisions, come with
   phases 3 and 4.
@@ -227,7 +235,7 @@ does not hold them.
 | `ControllerUrl` | `http://localhost:8080` | The controller's API. |
 | `ControllerApiKeyFile` | none (required) | The file holding the server's Viewer key, on one line, readable only by its owner. |
 | `ControllerCertificateSha256`, `ControllerCaCertificatePath` | none | How to trust the controller's HTTPS certificate: its SHA-256, or the CA that issued it (the installer's). Not both. |
-| `DataPath` | `~/.local/share/hvo-roof-alpaca` | Where `alpaca-devices.json` (the `UniqueID`) is kept. |
+| `DataPath` | `~/.local/share/hvo-roof-alpaca` | Where `alpaca-devices.json` (the `UniqueID`) and its lock file are kept. |
 | `Location` | empty | The management API's `Location`, such as the observatory's name. |
 | `RequestsPerSecondPerAddress` | `100` | The polling limit per client address. |
 | `MaxConnectedClients`, `ConnectionIdleMinutes` | `32`, `60` | How many clients may be connected, and how long an idle one stays so. |
@@ -245,8 +253,8 @@ key it reaches the controller with. It never logs the key.
 Clients find the server by broadcasting `alpacadiscovery1` to UDP port 32227. The server answers to the sender with
 `{"AlpacaPort":11111}`. The port is shared (`SO_REUSEADDR`), so another Alpaca server on the same computer can answer
 too.
-It answers only clients within `AllowedNetworks`, and only loopback ones while it listens on loopback alone, since
-nothing else could reach it. With `Discovery:IPv6` it also answers the IPv6 multicast group `ff12::a1:9aca`.
+It answers only clients within `AllowedNetworks`, and of those only loopback ones while it listens on loopback alone,
+since nothing else could reach it. With `Discovery:IPv6` it also answers the IPv6 multicast group `ff12::a1:9aca`.
 
 **Behind Docker's bridge network**, the LAN's broadcasts never reach a container. There, run the responder by itself
 on the host's network, telling clients the port the container publishes the server on:

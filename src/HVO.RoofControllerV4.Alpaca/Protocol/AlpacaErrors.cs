@@ -29,7 +29,7 @@ public static class AlpacaErrors
 
     /// <summary>
     /// The roof's status is not known: the controller cannot be reached, has sent no status yet, or its status hub has
-    /// been silent for more than 3 s. A read never returns a status older than that.
+    /// been silent for 3 s. A read never returns a status older than that.
     /// </summary>
     public const int ControllerUnavailable = 0x500;
 

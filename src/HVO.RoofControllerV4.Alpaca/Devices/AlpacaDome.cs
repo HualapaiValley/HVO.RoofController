@@ -45,6 +45,9 @@ public sealed class AlpacaDome
     /// <summary>The device's description; ASCOM allows at most 64 characters.</summary>
     public const string DeviceDescription = "Hualapai Valley Observatory roll-off roof (read-only)";
 
+    /// <summary>The member that stops the roof, as it appears in URLs.</summary>
+    public const string AbortSlewMember = "abortslew";
+
     /// <summary>The one action: what the roof is doing, and why it reads as it does. It never moves the roof.</summary>
     public const string StatusAction = "status";
 
@@ -151,7 +154,7 @@ public sealed class AlpacaDome
             ["azimuth"] = NotImplementedProperty("Azimuth", "a roll-off roof has no azimuth", Zero),
 
             // Stop: always allowed.
-            ["abortslew"] = new(null, AbortSlewAsync),
+            [AbortSlewMember] = new(null, AbortSlewAsync),
             ["openshutter"] = new(null, Sync(call => RequireConnected(call, () => AlpacaResult.Error(AlpacaErrors.InvalidOperation, CommandsDisabled)))),
             ["closeshutter"] = new(null, Sync(call => RequireConnected(call, () => AlpacaResult.Error(AlpacaErrors.InvalidOperation, CommandsDisabled)))),
             ["findhome"] = NotImplementedMethod("FindHome", "a roll-off roof has no home position"),

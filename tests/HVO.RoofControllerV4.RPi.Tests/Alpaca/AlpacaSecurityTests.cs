@@ -112,6 +112,30 @@ public sealed class AlpacaSecurityTests
     }
 
     [TestMethod]
+    [DataRow("/api/v1/dome/0/abortslew")]
+    [DataRow("/api/v1/dome/0/abortslew/")]
+    public async Task EveryRouteTakenAsAbortSlew_PassesAnExhaustedPollingLimit(string path)
+    {
+        var roof = RoofServiceMock.Create();
+        var settings = new Dictionary<string, string?> { ["Alpaca:RequestsPerSecondPerAddress"] = "1" };
+        await using var alpaca = await AlpacaTestHost.StartAsync(RoofClientApiTests.CreateHost(roof), settings, waitForStatus: false);
+        HttpStatusCode last;
+        var attempts = 0;
+        do
+        {
+            using var read = await alpaca.Http.GetAsync("/api/v1/dome/0/name");
+            last = read.StatusCode;
+        }
+        while (last != HttpStatusCode.TooManyRequests && ++attempts < 20);
+        last.Should().Be(HttpStatusCode.TooManyRequests, "the polling limit is exhausted");
+
+        using var stop = await alpaca.Http.PutAsync(path, new StringContent("ClientID=1", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded"));
+
+        stop.StatusCode.Should().Be(HttpStatusCode.OK);
+        roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
+    }
+
+    [TestMethod]
     public async Task Polling_IsLimitedPerAddress_ButAbortSlewNeverIs()
     {
         var roof = RoofServiceMock.Create();

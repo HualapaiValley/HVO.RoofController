@@ -58,6 +58,24 @@ public sealed class AlpacaDiscoveryTests
     }
 
     [TestMethod]
+    public async Task AServerOnLoopbackAlone_StillAnswersOnlyTheAllowedNetworks()
+    {
+        var options = new AlpacaOptions { ListenAddresses = ["127.0.0.1"], AllowedNetworks = ["10.0.0.0/8"] };
+        await using var responder = await Responder.StartAsync(options);
+
+        (await responder.AskAsync("alpacadiscovery1")).Should().BeNull("loopback is outside the allowed networks");
+    }
+
+    [TestMethod]
+    public async Task AServerOnLoopbackAlone_AnswersLoopback_WhenItIsAllowed()
+    {
+        var options = new AlpacaOptions { ListenAddresses = ["127.0.0.1"], AllowedNetworks = ["127.0.0.0/8", "10.0.0.0/8"] };
+        await using var responder = await Responder.StartAsync(options);
+
+        (await responder.AskAsync("alpacadiscovery1")).Should().NotBeNull();
+    }
+
+    [TestMethod]
     public async Task TheDiscoveryPort_IsShared()
     {
         await using var first = await Responder.StartAsync(new AlpacaOptions { ListenAddresses = ["127.0.0.1"] });
