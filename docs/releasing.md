@@ -262,8 +262,9 @@ A release is trusted as every HVO product's is, by the shared
   against `SHA256SUMS`, and against its attestation when `gh` is signed in
   ([What install.sh checks](install.md#what-installsh-checks)). Nothing else signs a release: there is no signing key
   and no signed manifest.
-- **The owner approves, and a person publishes.** The workflow makes a draft and publishes nothing. Its release job
-  runs in the `release` environment, whose required reviewer, the owner, approves each run
+- **The owner (or the owner's delegated release agent) approves, and a person publishes.** The workflow makes a draft
+  and publishes nothing. Its release job runs in the `release` environment, whose required reviewer, the owner, approves
+  each run, or delegates that approval to the release agent (Kepler) once CI is green
   ([The first release](#the-first-release)); a person then checks the draft and publishes it
   ([Before publishing](#before-publishing)).
 - **`latest`** moves only for the newest final release: never for a release candidate, a dry run or a fix to an older

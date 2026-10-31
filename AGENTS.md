@@ -25,8 +25,9 @@ request. What the docs already explain is linked from here, not repeated.
   emulators follow them as they are. Change them only for a major issue, such as a safety gap or a mismatch that stops
   the roof working. Offer improvements (ramps, current limits, braking, preset speeds, position sensing) as separate,
   optional recommendations, each with its trade-offs and how the emulator could test it.
-- **Publishing is a person's job.** Agents never approve the `release` environment, publish a release, change a
-  package's visibility, or delete or move a published tag ([Releases](#releases)).
+- **Publishing is a person's job.** The owner's delegated release agent (Kepler) may approve the `release` environment
+  once CI is green on the tagged commit. Agents never publish a release, change a package's visibility, or delete or
+  move a published tag ([Releases](#releases)).
 
 ## The project
 
@@ -273,7 +274,7 @@ Follow [docs/releasing.md](docs/releasing.md). In short:
    there is nothing to do).
 3. **The tag:** an annotated `v<version>` tag on the merged commit on main starts `release.yml`, which makes a draft
    release and installs a rig from it end to end.
-4. **A person** approves the `release` environment, checks the draft
+4. **The owner, or the owner's delegated release agent (Kepler),** approves the `release` environment. **A person** checks the draft
    ([Before publishing](docs/releasing.md#before-publishing)) and publishes it. Publishing moves the images' `latest`
    tag (`release-latest.yml`).
 
