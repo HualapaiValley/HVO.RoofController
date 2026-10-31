@@ -160,6 +160,15 @@ public sealed class WebScreenshotTests
         await page.GetByTestId("names-short-name").FillAsync("Ada");
         await page.GetByTestId("names-short-name").BlurAsync();
         await shots.TakeAsync("16-names");
+        // A person's own PIN (#205): the admin is given a test PIN for it, and every PIN field is left empty.
+        using (var pins = browser.AdminClient())
+        {
+            await pins.Identity.SetPinAsync(WebBrowser.Admin, TestSecrets.Pin);
+        }
+
+        await page.GotoAsync("/account/pin");
+        await Expect(page.GetByTestId("pin-form")).ToBeVisibleAsync();
+        await shots.TakeAsync("18-pin");
         await page.GotoAsync("/settings");
         await page.Locator("[data-testid=settings-group][data-group=roof]").ClickAsync();
         var safety = page.Locator("[data-testid=setting][data-key$=':AtSpeedConfirmationTimeout']");

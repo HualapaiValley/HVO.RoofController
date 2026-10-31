@@ -30,6 +30,24 @@ public static class RoofIdentityText
 
     public const string RotateEndsOldSecret = "The old secret stops working at once.";
 
+    /// <summary>What changing your own PIN ends, and what it keeps (#205).</summary>
+    public const string OwnPinChangeEndsSessions =
+        "Changing your PIN keeps this session open and ends your other PIN sessions, at every kiosk. Your password sessions stay open.";
+
+    /// <summary>Said to a person who has no PIN to change (#205): the first one is an admin's to give.</summary>
+    public const string NoPinYet = "You have no PIN. An admin gives you your first one; then you can change it yourself.";
+
+    /// <summary>Said to a Linux account signed in with its password (#205).</summary>
+    public const string LinuxHasNoPin =
+        "A Linux account has no PIN of its own here. The kiosk's commissioned PIN is changed at a kiosk, after unlocking with it.";
+
+    /// <summary>Said once your own PIN changed (#205).</summary>
+    public const string OwnPinChanged = "Your PIN was changed. Your other PIN sessions were ended.";
+
+    /// <summary>What removing a person's PIN does (#205).</summary>
+    public const string PinRemoveEndsSessions =
+        "Removing it ends the person's PIN sessions: they cannot unlock a kiosk until an admin gives them a new PIN.";
+
     public static readonly string DisplayNameRule = string.Create(
         CultureInfo.InvariantCulture,
         $"A display name is optional: up to {RoofIdentityContract.MaximumDisplayNameLength} characters, without control characters.");
@@ -94,6 +112,17 @@ public static class RoofIdentityText
     /// <summary>Checks a new PIN typed twice. Empty (both) means none and is accepted; returns what is wrong, or null.</summary>
     public static string? CheckNewPin(string? value, string? again)
         => CheckNewSecret(value, again, RoofIdentityContract.IsValidPin, PinRule, "PINs");
+
+    /// <summary>
+    /// Checks a change of your own PIN (#205): the current PIN, then the new one typed twice. Returns what is wrong, or
+    /// null. The controller checks the current PIN itself.
+    /// </summary>
+    public static string? CheckPinChange(string? current, string? value, string? again)
+        => !RoofIdentityContract.IsAcceptedPin(current) ? "Enter your current PIN."
+            : string.IsNullOrEmpty(value) ? "Enter your new PIN."
+            : CheckNewPin(value, again) is { } problem ? problem
+            : string.Equals(current, value, StringComparison.Ordinal) ? "Choose a new PIN different from your current one."
+            : null;
 
     /// <summary>How a session signed in: "PIN" or "password".</summary>
     public static string DescribeKind(RoofCredentialKind kind) => kind == RoofCredentialKind.Pin ? "PIN" : "password";

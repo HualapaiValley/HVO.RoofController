@@ -168,9 +168,21 @@ hvo-roof login ada        # asks for the password; saves the session
 hvo-roof whoami
 hvo-roof logout           # ends the session; a saved API key is kept
 hvo-roof passwd           # changes the signed-in person's password
+hvo-roof pin              # changes the signed-in person's own kiosk PIN
 ```
 
-The terminal interface's **Setup (F5)** page does the same: Connection, Check, Sign in, Sign out and First admin.
+The terminal interface's **Setup (F5)** page does the same: Connection, Check, Sign in, Sign out and First admin, with
+your own Names and PIN on a row below them.
+
+`hvo-roof pin` (#205) changes the PIN you unlock a kiosk with, signed in with your password (a session from `login`). It
+asks for your current PIN, then the new one (twice in a terminal; once from standard input), and never shows them. A
+new PIN is exactly four digits, not the reserved temporary PIN `0000` and not the PIN you have now. The controller
+checks the current PIN as a kiosk's PIN sign-in does: a wrong one is refused (exit 7) and leaves your session open, and
+repeated wrong ones lock your PIN out for a while, at every kiosk too (exit 7, with when to try again). The change keeps
+this session and your other password sessions open, and ends your PIN sessions at every kiosk. It asks for nothing,
+and says why (exit 7), when there is no PIN to change: you have none yet (an admin gives the first one, with
+`pins set`), you signed in with a Linux account (it has no PIN here), or the credential is an API key. It is refused in
+local mode, as `login` and `passwd` are.
 
 ## Credentials
 
@@ -213,9 +225,10 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `history [--user] [--principal-id] [--since] [--until] [--take] [--skip]` | viewer | The roof command history, newest first: your own, or everyone's for an admin (see [History](#history)). |
 | `whoami` | any | The controller in use, and who the controller takes the credential to be: for a person, also their display name, short name and login type (a Linux account's names are the operating system's). |
 | `login`, `logout`, `passwd` | any | Signing in with a password (see [Setup](#setup)). |
+| `pin` | operator, admin (a person's session) | Changes your own kiosk PIN: the current one, then the new one (see [Setup](#setup)). |
 | `config show\|get\|set\|set-secret\|diff\|apply\|discard` | operator (UI group), admin | The controller's settings (see [Settings](#settings)). |
 | `users list\|show\|add\|set\|remove` | admin | The people who sign in: each one's name, display name, short name, role, login type (local, or Linux), password, PIN, sessions and last sign-in. `add` and `set` take `--display-name` and `--short-name`; on `set`, an empty one (`""`) removes it, and a name ends no session. |
-| `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). |
+| `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). `set` gives or replaces a person's PIN and `remove` takes it (or their temporary commissioning PIN) away; both send only the PIN, so the person keeps the role the controller has for them, and both end the person's PIN sessions at every kiosk, never their password sessions. |
 | `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. |
 | `sessions list\|end` | admin | People's sessions. Tokens are never shown. |
 | `info` | any | `hvo-roof`'s own version, then the controller's summary: its version; right after it, `Web UI:`, where people reach the web UI (its URLs, such as `https://192.0.2.10:8088/`, from the host's address, the published port and the scheme the installer or deploy script recorded; `only on the controller's machine` when it is not published to the network; `address not known` when the deployment did not record it, and never a container's own address); then its uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and host addresses. An admin also gets the host's details (its name, system, runtime and the controller's process) under `Host details (admin):`; for anyone else, standard error says they need the Admin role. With `--json`: `{"client", "summary", "information", "metrics"}`, where `client.version` is `hvo-roof`'s full version (with its commit), as `summary.applicationVersion` is the controller's, and `information` and `metrics` are null without the Admin role. A controller older than the summary (4.2.0 and before) gives only an admin the details. |
@@ -403,9 +416,9 @@ and the Settings page's header then says the file was edited by hand.
 |-----|------|-------------|
 | F1 | Roof | The status, with Open, Close, Clear fault, Refresh and History. Each button that cannot be used says why, for example "the roof is already closed". History shows your roof commands (everyone's for an admin) in place of the controller's readings; Readings shows them again. |
 | F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. A group's secrets are set and cleared together: Change on the camera's user name or password asks for both, each typed twice, and Clear secret clears both. |
-| F3 | People | People, API keys and sessions (admin). People shows each one's display name, short name, role, login type, password, PIN, sessions and last sign-in; Names sets or clears the display and short name without ending a session. |
+| F3 | People | People, API keys and sessions (admin). People shows each one's display name, short name, role, login type, password, PIN, sessions and last sign-in; Names sets or clears the display and short name without ending a session; PIN and Remove PIN set or take a person's PIN, keep their role and end their PIN sessions. |
 | F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's summary (version, uptimes, CPU, temperature, memory, disk, addresses), the host's details (admin), and Restart (admin). |
-| F5 | Setup | Connection, a connection check, Sign in, Sign out, Names (your own display and short name), and First admin. |
+| F5 | Setup | Connection, a connection check, Sign in, Sign out and First admin; below them, Names (your own display and short name) and PIN (your own PIN). |
 
 ![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault, Refresh and History buttons](images/terminal/01-roof.svg)
 
@@ -519,6 +532,13 @@ On Setup, **Names** changes your own display and short name, signed in with your
 removed, and nothing ends. A Linux account's names come from the operating system (its full name and its user name), so
 Names only shows them, and with an API key alone it says to sign in first. An admin changes anyone's names on People
 (F3) or with `hvo-roof users set`; the kiosk does not change names.
+
+On Setup, **PIN** changes your own PIN (#205), as `hvo-roof pin` does: your current PIN, then the new one twice, in
+private fields. A mistyped new PIN is refused before anything is sent. A wrong current PIN is said on the message line,
+and sign-in is not offered, since your session is still open. Once it changes, this session stays open and your PIN
+sessions at every kiosk end. Without a PIN of your own, with a Linux account, or with an API key alone, PIN says why and
+asks for nothing. An admin sets or removes anyone's PIN on People (F3) or with `hvo-roof pins set|remove`; at a kiosk,
+you change yours on its PIN pad ([kiosk.md](kiosk.md)).
 
 ![The Setup page: the controller address, how its certificate is checked, the credential and where it comes from](images/terminal/05-setup.svg)
 

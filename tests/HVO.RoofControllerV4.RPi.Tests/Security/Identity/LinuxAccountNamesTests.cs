@@ -84,6 +84,32 @@ public sealed class LinuxAccountNamesTests
     }
 
     [TestMethod]
+    public async Task ALinuxSession_HasNoPinOfItsOwn_AndCannotChangeOne()
+    {
+        if (!Socket.OSSupportsUnixDomainSockets) Assert.Inconclusive("The native worker needs Unix sockets.");
+        using var directory = new TemporaryDirectory();
+        var socketPath = directory.File("worker.sock");
+        await using var worker = await StartWorkerAsync(socketPath, profile: true);
+        await using var host = Host(directory, socketPath);
+        var store = host.Services.GetRequiredService<RoofIdentityStore>();
+        var (principal, linux) = Enroll(store);
+        var issued = Session(store, principal, linux, FullName);
+        using var client = host.CreateApiClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(RoofIdentityContract.BearerScheme, issued.Token);
+
+        var me = await ApiJson.ReadAsync<RoofCallerResponse>(await client.GetAsync("/api/v4.0/Auth/Me"));
+        var refused = await client.PostAsJsonAsync("/api/v4.0/Auth/Pin/Change", new RoofPinChangeRequest { CurrentPin = "2468", NewPin = "8642" });
+
+        me.HasPin.Should().BeFalse("a Linux account signed in with its password has no PIN here (#205)");
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var problem = await ApiJson.ReadElementAsync(refused);
+        problem.GetProperty("code").GetString().Should().Be(nameof(RoofControllerErrorCode.IdentityReadOnly));
+        problem.GetProperty("detail").GetString().Should().Be(HVO.RoofControllerV4.Client.RoofIdentityText.LinuxHasNoPin,
+            "the controller and the clients say the same");
+        (await client.GetAsync("/api/v4.0/Auth/Me")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [TestMethod]
     public async Task AWorkerOlderThanProfiles_GivesNoFullName_AndTheSignInStillWorks()
     {
         if (!Socket.OSSupportsUnixDomainSockets) Assert.Inconclusive("The native worker needs Unix sockets.");

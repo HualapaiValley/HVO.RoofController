@@ -88,6 +88,7 @@ public sealed class RoofCliProviderTests
     [DataRow("login", "ada", "--provider", "virtual")]
     [DataRow("login", "ada", "--provider", "linux")]
     [DataRow("my-keys", "create", "job", "--scopes", "read")]
+    [DataRow("pin")]
     public async Task LocalMode_CannotTurnIntoASavedPasswordOrKey(params string[] command)
     {
         using var files = new CliRig();

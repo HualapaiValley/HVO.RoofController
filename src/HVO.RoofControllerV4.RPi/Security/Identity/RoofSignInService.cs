@@ -155,6 +155,97 @@ public sealed class RoofSignInService
         }
     }
 
+    /// <summary>
+    /// A signed-in person changes their own PIN (#205), from a PIN session at the kiosk <paramref name="kioskName"/>, which
+    /// holds the key <paramref name="kioskKeyId"/>, or from a password session (both null). The current PIN is checked as a PIN sign-in is, counting towards the same
+    /// lockouts: the name's PIN and, at a kiosk, the kiosk. Their other PIN sessions end; <paramref name="keepSessionId"/>
+    /// stays open, and so do their password sessions.
+    /// </summary>
+    public async Task<RoofSignInResult> ChangePinAsync(
+        string name,
+        string keepSessionId,
+        string? kioskKeyId,
+        string? kioskName,
+        string currentPin,
+        string newPin,
+        string remote,
+        CancellationToken cancellationToken)
+    {
+        if (!_identity.IsAvailable)
+        {
+            return Unavailable();
+        }
+
+        var where = kioskKeyId is null ? "PIN change" : $"PIN change at {kioskName}";
+        _identity.TryGetUser(name, out var user);
+        LockKey[] lockKeys = kioskKeyId is null
+            ? [new(RoofSignInLockout.ForPin(name), user is not null)]
+            : [new(RoofSignInLockout.ForDevice(kioskKeyId), Known: true), new(RoofSignInLockout.ForPin(name), user is not null)];
+        var admission = BeginAttempts(lockKeys, out var retryAfter);
+        if (admission != RoofSignInAdmission.Admitted)
+        {
+            return Refused(admission, where, name, remote, retryAfter);
+        }
+
+        // As at sign-in: a viewer has no PIN, and the emulator's temporary PIN is checked as the code it is.
+        var hash = user is null || user.Role == RoofControllerApiContract.ViewerRole ? null : user.PinHash;
+        var stamp = user?.Stamp;
+        var outcome = RoofSignInOutcome.NotChecked;
+        var lockedFor = TimeSpan.Zero;
+        RoofSecretCheck check;
+        try
+        {
+            if (user is not null && _identity.CanUseTemporaryPin(user))
+            {
+                hash = await _hasher.HashAsync("0000", cancellationToken).ConfigureAwait(false);
+                if (hash is null) return Busy();
+            }
+
+            check = await _hasher.VerifyAsync(hash, currentPin, cancellationToken).ConfigureAwait(false);
+            outcome = Outcome(check);
+        }
+        finally
+        {
+            lockedFor = EndAttempts(lockKeys, outcome);
+        }
+
+        switch (check)
+        {
+            case RoofSecretCheck.Busy:
+                return Busy();
+            case RoofSecretCheck.Failed:
+                return Failed(lockedFor, name, where, remote, "The current PIN is not correct.");
+        }
+
+        var newHash = await _hasher.HashAsync(newPin, cancellationToken).ConfigureAwait(false);
+        if (newHash is null)
+        {
+            return Busy();
+        }
+
+        try
+        {
+            var changed = _identity.ChangeOwnPin(user!.Name, stamp!, newHash, keepSessionId);
+            if (!changed.Succeeded)
+            {
+                return RoofSignInResult.Failure(changed.Error!.Value, changed.Detail!);
+            }
+
+            _logger.LogWarning(
+                "AUDIT {Name} changed their own PIN ({Where}) from {Remote}; {Ended} other PIN session(s) ended.",
+                user.Name,
+                kioskKeyId is null ? "password session" : $"PIN session at {kioskName}",
+                remote,
+                changed.Value!.SessionsEnded);
+            return RoofSignInResult.Success(null);
+        }
+        catch (RoofIdentityStoreException ex)
+        {
+            _logger.LogError("PIN change for {Name} could not be saved: {Reason}", user!.Name, ex.Message);
+            return Unavailable();
+        }
+    }
+
     private async Task<RoofSignInResult> SignInAsync(
         string name,
         string secret,

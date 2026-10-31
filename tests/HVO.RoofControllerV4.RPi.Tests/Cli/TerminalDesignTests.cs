@@ -263,8 +263,10 @@ public sealed class TerminalDesignTests
             workflows.Setup_ProviderSignIn_RendersEditableOsNameForDocumentation();
             workflows.Setup_Connection_RefusesABadAddress_InThePrompt();
             workflows.Setup_Connection_ACaReplacesTheSavedPin_ButNotOneTypedWithIt();
+            workflows.Setup_Pin_APersonChangesTheirOwn_KeepsTheSession_AndTheirOtherPinSessionsEnd();
             workflows.People_AddsAPerson_AndShowsANewKeysSecretOnce();
             workflows.People_SettingAPassword_KeepsARoleChangedElsewhere();
+            workflows.People_PinAndRemovePin_SendOnlyThePin_KeepARoleChangedElsewhere_AndEndThePinSessions();
             workflows.People_Role_ChangesTheRole();
             workflows.People_LinuxRoleAndAccess_AreChangedThroughTheApi();
             workflows.Settings_AnOperatorChangesTheUiGroup();

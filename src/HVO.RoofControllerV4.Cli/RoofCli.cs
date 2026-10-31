@@ -136,6 +136,7 @@ public static partial class RoofCli
             yield return CreateLoginCommand();
             yield return CreateLogoutCommand();
             yield return CreatePasswordCommand();
+            yield return CreatePinCommand();
             yield return CreateConfigCommand();
             yield return CreateUsersCommand();
             yield return CreatePrincipalsCommand();
@@ -175,7 +176,7 @@ public static partial class RoofCli
                     throw new RoofCliUsageException("Choose --local or --remote, not both.");
                 }
 
-                if (context.Local && DescribeCommand(parseResult).Split(' ')[0] is "login" or "logout" or "passwd" or "setup")
+                if (context.Local && DescribeCommand(parseResult).Split(' ')[0] is "login" or "logout" or "passwd" or "pin" or "setup")
                 {
                     throw new RoofCliUsageException("Local mode authorizes each request without a saved login. Account credential commands require explicit remote mode (use --remote).");
                 }

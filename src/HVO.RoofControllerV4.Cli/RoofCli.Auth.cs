@@ -115,6 +115,63 @@ public static partial class RoofCli
             return command;
         }
 
+        private Command CreatePinCommand()
+        {
+            var command = new Command(
+                "pin",
+                "Change your own PIN, the one that unlocks a kiosk (needs a session from 'login'). Your other PIN sessions are ended; this session stays open.");
+            SetAction(command, async (context, _, cancellationToken) =>
+            {
+                using var client = context.Connect();
+
+                // Who is asking decides whether there is a PIN to change, before any secret is asked for.
+                var me = await client.Auth.GetCallerAsync(cancellationToken).ConfigureAwait(false);
+                if (me.Kind == RoofCredentialKind.ApiKey)
+                {
+                    throw new RoofCliRefusedException($"A PIN is a person's, and this credential is an API key. Sign in with '{CommandName} login' first.");
+                }
+
+                if (me.LoginType == RoofLoginTypes.Linux)
+                {
+                    throw new RoofCliRefusedException(RoofIdentityText.LinuxHasNoPin);
+                }
+
+                if (me.HasPin == false)
+                {
+                    throw new RoofCliRefusedException(RoofIdentityText.NoPinYet);
+                }
+
+                var current = context.ReadSecret("Current PIN: ");
+                var replacement = context.ReadNewSecret("New PIN: ");
+                if (RoofIdentityText.CheckPinChange(current, replacement, replacement) is { } problem)
+                {
+                    throw new RoofCliUsageException(problem);
+                }
+
+                try
+                {
+                    await client.Auth.ChangePinAsync(current, replacement, cancellationToken).ConfigureAwait(false);
+                }
+                catch (RoofApiException wrong) when (wrong.Code == RoofControllerErrorCode.SignInFailed)
+                {
+                    // Only the current PIN was wrong: the session is still valid, so this is not a sign-in problem.
+                    throw new RoofCliRefusedException("The current PIN is not correct. The PIN was not changed.", innerException: wrong);
+                }
+
+                if (context.Json)
+                {
+                    context.WriteJson(new { changed = true });
+                }
+                else
+                {
+                    context.Out.WriteLine(RoofIdentityText.OwnPinChanged);
+                }
+
+                return (int)RoofExitCode.Success;
+            });
+            return command;
+        }
+
         private static void WarnIfEnvironmentWins(RoofCliContext context)
         {
             if (RoofCliSetup.EnvironmentNote(context) is { } note)

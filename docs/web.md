@@ -74,6 +74,7 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
 | Your names (`/account/names`) | everyone | The person's own display and short name; for a Linux account, its names from the operating system, read-only. **Your names** in the header opens it. |
+| Your PIN (`/account/pin`) | everyone; linked for Operator and Admin | The person's own kiosk PIN: the current one, then the new one twice. **Your PIN** in the header opens it. |
 
 A Viewer and an Operator see Roof, Health, Settings, History and System in the navigation; System shows them the
 controller's summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role
@@ -207,6 +208,12 @@ An admin adds people and sets their role, password and [kiosk](kiosk.md) PIN, ad
 ([Managing people, keys and sessions](security.md#managing-people-keys-and-sessions)). A new key's secret is shown
 once, as it is created; neither the page nor the controller shows it again.
 
+**PIN** sets or replaces a person's [kiosk](kiosk.md) PIN, and **Remove PIN** removes it (or their temporary
+commissioning PIN), each with the PIN's own endpoint (`PUT` and `DELETE Identity/Users/{name}/Pin`): the page never
+sends the person's role with it, so a role another admin has just changed stands. Either ends the person's PIN
+sessions, at every kiosk; their password sessions stay open, and so does the admin's own. Without a PIN, a person
+cannot unlock a kiosk until an admin gives them a new one.
+
 Each person's row shows their **display name** (a friendly name, up to 64 characters) and **short name** (up to 16, for
 narrow places such as the kiosk), both optional; how they sign in (**Login**: `local` for a person in the controller's
 identity store); and their **last sign-in**, with a password or a PIN (`none recorded` until they sign in after the
@@ -253,6 +260,23 @@ session (`POST Auth/Names`). Names are changed only where there is a keyboard: h
 the kiosk shows them but does not change them, and a PIN session cannot. An admin changes anyone's on the People page.
 A Linux account's names come from the operating system (its full name and its user name), so the page shows them
 read-only and says to change the full name on the controller's machine.
+
+### Your PIN
+
+![Your PIN: the current PIN, the new PIN and the new PIN again, all empty, with what changing it ends](images/web/18-pin-desktop.jpg)
+
+**Your PIN** in the header (for operators and admins: only they have a PIN) opens the person's own kiosk PIN
+(`POST Auth/Pin/Change`). They type the **current PIN**, then the **new PIN** twice: four digits, not the reserved
+temporary PIN and not the current one. The page checks that before sending anything; the controller always checks the
+current PIN, and a wrong one counts towards the same lockout as unlocking a kiosk with it, so after too many the PIN is
+locked for a while, here and at every kiosk (Stop still works). Every PIN field is emptied after each change, right or
+wrong. A change keeps this session, and the person's other password sessions, open, and ends their PIN sessions at
+every kiosk. When the controller's answer never comes, the page cannot tell whether the PIN changed, and says so:
+unlocking a kiosk with the new one finds out.
+
+A person without a PIN is told that an admin gives the first one (**PIN** on the People page); a viewer, that only
+operators and admins have one; and a Linux account, that it has no PIN of its own here (the kiosk's commissioned PIN
+is changed at a kiosk, after unlocking with it). The kiosk changes a PIN on its PIN pad too ([kiosk](kiosk.md)).
 
 ## Stop
 
