@@ -71,7 +71,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          dotnet-version: '10.0.402'
+          dotnet-version: '10.0.403'
 
       - name: Build
         run: |
@@ -125,7 +125,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          dotnet-version: '10.0.402'
+          dotnet-version: '10.0.403'
 
       - name: Build
         run: |
@@ -211,7 +211,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          dotnet-version: '10.0.402'
+          dotnet-version: '10.0.403'
 
       - name: Install by install.sh, again, hvo-roof, motion, change, renew, names, back up, restore, upgrade, roll back
         run: tests/installer/rig-scenario.sh
@@ -269,7 +269,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          dotnet-version: '10.0.402'
+          dotnet-version: '10.0.403'
 
       - name: Build
         run: |
@@ -349,7 +349,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
-          dotnet-version: '10.0.402'
+          dotnet-version: '10.0.403'
 
       - name: Build
         run: |
