@@ -10,7 +10,8 @@ namespace HVO.RoofControllerV4.Screens;
 /// Bounded touch pages for lists and explanatory text. Pages are measured with the configured text and target sizes;
 /// they never scale the contents or scroll the whole screen. Only the current page participates in focus navigation.
 /// Previous, Next and the page count are shown only when the contents overflow one page; contents that fit have the
-/// whole height and no page controls.
+/// whole height and no page controls. A text taller than a page continues on the next; a row of controls side by side
+/// (<see cref="KioskPagerRow"/>) taller than a page shows them one under another.
 /// </summary>
 public sealed class KioskPager : UserControl
 {
@@ -94,6 +95,12 @@ public sealed class KioskPager : UserControl
 
     private List<List<Control>> Paginate(double width, double room)
     {
+        // Every item is measured as it is drawn: attached, so its styles and a button's template apply. Detached, a
+        // button has no template and measures as only its minimum size, however much its content needs. A row split at
+        // another size is a row again until it is measured here.
+        _body.Children.Clear();
+        foreach (var row in _items.OfType<KioskPagerRow>()) row.Join();
+        _body.Children.AddRange(_items);
         List<List<Control>> pages = [[]];
         var used = 0d;
         foreach (var item in ExpandText(_items, width, room))
@@ -116,6 +123,19 @@ public sealed class KioskPager : UserControl
         foreach (var item in items)
         {
             item.Measure(new Size(width, double.PositiveInfinity));
+            if (item is KioskPagerRow { Cells.Count: > 0 } row && item.DesiredSize.Height > height)
+            {
+                // Too tall for a page in its column: one under another, each the page's width (a lone one in a row of two
+                // columns too), measured as drawn.
+                foreach (var cell in row.Split())
+                {
+                    _body.Children.Add(cell);
+                    yield return cell;
+                }
+
+                continue;
+            }
+
             if (item is not TextBlock text || item.DesiredSize.Height <= height)
             {
                 yield return item;

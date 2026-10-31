@@ -52,7 +52,7 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
 | `POST /api/v4.0/RoofControl/Lease`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409 (`LeaseNotActive`), 503 |
 | `POST /api/v4.0/RoofControl/ClearFault?pulseMs=250`      | Operator          | 200 `RoofStatusResponse` | 400 (`pulseMs` outside 50-2000), 401, 403, 409, 503 |
-| `GET  /api/v4.0/RoofControl/History?user=&principalId=&from=&to=&skip=&take=` | Viewer (own commands; Admin: everyone's) | 200 `RoofCommandHistoryPage`, newest first ([The command history](#the-command-history)) | 400 (`take` outside 1-500, a negative `skip`, `to` before `from`), 401, 403 (not an admin, and `user` or `principalId` is someone else) |
+| `GET  /api/v4.0/RoofControl/History?user=&principalId=&mine=&from=&to=&skip=&take=` | Viewer (own commands; Admin: everyone's, or with `mine=true` their own) | 200 `RoofCommandHistoryPage`, newest first ([The command history](#the-command-history)) | 400 (`take` outside 1-500, a negative `skip`, `to` before `from`), 401, 403 (not an admin, and `user` or `principalId` is someone else) |
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
 | `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409, 503 (`SettingsStoreUnavailable`) |
 | `GET  /api/v4.0/Settings`, `GET /api/v4.0/Settings/Catalogue` | Viewer (API key or session) | 200 `RoofSettingsResponse`, `RoofSettingsCatalogueResponse` (only the settings the caller may read) | 401 |
@@ -515,7 +515,8 @@ low) is not a command and is not recorded.
   session is never an admin's), reads only the commands recorded under their own identifiers; naming anyone else, by
   `user` or `principalId`, is refused with 403. An admin reads everyone's, and may pick one person's or key's: `user`
   finds whoever is named so now, and `principalId` the identifier an entry shows, for someone since removed or a key
-  since rotated.
+  since rotated. `mine=true` reads only the caller's own commands, by their identifiers, an admin's too: a search by
+  name would also find a key named like them. The kiosk's and the Mac app's History use it (#208).
 - **Where from.** The address is the one that connected, except for a command the web UI sends for a person: the web
   UI names the person's browser in `X-Forwarded-For` (the address that connected to the web UI, never a header the
   browser sent), and the controller believes it only from `RoofCommandHistory:TrustedProxies` (by default its own

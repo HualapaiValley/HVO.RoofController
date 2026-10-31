@@ -20,7 +20,7 @@ The installer installs it and makes its device key ([With the installer](#with-t
 
 The window opens at 1280x800 points, and can be made as small as 960x600: Stop, the pages and the status still fit.
 
-- **Navigation** along the bottom: Roof, Readings, Notices, About and Sign in. Password sessions also expose Settings, System and Sign out, with controller role checks intact.
+- **Navigation** along the bottom: Roof, Readings, Notices, About and Sign in. Password sessions also expose Settings, System, History and Sign out, with controller role checks intact.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the app renews it, and who is signed in
   (`olga (Operator)`), or `Signed out`.
@@ -361,6 +361,16 @@ temperature, memory, disk and host addresses. A stale connection or an unreachab
 remains available.
 
 ![App and controller build identification in labelled cards](images/mac/mac-about-960x600.png)
+
+### Your roof commands
+
+While someone is signed in, **History** shows them as the controller knows them (`GET Auth/Me`: name, role, login
+type, `Signed in with a password`, short name), read-only, and their own 20 most recent roof commands, newest first,
+as on the [kiosk](kiosk.md#history): an admin's too, since the app asks for the person's own commands only
+(`mine=true`, matched by their identifier, so never a key named like them). The web UI's History page is where an admin
+reads everyone's. A controller too old to list only the person's own is said so, and nothing is shown. Signing out hides History and forgets what it read.
+
+![History in the app's smallest window: the signed-in person, read-only, and their own recent roof commands](images/mac/history-960x600.png)
 
 ## Native redesign validation
 

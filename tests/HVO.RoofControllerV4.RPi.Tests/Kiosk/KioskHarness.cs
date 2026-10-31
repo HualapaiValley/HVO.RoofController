@@ -95,7 +95,12 @@ internal sealed class KioskHarness : IAsyncDisposable
             TimeProvider = Clock,
             StopTimeout = TimeSpan.FromSeconds(10),
             RequestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30),
-            LoggerFactory = LoggerFactory
+            LoggerFactory = LoggerFactory,
+            // The program's name and version, as the installed kiosk or Mac app sends them, so the command history says
+            // "kiosk" or "Mac app".
+            ProgramAssembly = options?.Wording.Device == KioskWording.Desktop.Device
+                ? typeof(HVO.RoofControllerV4.Mac.Program).Assembly
+                : typeof(HVO.RoofControllerV4.Kiosk.Program).Assembly
         });
         Console = new KioskConsole(Client, options, LoggerFactory.CreateLogger<KioskConsole>());
     }
@@ -141,6 +146,9 @@ internal sealed class KioskHarness : IAsyncDisposable
     /// connection ends first.
     /// </summary>
     public Func<HttpRequestMessage, bool>? CutAnswer { get; set; }
+
+    /// <summary>Changes a request before the controller has it, as an older controller would read it (a query it ignores).</summary>
+    public Action<HttpRequestMessage>? AlterRequest { get; set; }
 
     /// <summary>Optional controller build metadata override for cross-version UI tests, after normal authorization.</summary>
     public string? ControllerVersion { get; set; }
@@ -318,6 +326,7 @@ internal sealed class KioskHarness : IAsyncDisposable
                     throw new HttpRequestException("Connection refused (test).");
                 }
 
+                harness.AlterRequest?.Invoke(request);
                 var response = await base.SendAsync(request, cancellationToken);
                 if (harness.CutAnswer?.Invoke(request) == true)
                 {
