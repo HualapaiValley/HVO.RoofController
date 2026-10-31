@@ -115,9 +115,16 @@ The page follows the controller's live status: the hub sends a full status at ea
   (`No status yet.`), rather than showing a position.
 - **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a badge in the
   header, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), with the reasons and what the interlock does with
-  Open in its tooltip, and a Safety row in the status card. While the interlock blocks Open, Open is not offered and
-  says why; in Warn mode Open shows the controller's refusal, which says how to override it (there is no override
-  prompt on the page yet).
+  Open in its tooltip; a safety panel under the roof's state with the reasons, what Unknown means, each source's state
+  (`Unsafe: Telescope 'Main' is not parked`) and what Open does; and a Safety row and a row per source in the status
+  card. While the interlock blocks Open, Open is not offered and says why.
+- **The safety override.** With the interlock in Warn mode (the default) and the conditions not Safe (Unknown
+  included), Open asks first, in a panel above Open and Close: the conditions with their reasons, and **Open anyway**
+  or **Cancel**. Nothing is sent until Open anyway, which sends Open with the override; the controller logs it with your
+  name. Stop, Close and the end of your session withdraw the question. When the conditions changed after the page's
+  last status, the controller's refusal asks the same question. Stop stays at the bottom of the page throughout.
+
+![The safety override question on the roof page, with Stop at the bottom](images/web/19-safety-override-desktop.jpg)
 
 <p>
   <img src="images/web/03-roof-opening-phone.jpg" alt="The roof page on a phone while the roof opens: the position Opening and the lease being renewed" width="240">

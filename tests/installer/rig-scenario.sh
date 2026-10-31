@@ -1179,7 +1179,9 @@ scenario_motion() {
   current_check="motion: open"
   plant_is ".closedLimitActuated and (.openLimitActuated | not) and ${stopped}" || fail "the roof is not closed and still before it opens: $(plant)"
   started=$(date +%s.%N)
-  hvo_roof_json motion-open --json open
+  # The rig configures no safety source, so the conditions are Unknown and the default Warn interlock asks Open for the
+  # override (#215): given here, as a person would.
+  hvo_roof_json motion-open --json open --override-safety
   seconds=$(seconds_since "${started}")
   (( CLI_STATUS == 0 )) || fail "hvo-roof open exited ${CLI_STATUS}"
   jq -e '.status == "Open" and (.isMoving | not)' "${work}/motion-open.txt" >/dev/null \

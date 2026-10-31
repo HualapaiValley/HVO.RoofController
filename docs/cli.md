@@ -283,10 +283,28 @@ reading, and with no status at all for 30 s it gives up (exit 4) and says that t
 With `--no-wait`, the command returns once the controller accepts the motion. If the controller holds the motion on a
 lease, the command says so, and the roof stops when the lease runs out unless something runs `hvo-roof lease`.
 
-`status` shows the [safety conditions](safety-service.md) (telescope park and weather) as a `Safety:` row, for example
-`Safety: UNKNOWN: No safety sources configured (advisory: the safety interlock is off)`, and each `status --watch`
-line ends with their state (`safety unknown`, and `Open blocked` while the interlock blocks Open). The terminal
-interface's roof page shows the same row under ROOF STATE.
+`status` shows the [safety conditions](safety-service.md) (telescope park and weather) as a `Safety:` row and a
+`Safety source:` row for each source, for example:
+
+```text
+Safety:        UNSAFE: Telescope 'Main' is not parked (Open needs a safety override)
+Safety source: Unsafe: Telescope 'Main' is not parked
+Safety source: Safe: Weather monitor 'Cloud sensor' reports safe weather
+```
+
+Each `status --watch` line ends with their state (`safety unsafe`, and `Open blocked` while the interlock blocks Open).
+The terminal interface's roof page shows the same rows under ROOF STATE.
+
+With the safety interlock in Warn mode (the controller's default) and the conditions not Safe (Unknown included),
+`open` is refused (exit 7, `SafetyOverrideRequired`) with the reasons and how to give the override:
+
+```text
+To open anyway: 'hvo-roof open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.
+```
+
+`open --override-safety` sends it. The terminal interface asks instead: **Open** shows a `Safety override` prompt over
+the page with the conditions and **Open anyway** or **Cancel**; nothing is sent until Open anyway, Esc answers Cancel,
+and F9 still sends Stop while it is open.
 
 ## History
 

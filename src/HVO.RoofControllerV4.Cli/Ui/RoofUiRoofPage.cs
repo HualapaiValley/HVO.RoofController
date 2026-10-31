@@ -93,9 +93,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             _status.Text = $"{(Ui.IsStale ? "LAST KNOWN" : "LIVE")}: {RoofCliFormat.DescribeRoof(status)}";
             _status.SetScheme(status.IsFaultLatched ? Ui.Theme.Danger : Ui.IsStale ? Ui.Theme.Warning : Ui.Theme.Header);
             var rows = RoofCliFormat.DescribeStatus(status);
-            _state.Show(rows.Where(row => row.Label is "Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error")
+            _state.Show(rows.Where(row => IsStateRow(row.Label))
                 .Select(row => $"{row.Label}:  {row.Value}").Prepend(heading).ToArray());
-            ShowReadings(rows.Where(row => row.Label is not ("Roof" or "Last stop" or "Fault" or "Safety" or "Lease" or "Watchdog" or "Last error"))
+            ShowReadings(rows.Where(row => !IsStateRow(row.Label))
                 .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status)).ToArray());
         }
 
@@ -110,6 +110,10 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         CloseButton.SetScheme(Ui.Theme.ForMotion(RoofActionStates.ForMotion(RoofMotionDirection.Closing, Ui.Status, Ui.IsStale, close), RoofMotionDirection.Closing));
         _blocked.Text = RoofCommandRules.DescribeMotionBlocks(open, close) ?? string.Empty;
     }
+
+    // ROOF STATE: the roof, its faults, the safety conditions with each source, the lease and the watchdog.
+    private static bool IsStateRow(string label)
+        => label is "Roof" or "Last stop" or "Fault" or "Safety" or RoofStatusText.SafetySourceLabel or "Lease" or "Watchdog" or "Last error";
 
     public override string Describe() => string.Join('\n', (Ui.Status is null ? new[] { _status.Text } : _state.Lines).Concat(_readings.Lines).Append(_blocked.Text));
 
@@ -138,13 +142,23 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         => Ui.Connection is null ? NotConfigured : RoofCommandRules.GetClearFaultBlockReason(CommandState);
 
     // The role is known once the controller has said who the credential is.
-    private RoofCommandState CommandState => new(Ui.Status, Ui.IsStale, Ui.Caller is null ? null : IsOperator, _commandInFlight);
+    private RoofCommandState CommandState => new(Ui.Status, Ui.IsStale, Ui.Caller is null ? null : IsOperator, _commandInFlight, Ui.Caller is null ? null : IsAdmin);
 
-    private void Move(RoofMotionDirection direction)
+    private void Move(RoofMotionDirection direction) => Move(direction, overrideSafety: false);
+
+    private void Move(RoofMotionDirection direction, bool overrideSafety)
     {
         if (BlockReason(direction) is { } reason)
         {
             Ui.Say($"Not sent: {reason}.", error: true);
+            return;
+        }
+
+        // #215: while the conditions are not safe and the interlock asks for an override, Open is sent only once the
+        // person confirms, with the override.
+        if (direction == RoofMotionDirection.Opening && !overrideSafety && RoofCommandRules.NeedsSafetyOverride(Ui.Status))
+        {
+            AskSafetyOverride(Ui.Status!.Safety);
             return;
         }
 
@@ -156,8 +170,22 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             try
             {
                 status = direction == RoofMotionDirection.Opening
-                    ? await client.Roof.OpenAsync(cancellationToken).ConfigureAwait(false)
+                    ? await client.Roof.OpenAsync(overrideSafety, cancellationToken).ConfigureAwait(false)
                     : await client.Roof.CloseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (RoofApiException refusal) when (!overrideSafety && RoofCommandRules.IsSafetyOverrideRequest(refusal))
+            {
+                // The conditions were not safe when the controller checked, though this interface did not know: it asks now.
+                return () =>
+                {
+                    if (refusal.RoofStatus is { } refused)
+                    {
+                        Ui.Apply(refused);
+                    }
+
+                    Ui.Say(RoofText.DescribeFailure(refusal), error: true);
+                    AskSafetyOverride(refusal.RoofStatus?.Safety ?? Ui.Status?.Safety);
+                };
             }
             catch (Exception error) when (RoofCli.CommandBuilder.MayHaveReachedController(error))
             {
@@ -191,6 +219,25 @@ internal sealed class RoofUiRoofPage : RoofUiPage
                     : $"{verb} accepted. F9 or quitting stops it.");
             };
         }, motion: true);
+    }
+
+    /// <summary>
+    /// Asks the safety override question over the page: "Open anyway" sends Open with the override (the controller logs
+    /// it); Cancel or Esc sends nothing. F9 still sends Stop while it is open.
+    /// </summary>
+    internal void AskSafetyOverride(RoofSafetyStatus? safety)
+    {
+        var question = new RoofSafetyOverrideQuestion(safety);
+        Ui.Ask(new RoofUiPrompt(
+            question.Title,
+            string.Join('\n', question.Lines),
+            [],
+            [new RoofUiAction(RoofSafetyText.OverrideConfirm, _ =>
+            {
+                Move(RoofMotionDirection.Opening, overrideSafety: true);
+                return null;
+            })],
+            CloseLabel: RoofSafetyText.OverrideCancel));
     }
 
     private void ClearFault()

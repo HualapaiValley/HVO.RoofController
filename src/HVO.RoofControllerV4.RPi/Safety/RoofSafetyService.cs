@@ -151,6 +151,11 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             return;
         }
 
+        _logger.LogInformation(
+            "Reading {Count} safety source(s) every {PollInterval} (read timeout {ReadTimeout}): {Sources}.",
+            _sources.Length, options.PollInterval, options.ReadTimeout,
+            string.Join(", ", _sources.Select(source => $"{source.Kind} '{source.Name}'")));
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -220,7 +225,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             if (stillReading)
             {
                 // The last read has not ended, though its timeout cancelled it: another would only pile up behind it.
-                RecordFailure_NoLock(source, "the last read has not finished", out firstFailure);
+                RecordFailure_NoLock(source, "the last read has not finished", shown: true, out firstFailure);
             }
         }
 
@@ -253,13 +258,16 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         }
         catch (Exception ex)
         {
-            var failure = timeoutSource.IsCancellationRequested
-                ? string.Create(CultureInfo.InvariantCulture, $"no answer within {timeout.TotalSeconds:0.#} s")
+            // A timeout, and an adapter's own words (RoofSafetySourceException), are fit to show in the reason; any other
+            // failure is logged by its type alone, since its message could carry the device's address.
+            var timedOut = timeoutSource.IsCancellationRequested;
+            var failure = timedOut ? string.Create(CultureInfo.InvariantCulture, $"no answer within {timeout.TotalSeconds:0.#} s")
+                : ex is RoofSafetySourceException described ? Bounded(described.Message)
                 : ex.GetType().Name;
             bool first;
             lock (_gate)
             {
-                RecordFailure_NoLock(source, failure, out first);
+                RecordFailure_NoLock(source, failure, shown: timedOut || ex is RoofSafetySourceException, out first);
             }
 
             if (first)
@@ -304,11 +312,10 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             source.LastReadTimestamp = timestamp;
             source.ObservedLag = lag;
             source.LastReadingUtc = now - lag;
-            source.Detail = string.IsNullOrWhiteSpace(detail) ? null
-                : detail.Length <= MaxDetailLength ? detail
-                : detail[..MaxDetailLength];
+            source.Detail = string.IsNullOrWhiteSpace(detail) ? null : Bounded(detail);
             source.ConsecutiveFailures = 0;
             source.Failure = null;
+            source.ShownFailure = null;
         }
 
         if (failures > 0)
@@ -317,10 +324,14 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         }
     }
 
-    private static void RecordFailure_NoLock(Source source, string failure, out bool first)
+    /// <summary><paramref name="text"/> cut to <see cref="MaxDetailLength"/>, so a source cannot fill the status snapshot.</summary>
+    private static string Bounded(string text) => text.Length <= MaxDetailLength ? text : text[..MaxDetailLength];
+
+    private static void RecordFailure_NoLock(Source source, string failure, bool shown, out bool first)
     {
         source.ConsecutiveFailures++;
         source.Failure = failure;
+        source.ShownFailure = shown ? failure : null;
         first = source.ConsecutiveFailures == 1;
     }
 
@@ -349,12 +360,14 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             MaxReadingAgeSeconds = maxAge.TotalSeconds
         };
 
+        // Why the last read failed, when the words are fit to show: "no answer within 5 s", "the device is not connected".
+        var why = source.ShownFailure is { } shown ? $" ({shown})" : string.Empty;
         if (source.LastSafe is not { } safe || source.LastReadTimestamp is not { } readAt)
         {
             return status with
             {
                 State = RoofSafetyState.Unknown,
-                Reason = source.Failure is null ? $"{label} has not been read yet" : $"{label} cannot be read"
+                Reason = source.Failure is null ? $"{label} has not been read yet" : $"{label} cannot be read{why}"
             };
         }
 
@@ -368,6 +381,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
                 State = RoofSafetyState.Unknown,
                 IsStale = true,
                 Reason = string.Create(CultureInfo.InvariantCulture, $"{label}: the last reading ({said}) is older than {maxAge.TotalSeconds:0.#} s")
+                    + (source.ShownFailure is { } failed ? $"; the last read failed ({failed})" : string.Empty)
             };
         }
 
@@ -448,7 +462,11 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
 
         public string? Detail { get; set; }
 
+        /// <summary>Why the last read failed, as logged (the adapter's words, the timeout, or the exception's type).</summary>
         public string? Failure { get; set; }
+
+        /// <summary>Why the last read failed in words fit to show in the reason; null when only its type is known.</summary>
+        public string? ShownFailure { get; set; }
 
         public int ConsecutiveFailures { get; set; }
     }

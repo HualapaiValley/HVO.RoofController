@@ -27,8 +27,11 @@ public sealed class RoofSafetyOptions
     public static readonly TimeSpan MaxReadTimeout = TimeSpan.FromMinutes(1);
     public static readonly TimeSpan MaxMaxReadingAge = TimeSpan.FromHours(1);
 
-    /// <summary>What Open does with the safety state. Off (the default) only reports it.</summary>
-    public RoofSafetyInterlockMode InterlockMode { get; set; } = RoofSafetyInterlockMode.Off;
+    /// <summary>
+    /// What Open does with the safety state. Warn (the default, the owner's policy, #215) asks for an override while the
+    /// conditions are not Safe; Off only reports them; Block refuses Open.
+    /// </summary>
+    public RoofSafetyInterlockMode InterlockMode { get; set; } = RoofSafetyInterlockMode.Warn;
 
     /// <summary>
     /// Who may override in <see cref="RoofSafetyInterlockMode.Warn"/>: by default anyone who may open the roof, since the

@@ -38,7 +38,10 @@ public sealed class WebScreenshotTests
     {
         ["RoofHost:Addresses"] = "192.0.2.10",
         ["RoofHost:WebUiUrls"] = "https://192.0.2.10:8088/",
-        ["RoofHost:WebUiAccess"] = "Network"
+        ["RoofHost:WebUiAccess"] = "Network",
+        // The safety interlock as installed (Warn, #215) with no source configured: the conditions are Unknown, and Open
+        // asks for the override.
+        [RoofApiTestHost.SafetyInterlockModeKey] = null
     };
 
     private WebBrowser? _browser;
@@ -92,8 +95,14 @@ public sealed class WebScreenshotTests
             await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
         }
 
-        // A move shows the lease the page renews and the travel; Stop ends it before the images that follow.
+        // A move shows the safety override the page asks for (#215), the lease the page renews and the travel; Stop ends
+        // it before the images that follow.
         await browser.Open.ClickAsync();
+        await Expect(page.GetByTestId("safety-override")).ToBeVisibleAsync();
+        await Expect(page.GetByTestId("safety-override")).ToContainTextAsync("The safety conditions are UNKNOWN: No safety sources configured.");
+        browser.Rig.Controller.GetCurrentStatusSnapshot().IsMoving.Should().BeFalse("nothing is sent before Open anyway");
+        await shots.TakeAsync("19-safety-override");
+        await page.GetByTestId("safety-override-confirm").ClickAsync();
         await browser.Rig.WaitForControllerAsync(s => s.IsMoving, "the roof to open");
         await browser.Rig.WaitForPlantAsync(p => p.PositionMeters > 0.5, "the roof to be well under way");
         await Expect(browser.Lease).ToBeVisibleAsync();

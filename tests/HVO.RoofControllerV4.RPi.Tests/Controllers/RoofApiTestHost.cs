@@ -34,7 +34,8 @@ internal static class TestApiKeys
 
 /// <summary>
 /// WebApplicationFactory for the RPi host with a strict roof-service mock, the hardware host service removed, and test
-/// API keys configured. Development environment by default (RequireHttps off), Production on request. The test settings
+/// API keys configured. The safety interlock is Off unless a test sets <c>RoofSafety:InterlockMode</c> (null for the
+/// default, Warn). Development environment by default (RequireHttps off), Production on request. The test settings
 /// sit just below the settings file, where appsettings.json is, so the settings API can change them; the settings file
 /// and the managed secrets file are held in memory unless paths are given.
 /// </summary>
@@ -63,10 +64,20 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
         _settings = includeDefaultKeys ? DefaultKeySettings() : new Dictionary<string, string?>();
         _settings["BlueIris:BaseUrl"] = string.Empty;
         _settings["HatEmulator:Enabled"] = "false";
+        // The safety interlock defaults to Warn (#215), which with no source configured asks every Open for an override.
+        // Tests of anything else open as before the interlock; the safety tests set the mode they test, and a test of the
+        // controller's default passes null for it, which leaves the mode unset.
+        _settings[SafetyInterlockModeKey] = "Off";
         if (settings is not null)
         {
             foreach (var (key, value) in settings)
             {
+                if (key == SafetyInterlockModeKey && value is null)
+                {
+                    _settings.Remove(key);
+                    continue;
+                }
+
                 _settings[key] = value;
             }
         }
@@ -80,6 +91,9 @@ internal sealed class RoofApiTestHost : WebApplicationFactory<Program>
     }
 
     public Mock<IRoofControllerServiceV4> RoofService { get; }
+
+    /// <summary>The safety interlock's mode, which the test host sets Off unless a test gives it (null: the default).</summary>
+    public const string SafetyInterlockModeKey = "RoofSafety:InterlockMode";
 
     public static Dictionary<string, string?> DefaultKeySettings() => new()
     {

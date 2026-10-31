@@ -40,7 +40,7 @@ public sealed class SafetyApiTests
     }
 
     [TestMethod]
-    public async Task Safety_WithNoSourcesConfigured_IsUnknown_AndTheInterlockIsOff()
+    public async Task Safety_WithNoSourcesConfigured_IsUnknown_AndReportsTheInterlocksMode()
     {
         using var client = Host().CreateApiClient(TestApiKeys.Viewer);
 
@@ -71,7 +71,7 @@ public sealed class SafetyApiTests
         status.Safety.Sources.Single().Should().BeEquivalentTo(new { Name = "Main", Kind = RoofSafetySourceKind.TelescopePark, IsStale = false });
     }
 
-    // ---- Off (the default) -----------------------------------------------------------------------------------------
+    // ---- Off (the test host's; the controller's default is Warn, SafetyAlpacaApiTests) -----------------------------
 
     [TestMethod]
     public async Task Off_OpenGoesAhead_WhateverTheConditions()
@@ -82,7 +82,7 @@ public sealed class SafetyApiTests
 
         var response = await client.PostAsync($"{RoofPath}/Open", null);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK, "the default interlock mode leaves Open as it was");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "the interlock Off leaves Open as it was");
         host.RoofService.Verify(s => s.Open(), Times.Once());
         (await ApiJson.ReadAsync<RoofStatusResponse>(response)).Safety!.State.Should().Be(RoofSafetyState.Unsafe);
     }
@@ -313,6 +313,7 @@ public sealed class SafetyApiTests
         IWeatherSafetySource[]? weather = null,
         RecordingLoggerProvider? logs = null)
     {
+        // No mode given: Off, the test host's.
         var settings = new Dictionary<string, string?>();
         if (mode is not null)
         {

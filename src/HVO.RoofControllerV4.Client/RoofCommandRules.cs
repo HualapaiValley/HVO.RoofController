@@ -10,7 +10,11 @@ namespace HVO.RoofControllerV4.Client;
 /// controller decides).
 /// </param>
 /// <param name="CommandInFlight">True while a command sent from this client has not been answered.</param>
-public readonly record struct RoofCommandState(RoofStatusResponse? Status, bool IsStale, bool? CanOperate, bool CommandInFlight);
+/// <param name="IsAdmin">
+/// True when the caller holds the Admin role; null while the client does not know (the controller decides). Only a
+/// controller that narrows the safety override to admins asks.
+/// </param>
+public readonly record struct RoofCommandState(RoofStatusResponse? Status, bool IsStale, bool? CanOperate, bool CommandInFlight, bool? IsAdmin = null);
 
 /// <summary>
 /// Why a client does not offer Open, Close or Clear fault: the same reasons, in the same order and words, in every
@@ -48,6 +52,12 @@ public static class RoofCommandRules
 
     /// <summary>Open, while the controller's safety interlock blocks it (Block mode) and the conditions are not Safe.</summary>
     public const string SafetyInterlock = "the safety interlock blocks it: the safety conditions are not confirmed safe";
+
+    /// <summary>
+    /// Open, while the conditions are not Safe, the interlock asks for an override (Warn mode), the controller lets only
+    /// admins give it, and the caller is not one.
+    /// </summary>
+    public const string SafetyOverrideNeedsAdmin = "the safety conditions are not confirmed safe, and only an admin may override them";
 
     public const string NoFault = "no fault is active";
 
@@ -102,8 +112,25 @@ public static class RoofCommandRules
             : direction == RoofMotionDirection.Opening && status.Status is RoofControllerStatus.Open or RoofControllerStatus.Opening ? AlreadyOpen
             : direction == RoofMotionDirection.Closing && status.Status is RoofControllerStatus.Closed or RoofControllerStatus.Closing ? AlreadyClosed
             : direction == RoofMotionDirection.Opening && IsOpenBlockedBySafety(status) ? SafetyInterlock
+            : direction == RoofMotionDirection.Opening && state.IsAdmin == false && NeedsSafetyOverride(status)
+                && status.Safety!.OverrideRole == RoofControllerApiContract.AdminRole ? SafetyOverrideNeedsAdmin
             : null;
     }
+
+    /// <summary>
+    /// True when Open needs the safety override: the controller's interlock is in Warn mode and the conditions are not
+    /// Safe (Unknown counts as unsafe). Each client then asks before it sends Open, and sends it with the override only
+    /// once the person confirms (<see cref="RoofSafetyText"/>). Open with the interlock Off or Block never asks.
+    /// </summary>
+    public static bool NeedsSafetyOverride(RoofStatusResponse? status)
+        => status?.Safety is { InterlockMode: RoofSafetyInterlockMode.Warn, State: not RoofSafetyState.Safe };
+
+    /// <summary>
+    /// True when the controller refused Open for want of the safety override (SafetyOverrideRequired): the conditions
+    /// were not Safe when it checked, though this client may not have known. The client asks, as it does before Open.
+    /// </summary>
+    public static bool IsSafetyOverrideRequest(Exception error)
+        => error is RoofApiException { Code: RoofControllerErrorCode.SafetyOverrideRequired };
 
     /// <summary>
     /// True when the controller's safety interlock refuses Open whatever the caller sends: Block mode, and conditions

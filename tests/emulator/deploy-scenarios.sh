@@ -231,9 +231,13 @@ as_root() {
 
 # roof_call <method> <path> [key]: prints the body, then the HTTP status on the last line. The key goes on stdin.
 roof_call() {
+  local path=$2
+  # The rig configures no safety source, so the conditions are Unknown and the default Warn interlock asks every Open
+  # for the override (#215): it is given, so each Open meets only the controller's own checks, as before.
+  [[ "$1" == POST && "${path}" == Open ]] && path="Open?overrideSafety=true"
   printf 'X-Api-Key: %s\n' "${3:-${operator_key}}" \
     | curl -sS --max-time 15 --cacert "${work}/ca.pem" -X "$1" -H @- -H 'Accept: application/json' \
-        -w '\n%{http_code}' "${roof_api}/$2"
+        -w '\n%{http_code}' "${roof_api}/${path}"
 }
 
 roof_get() {

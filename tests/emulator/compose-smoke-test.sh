@@ -151,7 +151,19 @@ if [ -n "${HVO_ROOF_CLI:-}" ]; then
     wait_for "the roof is closed again after the terminal check" 90 roof_is Closed
 fi
 
-roof_post Open
+# No safety source is configured, so the conditions are Unknown, and the default Warn interlock refuses Open
+# (SafetyOverrideRequired, 409) without the override (#215); with it, the roof opens. Close is never gated.
+safety=$(roof_get Status | jq -c '.safety | {state, interlockMode}')
+[ "${safety}" = '{"state":"Unknown","interlockMode":"Warn"}' ] || fail "the safety conditions are not Unknown under the default Warn interlock: ${safety}"
+refused=$(mktemp)
+open_status=$(curl -sS --max-time 10 -o "${refused}" -w '%{http_code}' -X POST -H "X-Api-Key: ${HVO_EMULATED_ROOF_API_KEY}" "${roof_api}/Open")
+[ "${open_status}" = 409 ] || fail "Open without the safety override answered ${open_status}, not 409"
+jq -e '.code == "SafetyOverrideRequired"' "${refused}" >/dev/null || fail "Open was not refused for want of the safety override: $(cat "${refused}")"
+rm -f "${refused}"
+roof_is Closed || fail "the roof moved although Open was refused"
+echo "[smoke] Open asks for the safety override under the default Warn interlock, and moves nothing without it"
+
+roof_post "Open?overrideSafety=true"
 wait_for "the roof opened to the open limit" 90 roof_is Open
 curl -fsS --max-time 10 "${emulator_api}/status" | jq -e '.plant.openLimitActuated == true' >/dev/null \
     || fail "the controller reports Open but the emulated open limit is not actuated"

@@ -68,7 +68,9 @@ What the app offers depends on the person's role, as the controller gives it, an
 ([Unlocked](kiosk.md#unlocked)):
 
 - **Roof**: Open, Close and Clear fault for an operator, the operator lease renewed while a motion started here goes
-  on, and the notices.
+  on, and the notices. The [safety conditions](safety-service.md) and the safety override question are the kiosk's
+  ([Unlocked](kiosk.md#unlocked)): while the conditions are not Safe, Open asks first, and **Open anyway** sends it with
+  the override; Escape answers Cancel.
 - **Settings**: the controller's settings by group. **Change** opens a text box for a number, a duration or text,
   typed on the keyboard: Return saves it and Escape cancels. True or false, and a setting's choices, are a button per
   value. The change is shown for review before anything is sent, and a safety-critical change needs

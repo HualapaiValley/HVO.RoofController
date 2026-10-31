@@ -234,9 +234,13 @@ internal sealed class KioskScreen : IAsyncDisposable
         return shown;
     }
 
-    /// <summary>The texts shortened on purpose: the controller's name, the person's name on its pill, and the value being typed.</summary>
+    /// <summary>
+    /// The texts shortened on purpose: the controller's name, the person's name on its pill, the value being typed, and the
+    /// roof page's safety reason and what Open does (#207), which Readings shows whole.
+    /// </summary>
     private static bool ShortenedOnPurpose(TextBlock block)
-        => block.Name is "title" or "editor-value" || block.GetVisualAncestors().OfType<Control>().Any(ancestor => ancestor.Name == "unlocked-by");
+        => block.Name is "title" or "editor-value" or "safety-reasons" or "safety-open"
+            || block.GetVisualAncestors().OfType<Control>().Any(ancestor => ancestor.Name == "unlocked-by");
 
     private void CheckLayout(string name)
     {
@@ -275,7 +279,7 @@ internal sealed class KioskScreen : IAsyncDisposable
 
             // An ellipsis cuts a text short without shortening its lines, and a text that may not wrap can be wider than
             // its box. Only a text marked abbreviated may end in an ellipsis: its whole text is shown elsewhere. Those are
-            // the three kiosk.md lists; the mark on any other is a fault.
+            // the ones kiosk.md lists; the mark on any other is a fault.
             if (block.Classes.Contains(KioskTheme.Abbreviated))
             {
                 if (!ShortenedOnPurpose(block))
