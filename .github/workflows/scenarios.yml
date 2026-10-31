@@ -4,6 +4,8 @@ name: Scenarios
 # hardware is involved, and nothing is pushed or deployed.
 #   scenarios            every [TestCategory("Scenario")] test, the short C14 and kiosk soaks included
 #   browser              the web UI in Chromium with phone, tablet and desktop emulation ([TestCategory("Browser")])
+#   alpaca-conformu      the Alpaca server (#220) checked by a pinned ConformU against the controller and the HAT emulator
+#                        (tests/alpaca/conformu.sh)
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
 #                        rollback, the Compose migration, and a deploy of a pulled image
 #                        (tests/emulator/deploy-scenarios.sh)
@@ -152,6 +154,57 @@ jobs:
         with:
           name: browser-results-${{ github.run_id }}
           path: src/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  # The Alpaca server (#220) checked by ConformU, ASCOM's conformance checker, pinned by version and SHA-256, in CLI
+  # mode: its Alpaca protocol check and its Dome conformance check, against the server, the controller and the HAT
+  # emulator built here and run on the runner's loopback. DomeOpenShutter is false and the server refuses Open and Close
+  # in this phase; the script fails if the emulated roof moved, and when ConformU reports any error or issue, or any
+  # message tests/alpaca/conformu-expected.json does not list (docs/alpaca.md, "Conformance").
+  alpaca-conformu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
+        with:
+          dotnet-version: '10.0.402'
+
+      - name: Check the script and the results checker
+        run: |
+          shellcheck tests/alpaca/conformu.sh
+          python3 -m unittest discover -s tests/alpaca -p 'test_*.py' -v
+
+      - name: Build
+        working-directory: src
+        run: |
+          for project in HVO.RoofControllerV4.Emulator HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Alpaca; do
+            dotnet build "$project/$project.csproj" -c Debug -v minimal -p:ContinuousIntegrationBuild=true
+          done
+
+      - name: ConformU against the emulator
+        env:
+          HVO_ALPACA_TEST_DIR: ${{ github.workspace }}/alpaca-conformu
+        run: tests/alpaca/conformu.sh --no-build
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alpaca-conformu-${{ github.run_id }}
+          path: |
+            alpaca-conformu/*.log
+            alpaca-conformu/*.json
+            alpaca-conformu/*.txt
           if-no-files-found: warn
           retention-days: 7
 

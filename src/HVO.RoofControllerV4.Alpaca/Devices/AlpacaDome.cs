@@ -186,9 +186,10 @@ public sealed class AlpacaDome
             : AlpacaResult.Done);
     }
 
+    // The request's cancellation is not passed on: a client that hangs up never cancels a Stop.
     private async Task<AlpacaResult> AbortSlewAsync(Call call, CancellationToken cancellationToken)
     {
-        await _roof.StopAsync(call.Request.RemoteAddress, call.Request.ClientId, call.Request.ClientTransactionId, cancellationToken).ConfigureAwait(false);
+        await _roof.StopRoofAsync(call.Request.RemoteAddress, call.Request.ClientId, call.Request.ClientTransactionId).ConfigureAwait(false);
         return AlpacaResult.Done;
     }
 

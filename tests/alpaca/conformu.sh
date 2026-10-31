@@ -54,6 +54,8 @@ cleanup() {
   for pid in "${pids[@]}"; do
     wait "${pid}" 2>/dev/null || true
   done
+  # The key was made for this run only; it never stays with the logs.
+  rm -f "${work}/alpaca-key"
 }
 trap cleanup EXIT
 

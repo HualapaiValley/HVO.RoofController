@@ -169,7 +169,7 @@ public class Program
     }
 
     /// <summary>
-    /// Reads the server's API key for the controller. The file must hold one key on one line, and no other user may read
+    /// Reads the server's API key for the controller. The file must hold one key on one line, and only its owner may read
     /// or change it. The key never appears in a message.
     /// </summary>
     /// <exception cref="AlpacaSettingsException">The file cannot be read, others can read it, or it holds more than a key.</exception>
@@ -181,7 +181,7 @@ public class Program
             if (!OperatingSystem.IsWindows())
             {
                 var mode = File.GetUnixFileMode(path);
-                if ((mode & (UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.GroupWrite)) != 0)
+                if ((mode & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite)) != 0)
                 {
                     throw new AlpacaSettingsException(
                         $"{AlpacaOptions.SectionName}:ControllerApiKeyFile names {path}, which other users can read or change. Run: chmod 600 {path}");

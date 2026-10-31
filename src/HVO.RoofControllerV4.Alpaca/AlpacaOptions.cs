@@ -50,7 +50,7 @@ public sealed class AlpacaOptions
     public Uri ControllerUrl { get; set; } = new("http://localhost:8080");
 
     /// <summary>
-    /// A file holding the server's own API key for the controller, on one line, readable only by the server's user. A
+    /// A file holding the server's own API key for the controller, on one line, readable only by its owner. A
     /// Viewer key is all this phase needs: it reads the status and sends Stop, which every role may send.
     /// </summary>
     public string? ControllerApiKeyFile { get; set; }

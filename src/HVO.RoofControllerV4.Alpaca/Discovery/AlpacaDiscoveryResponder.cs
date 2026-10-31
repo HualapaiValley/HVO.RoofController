@@ -65,7 +65,15 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
             _bound.TrySetResult(((IPEndPoint)v4.LocalEndPoint!).Port);
             if (_options.Discovery.IPv6)
             {
-                v6 = OpenIPv6();
+                try
+                {
+                    v6 = OpenIPv6();
+                }
+                catch (SocketException ex)
+                {
+                    // IPv4 discovery carries on without it.
+                    _logger.LogWarning(ex, "Could not answer IPv6 Alpaca discovery on UDP port {DiscoveryPort}; answering IPv4 only", _options.Discovery.Port);
+                }
             }
 
             _logger.LogInformation(

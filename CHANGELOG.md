@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- An ASCOM Alpaca server for the roof, phase 1 (#220): `HVO.RoofControllerV4.Alpaca`, a process of its own, off by
+  default (`Alpaca:Enabled`), that serves the roof to astronomy software (NINA, SGP, Voyager, ACP, ASCOM's Dynamic
+  Client) as Alpaca **Dome 0**, read-only. It reaches the controller only through the client library, with its own
+  Viewer API key, listens only on the addresses it is given, and answers only its LAN: an address allowlist (loopback
+  and the private ranges by default), a `Host` check against DNS rebinding, no answer to other web pages' origins and no
+  CORS headers, and a per-address polling limit. `ShutterStatus` is Open, Closed, Opening or Closing as the roof is,
+  and Error for every other state (a stopped roof never reads as moving), from the last status the controller
+  published, never older than 3 s; `AbortSlew` is the controller's Stop and always allowed (also before connecting),
+  and an unverified stop is an error; `OpenShutter` and `CloseShutter` are refused (`0x40B`, commands disabled) and
+  never reach the controller. A fixed table of error numbers, the management API with a `UniqueID` kept for good,
+  read-only setup pages, and a UDP discovery responder that can also run alone on a host's network
+  (`--discovery-only`). ConformU 4.5.3, pinned, checks it in CI against the HAT emulator with no errors and no issues.
+  Running it, its settings and what later phases add: [docs/alpaca.md](docs/alpaca.md).
+
 ## [4.3.0] - 2026-10-30
 
 ### Added

@@ -7,6 +7,8 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
@@ -229,6 +231,24 @@ public sealed class AlpacaDomeTests
         roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
         roof.Verify(service => service.Open(), Times.Never());
         roof.Verify(service => service.Close(), Times.Never());
+    }
+
+    [TestMethod]
+    public async Task AbortSlew_IsSentEvenWhenTheClientHangsUp()
+    {
+        var roof = RoofServiceMock.Create();
+        await using var alpaca = await AlpacaTestHost.StartAsync(RoofClientApiTests.CreateHost(roof));
+        var context = new DefaultHttpContext();
+        context.Request.Method = HttpMethods.Put;
+        context.Request.ContentType = "application/x-www-form-urlencoded";
+        context.Request.Body = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("ClientID=5"));
+        context.Connection.RemoteIpAddress = AlpacaTestHost.ClientAddress;
+        var request = await AlpacaRequest.ReadAsync(context);
+
+        var result = await alpaca.Services.GetRequiredService<AlpacaDome>().InvokeAsync("abortslew", request, new CancellationToken(canceled: true));
+
+        result!.Value.ErrorNumber.Should().Be(0, "the request's cancellation never cancels a Stop");
+        roof.Verify(service => service.Stop(RoofControllerStopReason.NormalStop), Times.Once());
     }
 
     [TestMethod]

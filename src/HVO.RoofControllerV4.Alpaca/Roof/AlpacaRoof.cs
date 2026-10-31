@@ -92,15 +92,16 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
 
     /// <summary>
     /// Stops the roof: the controller's Stop, which every role may send and a latched fault never blocks. Returns the
-    /// controller's status after it.
+    /// controller's status after it. It takes no cancellation: a client that goes away does not cancel a Stop, which the
+    /// client library's Stop timeout bounds.
     /// </summary>
     /// <exception cref="AlpacaException">
     /// The stop was not confirmed: the relays could not be verified off (<see cref="AlpacaErrors.RelayStateUnverified"/>),
     /// the controller could not be reached, or it refused.
     /// </exception>
-    public async Task<RoofStatusResponse?> StopAsync(IPAddress client, uint clientId, uint clientTransactionId, CancellationToken cancellationToken)
+    public async Task<RoofStatusResponse?> StopRoofAsync(IPAddress client, uint clientId, uint clientTransactionId)
     {
-        var result = await _client.StopAsync(cancellationToken).ConfigureAwait(false);
+        var result = await _client.StopAsync(CancellationToken.None).ConfigureAwait(false);
         Offer(result.Status);
         _logger.LogInformation(
             "Alpaca AbortSlew from {RemoteAddress} (ClientID {ClientId}, ClientTransactionID {ClientTransactionId}): Stop {Outcome}",

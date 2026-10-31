@@ -173,6 +173,7 @@ public sealed class AlpacaOptionsTests
 
     [TestMethod]
     [DataRow(UnixFileMode.OtherRead)]
+    [DataRow(UnixFileMode.GroupRead)]
     [DataRow(UnixFileMode.GroupWrite)]
     public void AKeyFileOthersCanReadOrChange_IsRefused(UnixFileMode extra)
     {
