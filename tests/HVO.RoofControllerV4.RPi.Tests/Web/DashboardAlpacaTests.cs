@@ -3,6 +3,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Alpaca;
+using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Roof;
 using static HVO.RoofControllerV4.RPi.Tests.Web.WebAlpacaSupport;
@@ -33,7 +34,7 @@ public sealed class DashboardAlpacaTests
             Text(cut.Find("#rc2-alpaca-title")).Should().Be(RoofAlpacaText.Title);
             Text(cut.Find("[data-testid=alpaca-mode]")).Should().Be(RoofAlpacaText.DescribeMode(RoofAlpacaCommandMode.Off));
             harness.Console.View.Status!.Alpaca!.Hold.Held.Should().BeTrue("the controller's start sets the hold");
-            cut.FindAll("[data-testid=alpaca-hold], [data-testid=alpaca-lease], [data-testid=alpaca-grants], [data-testid=alpaca-alerts], [data-testid=alpaca-warning], [data-testid=alpaca-idle]")
+            cut.FindAll("[data-testid=alpaca-hold], [data-testid=alpaca-lease], [data-testid=alpaca-grants], [data-testid=alpaca-alerts], [data-testid=alpaca-warning], [data-testid=alpaca-lease-notice]")
                 .Should().BeEmpty("with commands off, the hold and the lease decide nothing");
         });
     }
@@ -48,8 +49,15 @@ public sealed class DashboardAlpacaTests
         await cut.WaitForAssertionAsync(() => cut.Find("[data-testid=alpaca]").GetAttribute("data-mode").Should().Be(nameof(RoofAlpacaCommandMode.CloseOnly)));
         await harness.TakeTheLeaseAsync(requests);
 
-        // Taking the lease drops every grant, so the grant comes after it.
-        await harness.Session!.Client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, ["scope-unknown:Guide"]);
+        // Taking the lease drops every grant, so the grant comes after it, from another person (a person who grants steps
+        // away from their own lease).
+        await RoofClientApiTests.AddUserAsync(harness.Host, "ada", RoofControllerApiContract.AdminRole);
+        using (var other = ClientTestSupport.CreateClient(harness.Host))
+        {
+            other.Credential = await other.Auth.SignInAsync("ada", Security.TestSecrets.Password);
+            await other.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, ["scope-unknown:Guide"]);
+        }
+
         harness.Alpaca().RaiseAlert("NotAuthorised", RoofAlpacaCommandKind.Close, "An Alpaca Close was refused as not authorised: the controller did not accept its key.", [],
             new RoofAlpacaClient(9, 1, "192.0.2.51", "basic"));
         harness.ServerClock.Advance(TimeSpan.FromSeconds(1));

@@ -95,10 +95,11 @@ public sealed record WebRoofView
     public WebAlpacaView? Alpaca { get; init; }
 
     /// <summary>
-    /// What this person is told about their operator lease idling out, on every page: the warning in its last minute, or
+    /// What this person is told about their operator lease, on every page: that they stepped away by granting an override
+    /// (<see cref="RoofAlpacaText.DescribeSteppedAway"/>), the warning in its last minute before it idles out, or
     /// <see cref="RoofAlpacaText.MayNowMove"/> once it did; null otherwise.
     /// </summary>
-    public string? AlpacaIdleWarning { get; init; }
+    public string? AlpacaLeaseNotice { get; init; }
 }
 
 /// <summary>
@@ -177,7 +178,8 @@ public sealed record WebAlpacaGrantQuestion(string AlertId, IReadOnlyList<string
 /// <para>The Alpaca command state (#220): an operator's live page holds the session's operator lease
 /// (<see cref="WebOperatorLease"/>) while it is open, and what the person does here keeps it
 /// (<see cref="NoteInput"/>); the page clears the human Stop hold, grants an override for one Alpaca Close only after the
-/// person confirms its question (Stop withdraws it), revokes grants and acknowledges alerts.</para>
+/// person confirms its question (Stop withdraws it), with the person stepping away from the lease until their next click
+/// or key (<see cref="WebOperatorLease.GrantAsync"/>), revokes grants and acknowledges alerts.</para>
 /// <para>Thread-safe. <see cref="Changed"/> is raised on any thread; a component marshals it with
 /// <c>InvokeAsync</c>.</para>
 /// </remarks>
@@ -512,9 +514,13 @@ public sealed class WebRoofConsole : IDisposable
             return Task.CompletedTask;
         }
 
+        // The person steps away with the grant (the controller ends their operator lease, which a grant never lifts): the
+        // input that sent it is forgotten, and only their next click or key takes the lease back, dropping the grant.
         return SendAlpacaAsync($"Sending {RoofAlpacaText.GrantConfirmLabel}…", RoofAlpacaText.GrantConfirmLabel, async (session, closing) =>
         {
-            var grant = await session.Client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, asked.Question.ReasonKeys, closing).ConfigureAwait(false);
+            var grant = session.OperatorLease is { } lease
+                ? await lease.GrantAsync(RoofAlpacaCommandKind.Close, asked.Question.ReasonKeys, closing).ConfigureAwait(false)
+                : await session.Client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, asked.Question.ReasonKeys, closing).ConfigureAwait(false);
             return RoofAlpacaText.DescribeGrant(grant);
         });
     }
@@ -1283,13 +1289,17 @@ public sealed class WebRoofConsole : IDisposable
             Notices = _notices.ToArray(),
             Alpaca = BuildAlpacaLocked(staleSince is not null),
 
-            // The answers to the person's own heartbeats say it first (one goes at once when they act on a warning);
-            // without them, the status.
-            AlpacaIdleWarning = _session is not { } person ? null
-                : _operatorLease is { } lease && (lease.IdledOut || lease.State is not null) ? lease.IdleWarning
-                : RoofAlpacaText.DescribeIdleWarning(_status?.Alpaca?.OperatorLease, person.Name)
+            AlpacaLeaseNotice = LeaseNoticeLocked()
         };
     }
+
+    // #220: a person who granted has stepped away; otherwise the answers to their own heartbeats say how the lease stands
+    // (one goes at once when they act on a warning), and without them the status.
+    private string? LeaseNoticeLocked()
+        => _session is not { } person ? null
+            : _operatorLease is { SteppedAway: true } ? RoofAlpacaText.DescribeSteppedAway(_status?.Alpaca?.Grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Close))
+            : _operatorLease is { State: not null } lease ? lease.IdleWarning
+            : RoofAlpacaText.DescribeIdleWarning(_status?.Alpaca?.OperatorLease, person.Name);
 
     // #220: what the page shows of the Alpaca command state, and offers this person.
     private WebAlpacaView? BuildAlpacaLocked(bool stale)

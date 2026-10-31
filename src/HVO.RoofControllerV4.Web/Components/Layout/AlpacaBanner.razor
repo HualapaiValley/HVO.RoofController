@@ -3,14 +3,14 @@
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 
-@* On every page (#220): what the signed-in person is told about their operator lease idling out, in the last minute
-   before it does and once it has ("Alpaca may now move the roof"). It also passes the person's own input on the page
-   (js/ui.js: their clicks, keys, forms and scrolling) and their navigation to the page's console, which keeps their
-   operator lease; a timer or a status update never does. *@
-@if (View.AlpacaIdleWarning is { } warning)
+@* On every page (#220): what the signed-in person is told about their operator lease: that they stepped away by
+   granting an override, the warning in the last minute before it idles out, and once it has, that Alpaca may now move
+   the roof. It also passes the person's own input on the page (js/ui.js: their clicks and keys) and their navigation to
+   the page's console, which keeps the lease or takes it back; a timer, a status update or a render never does. *@
+@if (View.AlpacaLeaseNotice is { } notice)
 {
-    <div class="alert alert-warning web-mode-banner" role="alert" data-testid="alpaca-idle-banner">
-        <p><i class="bi bi-hourglass-split me-1" aria-hidden="true"></i>@warning</p>
+    <div class="alert alert-warning web-mode-banner" role="alert" data-testid="alpaca-lease-banner">
+        <p><i class="bi bi-hourglass-split me-1" aria-hidden="true"></i>@notice</p>
     </div>
 }
 
@@ -45,7 +45,7 @@
         }
     }
 
-    /// <summary>The person did something on the page (called from the browser, at most once every 2 s).</summary>
+    /// <summary>The person clicked or typed on the page (called from the browser, at most once a second).</summary>
     [JSInvokable]
     public void NoteInput() => Roof.NoteInput();
 

@@ -168,13 +168,14 @@ the person's role allows.
 - **The operator lease.** While an operator or an admin has any page of the web UI open, their session holds the
   operator lease (a heartbeat every 10 s), and while any person holds it the controller refuses Alpaca commands; the
   panel says who holds it. A viewer holds none. Only the person's own input on one of their pages keeps it: a click or
-  a tap, a key, a form, scrolling, moving to another page, or Stop; a timer or a new status never does. While Alpaca
-  commands are on, a lease lapses after `RoofController:Lease:OperatorLeaseIdleMinutes` (10 by default) without input.
-  Every page warns in the last minute (`Your operator lease lapses in 50 s without input; then Alpaca may move the roof. Touch anything to keep it.`),
-  and once it has lapsed says `Alpaca may now move the roof: your operator lease lapsed after no input.`; the web UI
-  then stops renewing it until the person does something, which takes it again. Closing the person's last page,
-  signing out and the session ending release it. A page whose browser went away without closing it holds the lease
-  until the web UI drops its connection (up to 3 minutes), or the lease idles out.
+  a tap, a key (not a lone Shift, Ctrl, Alt or Meta), moving to another page, or Stop; scrolling, a timer, a new status
+  or a page drawn again never does. While Alpaca commands are on, a lease lapses after
+  `RoofController:Lease:OperatorLeaseIdleMinutes` (10 by default) without input. Every page warns in the last minute
+  (`Your operator lease lapses in 50 s without input; then Alpaca may move the roof. Touch anything to keep it.`), and
+  once it has lapsed says `Alpaca may now move the roof: your operator lease lapsed after no input.`; the heartbeats go
+  on, but the controller gives the lease back only with input, so the person's next click or key takes it again.
+  Closing the person's last page, signing out and the session ending release it. A page whose browser went away
+  without closing it holds the lease until the web UI drops its connection (up to 3 minutes), or the lease idles out.
 - **Alerts**, newest first: an Alpaca Close the controller refused, and a client refused as not authorised, each with
   how often, when, and the client the Alpaca server reported. Anyone signed in may **Acknowledge** one.
 - **Allowing one Close.** On the alert of a Close refused only because a telescope is not clear of the roof, or its
@@ -184,8 +185,13 @@ the person's role allows.
   by default) and that it never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's
   operator lease or the Stop hold. **Allow one Close** grants it; **Cancel**, and any Stop, withdraw the question
   without sending anything. The grant is listed with who gave it and the time left, and **Revoke** removes it. The next
-  Alpaca Close from any client uses it, and only once nobody holds the operator lease: the person's own open pages hold
-  it, so the Close goes ahead after they close them (or the lease lapses), and taking the lease again drops the grant.
+  Alpaca Close from any client uses it, once no person holds the operator lease.
+- **Stepping away.** A grant never lifts a person's operator lease, so the person who grants steps away with it: the
+  controller ends their lease, in every session of theirs, and every page of the session they granted from says
+  `You stepped away: Alpaca may close the roof once in the next 5 min. Click or type on this page to take control back; that cancels the grant.`
+  The click (or key) that sent the grant does not count, nor do the page's renders: the heartbeats go on without input
+  and the lease stays released. The person's next click or key on any of their pages takes it back, and taking it back
+  drops the grant, as any person taking the lease does. Another person's lease is untouched and still refuses.
 - A refusal of any of these, and what each did, is said under **Command feedback**.
 
 ### Health
@@ -428,7 +434,8 @@ Nothing here needs the Pi, the HAT or the roof.
   forced restart, and the web UI's host (sign-in, the cookie, the origin check, the headers and Stop). The Alpaca panel
   and the operator lease run against the controller's own Alpaca command state in process: the hold, grants (sent only
   after the question, with exactly the alert's reasons), alerts, the lease taken by the first page and released by the
-  last, input from the person's actions only, and an idle lease not taken again without input.
+  last, input from the person's actions only, an idle lease not taken again without input, and a grant that steps the
+  person away until their next click (`WebAlpacaBrowserTests` checks that last in Chromium too).
 - **Browser tests** (`TestCategory=Browser`, `tests/HVO.RoofControllerV4.RPi.Tests/Browser`) run the web UI in
   Chromium against the whole controller and the emulated roof, on phones over HTTPS, and on tablets (upright and
   sideways) and a desktop window over HTTP: sign-in, the session cookie, a session that expires while its page is open,

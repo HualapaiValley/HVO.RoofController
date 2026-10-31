@@ -5,6 +5,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.Web.Components.Layout;
+using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Roof;
 using HVO.RoofControllerV4.Web.Sessions;
 using Microsoft.AspNetCore.Components;
@@ -90,7 +91,8 @@ public sealed class WebOperatorLeaseTests
         using var third = Page(harness);
         await third.StartAsync();
         harness.Clock.Advance(TimeSpan.Zero);
-        await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held, "the lease to be taken again");
+        // The controller handles a request before the test's hook records it.
+        await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held && Count(requests) == 3, "the lease to be taken again");
         requests.Should().Equal("POST input", "DELETE", "POST input");
     }
 
@@ -115,7 +117,7 @@ public sealed class WebOperatorLeaseTests
     }
 
     [TestMethod]
-    public async Task AnIdleLease_IsNotTakenAgainWithoutInput_ThePageSaysAlpacaMayNowMove_AndInputTakesItAgain()
+    public async Task AnIdleLease_IsNotTakenBackByHeartbeats_ThePageSaysAlpacaMayNowMove_AndInputTakesItBackAtOnce()
     {
         using var harness = await WebRoofHarness.CreateAsync(settings: CloseOnly(idleMinutes: 1), operatorLease: true);
         var requests = harness.RecordLeaseRequests();
@@ -131,26 +133,71 @@ public sealed class WebOperatorLeaseTests
 
         harness.ServerClock.Advance(Step);
         await ClientTestSupport.WaitUntilAsync(() => !harness.Alpaca().GetStatus().OperatorLease.Held, "the controller to lapse it");
-        harness.Clock.Advance(Step);
-        await lease.Stopping;
+        for (var beat = 0; beat < 2; beat++)
+        {
+            var sent = Count(requests);
+            harness.ServerClock.Advance(Step);
+            harness.Clock.Advance(Step);
+            await ClientTestSupport.WaitUntilAsync(() => Count(requests) == sent + 1 && lease.State is { Held: false }, "a heartbeat after the lapse");
+        }
 
-        lease.IdledOut.Should().BeTrue();
-        lease.IsRenewing.Should().BeFalse("a heartbeat without input must not take an idle lease again");
-        harness.Console.View.AlpacaIdleWarning.Should().Be(RoofAlpacaText.MayNowMove);
-        var sent = Count(requests);
-        harness.ServerClock.Advance(Step);
-        harness.Clock.Advance(Step);
-        await Task.Delay(100);
-        Count(requests).Should().Be(sent);
-        harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse("Alpaca may now move the roof");
+        requests.TakeLast(2).Should().Equal(["POST", "POST"], "the heartbeats go on, without input");
+        harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse("a heartbeat without input never takes a lapsed lease back");
+        await harness.WaitForAsync(view => view.AlpacaLeaseNotice == RoofAlpacaText.MayNowMove, "the page to say Alpaca may now move the roof");
 
+        var before = Count(requests);
         harness.Console.NoteInput();
-        harness.Clock.Advance(TimeSpan.Zero);
 
-        await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held, "the person's input to take it again");
+        await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held && Count(requests) == before + 1, "the person's input to take it back at once");
         requests[^1].Should().Be("POST input");
-        lease.IdledOut.Should().BeFalse();
-        await harness.WaitForAsync(view => view.AlpacaIdleWarning != RoofAlpacaText.MayNowMove, "the page to stop saying so");
+        await harness.WaitForAsync(view => view.AlpacaLeaseNotice != RoofAlpacaText.MayNowMove, "the page to stop saying so");
+    }
+
+    [TestMethod]
+    public async Task AGrant_StepsThePersonAway_TheHeartbeatsGoOnWithoutInput_AndTheirNextClickTakesTheLeaseBack()
+    {
+        using var harness = await WebRoofHarness.CreateAsync(settings: CloseOnly(), operatorLease: true);
+        var grants = new List<string>();
+        var requests = harness.RecordLeaseRequests(grants);
+        harness.RaiseRefusedClose("scope-not-clear:Main");
+        await using var context = Context(harness);
+        var page = context.Render<Dashboard>();
+        await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-grant-ask]"));
+        await harness.TakeTheLeaseAsync(requests);
+        var lease = harness.Session!.OperatorLease!;
+
+        // The clicks that ask and confirm are input before the grant, never after it.
+        page.Click("[data-testid=alpaca-grant-ask]");
+        await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-question-confirm]").HasAttribute("data-alpaca-step-away").Should().BeTrue());
+        page.Click("[data-testid=alpaca-question-confirm]");
+
+        await page.WaitForAssertionAsync(() =>
+        {
+            var grant = harness.Alpaca().Grants().Should().ContainSingle().Subject;
+            harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
+            lease.SteppedAway.Should().BeTrue();
+            var stepped = RoofAlpacaText.DescribeSteppedAway(harness.Console.View.Status!.Alpaca!.Grants.Single());
+            stepped.Should().StartWith("You stepped away: Alpaca may close the roof once in the next 5 min.");
+            Text(page.Find("[data-testid=alpaca-lease-notice]")).Should().Be(stepped);
+            harness.Console.View.AlpacaLeaseNotice.Should().Be(stepped);
+        });
+        grants.Should().ContainSingle();
+        await lease.BeatAsync(requests);
+        await lease.BeatAsync(requests);
+        requests.Should().Equal(["POST input", "POST", "POST"], "the confirming click is not input after the grant, nor are the renders");
+        harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse();
+        harness.Alpaca().Grants().Should().ContainSingle("the grant waits for an Alpaca Close");
+
+        page.Click("[data-testid=refresh]");
+
+        await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held && Count(requests) == 4, "the next click to take the lease back");
+        requests[^1].Should().Be("POST input");
+        harness.Alpaca().Grants().Should().BeEmpty("taking the lease back drops the grant");
+        await page.WaitForAssertionAsync(() =>
+        {
+            lease.SteppedAway.Should().BeFalse();
+            page.FindAll("[data-testid=alpaca-lease-notice], [data-testid=alpaca-grant]").Should().BeEmpty();
+        });
     }
 
     [TestMethod]
@@ -169,20 +216,20 @@ public sealed class WebOperatorLeaseTests
             await StepAsync(harness, lease, (TimeSpan.FromMinutes(2) - elapsed).TotalSeconds);
         }
 
-        harness.Console.View.AlpacaIdleWarning.Should().BeNull("70 s are left");
-        banner.FindAll("[data-testid=alpaca-idle-banner]").Should().BeEmpty();
+        harness.Console.View.AlpacaLeaseNotice.Should().BeNull("70 s are left");
+        banner.FindAll("[data-testid=alpaca-lease-banner]").Should().BeEmpty();
 
         await StepAsync(harness, lease, 60);
 
         var warning = "Your operator lease lapses in 60 s without input; then Alpaca may move the roof. Touch anything to keep it.";
-        harness.Console.View.AlpacaIdleWarning.Should().Be(warning);
-        await banner.WaitForAssertionAsync(() => Text(banner.Find("[data-testid=alpaca-idle-banner]")).Should().Be(warning));
+        harness.Console.View.AlpacaLeaseNotice.Should().Be(warning);
+        await banner.WaitForAssertionAsync(() => Text(banner.Find("[data-testid=alpaca-lease-banner]")).Should().Be(warning));
 
         harness.Console.NoteInput();
 
         await ClientTestSupport.WaitUntilAsync(() => lease.State?.IdleSecondsRemaining == 120, "the input to go at once");
         requests[^1].Should().Be("POST input");
-        await banner.WaitForAssertionAsync(() => banner.FindAll("[data-testid=alpaca-idle-banner]").Should().BeEmpty());
+        await banner.WaitForAssertionAsync(() => banner.FindAll("[data-testid=alpaca-lease-banner]").Should().BeEmpty());
     }
 
     [TestMethod]

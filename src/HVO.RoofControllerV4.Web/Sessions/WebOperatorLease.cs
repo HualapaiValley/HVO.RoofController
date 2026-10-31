@@ -8,14 +8,15 @@ namespace HVO.RoofControllerV4.Web.Sessions;
 /// renews it (<see cref="RoofOperatorLeaseKeeper"/>), and while any person holds it the controller refuses Alpaca commands.
 /// Each live page holds it (<see cref="Hold"/>) from the moment its live connection starts until the page closes; the
 /// last page closing, the session ending and signing out release it. What the person does on any of their pages
-/// (<see cref="NoteInput"/>: a click, a key, a form, a navigation, never a timer or a status) keeps it from idling out.
+/// (<see cref="NoteInput"/>: a click, a key, a navigation, Stop; never a timer or a status) keeps it from idling out.
 /// </summary>
 /// <remarks>
-/// <para>While Alpaca commands are on, the controller lets a lease lapse after its idle limit without input. The keeper's
-/// next heartbeat, which carries no input, would take it again; so once the idle deadline the controller gave this
-/// person has passed with no input since, this session stops renewing it (releasing it if it is still held) and says
-/// <see cref="RoofAlpacaText.MayNowMove"/> until the person does something, which takes it again. The deadline is known
-/// only while the controller reports this person as the holder (it reports the oldest lease).</para>
+/// <para>While Alpaca commands are on, the controller lets a lease lapse after its idle limit without input, and a
+/// heartbeat without input never takes it back: the person is told <see cref="RoofAlpacaText.MayNowMove"/> until they do
+/// something.</para>
+/// <para>A person who grants an override steps away (<see cref="GrantAsync"/>): the controller ends their lease with the
+/// grant, since a grant never lifts a person's lease, and the heartbeats go on without input until the person does
+/// something, which takes the lease back and so drops the grant. The input that sent the grant does not count.</para>
 /// <para>Thread-safe. <see cref="Changed"/> is raised outside the lock, on any thread.</para>
 /// </remarks>
 public sealed class WebOperatorLease
@@ -25,14 +26,11 @@ public sealed class WebOperatorLease
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly Lock _gate = new();
-    private readonly ITimer _idleTimer;
     private RoofOperatorLeaseKeeper? _keeper;
     private Task _stopping = Task.CompletedTask;
     private int _holds;
     private bool _closed;
-    private bool _idledOut;
-    private long _inputs;
-    private long _inputsAtAnswer;
+    private bool _steppedAway;
 
     internal WebOperatorLease(RoofControllerClient client, string person, TimeProvider time, ILogger logger)
     {
@@ -40,13 +38,12 @@ public sealed class WebOperatorLease
         _person = person;
         _time = time;
         _logger = logger;
-        _idleTimer = time.CreateTimer(_ => OnIdleDeadline(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
-    /// <summary>Raised after <see cref="State"/>, <see cref="IdledOut"/> or <see cref="IsRenewing"/> changed, on any thread.</summary>
+    /// <summary>Raised after <see cref="State"/>, <see cref="SteppedAway"/> or <see cref="IsRenewing"/> changed, on any thread.</summary>
     public event EventHandler? Changed;
 
-    /// <summary>True while the session renews the lease: a page is open, and it has neither idled out nor been closed.</summary>
+    /// <summary>True while the session renews the lease: a page is open, and the session has not ended.</summary>
     public bool IsRenewing
     {
         get { lock (_gate) { return _keeper is not null; } }
@@ -58,25 +55,22 @@ public sealed class WebOperatorLease
         get { lock (_gate) { return _keeper?.State; } }
     }
 
-    /// <summary>True once the lease idled out for want of input, until the person does something on one of their pages.</summary>
-    public bool IdledOut
+    /// <summary>
+    /// True from the person's grant until they do something on one of their pages, or a heartbeat finds a lease of theirs
+    /// again (taking one back drops the grant): their lease has ended so that Alpaca may use the grant.
+    /// </summary>
+    public bool SteppedAway
     {
-        get { lock (_gate) { return _idledOut; } }
+        get { lock (_gate) { return _steppedAway; } }
     }
 
     /// <summary>
     /// What this person is told about their lease idling out (<see cref="RoofAlpacaText.DescribeIdleWarning"/>): the warning
-    /// in its last minute, <see cref="RoofAlpacaText.MayNowMove"/> once it idled out, or null.
+    /// in its last minute, <see cref="RoofAlpacaText.MayNowMove"/> once it lapsed, or null.
     /// </summary>
     public string? IdleWarning
     {
-        get
-        {
-            lock (_gate)
-            {
-                return _idledOut ? RoofAlpacaText.MayNowMove : RoofAlpacaText.DescribeIdleWarning(_keeper?.State, _person);
-            }
-        }
+        get { lock (_gate) { return RoofAlpacaText.DescribeIdleWarning(_keeper?.State, _person); } }
     }
 
     /// <summary>A page's hold: the first takes the lease; disposing the last releases it.</summary>
@@ -90,11 +84,10 @@ public sealed class WebOperatorLease
                 return new WebOperatorLeaseHold(null);
             }
 
-            // Opening the first page is the person being here: it takes the lease, even after it idled out.
             started = ++_holds == 1;
             if (started)
             {
-                _idledOut = false;
+                _steppedAway = false;
                 StartLocked();
             }
         }
@@ -108,46 +101,66 @@ public sealed class WebOperatorLease
     }
 
     /// <summary>
-    /// The person did something on one of their pages: the next heartbeat resets the idle clock, and a lease that idled out
-    /// is taken again. Never call it for a timer or a status update.
+    /// The person did something on one of their pages: the next heartbeat resets the idle clock, and takes back a lease that
+    /// lapsed or that they stepped away from. Never call it for a timer or a status update.
     /// </summary>
     public void NoteInput()
     {
         RoofOperatorLeaseKeeper? keeper;
-        var restarted = false;
-        var warned = false;
+        bool now;
+        bool returned;
         lock (_gate)
         {
-            if (_closed)
+            if (_closed || _keeper is null)
             {
                 return;
             }
 
-            _inputs++;
-            if (_idledOut && _holds > 0)
-            {
-                _idledOut = false;
-                StartLocked();
-                restarted = true;
-            }
-
             keeper = _keeper;
-            warned = !restarted && keeper is not null && RoofAlpacaText.DescribeIdleWarning(keeper.State, _person) is not null;
+            returned = _steppedAway;
+            _steppedAway = false;
+
+            // Warned, lapsed or away: the input goes at once, so the page shows the lease kept or taken back.
+            now = returned || RoofAlpacaText.DescribeIdleWarning(keeper.State, _person) is not null;
         }
 
-        if (restarted)
+        keeper.NoteInput();
+        if (now)
         {
-            _logger.LogInformation("{Name} did something after their operator lease idled out: the web UI takes it again", _person);
+            _ = BeatNowAsync(keeper);
+        }
+
+        if (returned)
+        {
+            _logger.LogInformation("{Name} did something after stepping away: the web UI takes the operator lease back, which drops the grant", _person);
             RaiseChanged();
-            return;
+        }
+    }
+
+    /// <summary>
+    /// Grants an override for one command of <paramref name="kind"/> lifting <paramref name="reasonKeys"/>, as the person
+    /// stepping away: no heartbeat crosses the grant, the input that sent it is forgotten, and from then on the heartbeats
+    /// carry no input until the person does something (<see cref="RoofOperatorLeaseKeeper.StepAwayAsync"/>).
+    /// </summary>
+    public async Task<RoofOverrideGrant> GrantAsync(RoofAlpacaCommandKind kind, IReadOnlyList<string> reasonKeys, CancellationToken cancellationToken)
+    {
+        RoofOperatorLeaseKeeper? keeper;
+        lock (_gate)
+        {
+            keeper = _keeper;
         }
 
-        keeper?.NoteInput();
-        if (warned)
+        var grant = keeper is null
+            ? await _client.Alpaca.GrantAsync(kind, reasonKeys, cancellationToken).ConfigureAwait(false)
+            : await keeper.StepAwayAsync(token => _client.Alpaca.GrantAsync(kind, reasonKeys, token), cancellationToken).ConfigureAwait(false);
+        lock (_gate)
         {
-            // The person was warned the lease is about to lapse: their input goes now, not at the next heartbeat.
-            _ = BeatNowAsync(keeper!);
+            _steppedAway = !_closed;
         }
+
+        _logger.LogInformation("{Name} granted one Alpaca {Kind} and stepped away from the operator lease", _person, kind);
+        RaiseChanged();
+        return grant;
     }
 
     /// <summary>
@@ -160,13 +173,8 @@ public sealed class WebOperatorLease
         Task stopping;
         lock (_gate)
         {
-            if (!_closed)
-            {
-                _closed = true;
-                _idleTimer.Dispose();
-            }
-
-            _idledOut = false;
+            _closed = true;
+            _steppedAway = false;
             stop = StopLocked();
             stopping = _stopping;
         }
@@ -202,7 +210,7 @@ public sealed class WebOperatorLease
                 return;
             }
 
-            _idledOut = false;
+            _steppedAway = false;
             stop = StopLocked();
         }
 
@@ -215,7 +223,6 @@ public sealed class WebOperatorLease
         var keeper = new RoofOperatorLeaseKeeper(_client, _time, _logger);
         keeper.StateChanged += OnKeeperStateChanged;
         _keeper = keeper;
-        _inputsAtAnswer = _inputs;
 
         // A release still on its way (a page reloaded: its old page let go as the new one held) goes first, so it cannot
         // remove the lease the new heartbeats hold. A keeper stopped meanwhile does not start.
@@ -233,11 +240,6 @@ public sealed class WebOperatorLease
     // is released (it is a request to the controller).
     private PendingStop? StopLocked()
     {
-        if (!_closed)
-        {
-            _idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        }
-
         if (_keeper is not { } keeper)
         {
             return null;
@@ -298,40 +300,14 @@ public sealed class WebOperatorLease
                 return;
             }
 
-            // The answer carries the input noted before it was sent; anything noted from now on goes with the next one.
-            _inputsAtAnswer = _inputs;
-            var state = _keeper!.State;
-            if (state is { Held: true, IdleSecondsRemaining: { } seconds } && string.Equals(state.Holder, _person, StringComparison.Ordinal))
+            // No heartbeat crosses a grant, so this answer came after it: a lease of the person's held again (another of
+            // their sessions took it back) has dropped the grant.
+            if (_steppedAway && _keeper!.State is { Held: true } state && string.Equals(state.Holder, _person, StringComparison.Ordinal))
             {
-                _idleTimer.Change(TimeSpan.FromSeconds(Math.Max(0, seconds)), Timeout.InfiniteTimeSpan);
-            }
-            else
-            {
-                _idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                _steppedAway = false;
             }
         }
 
-        RaiseChanged();
-    }
-
-    // The idle deadline the controller gave has passed: unless the person did something since its answer, the controller
-    // lapses the lease, and the next heartbeat (without input) must not take it again.
-    private void OnIdleDeadline()
-    {
-        PendingStop? stop;
-        lock (_gate)
-        {
-            if (_closed || _keeper is null || _inputs != _inputsAtAnswer)
-            {
-                return;
-            }
-
-            _idledOut = true;
-            stop = StopLocked();
-        }
-
-        Begin(stop);
-        _logger.LogInformation("The operator lease of {Name} idled out after no input: the web UI stopped renewing it, so Alpaca may move the roof", _person);
         RaiseChanged();
     }
 
