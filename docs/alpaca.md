@@ -505,9 +505,9 @@ cleared. A hold left overnight blocks Alpaca's Close, as a person's lease does.
 ### The operator lease
 
 **While a person holds the operator lease, every Alpaca Close is refused** (`LeaseHeld`, naming them). A person's UI
-holds it while it is open (the web UI, the terminal, the kiosk and the Mac app; `hvo-roof`'s commands do not), with a
-heartbeat every 10 s (`POST api/v4.0/alpaca/lease`, a person's session with the Operator role); it ends when the UI
-closes or its heartbeats stop for 30 s.
+holds it while it is open with an Operator's session (the web UI and the terminal always, the kiosk and the Mac app
+while commands are on, when it matters; `hvo-roof`'s commands never), with a heartbeat every 10 s
+(`POST api/v4.0/alpaca/lease`); it ends when the UI closes or signs out, or its heartbeats stop for 30 s.
 
 - **Idle**: while commands are on, a person's lease lapses after `OperatorLeaseIdleMinutes` (10 by default, 1 to 120)
   with no input from them. Heartbeats alone never keep it, and the idle clock starts no earlier than commands going
