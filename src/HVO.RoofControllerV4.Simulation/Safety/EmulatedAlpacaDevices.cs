@@ -39,7 +39,11 @@ public sealed record EmulatedAlpacaDeviceStatus(
     bool? CanPark,
     bool? Safe,
     EmulatedAlpacaBehaviour Behaviour,
-    long Requests);
+    long Requests)
+{
+    /// <summary>How long each of its Device API answers waits before it is sent (a slow mount through NINA or ASCOM Remote).</summary>
+    public double ResponseDelayMilliseconds { get; init; }
+}
 
 /// <summary>Every emulated device's state.</summary>
 public sealed record EmulatedAlpacaStatus(IReadOnlyList<EmulatedAlpacaDeviceStatus> Telescopes, IReadOnlyList<EmulatedAlpacaDeviceStatus> SafetyMonitors);
@@ -215,7 +219,46 @@ public sealed class EmulatedAlpacaServer
                 device.Connected = true;
                 device.Behaviour = EmulatedAlpacaBehaviour.Answers;
                 device.Requests = 0;
+                device.ResponseDelay = TimeSpan.Zero;
             }
+        }
+    }
+
+    /// <summary>
+    /// Makes each Device API answer of a device wait <paramref name="delay"/> before it is sent (0 to 10 s): a mount that
+    /// answers slowly, for the re-read budget (#220). Throws <see cref="ArgumentException"/> for a device it does not serve
+    /// or a delay out of range.
+    /// </summary>
+    public void SetResponseDelay(string deviceType, int deviceNumber, TimeSpan delay)
+    {
+        if (delay < TimeSpan.Zero || delay > TimeSpan.FromSeconds(10))
+        {
+            throw new ArgumentException("The response delay must be between 0 and 10 s.");
+        }
+
+        var devices = deviceType == TelescopeType ? _telescopes : deviceType == SafetyMonitorType ? _monitors
+            : throw new ArgumentException("The device type must be telescope or safetymonitor.");
+        if (deviceNumber < 0 || deviceNumber >= devices.Length)
+        {
+            throw new ArgumentException($"The emulator serves {deviceType} device numbers 0 to {devices.Length - 1}.");
+        }
+
+        lock (_gate)
+        {
+            devices[deviceNumber].ResponseDelay = delay;
+        }
+    }
+
+    /// <summary>How long a Device API answer of <paramref name="deviceType"/> <paramref name="deviceNumber"/> waits; zero for an unknown device.</summary>
+    public TimeSpan ResponseDelayOf(string deviceType, string deviceNumber)
+    {
+        var devices = deviceType == TelescopeType ? _telescopes : deviceType == SafetyMonitorType ? _monitors : [];
+        lock (_gate)
+        {
+            return int.TryParse(deviceNumber, System.Globalization.NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                && number >= 0 && number < devices.Length
+                ? devices[number].ResponseDelay
+                : TimeSpan.Zero;
         }
     }
 
@@ -642,7 +685,10 @@ public sealed class EmulatedAlpacaServer
         device.Type == TelescopeType ? device.CanPark : null,
         device.Type == SafetyMonitorType ? device.Value : null,
         device.Behaviour,
-        device.Requests);
+        device.Requests)
+    {
+        ResponseDelayMilliseconds = device.ResponseDelay.TotalMilliseconds
+    };
 
     /// <summary>A member's parameter: its name, as the Alpaca API writes it, and its type.</summary>
     private sealed record Parameter(string Name, ParameterType Type);
@@ -680,5 +726,7 @@ public sealed class EmulatedAlpacaServer
         public EmulatedAlpacaBehaviour Behaviour { get; set; } = EmulatedAlpacaBehaviour.Answers;
 
         public long Requests { get; set; }
+
+        public TimeSpan ResponseDelay { get; set; }
     }
 }

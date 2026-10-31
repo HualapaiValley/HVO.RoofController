@@ -6,6 +6,9 @@ namespace HVO.RoofControllerV4.Emulator;
 /// <summary>Changes an emulated mount. Null leaves a setting as it is; <c>Device</c> defaults to 0.</summary>
 public sealed record AlpacaTelescopeRequest(int Device = 0, bool? Parked = null, bool? Connected = null, EmulatedAlpacaBehaviour? Behaviour = null, bool? CanPark = null);
 
+/// <summary>How long a device's Device API answers wait (0 to 10000 ms): a slow mount, for the re-read budget (#220).</summary>
+public sealed record AlpacaDelayRequest(string DeviceType = "telescope", int Device = 0, double DelayMilliseconds = 0);
+
 /// <summary>Changes an emulated safety monitor. Null leaves a setting as it is; <c>Device</c> defaults to 0.</summary>
 public sealed record AlpacaSafetyMonitorRequest(int Device = 0, bool? Safe = null, bool? Connected = null, EmulatedAlpacaBehaviour? Behaviour = null);
 
@@ -47,6 +50,9 @@ public static class EmulatedAlpacaEndpoint
             => Apply(alpaca, () => alpaca.SetTelescope(request.Device, request.Parked, request.Connected, request.Behaviour, request.CanPark)));
         control.MapPost("/safetymonitor", (AlpacaSafetyMonitorRequest request, EmulatedAlpacaServer alpaca)
             => Apply(alpaca, () => alpaca.SetSafetyMonitor(request.Device, request.Safe, request.Connected, request.Behaviour)));
+        control.MapPost("/delay", (AlpacaDelayRequest request, EmulatedAlpacaServer alpaca)
+            => Apply(alpaca, () => alpaca.SetResponseDelay(request.DeviceType, request.Device,
+                double.IsFinite(request.DelayMilliseconds) ? TimeSpan.FromMilliseconds(request.DelayMilliseconds) : TimeSpan.MinValue)));
         control.MapPost("/reset", (EmulatedAlpacaServer alpaca) => Apply(alpaca, alpaca.Reset));
     }
 
@@ -76,6 +82,11 @@ public static class EmulatedAlpacaEndpoint
         }
 
         var answer = alpaca.Answer(context.Request.Method, deviceType, deviceNumber, member, parameters);
+        if (alpaca.ResponseDelayOf(deviceType, deviceNumber) is { } delay && delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, context.RequestAborted).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+
         if (answer.Hang)
         {
             // A device that stopped responding: nothing comes back until the client gives up (or the host stops).

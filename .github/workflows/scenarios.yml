@@ -159,9 +159,12 @@ jobs:
 
   # The Alpaca server (#220) checked by ConformU, ASCOM's conformance checker, pinned by version and SHA-256, in CLI
   # mode: its Alpaca protocol check and its Dome conformance check, against the server, the controller and the HAT
-  # emulator built here and run on the runner's loopback. DomeOpenShutter is false and the server refuses Open and Close
-  # in this phase; the script fails if the emulated roof moved, and when ConformU reports any error or issue, or any
-  # message tests/alpaca/conformu-expected.json does not list (docs/alpaca.md, "Conformance").
+  # emulator built here and run on the runner's loopback, behind the chain guard (every URL loopback, the controller on
+  # the HAT emulator). DomeOpenShutter is false and the server refuses Open; the roof starts Closed, so ConformU's
+  # CloseShutter moves nothing. Then the scripted Close runs check the hold, the credential, a blocking mount, a Close
+  # grant and unsafe weather against what the emulated roof did. The script fails if the emulated roof moved under
+  # ConformU, if a log or result holds a run secret (such a file is deleted before the upload), and when ConformU reports
+  # any error or issue, or any message tests/alpaca/conformu-expected.json does not list (docs/alpaca.md, "Conformance").
   alpaca-conformu:
     runs-on: ubuntu-latest
     timeout-minutes: 30
