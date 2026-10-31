@@ -10,8 +10,8 @@ namespace HVO.RoofControllerV4.RPi.Safety;
 /// https://ascom-standards.org/api/). Only reads: the controller never connects, disconnects, parks or moves a device,
 /// so it never takes a mount away from the program that drives it. A read that is not a clean answer throws
 /// <see cref="RoofSafetySourceException"/>, so it is a failed read, never a value: the server unreachable, an HTTP status
-/// other than success, an answer that is not the Alpaca JSON, a non-zero <c>ErrorNumber</c>, or a <c>Value</c> of the
-/// wrong type.
+/// other than success, an answer that is not the Alpaca JSON, a non-zero <c>ErrorNumber</c>, or anything short of an
+/// unambiguous success (<see cref="ReadValue"/>).
 /// </summary>
 /// <remarks>
 /// The failure's words name no address and quote nothing the device sent (its <c>ErrorMessage</c> is not used), since
@@ -83,27 +83,59 @@ public sealed class AlpacaDevice
     public async Task<bool> ReadBooleanAsync(string member, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(member);
-        var answer = await ReadAsync(member, cancellationToken).ConfigureAwait(false);
+        var transaction = NextTransaction();
+        var answer = await ReadAsync(member, transaction, cancellationToken).ConfigureAwait(false);
         using (answer)
         {
-            return ReadValue(answer.RootElement);
+            return ReadValue(answer.RootElement, transaction);
         }
     }
 
     /// <summary>
-    /// The <c>Value</c> of an Alpaca answer, once its <c>ErrorNumber</c> says it succeeded. The member names are matched
-    /// whatever their case, as the Alpaca API allows.
+    /// The <c>Value</c> of an Alpaca answer, only when the answer is an unambiguous success to the request that carried
+    /// <paramref name="clientTransaction"/>: every field once (names matched whatever their case, as the Alpaca API
+    /// allows), a numeric <c>ErrorNumber</c> and a string <c>ErrorMessage</c>, the request's <c>ClientTransactionID</c>
+    /// echoed and a <c>ServerTransactionID</c>, then <c>ErrorNumber</c> 0 with an empty <c>ErrorMessage</c> (the Alpaca
+    /// API's success, which a client checks both halves of) and a true or false <c>Value</c>. Anything else throws, so it
+    /// is a failed read that neither makes nor refreshes a reading. The device's own <c>ErrorMessage</c> is never quoted.
     /// </summary>
-    internal static bool ReadValue(JsonElement answer)
+    internal static bool ReadValue(JsonElement answer, uint clientTransaction)
     {
         if (answer.ValueKind != JsonValueKind.Object)
         {
             throw new RoofSafetySourceException("the Alpaca server's answer is not an Alpaca answer");
         }
 
-        if (Find(answer, "ErrorNumber") is not { ValueKind: JsonValueKind.Number } errorNumber || !errorNumber.TryGetInt32(out var error))
+        var fields = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in answer.EnumerateObject())
+        {
+            if (!fields.TryAdd(property.Name, property.Value))
+            {
+                // Two values for one field: which the device meant cannot be known.
+                throw new RoofSafetySourceException("the Alpaca server's answer repeats a field");
+            }
+        }
+
+        if (!fields.TryGetValue("ErrorNumber", out var errorNumber) || errorNumber.ValueKind != JsonValueKind.Number || !errorNumber.TryGetInt32(out var error))
         {
             throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorNumber");
+        }
+
+        if (!fields.TryGetValue("ErrorMessage", out var errorMessage) || errorMessage.ValueKind != JsonValueKind.String)
+        {
+            throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorMessage");
+        }
+
+        if (!fields.TryGetValue("ClientTransactionID", out var echoed) || echoed.ValueKind != JsonValueKind.Number
+            || !echoed.TryGetUInt32(out var echoedTransaction) || echoedTransaction != clientTransaction)
+        {
+            // A cached or replayed answer, or one meant for another request.
+            throw new RoofSafetySourceException("the Alpaca server's answer is not the answer to this request");
+        }
+
+        if (!fields.TryGetValue("ServerTransactionID", out var server) || server.ValueKind != JsonValueKind.Number || !server.TryGetUInt32(out _))
+        {
+            throw new RoofSafetySourceException("the Alpaca server's answer has no ServerTransactionID");
         }
 
         if (error != 0)
@@ -111,12 +143,17 @@ public sealed class AlpacaDevice
             throw new AlpacaErrorException(error);
         }
 
-        return Find(answer, "Value") switch
+        if (errorMessage.GetString()!.Length != 0)
         {
-            { ValueKind: JsonValueKind.True } => true,
-            { ValueKind: JsonValueKind.False } => false,
+            throw new RoofSafetySourceException("the Alpaca server's answer reports success with an error message");
+        }
+
+        return fields.TryGetValue("Value", out var value) ? value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
             _ => throw new RoofSafetySourceException("the Alpaca server's answer has no true or false Value")
-        };
+        } : throw new RoofSafetySourceException("the Alpaca server's answer has no true or false Value");
     }
 
     /// <summary>An Alpaca error number in words: its number and the ASCOM exception it stands for.</summary>
@@ -141,9 +178,8 @@ public sealed class AlpacaDevice
             : string.Create(CultureInfo.InvariantCulture, $"the device reports Alpaca error 0x{error:X3} ({meaning})");
     }
 
-    private async Task<JsonDocument> ReadAsync(string member, CancellationToken cancellationToken)
+    private async Task<JsonDocument> ReadAsync(string member, uint transaction, CancellationToken cancellationToken)
     {
-        var transaction = NextTransaction();
         var uri = new Uri(
             _server,
             string.Create(CultureInfo.InvariantCulture, $"api/v1/{DeviceType}/{DeviceNumber}/{member.ToLowerInvariant()}?ClientID={ClientId}&ClientTransactionID={transaction}"));
@@ -220,19 +256,6 @@ public sealed class AlpacaDevice
 
     // 1 to 4294967295, then 1 again: the Alpaca API reserves 0.
     private static uint NextTransaction() => (uint)(((Interlocked.Increment(ref s_transactions) - 1) % uint.MaxValue) + 1);
-
-    private static JsonElement? Find(JsonElement answer, string name)
-    {
-        foreach (var property in answer.EnumerateObject())
-        {
-            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-            {
-                return property.Value;
-            }
-        }
-
-        return null;
-    }
 
     private static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)
     {

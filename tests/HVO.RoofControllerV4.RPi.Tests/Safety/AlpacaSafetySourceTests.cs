@@ -127,7 +127,7 @@ public sealed class AlpacaSafetySourceTests
     [TestMethod]
     public async Task AMountWithoutAtPark_IsAConfigurationError()
     {
-        var mount = new AlpacaTelescopeParkSource(Telescope("Main"), Answering("{\"ErrorNumber\":1024,\"ErrorMessage\":\"not implemented\"}"));
+        var mount = new AlpacaTelescopeParkSource(Telescope("Main"), Answering(Envelope("\"ErrorNumber\":1024,\"ErrorMessage\":\"not implemented\"")));
 
         var read = () => mount.ReadParkStateAsync(CancellationToken.None);
 
@@ -196,12 +196,22 @@ public sealed class AlpacaSafetySourceTests
     [TestMethod]
     [DataRow("not json", "the Alpaca server's answer is not JSON")]
     [DataRow("[true]", "the Alpaca server's answer is not an Alpaca answer")]
-    [DataRow("{\"Value\":true}", "the Alpaca server's answer has no ErrorNumber")]
-    [DataRow("{\"Value\":true,\"ErrorNumber\":\"0\"}", "the Alpaca server's answer has no ErrorNumber")]
-    [DataRow("{\"Value\":\"true\",\"ErrorNumber\":0}", "the Alpaca server's answer has no true or false Value")]
-    [DataRow("{\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer has no true or false Value")]
-    [DataRow("{\"Value\":true,\"ErrorNumber\":1031,\"ErrorMessage\":\"at 192.0.2.7\"}", "the device is not connected (Alpaca error 0x407)")]
-    [DataRow("{\"Value\":true,\"ErrorNumber\":1035,\"ErrorMessage\":\"\"}", "the device reports Alpaca error 0x40B (invalid operation)")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorMessage\":\"\"}", "the Alpaca server's answer has no ErrorNumber")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":\"0\",\"ErrorMessage\":\"\"}", "the Alpaca server's answer has no ErrorNumber")]
+    [DataRow("{\"Value\":\"true\",\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer has no true or false Value")]
+    [DataRow("{\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer has no true or false Value")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":1031,\"ErrorMessage\":\"at 192.0.2.7\"}", "the device is not connected (Alpaca error 0x407)")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":1035,\"ErrorMessage\":\"\"}", "the device reports Alpaca error 0x40B (invalid operation)")]
+    // Review F2 (#227): a success must be unambiguous: ErrorNumber 0 with an empty ErrorMessage, every field once, and the
+    // answer to this request. Anything else is a failed read, so it can neither make nor refresh a Safe reading.
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":2,\"ErrorNumber\":0,\"ErrorMessage\":\"sensor read failed; cached value retained\"}", "the Alpaca server's answer reports success with an error message")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":2,\"ErrorNumber\":0}", "the Alpaca server's answer has no ErrorMessage")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":2,\"ErrorNumber\":0,\"ErrorMessage\":0}", "the Alpaca server's answer has no ErrorMessage")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":2,\"ErrorNumber\":0,\"ErrorNumber\":1280,\"Value\":false,\"ErrorMessage\":\"sensor read failed\"}", "the Alpaca server's answer repeats a field")]
+    [DataRow("{\"Value\":true,\"value\":false,\"ClientTransactionID\":$TX,\"ServerTransactionID\":2,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer repeats a field")]
+    [DataRow("{\"Value\":true,\"ServerTransactionID\":2,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer is not the answer to this request")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":4000000000,\"ServerTransactionID\":2,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer is not the answer to this request")]
+    [DataRow("{\"Value\":true,\"ClientTransactionID\":$TX,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", "the Alpaca server's answer has no ServerTransactionID")]
     public async Task AnAnswerThatIsNotACleanReading_IsAFailedRead(string body, string words)
     {
         var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Answering(body));
@@ -210,14 +220,40 @@ public sealed class AlpacaSafetySourceTests
 
         var failure = (await read.Should().ThrowAsync<RoofSafetySourceException>()).Which;
         failure.Message.Should().Be(words);
-        failure.Message.Should().NotContain("192.0.2.7", "the device's ErrorMessage is never quoted");
+        failure.Message.Should().NotContain("192.0.2.7", "the device's ErrorMessage is never quoted").And.NotContain("sensor read failed");
         failure.InnerException.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task AnAnswerThatIsNotACleanReading_NeverRefreshesTheLastReading()
+    {
+        var handler = new AnsweringHandler(Envelope("\"Value\":true,\"ErrorNumber\":0,\"ErrorMessage\":\"\""), sendLength: true);
+        var time = new ManualTimeProvider();
+        var options = new RoofSafetyOptions
+        {
+            InterlockMode = RoofSafetyInterlockMode.Off,
+            WeatherSources = [Weather("Cloud sensor")]
+        };
+        var configured = new RoofSafetyConfiguredSources(Options.Create(options), new Factory(() => handler));
+        using var service = new RoofSafetyService([], [], new TestOptionsMonitor<RoofSafetyOptions>(options), time, new CapturingLogger(), configured);
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().State.Should().Be(RoofSafetyState.Safe);
+
+        handler.Body = Envelope("\"Value\":true,\"ErrorNumber\":0,\"ErrorMessage\":\"sensor read failed\"");
+        time.Advance(TimeSpan.FromSeconds(30));
+        await service.PollAsync(CancellationToken.None);
+        time.Advance(TimeSpan.FromSeconds(31));
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Unknown, "the error-bearing answer did not refresh the reading made 61 s ago");
+        safety.WeatherState.Should().Be(RoofSafetyState.Unknown);
+        safety.Reasons.Should().Equal("Weather monitor 'Cloud sensor': the last reading (safe) is older than 60 s; the last read failed (the Alpaca server's answer reports success with an error message)");
     }
 
     [TestMethod]
     public async Task TheAnswersNames_AreReadWhateverTheirCase()
     {
-        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Answering("{\"value\":false,\"errornumber\":0,\"errormessage\":\"\"}"));
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Answering("{\"value\":false,\"errornumber\":0,\"errormessage\":\"\",\"clienttransactionid\":$TX,\"servertransactionid\":1}"));
 
         (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeFalse();
     }
@@ -225,7 +261,7 @@ public sealed class AlpacaSafetySourceTests
     [TestMethod]
     public async Task AnAnswerTooLongToBeAnAlpacaAnswer_IsAFailedRead()
     {
-        var body = "{\"Value\":true,\"ErrorNumber\":0,\"ErrorMessage\":\"" + new string('x', AlpacaDevice.MaxAnswerBytes) + "\"}";
+        var body = Envelope("\"Value\":true,\"ErrorNumber\":0,\"ErrorMessage\":\"" + new string('x', AlpacaDevice.MaxAnswerBytes) + "\"");
         var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Answering(body, sendLength: false));
 
         var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
@@ -236,7 +272,7 @@ public sealed class AlpacaSafetySourceTests
     [TestMethod]
     public async Task AServerWithAPath_KeepsIt_AndTheDeviceTypeAndMemberAreLowerCase()
     {
-        var recorder = new RecordingHandler(new AnsweringHandler("{\"Value\":true,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}", sendLength: true));
+        var recorder = new RecordingHandler(new AnsweringHandler(Envelope("\"Value\":true,\"ErrorNumber\":0,\"ErrorMessage\":\"\""), sendLength: true));
         var device = new AlpacaDevice("http://alpaca.example.test:8080/proxy/alpaca", "SafetyMonitor", 2, new Factory(() => recorder));
 
         (await device.ReadBooleanAsync("IsSafe", CancellationToken.None)).Should().BeTrue();
@@ -379,6 +415,9 @@ public sealed class AlpacaSafetySourceTests
 
     private static IHttpClientFactory Answering(string body, bool sendLength = true) => new Factory(() => new AnsweringHandler(body, sendLength));
 
+    /// <summary>An Alpaca answer with these fields, the request's ClientTransactionID and a ServerTransactionID.</summary>
+    private static string Envelope(string fields) => "{" + fields + ",\"ClientTransactionID\":$TX,\"ServerTransactionID\":1}";
+
     /// <summary>Makes every client on the handler given, as the controller's named client would be.</summary>
     internal sealed class Factory(Func<HttpMessageHandler> handler) : IHttpClientFactory
     {
@@ -428,15 +467,21 @@ public sealed class AlpacaSafetySourceTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    /// <summary>Answers <c>connected</c> and <c>canpark</c> true, and every other member with the body given.</summary>
+    /// <summary>
+    /// Answers <c>connected</c> and <c>canpark</c> true, and every other member with <see cref="Body"/>, in which
+    /// <c>$TX</c> stands for the request's ClientTransactionID.
+    /// </summary>
     private sealed class AnsweringHandler(string body, bool sendLength) : HttpMessageHandler
     {
+        public string Body { get; set; } = body;
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
-            var answer = path.EndsWith("/connected", StringComparison.Ordinal) || path.EndsWith("/canpark", StringComparison.Ordinal)
-                ? "{\"Value\":true,\"ClientTransactionID\":1,\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}"
-                : body;
+            var transaction = HttpUtility.ParseQueryString(request.RequestUri.Query)["ClientTransactionID"] ?? "0";
+            var answer = (path.EndsWith("/connected", StringComparison.Ordinal) || path.EndsWith("/canpark", StringComparison.Ordinal)
+                ? "{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}"
+                : Body).Replace("$TX", transaction, StringComparison.Ordinal);
             HttpContent content = sendLength
                 ? new StringContent(answer, Encoding.UTF8, "application/json")
                 : new StreamContent(new ForwardOnlyStream(Encoding.UTF8.GetBytes(answer)));

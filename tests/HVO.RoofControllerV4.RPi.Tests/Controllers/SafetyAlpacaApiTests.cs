@@ -167,6 +167,33 @@ public sealed class SafetyAlpacaApiTests
     }
 
     [TestMethod]
+    [DataRow("RoofSafety:Telescopes:0:BlocksRoof", "tru")]
+    [DataRow("RoofSafety:Telescopes:0:DeviceNumber", "not-a-number")]
+    [DataRow("RoofSafety:Telescopes:0:MaxReadingAge", "soon")]
+    [DataRow("RoofSafety:Telescopes:0:DeviceNumer", "1")]
+    [DataRow("RoofSafety:WeatherSources:0:Requirement", "Requred")]
+    [DataRow("RoofSafety:WeatherSources:1:Requirement", "Requred")]
+    public void ADeviceSettingThatCannotBeRead_StopsTheStart_NeverDropsTheDevice(string key, string value)
+    {
+        // Review F1 (#227): the configuration binder skips a whole list entry whose value does not convert, so a typo
+        // could remove a blocking mount or a required weather source and leave the rest Safe.
+        var extra = new Dictionary<string, string?> { [key] = value };
+        if (key.StartsWith("RoofSafety:WeatherSources:1:", StringComparison.Ordinal))
+        {
+            extra["RoofSafety:WeatherSources:1:Name"] = "Second sensor";
+            extra["RoofSafety:WeatherSources:1:Url"] = Address;
+        }
+
+        var host = Host(extra: extra);
+
+        var start = () => host.CreateApiClient(TestApiKeys.Viewer);
+
+        var text = start.Should().Throw<Exception>().Which.ToString();
+        text.Should().Contain(key.EndsWith("DeviceNumer", StringComparison.Ordinal) ? "DeviceNumer" : key);
+        text.Should().NotContain("alpaca.example.test");
+    }
+
+    [TestMethod]
     public async Task NothingTheControllerLogs_NamesADevicesAddress_EvenAtDebug()
     {
         var logs = new RecordingLoggerProvider();
@@ -187,7 +214,8 @@ public sealed class SafetyAlpacaApiTests
         bool blocksRoof = true,
         string url = Address,
         RecordingLoggerProvider? logs = null,
-        bool unreachable = false)
+        bool unreachable = false,
+        IReadOnlyDictionary<string, string?>? extra = null)
     {
         _emulator = new EmulatorHost();
         var emulator = _emulator;
@@ -209,6 +237,11 @@ public sealed class SafetyAlpacaApiTests
             settings["RoofSafety:WeatherSources:0:Name"] = "Cloud sensor";
             settings["RoofSafety:WeatherSources:0:Url"] = url;
             settings["RoofSafety:WeatherSources:0:Requirement"] = "Required";
+        }
+
+        foreach (var (key, value) in extra ?? new Dictionary<string, string?>())
+        {
+            settings[key] = value;
         }
 
         _host = new RoofApiTestHost(settings: settings, configureServices: services =>

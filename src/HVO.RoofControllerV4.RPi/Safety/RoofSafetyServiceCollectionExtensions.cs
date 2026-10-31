@@ -20,8 +20,10 @@ public static class RoofSafetyServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
+        // A value that does not convert, or a key no setting has, stops the start: by default the binder drops a whole
+        // device from a list for one bad value, which could remove a blocking mount or a required weather source unseen.
         services.AddOptions<RoofSafetyOptions>()
-            .Bind(configuration.GetSection(RoofSafetyOptions.SectionName))
+            .Bind(configuration.GetSection(RoofSafetyOptions.SectionName), binder => binder.ErrorOnUnknownConfiguration = true)
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<RoofSafetyOptions>, RoofSafetyOptionsValidator>();
         services.TryAddSingleton(TimeProvider.System);

@@ -16,8 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Ignored`). A device that is not connected, answers an Alpaca error or an HTTP error, cannot be reached, answers
   something that is not the Alpaca JSON or does not answer in time is a failed read with the reason in fixed words
   (`the device is not connected`, `no answer within 5 s`, …), and goes Unknown once its last reading is too old; a mount
-  that cannot park is a configuration error. No log, reason or trace names a device's address. On the Pi the settings
-  go in the secrets directory, one file per setting ([docs/alpaca.md](docs/alpaca.md)).
+  that cannot park is a configuration error. Only an unambiguous Alpaca success counts (`ErrorNumber` 0 with an empty
+  `ErrorMessage`, every field once, the request's own `ClientTransactionID`). No log, reason or trace names a device's
+  address. On the Pi the settings go in the secrets directory, one file per setting; a value that is not of its type, or
+  a key under `RoofSafety` that no setting has, stops the controller at start rather than dropping a device
+  ([docs/alpaca.md](docs/alpaca.md)).
 - The weather alone on every status and at `GET /api/v4.0/Safety` (`weatherState`, `weatherReasons`), never including
   the telescopes, for the weather-only Alpaca SafetyMonitor; and each source's `counts`.
 - The HAT emulator serves fake ASCOM Alpaca mounts and weather safety monitors on its control port

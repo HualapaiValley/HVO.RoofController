@@ -162,7 +162,8 @@ well.
 
 The `RoofSafety` section of the controller's configuration (`appsettings.json`, the secrets directory, environment
 variables such as `RoofSafety__InterlockMode`). It is not in the settings catalogue, so the API, the UIs and the
-settings file do not hold it. A value the controller cannot use stops it at start.
+settings file do not hold it. A value the controller cannot use stops it at start, as does a key under `RoofSafety` that
+no setting has (a misspelt one).
 
 | Setting | Default | Range | Meaning |
 |---|---|---|---|

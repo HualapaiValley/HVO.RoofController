@@ -238,7 +238,9 @@ NotImplemented, as `conformance` requires. To repeat it, with the emulator runni
 conformu conformance http://127.0.0.1:5290/api/v1/safetymonitor/0
 conformu alpacaprotocol http://127.0.0.1:5290/api/v1/safetymonitor/0
 conformu conformance http://127.0.0.1:5290/api/v1/telescope/0
-``` Both compose files point the controller's `RoofSafety` sources at them
+```
+
+Both compose files point the controller's `RoofSafety` sources at them
 (`http://hat-emulator:5290`), so an emulated rig's conditions are Safe until the control API says otherwise:
 
 | Request | Body | Effect |

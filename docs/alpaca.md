@@ -72,8 +72,10 @@ Under `RoofSafety`, beside the service's own settings ([Settings](safety-service
 the settings catalogue, so neither the API nor the settings file holds it: on the Pi, write each setting as a file in
 the secrets directory, one per setting, as for `BlueIris__BaseUrl`
 ([deployment.md](deployment.md#1-secrets-directory)); elsewhere, environment variables or `appsettings.json`. The
-controller reads the devices at start: a change takes a restart, and a setting it cannot use stops it at start, named
-by its key, never by the address it holds.
+controller reads the devices at start: a change takes a restart. A setting it cannot use stops it at start, named by
+its key, never by the address it holds: a value that is not of its type (`BlocksRoof: tru`, a `DeviceNumber` that is
+not a number, `Requirement: Requred`) and a key no setting has (`DeviceNumer`) as much as a bad address, so a typo can
+never drop a device and leave the rest to decide.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -117,7 +119,9 @@ or, in a JSON configuration file:
 
 ## When a device cannot be read
 
-A read that is not a clean answer is a failed read, never a value. The service keeps the last reading until it is
+A read that is not a clean answer is a failed read, never a value: only an unambiguous success counts, `ErrorNumber` 0
+with an empty `ErrorMessage` (the Alpaca API's success, both halves checked), every field once, and the request's own
+`ClientTransactionID` echoed. The service keeps the last reading until it is
 older than its `MaxReadingAge`, then the source is Unknown ([Staleness and failed reads](safety-service.md#staleness-and-failed-reads)).
 The reason says why, in these words:
 
@@ -129,7 +133,8 @@ The reason says why, in these words:
 | is a mount without `AtPark` (`0x400`) | `configuration error: the mount does not implement AtPark` |
 | cannot be reached | `the Alpaca server could not be reached (connection refused)`, `(host unreachable)`, `(host name not found)`, … |
 | answers an HTTP error | `the Alpaca server answered HTTP 500` |
-| answers something that is not the Alpaca JSON | `the Alpaca server's answer is not JSON`, `… has no ErrorNumber`, `… has no true or false Value`, `… is too long to be an Alpaca answer` |
+| answers something that is not the Alpaca JSON | `the Alpaca server's answer is not JSON`, `… has no ErrorNumber`, `… has no ErrorMessage`, `… has no ServerTransactionID`, `… has no true or false Value`, `… is too long to be an Alpaca answer` |
+| answers ambiguously | `the Alpaca server's answer repeats a field` (one field twice, whatever its case), `… reports success with an error message` (`ErrorNumber` 0 with a non-empty `ErrorMessage`), `… is not the answer to this request` (a `ClientTransactionID` other than the one sent: a cached or replayed answer) |
 | does not answer within `ReadTimeout` | `no answer within 5 s` |
 
 For example: `Telescope 'Main' cannot be read (the device is not connected)`, or, once its last reading is too old,
