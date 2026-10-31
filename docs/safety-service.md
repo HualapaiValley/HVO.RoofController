@@ -172,7 +172,7 @@ no setting has (a misspelt one).
 | `PollInterval` | `00:00:10` | 1 s to 10 min | How often each source is read. |
 | `ReadTimeout` | `00:00:05` | 0.1 s to 1 min | How long one read may take. |
 | `MaxReadingAge` | `00:01:00` | more than `PollInterval` plus `ReadTimeout`, at most 1 h | How old a reading may be and still count, for a source without its own. |
-| `Telescopes` | none | at most 16 | The ASCOM Alpaca mounts read: `Name`, `Url`, `DeviceNumber`, `MaxReadingAge`, `BlocksRoof` ([docs/alpaca.md](alpaca.md#settings)). |
+| `Telescopes` | none | at most 16 | The ASCOM Alpaca mounts read: `Name`, `Url`, `DeviceNumber`, `MaxReadingAge`, `BlocksRoof` ([docs/alpaca.md](alpaca.md#source-settings)). |
 | `WeatherSources` | none | at most 16 | The ASCOM Alpaca safety monitors read: `Name`, `Url`, `DeviceNumber`, `MaxReadingAge`, `Requirement`. |
 
 To keep Open as it was before the interlock (the conditions only reported and logged), set `InterlockMode` to `Off`.

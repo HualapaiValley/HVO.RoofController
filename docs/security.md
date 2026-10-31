@@ -31,6 +31,10 @@ Stop uses its own policy, `RoofStopPolicy`. Any authenticated caller (any key or
 Stop never starts motion. Sign-in lockouts never apply to Stop.
 Anonymous callers may stop it only when `RoofControllerSecurity:AllowAnonymousStop` is `true` (default `false`).
 
+The [Alpaca server](alpaca.md) is a client like any other, with its own API key. A `RoofViewer` key is all its first
+phase needs: it reads the status and sends Stop for `AbortSlew`. It warns in its log when its key has a higher role.
+Alpaca clients give it no credential in this phase.
+
 ## Endpoints
 
 API routes accept an API key in the `X-Api-Key` header (scheme `ApiKey`) or a session token in

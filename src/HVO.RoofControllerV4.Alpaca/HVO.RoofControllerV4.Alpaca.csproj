@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>HVO.RoofControllerV4.Alpaca</RootNamespace>
+    <Description>The roof's ASCOM Alpaca server (#220): a separate process, off by default, that serves the roof as an Alpaca Dome through the controller's REST API and status hub.</Description>
+    <RuntimeIdentifiers>linux-arm64;linux-x64;osx-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!--
+    No appsettings.json: the settings are the Alpaca section, from the environment (Alpaca__*) or the command line, with
+    the defaults in AlpacaOptions. A settings file here would also be copied next to the controller's in the test
+    project's output.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="../HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj" />
+    <InternalsVisibleTo Include="HVO.RoofControllerV4.RPi.Tests" />
+  </ItemGroup>
+
+</Project>
