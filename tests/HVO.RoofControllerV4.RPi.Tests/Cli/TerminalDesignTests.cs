@@ -302,7 +302,7 @@ public sealed class TerminalDesignTests
         {
             RoofSettingsContract.RoofGroup, RoofSettingsContract.ControllerGroup, RoofSettingsContract.CameraGroup,
             RoofSettingsContract.SecurityGroup, RoofSettingsContract.IdentityGroup, RoofSettingsContract.LoggingGroup,
-            RoofSettingsContract.UiGroup
+            RoofSettingsContract.UiGroup, RoofSettingsContract.AlpacaGroup
         });
         rig.Environment["HVO_TERMINAL"] = mode;
         using var tui = new TuiDriver(rig, width, height);

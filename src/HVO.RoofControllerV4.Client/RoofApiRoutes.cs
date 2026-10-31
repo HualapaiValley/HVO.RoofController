@@ -19,6 +19,20 @@ internal static class RoofApiRoutes
     public const string History = V4 + "RoofControl/" + Common.Models.RoofCommandHistoryContract.Route;
     public const string Safety = V4 + "Safety";
 
+    // The Alpaca command surface (#220).
+    private const string Alpaca = Common.Models.RoofAlpacaContract.Route + "/";
+    public const string AlpacaTicket = Alpaca + Common.Models.RoofAlpacaContract.TicketRoute;
+    public const string AlpacaClose = Alpaca + Common.Models.RoofAlpacaContract.CloseRoute;
+    public const string AlpacaEvents = Alpaca + Common.Models.RoofAlpacaContract.EventsRoute;
+    public const string AlpacaGrants = Alpaca + Common.Models.RoofAlpacaContract.GrantsRoute;
+    public const string AlpacaHold = Alpaca + Common.Models.RoofAlpacaContract.HoldRoute;
+    public const string AlpacaLease = Alpaca + Common.Models.RoofAlpacaContract.LeaseRoute;
+    public const string AlpacaAlerts = Alpaca + Common.Models.RoofAlpacaContract.AlertsRoute;
+
+    public static string AlpacaGrant(Common.Models.RoofAlpacaCommandKind kind) => $"{AlpacaGrants}/{kind}";
+
+    public static string AcknowledgeAlpacaAlert(string id) => $"{AlpacaAlerts}/{Segment(id)}/acknowledge";
+
     public const string Session = V4 + "Auth/Session";
     public const string Providers = V4 + "Auth/Providers";
     public const string ProviderSession = V4 + "Auth/ProviderSession";

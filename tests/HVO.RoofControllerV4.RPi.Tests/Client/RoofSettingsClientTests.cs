@@ -64,7 +64,7 @@ public sealed class RoofSettingsClientTests
             RoofSettingsContract.SecurityGroup,
             RoofSettingsContract.IdentityGroup,
             RoofSettingsContract.LoggingGroup,
-            RoofSettingsContract.UiGroup);
+            RoofSettingsContract.UiGroup, RoofSettingsContract.AlpacaGroup);
         foreach (var group in form.Groups)
         {
             group.Fields.Select(field => field.Label).Should().OnlyHaveUniqueItems("each field in {0} needs its own label", group.Name);

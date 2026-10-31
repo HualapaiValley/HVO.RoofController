@@ -29,6 +29,7 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
     private readonly TimeSpan _staleAfter;
     private RoofStatusResponse? _latest;
     private int _keyChecked;
+    private long _aborts;
 
     public AlpacaRoof(RoofControllerClient client, ILogger<AlpacaRoof> logger)
     {
@@ -118,6 +119,8 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
     /// </exception>
     public async Task<RoofStatusResponse?> StopRoofAsync(IPAddress client, uint clientId, uint clientTransactionId)
     {
+        // Counted first: an Open or Close that arrived before this AbortSlew and has not yet got its ticket is refused.
+        Interlocked.Increment(ref _aborts);
         var result = await _client.StopAsync(CancellationToken.None).ConfigureAwait(false);
         Offer(result.Status);
         var verified = result.Outcome == RoofStopOutcome.Acknowledged && ShowsRelaysVerifiedOff(result.Status);
@@ -130,6 +133,54 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
             RoofStopOutcome.Acknowledged or RoofStopOutcome.RelayUnverified => throw new AlpacaException(AlpacaErrors.RelayStateUnverified, UnconfirmedStop),
             _ => throw new AlpacaException(ErrorNumberFor(result.Error), result.Message),
         };
+    }
+
+    /// <summary>How many AbortSlews this server has sent on so far (#220, AA3).</summary>
+    public long AbortCount => Interlocked.Read(ref _aborts);
+
+    /// <summary>How long the server waits for a ticket: the controller answers at once.</summary>
+    internal static readonly TimeSpan TicketTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Asks the controller for a ticket for one command, with the Alpaca client's own key passed on for this call only.
+    /// </summary>
+    public Task<RoofAlpacaTicket> RequestTicketAsync(RoofAlpacaCommandKind kind, string clientKey, RoofAlpacaForwarding client)
+        => _client.Alpaca.RequestTicketAsync(kind, new RoofApiKeyCredential(clientKey), client, TicketTimeout);
+
+    /// <summary>
+    /// Sends the Alpaca client's Close with its ticket and key. The wait is the ticket's answer deadline plus 1 s; a
+    /// timeout is an error the client sees, never retried (#220, R12).
+    /// </summary>
+    public async Task<RoofStatusResponse> CloseAsync(RoofAlpacaTicket ticket, string clientKey, RoofAlpacaForwarding client)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        var timeout = TimeSpan.FromMilliseconds(ticket.AnswerDeadlineMilliseconds) + TimeSpan.FromSeconds(1);
+        try
+        {
+            var status = await _client.Alpaca.CloseAsync(new RoofAlpacaCommandRequest(ticket.TicketId, ticket.InstanceId, ticket.Generation),
+                new RoofApiKeyCredential(clientKey), client, timeout).ConfigureAwait(false);
+            Offer(status);
+            return status;
+        }
+        catch (RoofApiException refusal)
+        {
+            // A refused start leaves the status as it was; the refusal's snapshot is newer still, and as true.
+            Offer(refusal.RoofStatus);
+            throw;
+        }
+    }
+
+    /// <summary>Reports this server's own refusal of a command to the controller, for the UIs' alert. Best effort; never a credential.</summary>
+    public async Task ReportRefusalAsync(RoofAlpacaEvent report)
+    {
+        try
+        {
+            await _client.Alpaca.ReportEventAsync(report).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is RoofApiException or HttpRequestException or TimeoutException or OperationCanceledException or RoofProtocolException)
+        {
+            _logger.LogInformation("Could not report a refused Alpaca {Kind} to the controller: {Reason}", report.Kind, RoofText.DescribeFailure(ex));
+        }
     }
 
     /// <summary>What AbortSlew answers when the controller's answer to Stop does not show the relays verified off.</summary>
@@ -213,21 +264,29 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
         }
     }
 
-    // Says which key the server uses, and warns when it may do more than this phase needs (a Viewer key reads and stops).
+    // Says which key the server uses, and warns unless it is the Alpaca server's own account (#220): with a plain Viewer key
+    // (phase 1's) its AbortSlew sets the controller's human Stop hold and its refusal reports are refused; with more, it
+    // could do more than it needs.
     private async Task CheckKeyAsync()
     {
         try
         {
             var caller = await _client.Auth.GetCallerAsync().ConfigureAwait(false);
-            if (string.Equals(caller.Role, RoofControllerApiContract.ViewerRole, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(caller.AlpacaAccount, RoofAlpacaContract.ServerRole, StringComparison.Ordinal))
             {
-                _logger.LogInformation("The Alpaca server reaches the roof controller as {KeyName} ({Role})", caller.Name, caller.Role);
+                _logger.LogInformation("The Alpaca server reaches the roof controller as {KeyName}, its own account ({Account})", caller.Name, caller.AlpacaAccount);
+            }
+            else if (string.Equals(caller.Role, RoofControllerApiContract.ViewerRole, StringComparison.OrdinalIgnoreCase) && caller.AlpacaAccount is null)
+            {
+                _logger.LogWarning(
+                    "The Alpaca server reaches the roof controller as {KeyName}, a plain {Role} key: its AbortSlew sets the controller's human Stop hold, and its refusal reports are refused. Give it a {Account} key",
+                    caller.Name, caller.Role, RoofAlpacaContract.ServerRole);
             }
             else
             {
                 _logger.LogWarning(
-                    "The Alpaca server reaches the roof controller as {KeyName} with the {Role} role; it needs only {ViewerRole}. Give it a Viewer key",
-                    caller.Name, caller.Role, RoofControllerApiContract.ViewerRole);
+                    "The Alpaca server reaches the roof controller as {KeyName} with the {Role} role{Account}; it needs only the {ServerRole} account. Give it that key",
+                    caller.Name, caller.Role, caller.AlpacaAccount is null ? string.Empty : $" ({caller.AlpacaAccount})", RoofAlpacaContract.ServerRole);
             }
         }
         catch (Exception ex) when (ex is RoofApiException or HttpRequestException or TimeoutException or RoofProtocolException or OperationCanceledException)

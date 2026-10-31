@@ -246,6 +246,7 @@ public class Program
         services.AddSingleton<AlpacaRoof>();
         services.AddHostedService(provider => provider.GetRequiredService<AlpacaRoof>());
         services.AddSingleton<AlpacaConnections>();
+        services.AddSingleton<AlpacaAuthFailures>();
         services.AddSingleton<AlpacaDome>();
         services.AddSingleton<AlpacaSafetyMonitor>();
         services.AddSingleton<AlpacaTransactions>();

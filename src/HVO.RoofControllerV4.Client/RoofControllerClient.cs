@@ -34,6 +34,7 @@ public sealed class RoofControllerClient : IDisposable
         System = new RoofSystemApi(_http);
         Health = new RoofHealthApi(_http);
         Camera = new RoofCameraApi(_http);
+        Alpaca = new RoofAlpacaApi(_http);
     }
 
     public RoofConnectionOptions Options { get; }
@@ -74,6 +75,9 @@ public sealed class RoofControllerClient : IDisposable
     public RoofHealthApi Health { get; }
 
     public RoofCameraApi Camera { get; }
+
+    /// <summary>The Alpaca command surface (#220): override grants, the Stop hold, the operator lease, alerts, and the Alpaca server's calls.</summary>
+    public RoofAlpacaApi Alpaca { get; }
 
     internal ILogger Logger { get; }
 

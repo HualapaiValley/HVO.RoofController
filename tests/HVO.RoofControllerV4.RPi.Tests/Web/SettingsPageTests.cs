@@ -44,7 +44,7 @@ public sealed class SettingsPageTests
         cut.FindAll("[data-testid=settings-in-memory]").Should().BeEmpty("the settings are kept in the file");
         cut.FindAll("[data-testid=settings-group]").Select(group => group.GetAttribute("data-group")).ToList().Should().Equal(
             RoofSettingsContract.RoofGroup, RoofSettingsContract.ControllerGroup, RoofSettingsContract.CameraGroup, RoofSettingsContract.SecurityGroup,
-            RoofSettingsContract.IdentityGroup, RoofSettingsContract.LoggingGroup, RoofSettingsContract.UiGroup);
+            RoofSettingsContract.IdentityGroup, RoofSettingsContract.LoggingGroup, RoofSettingsContract.UiGroup, RoofSettingsContract.AlpacaGroup);
         cut.Find("[data-testid=settings-group][aria-pressed=true]").TextContent.Trim().Should().Be("Roof");
         cut.Find("[data-testid=settings-fields]").GetAttribute("data-group").Should().Be(RoofSettingsContract.RoofGroup);
 

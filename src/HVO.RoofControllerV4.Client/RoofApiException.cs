@@ -60,6 +60,12 @@ public sealed class RoofApiException : Exception
 
     public string? TraceId { get; }
 
+    /// <summary>For a refused Alpaca command (#220): the rule that refused it (<c>NotSafe</c>, <c>StopHold</c>, ...).</summary>
+    public string? AlpacaRefusal { get; init; }
+
+    /// <summary>For a refused Alpaca command: the safety reasons' stable keys (a grant made for them lifts exactly these).</summary>
+    public IReadOnlyList<string> ReasonKeys { get; init; } = [];
+
     /// <summary>
     /// Reads an error answer. A body that is not ProblemDetails (a proxy page, an empty body) still gives an exception
     /// described by its status.
@@ -75,6 +81,8 @@ public sealed class RoofApiException : Exception
         string? traceId = null;
         RoofStatusResponse? roofStatus = null;
         Dictionary<string, string[]>? errors = null;
+        string? alpacaRefusal = null;
+        IReadOnlyList<string> reasonKeys = [];
 
         try
         {
@@ -107,6 +115,12 @@ public sealed class RoofApiException : Exception
                     {
                         errors = fieldErrors.Deserialize<Dictionary<string, string[]>>(RoofClientJson.Options);
                     }
+
+                    alpacaRefusal = ReadString(root, RoofAlpacaContract.RefusalExtension);
+                    if (root.TryGetProperty(RoofAlpacaContract.ReasonKeysExtension, out var keys) && keys.ValueKind == JsonValueKind.Array)
+                    {
+                        reasonKeys = [.. keys.EnumerateArray().Where(key => key.ValueKind == JsonValueKind.String).Select(key => key.GetString()!).Take(32)];
+                    }
                 }
             }
         }
@@ -127,7 +141,11 @@ public sealed class RoofApiException : Exception
             roofStatus,
             ReadRetryAfter(response, timeProvider ?? TimeProvider.System),
             errors,
-            traceId);
+            traceId)
+        {
+            AlpacaRefusal = alpacaRefusal,
+            ReasonKeys = reasonKeys
+        };
     }
 
     private static string? ReadString(JsonElement root, string name)

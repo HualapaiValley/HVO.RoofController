@@ -357,6 +357,12 @@ public sealed record RoofCallerResponse(
     /// its password; null for an API key, and from a controller older than #205.
     /// </summary>
     public bool? HasPin { get; init; }
+
+    /// <summary>
+    /// For an Alpaca account's key (#220): its account role, <see cref="RoofAlpacaContract.CommanderRole"/> or
+    /// <see cref="RoofAlpacaContract.ServerRole"/>; null otherwise. <see cref="Role"/> is then the Viewer role it reads with.
+    /// </summary>
+    public string? AlpacaAccount { get; init; }
 }
 
 /// <summary>A person who may sign in with a PIN at a kiosk, from <c>GET Auth/Pin/Users</c>.</summary>

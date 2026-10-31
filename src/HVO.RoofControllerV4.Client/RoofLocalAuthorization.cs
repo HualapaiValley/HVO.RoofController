@@ -42,6 +42,19 @@ internal static class RoofLocalAuthorization
             return "operate";
         }
 
+        // The person-only Alpaca routes (#220): grants, the Stop hold, the operator lease, acknowledging alerts.
+        if (path.StartsWith(RoofApiRoutes.AlpacaGrants, StringComparison.Ordinal) || path == RoofApiRoutes.AlpacaHold
+            || path.StartsWith(RoofApiRoutes.AlpacaLease, StringComparison.Ordinal)
+            || (path.StartsWith(RoofApiRoutes.AlpacaAlerts + "/", StringComparison.Ordinal) && method == HttpMethod.Post))
+        {
+            return method == HttpMethod.Get ? "read" : "operate";
+        }
+
+        if (method == HttpMethod.Get && path == RoofApiRoutes.AlpacaAlerts)
+        {
+            return "read";
+        }
+
         if (path is RoofApiRoutes.Configuration or RoofApiRoutes.Settings or RoofApiRoutes.SettingsCatalogue
             or RoofApiRoutes.SettingsReload or RoofApiRoutes.SettingsDiscard or RoofApiRoutes.Restart
             || path.StartsWith(RoofApiRoutes.Settings + "/", StringComparison.Ordinal))

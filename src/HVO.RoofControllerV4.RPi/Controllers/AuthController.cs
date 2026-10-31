@@ -212,7 +212,10 @@ public sealed class AuthController : ControllerBase
             DisplayName = displayName,
             ShortName = shortName,
             LoginType = loginType,
-            HasPin = hasPin
+            HasPin = hasPin,
+            AlpacaAccount = User.IsInRole(RoofAlpacaContract.ServerRole) ? RoofAlpacaContract.ServerRole
+                : User.IsInRole(RoofAlpacaContract.CommanderRole) ? RoofAlpacaContract.CommanderRole
+                : null
         };
     }
 

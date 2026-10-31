@@ -56,7 +56,7 @@ public sealed class RoofCliConfigCommandTests
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Out.Should().StartWith("Settings version 1.").And.Contain($"File: {controller.SettingsPath}");
-        foreach (var group in new[] { "roof", "controller", "camera", "security", "identity", "logging", "ui" })
+        foreach (var group in new[] { "roof", "controller", "camera", "security", "identity", "logging", "ui", "alpaca" })
         {
             result.Out.Should().Contain($"[{group}] ", "an admin reads every group");
         }
@@ -121,7 +121,7 @@ public sealed class RoofCliConfigCommandTests
         json.GetProperty("pendingHandEdit").ValueKind.Should().Be(JsonValueKind.Null);
         json.GetProperty("warnings").GetArrayLength().Should().Be(0);
         json.GetProperty("groups").EnumerateArray().Select(group => group.GetProperty("name").GetString())
-            .Should().Equal("roof", "controller", "camera", "security", "identity", "logging", "ui");
+            .Should().Equal("roof", "controller", "camera", "security", "identity", "logging", "ui", "alpaca");
         var watchdog = json.GetProperty("groups")[0].GetProperty("settings").EnumerateArray()
             .Single(setting => setting.GetProperty("key").GetString() == Watchdog);
         watchdog.GetProperty("displayValue").GetString().Should().Be("120 s (00:02:00)");
