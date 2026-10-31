@@ -199,6 +199,9 @@ public sealed class KioskShell : UserControl
         // Every touch keeps the kiosk awake; the one that wakes a blank screen is not passed on to what is under it.
         AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         AddHandler(KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+        // When the touch ends, after what it pressed has acted (#220): a person away from the operator lease takes it back.
+        AddHandler(PointerReleasedEvent, (_, _) => Dispatcher.UIThread.Post(_console.TouchEnded), RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(KeyUpEvent, (_, _) => Dispatcher.UIThread.Post(_console.TouchEnded), RoutingStrategies.Tunnel, handledEventsToo: true);
         console.Changed += OnConsoleChanged;
         Update(console.View);
     }
@@ -555,8 +558,10 @@ public sealed class KioskShell : UserControl
         if (view.Status is { InputsHealthy: false } inputs)
             warnings.Add(("inputs-banner", $"Safety inputs: {RoofStatusText.DescribeInputs(inputs)}.", KioskNoticeLevel.Warning));
         var safetyIo = warnings.Any(warning => warning.Name is "relays-banner" or "inputs-banner");
-        // #220: the unlocking person's operator lease about to lapse (or lapsed), and the controller's Alpaca warnings.
-        if (view.AlpacaIdleWarning is { } idle) warnings.Add(("alpaca-idle-banner", idle, KioskNoticeLevel.Warning));
+        // #220: the unlocking person stepped away from the operator lease by granting, or their lease about to lapse (or
+        // lapsed), and the controller's Alpaca warnings.
+        var lease = view.AlpacaSteppedAway ?? view.AlpacaIdleWarning;
+        if (lease is not null) warnings.Add(("alpaca-lease-banner", lease, KioskNoticeLevel.Warning));
         if (view.Status?.Alpaca is { } alpaca)
             warnings.AddRange(alpaca.Warnings.Select(text => ("alpaca-warning", text, KioskNoticeLevel.Warning)));
         // A bounded summary stays visible on every page. Full, unabridged warnings are in Readings, before the values.
@@ -566,7 +571,7 @@ public sealed class KioskShell : UserControl
                 : view.IsUnreachable ? "Controller unreachable. Motion unavailable."
                 : view.IsStale ? "STALE: last known status. Motion unavailable."
                 : view.Status is { } roof && RoofCommandRules.HasFault(roof) ? "Fault latched. Motion refused. Readings has details."
-                : view.AlpacaIdleWarning is { } lapsing ? lapsing
+                : lease is not null ? lease
                 : view.ModeWarnings.Count > 0 ? "Simulation / safety mode warning. Readings has details."
                 : !view.IsStarted ? "Connecting to the controller…"
                 : safetyIo ? "Safety I/O warning. Readings has details."

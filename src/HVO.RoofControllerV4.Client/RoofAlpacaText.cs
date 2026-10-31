@@ -83,6 +83,16 @@ public static class RoofAlpacaText
             : null;
     }
 
+    /// <summary>
+    /// Said after the person granted an override, which steps them away from the operator lease, until their next input
+    /// takes it back: with a Close grant in force, that Alpaca may close the roof once within it and that taking control
+    /// back cancels it; without one, that Alpaca may move the roof.
+    /// </summary>
+    public static string DescribeSteppedAway(RoofOverrideGrant? grant)
+        => grant is { Kind: RoofAlpacaCommandKind.Close }
+            ? $"You stepped away from the operator lease: Alpaca may close the roof once in the next {Duration(grant.SecondsRemaining)}. Touch anything to take control back; that cancels the grant."
+            : "You stepped away from the operator lease: Alpaca may move the roof. Touch anything to take control back.";
+
     /// <summary>A grant: "One Close allowed (lifts: Telescope 'Main' unknown) by ada, 4 min left".</summary>
     public static string DescribeGrant(RoofOverrideGrant grant)
     {

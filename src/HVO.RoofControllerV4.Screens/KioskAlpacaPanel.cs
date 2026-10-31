@@ -122,7 +122,16 @@ public sealed class KioskAlpacaPanel
 
         return RunAsync("Revoking the grant…", async () =>
         {
-            await _console.Client.Alpaca.RevokeAsync(kind);
+            try
+            {
+                await _console.Client.Alpaca.RevokeAsync(kind);
+            }
+            catch (RoofApiException gone) when (gone.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Used, lapsed, or cancelled already: the touch on Revoke took the person's lease back, which drops it.
+                return () => Message = new KioskNotice($"The {kind} grant is no longer in force.", KioskNoticeLevel.Info, Now);
+            }
+
             return () => Message = new KioskNotice($"The {kind} grant is revoked.", KioskNoticeLevel.Info, Now);
         });
     }
@@ -153,9 +162,10 @@ public sealed class KioskAlpacaPanel
             return Task.CompletedTask;
         }
 
+        // Through the console: the person steps away from the operator lease with the grant (KioskConsole.GrantCloseAsync).
         return RunAsync("Granting one Alpaca Close…", async () =>
         {
-            var grant = await _console.Client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasons);
+            var grant = await _console.GrantCloseAsync(reasons);
             return () => Message = new KioskNotice($"Granted. {RoofAlpacaText.DescribeGrant(grant)}", KioskNoticeLevel.Warning, Now);
         });
     }

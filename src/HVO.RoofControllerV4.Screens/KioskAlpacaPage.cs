@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.VisualTree;
 using HVO.RoofControllerV4.Client;
@@ -216,9 +217,10 @@ public sealed class KioskAlpacaPage : UserControl
             hold is not null && operating ? [new RowAction("alpaca-clear-hold", RoofAlpacaText.ClearHoldLabel, () => _ = _panel.ClearHoldAsync(), Primary: true)] : [],
             identity: null));
 
-        // The operator lease: who holds it, and that these screens hold it for the person.
+        // The operator lease: who holds it, and that these screens hold it for the person (unless it lapsed, or they
+        // stepped away by granting: the summary under the header says so).
         rows.Add(Row.Line("alpaca-lease", RoofAlpacaText.DescribeLease(alpaca.OperatorLease) ?? NoLease, KioskTheme.Text, countdown: true));
-        if (view.KeepsOperatorLease)
+        if (view.KeepsOperatorLease && alpaca.OperatorLease is { Held: true } held && held.Holder == view.UnlockedBy)
         {
             rows.Add(Row.Line("alpaca-lease-kept", _console.Wording.KeepsOperatorLease, KioskTheme.Muted, _metrics.Small));
         }
@@ -304,13 +306,12 @@ public sealed class KioskAlpacaPage : UserControl
             return label;
         }
 
-        // A card: what it is, then what may be done with it, side by side while they fit.
+        // A card: what it is, and beside it at the right what may be done with it, so a card takes little of a page.
         label.Name = $"{row.Name}-text";
-        var card = new StackPanel { Spacing = _metrics.Gap };
-        card.Children.Add(label);
+        var card = new DockPanel { HorizontalSpacing = _metrics.Gap * 2 };
         if (row.Actions.Count > 0)
         {
-            var buttons = new WrapPanel { ItemSpacing = _metrics.Gap * 2, LineSpacing = _metrics.Gap };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = _metrics.Gap * 2, VerticalAlignment = VerticalAlignment.Center };
             foreach (var action in row.Actions)
             {
                 var button = KioskTheme.TouchButton(action.Label, action.Name, _metrics, action.Click);
@@ -322,8 +323,11 @@ public sealed class KioskAlpacaPage : UserControl
                 buttons.Children.Add(button);
             }
 
+            DockPanel.SetDock(buttons, Dock.Right);
             card.Children.Add(buttons);
         }
+
+        card.Children.Add(label);
 
         return new Border
         {

@@ -7,6 +7,7 @@ using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
+using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Screens;
 using Microsoft.Extensions.DependencyInjection;
 using static HVO.RoofControllerV4.RPi.Tests.Kiosk.KioskAvalonia;
@@ -162,26 +163,87 @@ public sealed class KioskAlpacaTests
         harness.Console.View.AlpacaIdleWarning.Should().EndWith("then Alpaca may move the roof. Touch anything to keep it.");
         harness.Console.View.OffersAlpaca.Should().BeTrue();
 
-        // 5 s before the lapse, the kiosk's clock stops; the controller's goes on, and the lease lapses there.
-        await TogetherAsync(harness, TimeSpan.FromSeconds(5));
-        harness.ServerClock.Advance(TimeSpan.FromSeconds(6));
-        await harness.WaitForAsync(view => view.AlpacaIdleWarning == RoofAlpacaText.MayNowMove && !view.KeepsOperatorLease, "the lapse");
+        // The lease lapses at the controller; the heartbeats go on, and none takes it back.
+        await TogetherAsync(harness, TimeSpan.FromSeconds(10));
+        await AnsweredAsync(harness, 13);
+        await harness.WaitForAsync(view => view.AlpacaIdleWarning == RoofAlpacaText.MayNowMove, "the lapse");
         Alpaca(harness).GetStatus().OperatorLease.Should().Be(new RoofOperatorLeaseState { Held = false, IdleLapsedHolder = KioskHarness.Operator });
+        for (var heartbeat = 14; heartbeat <= 16; heartbeat++)
+        {
+            await TogetherAsync(harness, TimeSpan.FromSeconds(10));
+            await AnsweredAsync(harness, heartbeat);
+        }
 
-        // No heartbeat takes it back: the lapse stands until the person touches the screen.
-        var sent = harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaLease);
-        await harness.AdvanceAsync(TimeSpan.FromSeconds(30));
-        harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaLease).Should().Be(sent);
-        Alpaca(harness).GetStatus().OperatorLease.Held.Should().BeFalse("nothing took it again");
+        Alpaca(harness).GetStatus().OperatorLease.Held.Should().BeFalse("a heartbeat alone never takes it back");
         harness.Console.View.AlpacaIdleWarning.Should().Be(RoofAlpacaText.MayNowMove);
+        harness.Console.View.KeepsOperatorLease.Should().BeTrue("the heartbeats go on");
 
+        // A touch takes it back as it ends: no waiting for the next heartbeat.
         harness.Console.Touch();
-        harness.Console.View.KeepsOperatorLease.Should().BeTrue();
-        harness.Clock.Advance(TimeSpan.Zero);
-        await harness.WaitForAsync(view => view.Status?.Alpaca?.OperatorLease is { Held: true, Holder: KioskHarness.Operator } && view.AlpacaIdleWarning is null, "the lease taken again");
+        harness.Console.TouchEnded();
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.OperatorLease is { Held: true, Holder: KioskHarness.Operator } && view.AlpacaIdleWarning is null, "the lease taken back");
+        inputs.Should().HaveCount(17);
         inputs.First().Should().BeTrue();
-        inputs.Last().Should().BeTrue("the touch took it again");
+        inputs.Last().Should().BeTrue("the touch took it back");
         inputs.Skip(1).SkipLast(1).Should().OnlyContain(input => !input, "a heartbeat alone is never input");
+    }
+
+    [TestMethod]
+    public async Task AGrant_StepsThePersonAway_TheHeartbeatsGoOnWithoutInput_AndALaterTouchTakesControlBack()
+    {
+        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly);
+        var inputs = new ConcurrentQueue<bool>();
+        harness.AlterRequest = request =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/" + RoofApiRoutes.AlpacaLease, StringComparison.Ordinal))
+            {
+                inputs.Enqueue(request.RequestUri.Query.Contains("input=true", StringComparison.Ordinal));
+            }
+        };
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        harness.Clock.Advance(TimeSpan.Zero);
+        await AnsweredAsync(harness, 1);
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.OperatorLease is { Held: true, Holder: KioskHarness.Operator }, "the operator lease taken");
+        Refuse(harness, "scope-not-clear:Main");
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Alerts.Count == 1, "the alert");
+        await using var screen = await KioskScreen.ShowAsync(harness, 1280, 720, 8.2);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Alpaca));
+
+        // The taps that ask for the grant and answer the question are not input after it.
+        await screen.TouchAsync(await FindAsync(screen, "alpaca-grant-close-0"));
+        await UntilAsync(() => screen.Shell.Alpaca.Question is not null, "the question");
+        await screen.TouchAsync(screen.Find("alpaca-answer-0")!);
+        await UntilAsync(() => harness.Answered(HttpMethod.Post, RoofApiRoutes.AlpacaGrants) == 1 && screen.Shell.Alpaca.Busy is null, "the grant");
+
+        Alpaca(harness).Grants().Should().ContainSingle();
+        Alpaca(harness).GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
+        await harness.WaitForAsync(view => view.AlpacaSteppedAway is not null && view.Status?.Alpaca?.Grants.Count == 1, "the step away");
+        var away = RoofAlpacaText.DescribeSteppedAway(harness.Console.View.Status!.Alpaca!.Grants[0]);
+        away.Should().Be("You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Touch anything to take control back; that cancels the grant.");
+        await OnUiAsync(() =>
+        {
+            screen.Shell.Update(harness.Console.View);
+            screen.Text("safety-summary").Should().Be(away, "it is said on every page");
+        });
+        await screen.RenderAsync("alpaca-stepped-away", TestContext);
+
+        // The heartbeats go on, without input: the lease stays released, and the grant stays.
+        for (var heartbeat = 2; heartbeat <= 4; heartbeat++)
+        {
+            await HeartbeatAsync(harness, heartbeat);
+        }
+
+        Alpaca(harness).GetStatus().OperatorLease.Held.Should().BeFalse();
+        Alpaca(harness).Grants().Should().ContainSingle();
+        harness.Console.View.AlpacaSteppedAway.Should().NotBeNull();
+
+        // A later touch takes control back at once, and cancels the grant.
+        await screen.TouchAsync(screen.Find("title")!);
+        await harness.WaitForAsync(view => view.Status?.Alpaca is { OperatorLease: { Held: true, Holder: KioskHarness.Operator }, Grants.Count: 0 }, "control taken back");
+        harness.Console.View.AlpacaSteppedAway.Should().BeNull();
+        Alpaca(harness).Grants().Should().BeEmpty("taking the lease back drops the grant");
+        inputs.Should().Equal([true, false, false, false, true], "the first heartbeat, three without input after the grant, and the touch");
     }
 
     // ---- The page -----------------------------------------------------------------------------------------------------
@@ -340,20 +402,44 @@ public sealed class KioskAlpacaTests
         granted["alpaca-message"].Should().StartWith("Granted. One Close allowed by");
         granted["alpaca-revoke-0"].Should().Be(RoofAlpacaText.RevokeLabel);
 
-        // Acknowledged: no longer offered to acknowledge, nor to grant from.
+        // Acknowledged: no longer offered to acknowledge, nor to grant from. The touch is the person's input after the
+        // grant, so it takes control back, which cancels the grant.
         await screen.TouchAsync(await FindAsync(screen, "alpaca-acknowledge-0"));
         await harness.WaitForAsync(view => view.Status?.Alpaca?.Alerts[0].Acknowledged == true, "the acknowledgement");
         Alpaca(harness).Alerts()[0].AcknowledgedBy.Should().Contain(KioskHarness.Operator);
+        await harness.WaitForAsync(view => view.Status?.Alpaca is { OperatorLease.Held: true, Grants.Count: 0 }, "control taken back");
         await UntilAsync(() => screen.Shell.Alpaca.Busy is null, "the answer");
         var acknowledged = await ReadEveryPageAsync(screen, "alpaca-acknowledged");
         acknowledged["alpaca-alert-0-text"].Should().Contain("Acknowledged by");
-        acknowledged.Keys.Should().NotContain(["alpaca-acknowledge-0", "alpaca-grant-close-0"]);
-
-        // Revoked.
-        await screen.TouchAsync(await FindAsync(screen, "alpaca-revoke-0"));
-        await harness.WaitForAsync(view => view.Status?.Alpaca?.Grants.Count == 0, "the grant revoked");
-        Alpaca(harness).Grants().Should().BeEmpty();
+        acknowledged.Keys.Should().NotContain(["alpaca-acknowledge-0", "alpaca-grant-close-0", "alpaca-revoke-0"]);
         harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaGrants).Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task Revoke_RevokesAnotherPersonsGrant()
+    {
+        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly);
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        harness.Clock.Advance(TimeSpan.Zero);
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.OperatorLease is { Held: true, Holder: KioskHarness.Operator }, "the operator lease taken");
+        using (var ada = ClientTestSupport.CreateClient(harness.Host))
+        {
+            ada.Credential = await ada.Auth.SignInAsync(KioskHarness.Admin, TestSecrets.Password);
+            await ada.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, ["scope-unknown:Main"]);
+        }
+
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Grants.Count == 1, "ada's grant");
+        await using var screen = await KioskScreen.ShowAsync(harness, 800, 480, 5.2);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Alpaca));
+
+        await screen.TouchAsync(await FindAsync(screen, "alpaca-revoke-0"));
+
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Grants.Count == 0, "the grant revoked");
+        harness.Sent(HttpMethod.Delete, RoofApiRoutes.AlpacaGrant(RoofAlpacaCommandKind.Close)).Should().Be(1);
+        await UntilAsync(() => screen.Shell.Alpaca.Busy is null, "the answer");
+        (await ReadEveryPageAsync(screen, "alpaca-revoked"))["alpaca-message"].Should().Be("The Close grant is revoked.");
+        harness.Console.View.AlpacaSteppedAway.Should().BeNull("olga granted nothing");
     }
 
     [TestMethod]
