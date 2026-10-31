@@ -73,10 +73,10 @@ public sealed class RoofAlpacaRereadTests
         await AlpacaCommandRig.WaitUntilAsync(() => source.Held == 2, "the second re-read");
 
         source.Release(index: 1, parked: false); // the newer read ends first: not parked
+        (await second).Rule().Should().Be("NotSafe"); // waits only for that read, so it is in the slot now
         source.Release(index: 0, parked: true);  // then the older one: a late "parked"
 
         (await first).Rule().Should().Be("NotSafe", "the slot keeps the newer not-clear");
-        (await second).Rule().Should().Be("NotSafe");
         ordered.Hat.RelayMask.Should().Be(0x00);
     }
 
