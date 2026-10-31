@@ -158,13 +158,14 @@ the API only.
 
 No test relies on a real device. The HAT emulator serves fake Alpaca mounts and safety monitors, modelled on the Alpaca
 API, with their park, weather, connection and failure states set through its control API
-([docs/emulator.md](emulator.md#alpaca-devices)); both compose files point the controller at them.
+([docs/emulator.md](emulator.md#alpaca-devices)); both compose files point the controller at them. ASCOM ConformU
+checks the fakes themselves (the results are in that section).
 
 | Tests | Cover |
 |---|---|
 | `Safety/AlpacaSafetySourceTests` | The adapters against the emulator's devices and against answers no device should give: GET only, the order of the requests, the transaction numbers, every failure's words, a mount that cannot park, a timeout, an unreachable server, and no address in a failure or its inner exception. |
 | `Safety/RoofSafetyServiceTests` | The readiness rule (a required weather source, every blocking scope clear, `Ignored` and `BlocksRoof: false`), the weather alone, the settings' validation, the start log. |
-| `Emulation/EmulatedAlpacaTests` | The emulator's devices against the Alpaca API: the answer's shape, parameter names in any case, form-encoded `PUT`s, HTTP 400, `0x407` while not connected, a mount that cannot park, the fault injection, the control API. |
+| `Emulation/EmulatedAlpacaTests` | The emulator's devices against the Alpaca API: the answer's shape, parameter names (any case in a `GET`, exact in a `PUT`), form-encoded `PUT`s, HTTP 400, `0x407` while not connected, a mount that cannot park, the fault injection, the control API. |
 | `Controllers/SafetyAlpacaApiTests` | The controller with configured devices, through its real pipeline: the conditions on the status, what Open needs, Close and Stop never gated, the conditions never moving the roof, and no address in the log at any level. |
 | `Scenarios/AlpacaSafetySourceScenarios` | The emulated plant with the production settings and the default Warn interlock, the devices over a real socket: unsafe weather refuses Open and moves nothing, weather turning unsafe while the roof opens stops nothing, Close is never gated, and a mount that stops answering asks Open for the override. |
 | `tests/emulator/compose-smoke-test.sh` | The containers: the conditions follow the emulator's devices, and the Warn interlock refuses Open while the weather is unsafe. |

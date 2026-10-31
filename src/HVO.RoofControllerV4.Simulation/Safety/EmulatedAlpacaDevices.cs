@@ -56,24 +56,24 @@ public sealed record EmulatedAlpacaAnswer(int StatusCode, IReadOnlyDictionary<st
 /// (https://ascom-standards.org/api/) and the ASCOM interface definitions (ISafetyMonitorV3, ITelescopeV4), not on the
 /// controller's adapter, so a controller that disagrees with a real device is caught:
 /// <list type="bullet">
-/// <item>URLs are lower case (<c>/api/v1/{device_type}/{device_number}/{member}</c>); parameter names, in a GET's query
-/// or a PUT's form body, are not case sensitive.</item>
-/// <item>A request the device cannot interpret (an unknown device type, device number or member, a GET of a member only
-/// PUT, a <c>ClientID</c> or <c>ClientTransactionID</c> that is not a number from 0 to 4294967295, a PUT
-/// <c>Connected</c> that is not True or False) is HTTP 400 with a text message.</item>
+/// <item>URLs are lower case (<c>/api/v1/{device_type}/{device_number}/{member}</c>). Parameter names in a GET's query
+/// are matched whatever their case; in a PUT's form body they are case sensitive, so a misspelt one is not there.</item>
+/// <item>A request the device cannot interpret (an unknown device type, device number or member, a member asked with the
+/// wrong method, a parameter missing or not of its type, a <c>ClientID</c> or <c>ClientTransactionID</c> that is not a
+/// number from 0 to 4294967295) is HTTP 400 with a text message.</item>
 /// <item>An answer is HTTP 200 with the JSON <c>Value</c> (a property read), <c>ClientTransactionID</c> (echoed, 0 when
 /// not given), <c>ServerTransactionID</c> (from 1, one more each answer), <c>ErrorNumber</c> and <c>ErrorMessage</c>.
 /// An error carries no <c>Value</c>, so a client cannot take it for a reading.</item>
 /// <item>Only <c>Connected</c>, <c>Connecting</c>, <c>Name</c>, <c>Description</c>, <c>DriverInfo</c>,
 /// <c>DriverVersion</c>, <c>InterfaceVersion</c> and <c>SupportedActions</c> answer while not connected; every other
 /// member answers <c>ErrorNumber</c> 0x407 (NotConnectedException).</item>
-/// <item>A mount that cannot park answers <c>CanPark</c> false, <c>AtPark</c> false, and 0x400 (NotImplementedException)
-/// to <c>Park</c> and <c>Unpark</c>, as ITelescopeV4 says.</item>
 /// </list>
-/// The safety monitor serves every ISafetyMonitorV3 member. The mount serves the common members and its park members
-/// only (<c>AtPark</c>, <c>CanPark</c>, <c>CanUnpark</c>, <c>Park</c>, <c>Unpark</c>); any other telescope member is
-/// HTTP 400, so it is not a whole ITelescopeV4 (ASCOM's OmniSim is one). Nothing here moves or reaches hardware, and the
-/// devices answer no Alpaca discovery. Safe to use from any thread.
+/// The safety monitor is a whole ISafetyMonitorV3. The mount is a whole ITelescopeV4 that can only park: it stands still
+/// on the meridian at the celestial equator, not tracking, every capability false but <c>CanPark</c> and
+/// <c>CanUnpark</c>; what a capability gates, and every optional member, answers 0x400 (NotImplementedException). A mount
+/// set unable to park answers <c>CanPark</c> false, <c>AtPark</c> false and 0x400 to <c>Park</c>. Both pass ASCOM
+/// ConformU with no errors or issues (docs/emulator.md). Nothing here moves or reaches hardware, and the devices answer no
+/// Alpaca discovery. Safe to use from any thread.
 /// </summary>
 public sealed class EmulatedAlpacaServer
 {
@@ -89,8 +89,14 @@ public sealed class EmulatedAlpacaServer
     /// <summary>ASCOM NotImplementedException.</summary>
     public const int NotImplementedError = 0x400;
 
+    /// <summary>ASCOM InvalidValueException.</summary>
+    public const int InvalidValueError = 0x401;
+
     /// <summary>ASCOM NotConnectedException.</summary>
     public const int NotConnectedError = 0x407;
+
+    /// <summary>ASCOM ParkedException.</summary>
+    public const int ParkedError = 0x408;
 
     /// <summary>ASCOM ActionNotImplementedException.</summary>
     public const int ActionNotImplementedError = 0x40C;
@@ -98,16 +104,52 @@ public sealed class EmulatedAlpacaServer
     /// <summary>The first driver-specific error number, which <see cref="EmulatedAlpacaBehaviour.DriverError"/> answers.</summary>
     public const int DriverError = 0x500;
 
-    // The members every device has (IAscomDeviceV2), read with GET.
-    private static readonly HashSet<string> CommonReads =
-        ["connected", "connecting", "description", "driverinfo", "driverversion", "interfaceversion", "name", "supportedactions", "devicestate"];
+    /// <summary>The emulated mount's site: made-up coordinates, not the observatory's.</summary>
+    public const double SiteLatitude = 30.0;
 
-    // The members every device has, called with PUT.
-    private static readonly HashSet<string> CommonCalls = ["connected", "connect", "disconnect", "action", "commandblind", "commandbool", "commandstring"];
+    /// <summary>The emulated mount's site longitude, degrees east.</summary>
+    public const double SiteLongitude = -110.0;
+
+    /// <summary>The emulated mount's site elevation, metres.</summary>
+    public const double SiteElevation = 1000.0;
+
+    private static readonly DateTimeOffset J2000 = new(2000, 1, 1, 12, 0, 0, TimeSpan.Zero);
 
     // What may be read while not connected (ASCOM Platform 7, "Members available when not connected").
     private static readonly HashSet<string> ReadableWhileNotConnected =
         ["connected", "connecting", "description", "driverinfo", "driverversion", "interfaceversion", "name", "supportedactions"];
+
+    // Every member, by "GET name" or "PUT name", with its parameters: IAscomDeviceV2's, then each interface's.
+    private static readonly Dictionary<string, Parameter[]> CommonMembers = Members(
+        "GET connected", "GET connecting", "GET description", "GET driverinfo", "GET driverversion", "GET interfaceversion",
+        "GET name", "GET supportedactions", "GET devicestate",
+        "PUT connected Connected:bool", "PUT connect", "PUT disconnect", "PUT action Action:text Parameters:text",
+        "PUT commandblind Command:text Raw:bool", "PUT commandbool Command:text Raw:bool", "PUT commandstring Command:text Raw:bool");
+
+    private static readonly Dictionary<string, Parameter[]> SafetyMonitorMembers = Members("GET issafe");
+
+    private static readonly Dictionary<string, Parameter[]> TelescopeMembers = Members(
+        "GET alignmentmode", "GET altitude", "GET aperturearea", "GET aperturediameter", "GET athome", "GET atpark", "GET azimuth",
+        "GET canfindhome", "GET canpark", "GET canpulseguide", "GET cansetdeclinationrate", "GET cansetguiderates", "GET cansetpark",
+        "GET cansetpierside", "GET cansetrightascensionrate", "GET cansettracking", "GET canslew", "GET canslewaltaz",
+        "GET canslewaltazasync", "GET canslewasync", "GET cansync", "GET cansyncaltaz", "GET canunpark", "GET declination",
+        "GET declinationrate", "GET doesrefraction", "GET equatorialsystem", "GET focallength", "GET guideratedeclination",
+        "GET guideraterightascension", "GET ispulseguiding", "GET rightascension", "GET rightascensionrate", "GET sideofpier",
+        "GET siderealtime", "GET siteelevation", "GET sitelatitude", "GET sitelongitude", "GET slewing", "GET slewsettletime",
+        "GET targetdeclination", "GET targetrightascension", "GET tracking", "GET trackingrate", "GET trackingrates", "GET utcdate",
+        "GET axisrates Axis:int", "GET canmoveaxis Axis:int", "GET destinationsideofpier RightAscension:number Declination:number",
+        "PUT declinationrate DeclinationRate:number", "PUT doesrefraction DoesRefraction:bool",
+        "PUT guideratedeclination GuideRateDeclination:number", "PUT guideraterightascension GuideRateRightAscension:number",
+        "PUT rightascensionrate RightAscensionRate:number", "PUT sideofpier SideOfPier:int", "PUT siteelevation SiteElevation:number",
+        "PUT sitelatitude SiteLatitude:number", "PUT sitelongitude SiteLongitude:number", "PUT slewsettletime SlewSettleTime:int",
+        "PUT targetdeclination TargetDeclination:number", "PUT targetrightascension TargetRightAscension:number",
+        "PUT tracking Tracking:bool", "PUT trackingrate TrackingRate:int", "PUT utcdate UTCDate:date",
+        "PUT abortslew", "PUT findhome", "PUT moveaxis Axis:int Rate:number", "PUT park", "PUT pulseguide Direction:int Duration:int",
+        "PUT setpark", "PUT slewtoaltaz Azimuth:number Altitude:number", "PUT slewtoaltazasync Azimuth:number Altitude:number",
+        "PUT slewtocoordinates RightAscension:number Declination:number",
+        "PUT slewtocoordinatesasync RightAscension:number Declination:number", "PUT slewtotarget", "PUT slewtotargetasync",
+        "PUT synctoaltaz Azimuth:number Altitude:number", "PUT synctocoordinates RightAscension:number Declination:number",
+        "PUT synctotarget", "PUT unpark");
 
     private readonly object _gate = new();
     private readonly Device[] _telescopes;
@@ -117,7 +159,7 @@ public sealed class EmulatedAlpacaServer
 
     /// <param name="telescopes">How many mounts to serve (0 to 8), numbered from 0, each parked and connected.</param>
     /// <param name="safetyMonitors">How many safety monitors to serve (0 to 8), numbered from 0, each safe and connected.</param>
-    /// <param name="time">The clock for <c>DeviceState</c>'s TimeStamp; the system's by default.</param>
+    /// <param name="time">The clock for the mount's sidereal time and UTC date and <c>DeviceState</c>'s TimeStamp; the system's by default.</param>
     public EmulatedAlpacaServer(int telescopes = 1, int safetyMonitors = 1, TimeProvider? time = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(telescopes);
@@ -127,6 +169,15 @@ public sealed class EmulatedAlpacaServer
         _time = time ?? TimeProvider.System;
         _telescopes = [.. Enumerable.Range(0, telescopes).Select(number => new Device(TelescopeType, number, $"Emulated mount {number}"))];
         _monitors = [.. Enumerable.Range(0, safetyMonitors).Select(number => new Device(SafetyMonitorType, number, $"Emulated safety monitor {number}"))];
+    }
+
+    private enum ParameterType
+    {
+        Boolean,
+        Number,
+        Integer,
+        Text,
+        Date
     }
 
     /// <summary>Every device's state now.</summary>
@@ -185,13 +236,13 @@ public sealed class EmulatedAlpacaServer
             return BadRequest($"The Alpaca Device API takes GET and PUT, not {method}.");
         }
 
-        var devices = deviceType switch
+        var (devices, members) = deviceType switch
         {
-            TelescopeType => _telescopes,
-            SafetyMonitorType => _monitors,
-            _ => null
+            TelescopeType => (_telescopes, TelescopeMembers),
+            SafetyMonitorType => (_monitors, SafetyMonitorMembers),
+            _ => (null, null)
         };
-        if (devices is null)
+        if (devices is null || members is null)
         {
             // Alpaca URLs are lower case, and only these two types are served.
             return BadRequest($"The device type '{deviceType}' is not served here: only telescope and safetymonitor, in lower case.");
@@ -203,30 +254,29 @@ public sealed class EmulatedAlpacaServer
         }
 
         var values = parameters.ToList();
-        if (!TryReadTransaction(values, "ClientID", out _, out var problem) || !TryReadTransaction(values, "ClientTransactionID", out var clientTransaction, out problem))
+        var names = put ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        if (!TryReadTransaction(values, "ClientID", names, out _, out var problem)
+            || !TryReadTransaction(values, "ClientTransactionID", names, out var clientTransaction, out problem))
         {
             return BadRequest(problem!);
         }
 
-        var known = put
-            ? CommonCalls.Contains(member) || (deviceType == TelescopeType && member is "park" or "unpark")
-            : CommonReads.Contains(member) || member == (deviceType == TelescopeType ? "atpark" : "issafe")
-                || (deviceType == TelescopeType && member is "canpark" or "canunpark");
-        if (!known)
+        var key = $"{(put ? "PUT" : "GET")} {member}";
+        if (!CommonMembers.TryGetValue(key, out var expected) && !members.TryGetValue(key, out expected))
         {
-            return BadRequest($"The {deviceType} has no member '{member}' to {(put ? "PUT" : "GET")} here (members are lower case).");
+            return BadRequest($"The {deviceType} has no member '{member}' to {(put ? "PUT" : "GET")} (members are lower case).");
         }
 
-        bool? connect = null;
-        if (put && member == "connected")
+        var arguments = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var parameter in expected)
         {
-            var text = Find(values, "Connected");
-            if (!bool.TryParse(text, out var wanted))
+            var text = Find(values, parameter.Name, names);
+            if (text is null || !IsOfType(text, parameter.Type))
             {
-                return BadRequest("Connected must be True or False.");
+                return BadRequest($"{parameter.Name} is missing or is not {Describe(parameter.Type)}.");
             }
 
-            connect = wanted;
+            arguments[parameter.Name] = text;
         }
 
         var device = devices[number];
@@ -243,7 +293,10 @@ public sealed class EmulatedAlpacaServer
                     return Error(clientTransaction, DriverError, "The emulated driver could not reach its device (emulator fault injection).");
             }
 
-            return put ? Call(device, member, connect, clientTransaction) : Read(device, member, clientTransaction);
+            var outcome = put ? Call(device, member, arguments) : Read(device, member, arguments);
+            return outcome.Error != 0 ? Error(clientTransaction, outcome.Error, outcome.Message)
+                : outcome.HasValue ? new EmulatedAlpacaAnswer(200, Response(clientTransaction, outcome.Value, hasValue: true, 0, string.Empty), null)
+                : new EmulatedAlpacaAnswer(200, Response(clientTransaction, null, hasValue: false, 0, string.Empty), null);
         }
     }
 
@@ -256,7 +309,8 @@ public sealed class EmulatedAlpacaServer
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(query);
         var values = query.ToList();
-        if (!TryReadTransaction(values, "ClientID", out _, out var problem) || !TryReadTransaction(values, "ClientTransactionID", out var clientTransaction, out problem))
+        if (!TryReadTransaction(values, "ClientID", StringComparison.OrdinalIgnoreCase, out _, out var problem)
+            || !TryReadTransaction(values, "ClientTransactionID", StringComparison.OrdinalIgnoreCase, out var clientTransaction, out problem))
         {
             return BadRequest(problem!);
         }
@@ -299,77 +353,169 @@ public sealed class EmulatedAlpacaServer
     }
 
     // The caller holds the gate.
-    private EmulatedAlpacaAnswer Read(Device device, string member, uint clientTransaction)
+    private Outcome Read(Device device, string member, Dictionary<string, string> arguments)
     {
         if (!device.Connected && !ReadableWhileNotConnected.Contains(member))
         {
-            return Error(clientTransaction, NotConnectedError, $"{device.Name} is not connected.");
+            return Outcome.Failed(NotConnectedError, $"{device.Name} is not connected.");
         }
 
         var telescope = device.Type == TelescopeType;
-        object value = member switch
+        switch (member)
         {
-            "connected" => device.Connected,
-            // Connect completes at once here, so a connection is never in progress.
-            "connecting" => false,
-            "name" => device.Name,
-            "description" => $"{device.Name}, emulated by the HVO HAT emulator",
-            "driverinfo" => "HVO HAT emulator: an emulated ASCOM Alpaca device for development and tests",
-            "driverversion" => "1.0",
-            // ITelescopeV4 and ISafetyMonitorV3: the interfaces of ASCOM Platform 7.
-            "interfaceversion" => telescope ? 4 : 3,
-            "supportedactions" => Array.Empty<string>(),
-            "devicestate" => new[]
-            {
-                new Dictionary<string, object?> { ["Name"] = telescope ? "AtPark" : "IsSafe", ["Value"] = telescope ? device.Value && device.CanPark : device.Value },
-                new Dictionary<string, object?> { ["Name"] = "TimeStamp", ["Value"] = _time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffffff", CultureInfo.InvariantCulture) }
-            },
-            "canpark" or "canunpark" => device.CanPark,
-            // A mount that cannot park is never parked.
-            "atpark" => device.Value && device.CanPark,
-            _ => device.Value
-        };
-        return new EmulatedAlpacaAnswer(200, Response(clientTransaction, value, hasValue: true, 0, string.Empty), null);
+            case "connected":
+                return Outcome.Of(device.Connected);
+            case "connecting":
+                // Connect completes at once here, so a connection is never in progress.
+                return Outcome.Of(false);
+            case "name":
+                return Outcome.Of(device.Name);
+            case "description":
+                return Outcome.Of($"{device.Name}, emulated by the HVO HAT emulator");
+            case "driverinfo":
+                return Outcome.Of("HVO HAT emulator: an emulated ASCOM Alpaca device for development and tests");
+            case "driverversion":
+                return Outcome.Of("1.0");
+            case "interfaceversion":
+                // ITelescopeV4 and ISafetyMonitorV3: the interfaces of ASCOM Platform 7.
+                return Outcome.Of(telescope ? 4 : 3);
+            case "supportedactions":
+                return Outcome.Of(Array.Empty<string>());
+            case "devicestate":
+                return Outcome.Of(telescope ? TelescopeState(device) : MonitorState(device));
+            case "issafe":
+                return Outcome.Of(device.Value);
+        }
+
+        return ReadTelescope(device, member, arguments);
+    }
+
+    // The caller holds the gate. The mount stands still on the meridian at the celestial equator, not tracking.
+    private Outcome ReadTelescope(Device device, string member, Dictionary<string, string> arguments)
+    {
+        switch (member)
+        {
+            case "athome" or "slewing" or "tracking"
+                or "canfindhome" or "canpulseguide" or "cansetdeclinationrate" or "cansetguiderates" or "cansetpark"
+                or "cansetpierside" or "cansetrightascensionrate" or "cansettracking" or "canslew" or "canslewaltaz"
+                or "canslewaltazasync" or "canslewasync" or "cansync" or "cansyncaltaz":
+                return Outcome.Of(false);
+            case "canpark" or "canunpark":
+                return Outcome.Of(device.CanPark);
+            case "atpark":
+                // A mount that cannot park is never parked.
+                return Outcome.Of(Parked(device));
+            case "declination" or "declinationrate" or "rightascensionrate":
+                return Outcome.Of(0.0);
+            case "rightascension" or "siderealtime":
+                return Outcome.Of(LocalSiderealHours());
+            case "equatorialsystem":
+                // equTopocentric.
+                return Outcome.Of(1);
+            case "sitelatitude":
+                return Outcome.Of(SiteLatitude);
+            case "sitelongitude":
+                return Outcome.Of(SiteLongitude);
+            case "siteelevation":
+                return Outcome.Of(SiteElevation);
+            case "trackingrate":
+                // driveSidereal, the only rate.
+                return Outcome.Of(0);
+            case "trackingrates":
+                return Outcome.Of(new[] { 0 });
+            case "utcdate":
+                return Outcome.Of(UtcDate());
+            case "axisrates":
+                return IsAxis(arguments["Axis"]) ? Outcome.Of(Array.Empty<object>()) : Outcome.Failed(InvalidValueError, "Axis must be 0, 1 or 2.");
+            case "canmoveaxis":
+                return IsAxis(arguments["Axis"]) ? Outcome.Of(false) : Outcome.Failed(InvalidValueError, "Axis must be 0, 1 or 2.");
+            default:
+                // AlignmentMode, Altitude, Azimuth, the aperture and focal length, DoesRefraction, the guide rates,
+                // IsPulseGuiding, SideOfPier, DestinationSideOfPier, SlewSettleTime and the targets: optional, or gated
+                // by a capability this mount does not have.
+                return Outcome.Failed(NotImplementedError, $"{member} is not implemented by this mount.");
+        }
     }
 
     // The caller holds the gate.
-    private EmulatedAlpacaAnswer Call(Device device, string member, bool? connect, uint clientTransaction)
+    private Outcome Call(Device device, string member, Dictionary<string, string> arguments)
     {
         switch (member)
         {
             case "connected":
-                device.Connected = connect!.Value;
-                return Done(clientTransaction);
+                device.Connected = bool.Parse(arguments["Connected"]);
+                return Outcome.Done;
             case "connect":
                 device.Connected = true;
-                return Done(clientTransaction);
+                return Outcome.Done;
             case "disconnect":
                 device.Connected = false;
-                return Done(clientTransaction);
+                return Outcome.Done;
         }
 
         if (!device.Connected)
         {
-            return Error(clientTransaction, NotConnectedError, $"{device.Name} is not connected.");
+            return Outcome.Failed(NotConnectedError, $"{device.Name} is not connected.");
         }
 
         switch (member)
         {
             case "action":
-                return Error(clientTransaction, ActionNotImplementedError, "The emulated device supports no actions.");
+                return Outcome.Failed(ActionNotImplementedError, "The emulated device supports no actions.");
+            case "commandblind" or "commandbool" or "commandstring":
+                // Deprecated in Platform 7.
+                return Outcome.Failed(NotImplementedError, $"{member} is not implemented.");
             case "park" or "unpark" when !device.CanPark:
-                return Error(clientTransaction, NotImplementedError, $"{device.Name} cannot park.");
+                return Outcome.Failed(NotImplementedError, $"{device.Name} cannot park.");
             case "park":
                 device.Value = true;
-                return Done(clientTransaction);
+                return Outcome.Done;
             case "unpark":
                 device.Value = false;
-                return Done(clientTransaction);
+                return Outcome.Done;
+            case "abortslew" when Parked(device):
+                return Outcome.Failed(ParkedError, $"{device.Name} is parked.");
+            case "abortslew":
+                // Nothing is slewing.
+                return Outcome.Done;
             default:
-                // CommandBlind, CommandBool and CommandString, deprecated in Platform 7.
-                return Error(clientTransaction, NotImplementedError, $"{member} is not implemented.");
+                // Every write and every motion this mount cannot do.
+                return Outcome.Failed(NotImplementedError, $"{member} is not implemented by this mount.");
         }
     }
+
+    private object[] TelescopeState(Device device) =>
+    [
+        State("AtHome", false),
+        State("AtPark", Parked(device)),
+        State("Declination", 0.0),
+        State("RightAscension", LocalSiderealHours()),
+        State("SiderealTime", LocalSiderealHours()),
+        State("Slewing", false),
+        State("Tracking", false),
+        State("UTCDate", UtcDate()),
+        State("TimeStamp", TimeStamp())
+    ];
+
+    private object[] MonitorState(Device device) => [State("IsSafe", device.Value), State("TimeStamp", TimeStamp())];
+
+    private static Dictionary<string, object?> State(string name, object value) => new() { ["Name"] = name, ["Value"] = value };
+
+    private static bool Parked(Device device) => device.Value && device.CanPark;
+
+    private static bool IsAxis(string text) => int.Parse(text, NumberStyles.Integer, CultureInfo.InvariantCulture) is >= 0 and <= 2;
+
+    /// <summary>Local mean sidereal time at <see cref="SiteLongitude"/>, hours (0 to 24).</summary>
+    private double LocalSiderealHours()
+    {
+        var days = (_time.GetUtcNow() - J2000).TotalDays;
+        var hours = (18.697374558 + (24.06570982441908 * days) + (SiteLongitude / 15.0)) % 24.0;
+        return hours < 0 ? hours + 24.0 : hours;
+    }
+
+    private string UtcDate() => _time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
+
+    private string TimeStamp() => _time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffffff", CultureInfo.InvariantCulture);
 
     private void Set(Device[] devices, string kind, int deviceNumber, bool? value, bool? connected, EmulatedAlpacaBehaviour? behaviour, bool? canPark)
     {
@@ -400,10 +546,6 @@ public sealed class EmulatedAlpacaServer
         => new(200, Response(clientTransaction, null, hasValue: false, error, message), null);
 
     // The caller holds the gate.
-    private EmulatedAlpacaAnswer Done(uint clientTransaction)
-        => new(200, Response(clientTransaction, null, hasValue: false, 0, string.Empty), null);
-
-    // The caller holds the gate.
     private Dictionary<string, object?> Response(uint clientTransaction, object? value, bool hasValue, int error, string message)
     {
         var json = new Dictionary<string, object?>();
@@ -427,17 +569,53 @@ public sealed class EmulatedAlpacaServer
 
     private static EmulatedAlpacaAnswer BadRequest(string message) => new(400, null, message);
 
-    private static string? Find(IEnumerable<KeyValuePair<string, string?>> parameters, string name)
-        => parameters.FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
+    /// <summary>The members, from "METHOD name Parameter:type ..." lines.</summary>
+    private static Dictionary<string, Parameter[]> Members(params string[] lines)
+        => lines.Select(line => line.Split(' ')).ToDictionary(
+            parts => $"{parts[0]} {parts[1]}",
+            parts => parts.Skip(2).Select(spec =>
+            {
+                var (name, type) = (spec[..spec.IndexOf(':', StringComparison.Ordinal)], spec[(spec.IndexOf(':', StringComparison.Ordinal) + 1)..]);
+                return new Parameter(name, type switch
+                {
+                    "bool" => ParameterType.Boolean,
+                    "number" => ParameterType.Number,
+                    "int" => ParameterType.Integer,
+                    "date" => ParameterType.Date,
+                    _ => ParameterType.Text
+                });
+            }).ToArray(),
+            StringComparer.Ordinal);
 
-    // Parameter names are matched whatever their case; a missing one is 0, the Alpaca API's "not supplied".
-    private static bool TryReadTransaction(IEnumerable<KeyValuePair<string, string?>> parameters, string name, out uint value, out string? problem)
+    private static bool IsOfType(string text, ParameterType type) => type switch
+    {
+        ParameterType.Boolean => bool.TryParse(text, out _),
+        ParameterType.Number => double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number),
+        ParameterType.Integer => int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+        ParameterType.Date => DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _),
+        _ => true
+    };
+
+    private static string Describe(ParameterType type) => type switch
+    {
+        ParameterType.Boolean => "True or False",
+        ParameterType.Number => "a number",
+        ParameterType.Integer => "a whole number",
+        ParameterType.Date => "an ISO 8601 date and time",
+        _ => "given"
+    };
+
+    private static string? Find(IEnumerable<KeyValuePair<string, string?>> parameters, string name, StringComparison names)
+        => parameters.FirstOrDefault(pair => string.Equals(pair.Key, name, names)).Value;
+
+    // A missing number is 0, the Alpaca API's "not supplied".
+    private static bool TryReadTransaction(IEnumerable<KeyValuePair<string, string?>> parameters, string name, StringComparison names, out uint value, out string? problem)
     {
         value = 0;
         problem = null;
         foreach (var (key, text) in parameters)
         {
-            if (!string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(key, name, names))
             {
                 continue;
             }
@@ -460,11 +638,24 @@ public sealed class EmulatedAlpacaServer
         device.Name,
         device.UniqueId,
         device.Connected,
-        device.Type == TelescopeType ? device.Value && device.CanPark : null,
+        device.Type == TelescopeType ? Parked(device) : null,
         device.Type == TelescopeType ? device.CanPark : null,
         device.Type == SafetyMonitorType ? device.Value : null,
         device.Behaviour,
         device.Requests);
+
+    /// <summary>A member's parameter: its name, as the Alpaca API writes it, and its type.</summary>
+    private sealed record Parameter(string Name, ParameterType Type);
+
+    /// <summary>What a member answers: a value, nothing (a method), or an ASCOM error.</summary>
+    private readonly record struct Outcome(bool HasValue, object? Value, int Error, string Message)
+    {
+        public static Outcome Done => new(false, null, 0, string.Empty);
+
+        public static Outcome Of(object value) => new(true, value, 0, string.Empty);
+
+        public static Outcome Failed(int error, string message) => new(false, null, error, message);
+    }
 
     /// <summary>One device; its mutable fields are guarded by the server's gate.</summary>
     private sealed class Device(string type, int number, string name)

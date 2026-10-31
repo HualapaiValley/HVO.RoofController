@@ -206,24 +206,39 @@ The emulator also stands in for the ASCOM Alpaca devices the controller's safety
 adapter:
 
 - `GET` and `PUT /api/v1/{telescope|safetymonitor}/{n}/{member}`, lower case. A `PUT` carries its parameters
-  form-encoded. Parameter names (`ClientID`, `ClientTransactionID`, `Connected`) are matched whatever their case.
+  form-encoded. Parameter names (`ClientID`, `ClientTransactionID`, `Connected`) are matched whatever their case in a
+  `GET`'s query, and exactly in a `PUT`'s body, as the Alpaca API says.
 - An answer is HTTP 200 with `Value` (a read), `ClientTransactionID` (echoed, 0 when not given),
   `ServerTransactionID`, `ErrorNumber` and `ErrorMessage`. An error carries no `Value`.
-- A request a device cannot interpret (an unknown type, number or member, a member read that is only `PUT`, a
-  transaction number that is not 0 to 4294967295, a `Connected` that is not `True` or `False`) is HTTP 400 with a text
+- A request a device cannot interpret (an unknown type, number or member, a member asked with the wrong method, a
+  parameter missing or not of its type, a transaction number that is not 0 to 4294967295) is HTTP 400 with a text
   message.
 - Not connected, every member but `Connected`, `Connecting`, `Name`, `Description`, `DriverInfo`, `DriverVersion`,
   `InterfaceVersion` and `SupportedActions` answers `0x407` (NotConnected).
-- The safety monitor serves every `ISafetyMonitorV3` member (`IsSafe`, the common members, `Connect`, `Disconnect`,
-  `DeviceState`). The mount serves the common members and its park members only (`AtPark`, `CanPark`, `CanUnpark`,
-  `Park`, `Unpark`); any other telescope member is HTTP 400, so it is not a whole `ITelescopeV4` (ASCOM's OmniSim is
-  one, for a client that needs it). A mount that cannot park answers `CanPark` false, `AtPark` false and `0x400` to
-  `Park`.
+- The safety monitor is a whole `ISafetyMonitorV3` (`IsSafe`, the common members, `Connect`, `Disconnect`,
+  `DeviceState`). The mount is a whole `ITelescopeV4` that can only park: it stands still on the meridian at the
+  celestial equator, not tracking, at a made-up site, with every capability false but `CanPark` and `CanUnpark`. What a
+  capability gates, and every optional member, answers `0x400` (NotImplemented); `AbortSlew` while parked answers
+  `0x408`. A mount that cannot park answers `CanPark` false, `AtPark` false and `0x400` to `Park`. For a client that
+  needs a mount that slews, use ASCOM's OmniSim.
 - `GET /management/apiversions`, `/management/v1/description` and `/management/v1/configureddevices` (each device
   with a stable UniqueID, `hvo-hat-emulator-telescope-0` and so on).
 
 Like the control API they have no authentication, and they answer no Alpaca discovery: keep them on loopback or a
-private test network. Both compose files point the controller's `RoofSafety` sources at them
+private test network.
+
+Checked with ASCOM ConformU 4.5.3 (`conformu.4.5.3.linux-x64.tar.gz`, SHA-256
+`47aa2a6da3e25bca77723efcaa5cd619f2b728c8e060bfeb098da6b5d0a64600`) against the emulator on loopback: the safety
+monitor passes `conformance` and `alpacaprotocol` with no errors, issues or information messages, and the mount passes
+`conformance` with none. The mount's `alpacaprotocol` reports one error, ConformU's own: its PulseGuide protocol test
+reads `IsPulseGuiding` whatever `CanPulseGuide` says, and `ITelescopeV4` has a mount that cannot pulse guide answer it
+NotImplemented, as `conformance` requires. To repeat it, with the emulator running:
+
+```bash
+conformu conformance http://127.0.0.1:5290/api/v1/safetymonitor/0
+conformu alpacaprotocol http://127.0.0.1:5290/api/v1/safetymonitor/0
+conformu conformance http://127.0.0.1:5290/api/v1/telescope/0
+``` Both compose files point the controller's `RoofSafety` sources at them
 (`http://hat-emulator:5290`), so an emulated rig's conditions are Safe until the control API says otherwise:
 
 | Request | Body | Effect |

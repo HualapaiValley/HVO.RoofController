@@ -12,7 +12,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Emulation;
 /// <summary>
 /// The HAT emulator's ASCOM Alpaca devices (a telescope mount and a weather safety monitor, #220), checked against the
 /// ASCOM Alpaca Device and Management APIs (https://ascom-standards.org/api/) and the ASCOM interfaces, not against the
-/// controller's adapter: the answer's shape and its transaction numbers, parameter names in any case, form-encoded PUTs,
+/// controller's adapter: the answer's shape and its transaction numbers, parameter names (any case in a GET, exact in a PUT), form-encoded PUTs,
 /// HTTP 400 for a request a device cannot interpret, NotConnected (0x407) while not connected, a mount that cannot park,
 /// the fault injection, and the control API.
 /// </summary>
@@ -89,7 +89,7 @@ public sealed class EmulatedAlpacaTests
     [DataRow("/api/v1/dome/0/atpark", "a device type the emulator does not serve")]
     [DataRow("/api/v1/telescope/1/atpark", "a device number it does not serve")]
     [DataRow("/api/v1/telescope/x/atpark", "a device number that is not a number")]
-    [DataRow("/api/v1/telescope/0/slewing", "a telescope member it does not serve")]
+    [DataRow("/api/v1/telescope/0/shutterstatus", "a member no telescope has")]
     [DataRow("/api/v1/telescope/0/park", "a member only PUT")]
     [DataRow("/api/v1/safetymonitor/0/atpark", "a telescope's member asked of a safety monitor")]
     [DataRow("/api/v1/telescope/0/atpark?ClientTransactionID=-1", "a transaction number below 0")]
@@ -129,12 +129,12 @@ public sealed class EmulatedAlpacaTests
     }
 
     [TestMethod]
-    public async Task AFormEncodedPut_ConnectsAndDisconnects_AndParksAndUnparks_WithParameterNamesInAnyCase()
+    public async Task AFormEncodedPut_ConnectsAndDisconnects_AndParksAndUnparks()
     {
         await using var host = new EmulatorHost();
         using var client = host.CreateClient();
 
-        var disconnect = await PutAsync(client, "/api/v1/telescope/0/connected", ("connected", "False"), ("clienttransactionid", "11"));
+        var disconnect = await PutAsync(client, "/api/v1/telescope/0/connected", ("Connected", "false"), ("ClientTransactionID", "11"));
         var refused = await PutAsync(client, "/api/v1/telescope/0/unpark");
         var connect = await PutAsync(client, "/api/v1/telescope/0/connect");
         var unpark = await PutAsync(client, "/api/v1/telescope/0/unpark", ("ClientTransactionID", "12"));
@@ -151,6 +151,20 @@ public sealed class EmulatedAlpacaTests
         unpark.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0);
         unparked.Body.GetProperty("Value").GetBoolean().Should().BeFalse();
         parked.Body.GetProperty("Value").GetBoolean().Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task APutsParameterNames_AreCaseSensitive_AsTheAlpacaApiSays()
+    {
+        await using var host = new EmulatorHost();
+        using var client = host.CreateClient();
+
+        var misspelt = await PutAsync(client, "/api/v1/telescope/0/connect", ("clienttransactionid", "12"));
+        var lowerCase = await PutAsync(client, "/api/v1/telescope/0/connected", ("connected", "False"));
+
+        misspelt.Body.GetProperty("ClientTransactionID").GetUInt32().Should().Be(0, "a PUT's clienttransactionid is not its ClientTransactionID");
+        lowerCase.Status.Should().Be(HttpStatusCode.BadRequest, "a PUT's connected is not its Connected");
+        host.Alpaca.GetStatus().Telescopes[0].Connected.Should().BeTrue();
     }
 
     [TestMethod]
@@ -208,6 +222,56 @@ public sealed class EmulatedAlpacaTests
         canUnpark.Body.GetProperty("Value").GetBoolean().Should().BeFalse();
         atPark.Body.GetProperty("Value").GetBoolean().Should().BeFalse("ITelescopeV4: AtPark is false for a mount that cannot park");
         park.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0x400);
+    }
+
+    [TestMethod]
+    public async Task TheMount_IsAWholeITelescopeV4_ThatCanOnlyPark()
+    {
+        await using var host = new EmulatorHost();
+        using var client = host.CreateClient();
+
+        var sidereal = await ReadAsync(client, "/api/v1/telescope/0/siderealtime");
+        var rightAscension = await ReadAsync(client, "/api/v1/telescope/0/rightascension");
+        var utc = await ReadAsync(client, "/api/v1/telescope/0/utcdate");
+        var canSlew = await ReadAsync(client, "/api/v1/telescope/0/canslew");
+        var rates = await ReadAsync(client, "/api/v1/telescope/0/trackingrates");
+        var axisRates = await ReadAsync(client, "/api/v1/telescope/0/axisrates?Axis=1");
+        var badAxis = await ReadAsync(client, "/api/v1/telescope/0/canmoveaxis?axis=7");
+        var altitude = await ReadAsync(client, "/api/v1/telescope/0/altitude");
+        var tracking = await PutAsync(client, "/api/v1/telescope/0/tracking", ("Tracking", "true"));
+        var slew = await PutAsync(client, "/api/v1/telescope/0/slewtocoordinatesasync", ("RightAscension", "1.5"), ("Declination", "10"));
+        var abortParked = await PutAsync(client, "/api/v1/telescope/0/abortslew");
+        var state = await ReadAsync(client, "/api/v1/telescope/0/devicestate");
+
+        sidereal.Body.GetProperty("Value").GetDouble().Should().BeInRange(0, 24);
+        rightAscension.Body.GetProperty("Value").GetDouble().Should().BeApproximately(sidereal.Body.GetProperty("Value").GetDouble(), 0.01, "it stands on the meridian");
+        DateTime.Parse(utc.Body.GetProperty("Value").GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind)
+            .Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+        canSlew.Body.GetProperty("Value").GetBoolean().Should().BeFalse();
+        rates.Body.GetProperty("Value").EnumerateArray().Select(rate => rate.GetInt32()).Should().Equal(0);
+        axisRates.Body.GetProperty("Value").GetArrayLength().Should().Be(0);
+        badAxis.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0x401, "InvalidValue for an axis that is not 0, 1 or 2");
+        altitude.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0x400, "an optional member it does not implement");
+        tracking.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0x400, "CanSetTracking is false");
+        slew.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0x400, "CanSlewAsync is false");
+        abortParked.Body.GetProperty("ErrorNumber").GetInt32().Should().Be(0x408, "ParkedException while parked");
+        state.Body.GetProperty("Value").EnumerateArray().Select(item => item.GetProperty("Name").GetString())
+            .Should().Equal("AtHome", "AtPark", "Declination", "RightAscension", "SiderealTime", "Slewing", "Tracking", "UTCDate", "TimeStamp");
+    }
+
+    [TestMethod]
+    [DataRow("/api/v1/telescope/0/tracking", "Tracking", "yes", "a Tracking that is not True or False")]
+    [DataRow("/api/v1/telescope/0/sitelatitude", "SiteLatitude", "north", "a SiteLatitude that is not a number")]
+    [DataRow("/api/v1/telescope/0/moveaxis", "Axis", "0", "MoveAxis without its Rate")]
+    [DataRow("/api/v1/telescope/0/utcdate", "UTCDate", "yesterday", "a UTCDate that is not a date")]
+    public async Task AMountPutWithAMissingOrBadParameter_IsHttp400(string path, string name, string value, string because)
+    {
+        await using var host = new EmulatorHost();
+        using var client = host.CreateClient();
+
+        var response = await PutAsync(client, path, (name, value));
+
+        response.Status.Should().Be(HttpStatusCode.BadRequest, because);
     }
 
     [TestMethod]
