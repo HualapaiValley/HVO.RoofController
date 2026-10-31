@@ -205,6 +205,12 @@ internal sealed class RoofCliContext
                 Host.Error.WriteLine(detail);
             }
 
+            if (RoofCommandRules.IsSafetyOverrideRequest(error))
+            {
+                // The controller's detail names the API's overrideSafety=true; on the command line it is the flag.
+                Host.Error.WriteLine(SafetyOverrideHint);
+            }
+
             if (error is RoofApiException { Errors.Count: > 0 } invalid)
             {
                 foreach (var (field, problems) in invalid.Errors)
@@ -224,6 +230,10 @@ internal sealed class RoofCliContext
 
         return (int)code;
     }
+
+    /// <summary>Said after a refusal for want of the safety override (SafetyOverrideRequired): how to give it here.</summary>
+    internal static readonly string SafetyOverrideHint =
+        $"To open anyway: '{RoofCli.CommandName} open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.";
 
     internal static (RoofExitCode Code, string Message) Classify(Exception error) => error switch
     {

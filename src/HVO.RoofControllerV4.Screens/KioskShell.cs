@@ -415,7 +415,8 @@ public sealed class KioskShell : UserControl
     {
         Touched(e);
         if (e.Handled || e.Key != Key.Escape) return;
-        if (Page == KioskPage.Settings && Settings.Question is not null) { Settings.Dismiss(); e.Handled = true; }
+        if (Page == KioskPage.Roof && _console.View.SafetyQuestion is not null) { _console.CancelSafetyOverride(); e.Handled = true; }
+        else if (Page == KioskPage.Settings && Settings.Question is not null) { Settings.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.System && System.Question is not null) { System.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.Terminal) { _terminalExit?.Cancel(); ShowPage(KioskPage.Roof); e.Handled = true; }
         else if (Page is KioskPage.Unlock or KioskPage.ChangePin)

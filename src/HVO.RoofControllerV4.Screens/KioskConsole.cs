@@ -69,6 +69,7 @@ public sealed class KioskConsole : IAsyncDisposable
     private TimeSpan _screenTimeout;
     private DateTimeOffset _screenTimeoutDue;
     private bool _readingScreenTimeout;
+    private PendingQuestion? _safetyQuestion;
     private KioskView _view;
 
     /// <param name="client">The kiosk's client, whose credential is a <see cref="RoofKioskCredential"/>.</param>
@@ -278,9 +279,101 @@ public sealed class KioskConsole : IAsyncDisposable
     /// </summary>
     public Task LockAsync() => LockCore(_options.Wording.SignedOutNotice, KioskNoticeLevel.Info);
 
-    public Task OpenAsync() => MoveAsync(RoofMotionDirection.Opening);
+    /// <summary>
+    /// Open. While the conditions are not Safe and the controller's interlock asks for an override (Warn mode; Unknown
+    /// counts as unsafe), nothing is sent: the kiosk asks first (<see cref="KioskView.SafetyQuestion"/>).
+    /// </summary>
+    public Task OpenAsync()
+    {
+        bool ask;
+        lock (_gate)
+        {
+            // A blocked Open is answered by MoveAsync with its reason; only one that would be sent is asked about.
+            ask = !_disposed && NotOfferedLocked() is null
+                && RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Opening, CommandStateLocked()) is null
+                && RoofCommandRules.NeedsSafetyOverride(_status);
+            if (ask)
+            {
+                _safetyQuestion = new PendingQuestion(new RoofSafetyOverrideQuestion(_status!.Safety), _session!, _stopsSent);
+                _lastActivity = _time.GetUtcNow();
+            }
+        }
 
-    public Task CloseAsync() => MoveAsync(RoofMotionDirection.Closing);
+        if (ask)
+        {
+            Publish();
+            return Task.CompletedTask;
+        }
+
+        return MoveAsync(RoofMotionDirection.Opening, overrideSafety: false);
+    }
+
+    /// <summary>
+    /// The person confirmed the safety override question: Open is sent with the override, which the controller logs. Does
+    /// nothing when no question is asked (it was answered, or Stop or the lock withdrew it).
+    /// </summary>
+    public Task OpenWithSafetyOverrideAsync()
+    {
+        Command? command = null;
+        lock (_gate)
+        {
+            if (_disposed || _safetyQuestion is not { } asked)
+            {
+                return Task.CompletedTask;
+            }
+
+            // The answer is consumed and its Open reserved at once, for the person and the Stops the question was asked
+            // under: a Stop sent since, or the kiosk locked or unlocked by someone else, withdraws it.
+            _safetyQuestion = null;
+            if (!ReferenceEquals(_session, asked.Session) || _stopsSent != asked.StopsSent)
+            {
+                AddNoticeLocked(StopWithdrewQuestion, KioskNoticeLevel.Info);
+            }
+            else if ((NotOfferedLocked() ?? RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Opening, CommandStateLocked())) is { } reason)
+            {
+                AddNoticeLocked($"Not sent: {reason}.", KioskNoticeLevel.Warning);
+            }
+            else
+            {
+                _busy = "Sending Open…";
+                command = new Command(asked.Session, asked.StopsSent, _closing.Token, _time.GetUtcNow());
+            }
+        }
+
+        Publish();
+        return command is null ? Task.CompletedTask : SendMoveAsync(RoofMotionDirection.Opening, overrideSafety: true, command);
+    }
+
+    /// <summary>Said when an answer to the safety override question came after a Stop, or another person, withdrew it.</summary>
+    public const string StopWithdrewQuestion = "Open not sent: the safety override question was withdrawn.";
+
+    /// <summary>The person answered the safety override question with Cancel: nothing is sent.</summary>
+    public void CancelSafetyOverride()
+    {
+        lock (_gate)
+        {
+            if (_safetyQuestion is null)
+            {
+                return;
+            }
+
+            _safetyQuestion = null;
+            AddNoticeLocked(RoofSafetyText.OverrideCancelled, KioskNoticeLevel.Info);
+        }
+
+        Publish();
+    }
+
+    public Task CloseAsync()
+    {
+        lock (_gate)
+        {
+            // Close is never gated by the conditions, and withdraws a question about Open.
+            _safetyQuestion = null;
+        }
+
+        return MoveAsync(RoofMotionDirection.Closing, overrideSafety: false);
+    }
 
     public async Task ClearFaultAsync()
     {
@@ -324,8 +417,9 @@ public sealed class KioskConsole : IAsyncDisposable
         {
             var sequence = ++_stopsSent;
 
-            // Stop ends the kiosk's hold on a motion: the lease is no longer renewed.
+            // Stop ends the kiosk's hold on a motion: the lease is no longer renewed. It withdraws a question about Open.
             DropLeaseLocked();
+            _safetyQuestion = null;
             _stopMessage = RoofStopText.Sending;
             _stopOutcome = RoofStopOutcome.Sent;
             _stopsInFlight++;
@@ -472,7 +566,7 @@ public sealed class KioskConsole : IAsyncDisposable
         return null;
     }
 
-    private async Task MoveAsync(RoofMotionDirection direction)
+    private async Task MoveAsync(RoofMotionDirection direction, bool overrideSafety)
     {
         var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
         if (Begin(state => RoofCommandRules.GetMotionBlockReason(direction, state), $"Sending {verb}…") is not { } command)
@@ -480,14 +574,56 @@ public sealed class KioskConsole : IAsyncDisposable
             return;
         }
 
+        await SendMoveAsync(direction, overrideSafety, command).ConfigureAwait(false);
+    }
+
+    // Sends a motion command already reserved (Begin, or a confirmed safety question), and ends it.
+    private async Task SendMoveAsync(RoofMotionDirection direction, bool overrideSafety, Command command)
+    {
+        var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
         try
         {
             RoofStatusResponse status;
             try
             {
                 status = direction == RoofMotionDirection.Opening
-                    ? await _client.Roof.OpenAsync(command.Closing).ConfigureAwait(false)
+                    ? await _client.Roof.OpenAsync(overrideSafety, command.Closing).ConfigureAwait(false)
                     : await _client.Roof.CloseAsync(command.Closing).ConfigureAwait(false);
+            }
+            catch (RoofApiException refusal) when (!overrideSafety && RoofCommandRules.IsSafetyOverrideRequest(refusal) && !command.Closing.IsCancellationRequested)
+            {
+                // The conditions were not Safe when the controller checked, though the kiosk did not know: it asks now,
+                // while the kiosk is still the same person's, unless Stop withdrew this Open since, or the newest status
+                // blocks Open for another reason, which the refusal's notice and the Open button then say.
+                bool asked;
+                lock (_gate)
+                {
+                    KeptAliveLocked(command);
+                    if (refusal.RoofStatus is { } refused)
+                    {
+                        ApplyLocked(refused);
+                    }
+
+                    asked = !_disposed && ReferenceEquals(_session, command.Session) && _stopsSent == command.StopsSent
+                        && NotOfferedLocked() is null
+                        && RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Opening, CommandStateLocked() with { CommandInFlight = false }) is null;
+                    if (asked)
+                    {
+                        _safetyQuestion = new PendingQuestion(new RoofSafetyOverrideQuestion(refusal.RoofStatus?.Safety ?? _status?.Safety), command.Session, command.StopsSent);
+                        AddNoticeLocked(RoofText.DescribeFailure(refusal), KioskNoticeLevel.Warning);
+                    }
+                }
+
+                if (asked)
+                {
+                    _logger.LogInformation("Open from {Name} needs a safety override; asking", command.Session.Name);
+                }
+                else
+                {
+                    Refused(refusal, verb, command.Session);
+                }
+
+                return;
             }
             catch (Exception error) when (RoofCommandRules.MayHaveReachedController(error) && !command.Closing.IsCancellationRequested)
             {
@@ -658,7 +794,7 @@ public sealed class KioskConsole : IAsyncDisposable
     private string? NotOfferedLocked() => !_started ? _options.Wording.Starting : _session is null ? _options.Wording.SignedOutBlock : null;
 
     private RoofCommandState CommandStateLocked()
-        => new(_status, IsStaleLocked(), _session is { } session && IsOperator(session.Role), _busy is not null);
+        => new(_status, IsStaleLocked(), _session is { } session && IsOperator(session.Role), _busy is not null, _session?.Role == RoofControllerApiContract.AdminRole);
 
     private static bool IsOperator(string role) => role is RoofControllerApiContract.OperatorRole or RoofControllerApiContract.AdminRole;
 
@@ -826,6 +962,7 @@ public sealed class KioskConsole : IAsyncDisposable
             }
 
             _session = null;
+            _safetyQuestion = null;
             if (_holdsLease)
             {
                 _logger.LogWarning("Kiosk locked while it held the operator lease for {Name}; renewal stopped so the lease can expire", session.Name);
@@ -878,6 +1015,8 @@ public sealed class KioskConsole : IAsyncDisposable
             }
 
             var now = _time.GetUtcNow();
+            // A question asked of one person is never answered by the next.
+            _safetyQuestion = null;
             if (session is not null)
             {
                 _session = session;
@@ -1178,6 +1317,7 @@ public sealed class KioskConsole : IAsyncDisposable
             CloseBlock = notOffered ?? RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Closing, command),
             ClearFaultBlock = notOffered ?? RoofCommandRules.GetClearFaultBlockReason(command),
             HoldsLease = _holdsLease,
+            SafetyQuestion = _safetyQuestion?.Question,
             StopMessage = _stopMessage,
             StopOutcome = _stopOutcome,
             StopInFlight = _stopsInFlight > 0,
@@ -1189,4 +1329,7 @@ public sealed class KioskConsole : IAsyncDisposable
     }
 
     private sealed record Command(RoofSessionResponse Session, long StopsSent, CancellationToken Closing, DateTimeOffset SentAt);
+
+    /// <summary>A safety override question, with the person's session and the count of Stops it was asked under.</summary>
+    private sealed record PendingQuestion(RoofSafetyOverrideQuestion Question, RoofSessionResponse Session, long StopsSent);
 }

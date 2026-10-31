@@ -3,7 +3,8 @@ namespace HVO.RoofControllerV4.Common.Safety;
 /// <summary>
 /// A source the controller's safety service reads (docs/safety-service.md). The service calls one source's read at a
 /// time, on its own schedule and with its own timeout, so an adapter does no polling or caching of its own: it reads
-/// the device when asked, and throws when it cannot.
+/// the device when asked, and throws when it cannot (a <see cref="RoofSafetySourceException"/> when it can say why in
+/// words fit to show).
 /// </summary>
 public interface IRoofSafetySource
 {
@@ -18,7 +19,8 @@ public interface IRoofSafetySource
 }
 
 /// <summary>
-/// A telescope mount's park state. A future adapter reads ASCOM Alpaca <c>Telescope.AtPark</c>; the simulation's
+/// A telescope mount's park state. No real adapter exists yet: which device to read (an ASCOM Alpaca
+/// <c>Telescope.AtPark</c> is one possibility) awaits the owner's decision. The simulation's
 /// <c>SimulatedTelescopeParkSource</c> stands in for one in the tests.
 /// </summary>
 public interface ITelescopeParkSource : IRoofSafetySource
@@ -28,9 +30,9 @@ public interface ITelescopeParkSource : IRoofSafetySource
 }
 
 /// <summary>
-/// Whether the weather is safe. A future adapter reads ASCOM Alpaca <c>SafetyMonitor.IsSafe</c> (or judges
-/// <c>ObservingConditions</c> against thresholds); the simulation's <c>SimulatedWeatherSafetySource</c> stands in for
-/// one in the tests.
+/// Whether the weather is safe. No real adapter exists yet: which device to read (an ASCOM Alpaca
+/// <c>SafetyMonitor.IsSafe</c> is one possibility) awaits the owner's decision. The simulation's
+/// <c>SimulatedWeatherSafetySource</c> stands in for one in the tests.
 /// </summary>
 public interface IWeatherSafetySource : IRoofSafetySource
 {
@@ -52,3 +54,21 @@ public sealed record TelescopeParkReading(bool IsParked, DateTimeOffset? Observe
 /// <param name="ObservedUtc">When the device observed it, when it says (wall-clock UTC); null means now.</param>
 /// <param name="Detail">Extra words to show with the reading (the sensor value that made it unsafe, say), if any.</param>
 public sealed record WeatherSafetyReading(bool IsSafe, DateTimeOffset? ObservedUtc = null, string? Detail = null);
+
+/// <summary>
+/// A read that failed for a reason the adapter can say in words safe to log and to show every client: "the device is
+/// not connected", say. The message never carries an address, a credential or the device's own text; the safety service
+/// quotes it in the source's reason. Any other exception is logged by its type alone.
+/// </summary>
+public sealed class RoofSafetySourceException : Exception
+{
+    public RoofSafetySourceException(string message)
+        : base(message)
+    {
+    }
+
+    public RoofSafetySourceException(string message, Exception? innerException)
+        : base(message, innerException)
+    {
+    }
+}

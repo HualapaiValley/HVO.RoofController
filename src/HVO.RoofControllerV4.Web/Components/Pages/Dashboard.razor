@@ -130,6 +130,40 @@
                     }
                 </div>
 
+                @if (status?.Safety is { } conditions)
+                {
+                    // #207: the safety conditions with their reasons, each source's state, and what Open does with them.
+                    <div class="rc2-safety rc2-safety--@(stale ? "stale" : conditions.State.ToString().ToLowerInvariant())" data-testid="safety-panel" data-state="@conditions.State" role="status" aria-label="Safety conditions">
+                        <div class="rc2-safety-head">
+                            <i class="bi @SafetyIcon(conditions.State)" aria-hidden="true"></i>
+                            <strong data-testid="safety-state">Safety: @RoofStatusText.DescribeSafetyState(conditions.State)@(stale ? " (last known)" : string.Empty)</strong>
+                            <span class="rc2-safety-open" data-testid="safety-open">@RoofSafetyText.DescribeOpen(conditions)</span>
+                        </div>
+                        @if (conditions.State != RoofSafetyState.Safe && conditions.Reasons.Count > 0)
+                        {
+                            <ul class="rc2-safety-reasons" data-testid="safety-reasons">
+                                @foreach (var reason in conditions.Reasons)
+                                {
+                                    <li>@reason</li>
+                                }
+                            </ul>
+                        }
+                        @if (conditions.State == RoofSafetyState.Unknown)
+                        {
+                            <p class="rc2-safety-note">@RoofSafetyText.UnknownCountsAsUnsafe</p>
+                        }
+                        @if (conditions.Sources.Count > 0)
+                        {
+                            <ul class="rc2-safety-sources" data-testid="safety-sources">
+                                @foreach (var source in conditions.Sources)
+                                {
+                                    <li class="rc2-safety-source rc2-safety-source--@source.State.ToString().ToLowerInvariant()" data-state="@source.State">@RoofSafetyText.DescribeSource(source)</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+
     </section>
 
     <div class="rc2-main">
@@ -138,6 +172,23 @@
                 <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2" aria-hidden="true"></i>Controls</h2>
             </div>
             <div class="rc2-card-body">
+                @if (View.SafetyQuestion is { } question)
+                {
+                    // #215: Open is sent with the safety override only once the person confirms. Stop stays below.
+                    <div class="rc2-safety-question" role="alertdialog" aria-labelledby="safety-question-title" data-testid="safety-override">
+                        <h3 class="rc2-safety-question-title" id="safety-question-title"><i class="bi bi-shield-exclamation me-2" aria-hidden="true"></i>@question.Title</h3>
+                        @foreach (var line in question.Lines)
+                        {
+                            <p>@line</p>
+                        }
+                        <div class="rc2-safety-question-actions">
+                            <button class="btn btn-warning" type="button" data-testid="safety-override-confirm" @onclick="Roof.OpenWithSafetyOverrideAsync">
+                                <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i>@RoofSafetyText.OverrideConfirm
+                            </button>
+                            <button class="btn btn-outline-light" type="button" data-testid="safety-override-cancel" @onclick="Roof.CancelSafetyOverride">@RoofSafetyText.OverrideCancel</button>
+                        </div>
+                    </div>
+                }
                 <div class="rc-position-line"><i class="bi bi-house" aria-hidden="true"></i><div><strong>@(status is null ? "Position unknown" : RoofText.DescribePosition(status.Status))@(stale && status is not null ? " (last known)" : string.Empty)</strong><span>One direction at a time. The controller enforces its safety settings.</span></div></div>
                 <div class="rc2-action-grid">
                     <button class="btn btn-outline-light btn-lg rc2-action rc-open rc-action--@openState" type="button" data-testid="open" data-state="@openState"

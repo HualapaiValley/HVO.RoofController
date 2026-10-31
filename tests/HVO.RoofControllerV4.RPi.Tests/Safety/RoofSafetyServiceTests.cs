@@ -19,8 +19,11 @@ namespace HVO.RoofControllerV4.RPi.Tests.Safety;
 [TestClass]
 public sealed class RoofSafetyServiceTests
 {
+    // The tests' baseline, with the interlock Off so the logged lines are the conditions' alone; the controller's own
+    // default is Warn (TheDefaults_AreValid_AndWarn).
     private static readonly RoofSafetyOptions Defaults = new()
     {
+        InterlockMode = RoofSafetyInterlockMode.Off,
         PollInterval = TimeSpan.FromSeconds(10),
         ReadTimeout = TimeSpan.FromSeconds(5),
         MaxReadingAge = TimeSpan.FromSeconds(60)
@@ -42,8 +45,8 @@ public sealed class RoofSafetyServiceTests
         safety.Reasons.Should().Equal(RoofSafetyStatus.NoSourcesReason);
         safety.Reasons.Should().Equal("No safety sources configured");
         safety.Sources.Should().BeEmpty();
-        safety.InterlockMode.Should().Be(RoofSafetyInterlockMode.Off, "the interlock is advisory unless configured");
-        safety.OverrideRole.Should().BeNull();
+        safety.InterlockMode.Should().Be(RoofSafetyInterlockMode.Off);
+        safety.OverrideRole.Should().BeNull("only Warn takes an override");
         safety.StateSinceUtc.Should().Be(_time.GetUtcNow());
     }
 
@@ -280,7 +283,7 @@ public sealed class RoofSafetyServiceTests
         _time.Advance(TimeSpan.FromSeconds(5));
         await poll.WaitAsync(TimeSpan.FromSeconds(10));
 
-        service.GetCurrent().Reasons.Should().Equal("Telescope 'Main' cannot be read");
+        service.GetCurrent().Reasons.Should().Equal("Telescope 'Main' cannot be read (no answer within 5 s)");
         _logger.Contains(LogLevel.Warning, "could not be read (no answer within 5 s)").Should().BeTrue();
     }
 
@@ -418,6 +421,17 @@ public sealed class RoofSafetyServiceTests
     }
 
     [TestMethod]
+    public async Task ASourcesLongWords_AreCut()
+    {
+        var mount = new WordedSource("Main") { Failure = new RoofSafetySourceException(new string('w', 1000)) };
+        using var service = Create([mount]);
+
+        await service.PollAsync(CancellationToken.None);
+
+        service.GetCurrent().Reasons.Single().Should().Be($"Telescope 'Main' cannot be read ({new string('w', RoofSafetyService.MaxDetailLength)})");
+    }
+
+    [TestMethod]
     public async Task ALongDetail_IsCut()
     {
         var weather = new SimulatedWeatherSafetySource("Cloud sensor") { Detail = new string('x', 1000) };
@@ -431,14 +445,66 @@ public sealed class RoofSafetyServiceTests
     // ---- Options ---------------------------------------------------------------------------------------------------
 
     [TestMethod]
-    public void TheDefaults_AreValid_AndOff()
+    public void TheDefaults_AreValid_AndWarn()
     {
         var defaults = new RoofSafetyOptions();
 
         new RoofSafetyOptionsValidator().Validate(null, defaults).Succeeded.Should().BeTrue();
-        defaults.InterlockMode.Should().Be(RoofSafetyInterlockMode.Off);
+        defaults.InterlockMode.Should().Be(RoofSafetyInterlockMode.Warn, "the owner's policy: the safety check warns, and asks Open for an override (#215)");
         defaults.OverrideRole.Should().Be(RoofSafetyOverrideRole.Operator, "anyone who may open may override: the safety check warns, it does not decide");
         default(RoofSafetyOverrideRole).Should().Be(RoofSafetyOverrideRole.Operator);
+    }
+
+    [TestMethod]
+    public void TheDefaults_WithNoSource_AreUnknown_AndAskOpenForAnOverrideFromAnyoneWhoMayOpen()
+    {
+        using var service = new RoofSafetyService([], [], new TestOptionsMonitor<RoofSafetyOptions>(new RoofSafetyOptions()), _time, _logger);
+
+        service.GetCurrent().Should().BeEquivalentTo(new
+        {
+            State = RoofSafetyState.Unknown,
+            InterlockMode = RoofSafetyInterlockMode.Warn,
+            OverrideRole = RoofControllerApiContract.OperatorRole
+        });
+    }
+
+    [TestMethod]
+    public async Task ASourcesOwnWords_AreInItsReason_AndTheLog_AndGoWhenItIsReadAgain()
+    {
+        var mount = new WordedSource("Main") { Failure = new RoofSafetySourceException("the device is not connected") };
+        using var service = Create([mount]);
+
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().Reasons.Should().Equal("Telescope 'Main' cannot be read (the device is not connected)");
+        _logger.Contains(LogLevel.Warning, "Safety source TelescopePark 'Main' could not be read (the device is not connected)").Should().BeTrue();
+
+        mount.Failure = null;
+        await service.PollAsync(CancellationToken.None);
+        mount.Failure = new RoofSafetySourceException("the device answered HTTP 500");
+        _time.Advance(TimeSpan.FromSeconds(30));
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().Reasons.Should().BeEmpty("the reading 30 s old still counts");
+
+        _time.Advance(TimeSpan.FromSeconds(31));
+        service.GetCurrent().Reasons.Should().Equal("Telescope 'Main': the last reading (parked) is older than 60 s; the last read failed (the device answered HTTP 500)");
+
+        mount.Failure = new IOException("cannot reach 192.0.2.7");
+        await service.PollAsync(CancellationToken.None);
+        // Another failure's message is not shown: it could carry the device's address.
+        service.GetCurrent().Reasons.Should().Equal("Telescope 'Main': the last reading (parked) is older than 60 s");
+        _logger.Entries.Should().NotContain(entry => entry.Message.Contains("192.0.2.7", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task TheSources_AreNamedAtStart_NeverByAddress()
+    {
+        using var service = Create([new SimulatedTelescopeParkSource("Main")], [new SimulatedWeatherSafetySource("Cloud sensor")]);
+
+        await service.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => _logger.Entries.Any(entry => entry.Message.StartsWith("Reading 2 safety source(s)", StringComparison.Ordinal)));
+        await service.StopAsync(CancellationToken.None);
+
+        _logger.Contains(LogLevel.Information, "Reading 2 safety source(s) every 00:00:10 (read timeout 00:00:05): TelescopePark 'Main', Weather 'Cloud sensor'.").Should().BeTrue();
     }
 
     [TestMethod]
@@ -486,6 +552,19 @@ public sealed class RoofSafetyServiceTests
         };
         change?.Invoke(options);
         return options;
+    }
+
+    /// <summary>A mount that answers parked, or throws <see cref="Failure"/>.</summary>
+    private sealed class WordedSource(string name) : ITelescopeParkSource
+    {
+        public string Name { get; } = name;
+
+        public TimeSpan? MaxReadingAge => null;
+
+        public Exception? Failure { get; set; }
+
+        public Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken)
+            => Failure is { } failure ? Task.FromException<TelescopeParkReading>(failure) : Task.FromResult(new TelescopeParkReading(true));
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)

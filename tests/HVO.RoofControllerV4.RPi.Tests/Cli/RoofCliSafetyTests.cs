@@ -32,6 +32,34 @@ public sealed class RoofCliSafetyTests
     }
 
     [TestMethod]
+    public async Task Status_ListsEachSafetySource_WithItsState()
+    {
+        var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
+        var weather = new SimulatedWeatherSafetySource("Cloud sensor");
+        using var host = RoofClientApiTests.CreateHost(
+            configureServices: services =>
+            {
+                services.AddSingleton<ITelescopeParkSource>(mount);
+                services.AddSingleton<IWeatherSafetySource>(weather);
+            },
+            settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = null });
+        using (var client = CreateClient(host, new HVO.RoofControllerV4.Client.RoofApiKeyCredential(TestApiKeys.Viewer)))
+        {
+            await WaitUntilAsync(() => client.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the mount to be read");
+        }
+
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+
+        var result = await rig.RunAsync("status");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().Contain("Safety:        UNSAFE: Telescope 'Main' is not parked (Open needs a safety override)")
+            .And.Contain("Safety source: Unsafe: Telescope 'Main' is not parked")
+            .And.Contain("Safety source: Safe: Weather monitor 'Cloud sensor' reports safe weather");
+    }
+
+    [TestMethod]
     public async Task Status_Json_CarriesTheSafetyConditions()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -93,7 +121,8 @@ public sealed class RoofCliSafetyTests
         var opened = await rig.RunAsync("open", "--no-wait", "--override-safety");
 
         refused.Code.Should().Be(RoofExitCode.Refused, refused.ToString());
-        refused.Error.Should().Contain("Open needs a safety override. [SafetyOverrideRequired]").And.Contain("Telescope 'Main' is not parked");
+        refused.Error.Should().Contain("Open needs a safety override. [SafetyOverrideRequired]").And.Contain("Telescope 'Main' is not parked")
+            .And.Contain("To open anyway: 'hvo-roof open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.");
         opened.Code.Should().Be(RoofExitCode.Success, opened.ToString());
         host.RoofService.Verify(service => service.Open(), Times.Once());
     }

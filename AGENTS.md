@@ -107,13 +107,14 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   within 27 s of the signal, also at the container's process limit: the supervisor forks only to start a process, and
   only with room for it, and the stop forks nothing until the controller and the web UI have ended. A whole container
   killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
-- Safety conditions (`RoofSafety:InterlockMode`, default `Off`): the safety service reports Safe, Unsafe or Unknown
-  (no source, a source not read, failing or older than its `MaxReadingAge`) from telescope-park and weather sources,
-  on every status and at `GET /api/v4.0/Safety`. `Warn`, the owner's chosen policy, refuses Open
+- Safety conditions (`RoofSafety:InterlockMode`, default `Warn`): the safety service reports Safe, Unsafe or Unknown
+  (no source, a source not read, failing or older than its `MaxReadingAge`) with reasons from telescope-park and weather
+  sources, on every status and at `GET /api/v4.0/Safety`. `Warn`, the owner's policy, refuses Open
   (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`, which anyone who may open may send
-  (`OverrideRole`, default `Operator`; audit-logged); `Block` refuses Open (`SafetyInterlockActive`). Unknown counts as
-  Unsafe. Only Open is checked: never Close or Stop, and the service never moves the roof. No real source exists yet
-  ([docs/safety-service.md](docs/safety-service.md)).
+  (`OverrideRole`, default `Operator`; audit-logged); every UI asks before it sends it. `Block` refuses Open
+  (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is checked: never Close or Stop,
+  and the service never moves the roof. No real source exists yet: which devices to read (ASCOM Alpaca or another)
+  awaits the owner's decision, so add none without it ([docs/safety-service.md](docs/safety-service.md)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

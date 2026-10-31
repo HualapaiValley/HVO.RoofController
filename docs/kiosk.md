@@ -128,8 +128,20 @@ Every PIN session is Operator-only, including an Admin PIN. A Viewer cannot have
 - **Notices** keep the last five things that happened, with their time: a command's answer, who unlocked the kiosk, the
   controller restarting, and safety alerts (`SAFETY: …`).
 - **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a chip beside
-  the position, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), and the reasons in the Safety row on
-  Readings. While the interlock blocks Open, Open is not offered.
+  the position, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber); while they are not Safe, the first reason
+  (`Telescope 'Main' is not parked (+1 more)`) and what Open does (`Open asks for a safety override (logged)`) under
+  it, cut short when long; and on Readings the whole Safety row and a row per source. While the interlock blocks Open,
+  Open is not offered.
+- **The safety override.** With the interlock in Warn mode (the default) and the conditions not Safe (Unknown
+  included), **Open roof** asks first, in the motion controls' place: the conditions with their reasons, and **Open
+  anyway** or **Cancel** side by side. Nothing is sent until Open anyway, which sends Open with the override; the
+  controller logs it with the unlocking person's name. Stop, Close, Esc (Cancel) and the kiosk locking withdraw it, so a
+  question asked of one person is never answered by the next. Stop stays at the right throughout.
+
+<p>
+  <img src="images/kiosk/safety-override-800x480.png" alt="The safety override question on the first 7-inch display: the conditions Unknown, Open anyway and Cancel in the motion controls' place, and Stop at the right" width="400">
+  <img src="images/kiosk/safety-override-1280x720.png" alt="The safety override question at 1280x720" width="480">
+</p>
 
 <p>
   <img src="images/kiosk/opening-800x480.png" alt="The roof opening on the first 7-inch display: Opening… in bright green, Close not offered, and Stop bright red" width="400">
@@ -537,15 +549,15 @@ Nothing here needs the Pi, the display or the roof.
   root on an arm64 runner with systemd (`InstallerKioskSystemTests`), and checks that it starts (the display and the
   touchscreen stay the assumptions above).
 - **The renders** (`KioskRenderTests`) draw each screen headless (Avalonia's headless platform with Skia) at 1280x720
-  and 800x480. `KioskRedesignTests` adds 1920x1200 at explicit densities 8.2 and 9.0, long simultaneous warnings, every bounded page, private input and Stop outcomes. They check that nothing overlaps, that no text is cut off but for the three texts shortened on purpose (a
+  and 800x480. `KioskRedesignTests` adds 1920x1200 at explicit densities 8.2 and 9.0, long simultaneous warnings, every bounded page, private input and Stop outcomes. They check that nothing overlaps, that no text is cut off but for the texts shortened on purpose (a
   controller name longer than half the header, which Readings shows whole; a long name on its pill; the end
-  of a long value being typed), that every button is at least 12 mm, and that Stop is shown in
+  of a long value being typed; the roof page's safety reason and what Open does, which Readings shows whole), that every button is at least 12 mm, and that Stop is shown in
   full on every screen and stops the roof even when touched as the screen blanks. The pictures on this page are those renders; CI keeps them as the `kiosk-renders`
   artifact. To refresh them, from `src/`:
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests|FullyQualifiedName~KioskPinChangeTests|FullyQualifiedName~KioskPersonHistoryTests"
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests|FullyQualifiedName~KioskPinChangeTests|FullyQualifiedName~KioskPersonHistoryTests|FullyQualifiedName~KioskSafetyOverrideTests"
   for f in ../docs/images/kiosk/*.png; do
     if [ -f "/tmp/kiosk-renders/$(basename "$f")" ]; then cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; fi
   done

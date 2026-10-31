@@ -433,7 +433,7 @@ public sealed class RoofHistoryApiTests
         await operatorClient.Roof.OpenAsync();
 
         var accepted = (await operatorClient.Roof.GetHistoryAsync()).Entries.Single();
-        accepted.Accepted.Should().BeTrue("the interlock is off by default");
+        accepted.Accepted.Should().BeTrue("the interlock is off (the test host's, as on a controller set Off)");
         accepted.SafetyState.Should().Be("Unsafe");
         accepted.SafetyOverride.Should().BeNull();
         RoofHistoryText.DescribeResult(accepted).Should().Be("Accepted (conditions unsafe)");
@@ -442,7 +442,8 @@ public sealed class RoofHistoryApiTests
     [TestMethod]
     public async Task AnOpenAcceptedWhileNothingWatchesTheConditions_HasNoSafetyNote_ButARefusalKeepsIt()
     {
-        // The interlock Off (the default) and no safety source: the conditions are always Unknown, which says nothing (#216).
+        // The interlock Off (as the test host sets it) and no safety source: the conditions are always Unknown, which says
+        // nothing (#216). With the default, Warn, every Open carries an override, and its entry says so.
         using var host = RoofClientApiTests.CreateHost();
         using var operatorClient = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Operator));
         (await operatorClient.Roof.GetSafetyAsync()).Should().Match<RoofSafetyStatus>(safety =>

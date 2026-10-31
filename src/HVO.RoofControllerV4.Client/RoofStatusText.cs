@@ -20,6 +20,9 @@ public static class RoofStatusText
     /// <summary>The mode warning for a controller that ignores the limit switches.</summary>
     public const string LimitsIgnored = "LIMITS IGNORED: the controller is ignoring the physical limit switches (development only).";
 
+    /// <summary>The label of each safety source's row in <see cref="DescribeRows"/>, after the Safety row.</summary>
+    public const string SafetySourceLabel = "Safety source";
+
     /// <summary>The status as label and value rows, in the order every client lists them.</summary>
     public static IReadOnlyList<(string Label, string Value)> DescribeRows(RoofStatusResponse status)
     {
@@ -48,6 +51,10 @@ public static class RoofStatusText
         if (status.Safety is { } safety)
         {
             rows.Add(("Safety", DescribeSafety(safety)));
+            foreach (var source in safety.Sources)
+            {
+                rows.Add((SafetySourceLabel, RoofSafetyText.DescribeSource(source)));
+            }
         }
 
         rows.Add(("Controller", DescribeController(status)));

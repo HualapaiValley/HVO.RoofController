@@ -36,18 +36,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the web UI or the terminal, as the page says, never at the kiosk.
 - Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
   Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
-  age) and bounded, non-overlapping reads. It is on every status snapshot and status hub message (`safety`), at
+  age) and bounded, non-overlapping reads; a source that cannot be read, times out or is stale is Unknown, with why
+  ("cannot be read (no answer within 5 s)"). It is on every status snapshot and status hub message (`safety`), at
   `GET /api/v4.0/Safety` (Viewer) and in the client library (`GetSafetyAsync`), and every change is logged. No real
-  source exists yet, so the conditions are Unknown ("No safety sources configured"); simulated sources test it.
-- An optional Open interlock on the safety conditions, `RoofSafety:InterlockMode`: `Off` (the default: Open is
-  unchanged, and an Open while not Safe is logged), `Warn` (the chosen policy: Open refused with
-  `SafetyOverrideRequired` unless the request carries `overrideSafety=true`, which anyone who may open the roof may
-  send, `RoofSafety:OverrideRole` `Operator` by default; overrides are audit-logged) or `Block` (refused with
-  `SafetyInterlockActive`). Unknown counts as Unsafe. Close and Stop are never refused for the conditions
-  ([docs/safety-service.md](docs/safety-service.md)).
-- Safety indicators: a badge on the web UI's roof page, a Safety row in every client's status (`hvo-roof status`, the
-  terminal interface, the web UI, the kiosk's Readings), the state on `hvo-roof status --watch` lines, a chip on the
-  kiosk's roof page, and `hvo-roof open --override-safety`.
+  source exists yet (which devices to read awaits the owner's decision), so the conditions are Unknown ("No safety
+  sources configured"); simulated sources test it ([docs/safety-service.md](docs/safety-service.md)).
+- The Open interlock on the safety conditions, `RoofSafety:InterlockMode`: `Warn` (the default and the owner's policy:
+  while the conditions are not Safe, Open is refused with `SafetyOverrideRequired` unless the request carries
+  `overrideSafety=true`, which anyone who may open the roof may send, `RoofSafety:OverrideRole` `Operator` by default;
+  overrides are audit-logged), `Off` (Open unchanged, an Open while not Safe logged) or `Block` (refused with
+  `SafetyInterlockActive`). Unknown counts as Unsafe. Close and Stop are never refused for the conditions, and nothing
+  closes the roof by itself (#207, #215).
+- Safety override prompts (#215): while the interlock asks for an override, Open in the web UI, the kiosk, the Mac app
+  and `hvo-roof ui` asks first, with the conditions and their reasons, and sends Open with the override only on
+  **Open anyway**; Cancel, Stop, Close and the end of the session (the kiosk locking) withdraw the question, and a
+  refusal for want of the override (the conditions changed) asks too. `hvo-roof open` says how to give it
+  (`--override-safety`).
+- Safety indicators with reasons on every interface (#207): a safety panel on the web UI's roof page (the state, the
+  reasons, each source and what Open does) beside its badge; the first reason and what Open does under the kiosk's and
+  Mac app's safety chip; a Safety row and a row per source in every client's status (`hvo-roof status`, the terminal
+  interface's ROOF STATE, the web UI's status card, the kiosk's Readings); and the state on `hvo-roof status --watch`
+  lines.
 - `GET api/v4.0/System/Summary` for every role (a viewer, an operator, an admin, a kiosk key, a PIN session): the
   controller's version and uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and
   addresses, each null when it cannot be read. `System/info` and `System/metrics` stay admin-only. The client library
@@ -88,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Open asks for a safety override by default** (#215): the safety interlock's default is now `Warn`, so while the
+  safety conditions are not Safe, and always while no safety source exists (the conditions are Unknown, as they are
+  until real sources are added), every Open needs the override, which each interface asks for and the controller
+  audit-logs. Set `RoofSafety:InterlockMode` to `Off` to keep Open as it was. Scripts that open the roof add
+  `--override-safety` (or `overrideSafety=true`).
 - The controller's version and summary are no longer admin-only in any UI: the web UI's System page (now in every
   role's navigation), `hvo-roof info`, the terminal's System page, and the kiosk's and Mac app's About and System pages
   show them to every role, a locked kiosk too; the host's details and the restarts stay admin-only. A controller that
