@@ -107,7 +107,7 @@ public sealed class WebSafetyOverrideTests
     public async Task OpenWhileTheConditionsAreSafe_AsksNothing()
     {
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount).AddSingleton<IWeatherSafetySource>(new SimulatedWeatherSafetySource("Cloud sensor")));
         harness.OpensTheRoof();
         await harness.StartLiveAsync();
         await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
@@ -122,7 +122,7 @@ public sealed class WebSafetyOverrideTests
     public async Task ARefusalForWantOfTheOverride_AsksThen_WithTheConditionsTheControllerSent()
     {
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount).AddSingleton<IWeatherSafetySource>(new SimulatedWeatherSafetySource("Cloud sensor")));
         harness.OpensTheRoof();
         await harness.StartLiveAsync();
         await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
@@ -180,7 +180,7 @@ public sealed class WebSafetyOverrideTests
     {
         // Review F3: the refusal belongs to an Open that Stop withdrew.
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount).AddSingleton<IWeatherSafetySource>(new SimulatedWeatherSafetySource("Cloud sensor")));
         await harness.StartLiveAsync();
         await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
         await UnparkUnseenAsync(harness, mount);
@@ -211,7 +211,7 @@ public sealed class WebSafetyOverrideTests
     {
         // Review F4: the refusal's status says Open is blocked for another reason.
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount).AddSingleton<IWeatherSafetySource>(new SimulatedWeatherSafetySource("Cloud sensor")));
         await harness.StartLiveAsync();
         await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
         await UnparkUnseenAsync(harness, mount);

@@ -82,15 +82,23 @@ public static class RoofSafetyText
         };
     }
 
+    /// <summary>Said of a weather source set Ignored: shown, but it never decides the conditions.</summary>
+    public const string IgnoredSource = "ignored";
+
+    /// <summary>Said of a telescope that cannot block the roof: shown, but it never decides the conditions.</summary>
+    public const string DoesNotBlockRoof = "does not block the roof";
+
     /// <summary>
-    /// One source: its state and reason, and the source's extra words when it gave any: "Unsafe: Weather monitor 'Cloud'
-    /// reports unsafe weather (rain)".
+    /// One source: its state and reason, the source's extra words when it gave any, and why it does not count when it
+    /// does not: "Unsafe: Weather monitor 'Cloud' reports unsafe weather (rain)", "Unsafe: Telescope 'Solar' is not parked
+    /// [does not block the roof]".
     /// </summary>
     public static string DescribeSource(RoofSafetySourceStatus source)
     {
         ArgumentNullException.ThrowIfNull(source);
         var detail = string.IsNullOrWhiteSpace(source.Detail) ? string.Empty : $" ({source.Detail})";
-        return $"{RoofStatusText.DescribeSafetyState(source.State)}: {source.Reason}{detail}";
+        var counts = source.Counts ? string.Empty : $" [{(source.Kind == RoofSafetySourceKind.TelescopePark ? DoesNotBlockRoof : IgnoredSource)}]";
+        return $"{RoofStatusText.DescribeSafetyState(source.State)}: {source.Reason}{detail}{counts}";
     }
 
     /// <summary>

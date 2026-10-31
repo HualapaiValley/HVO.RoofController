@@ -1,4 +1,5 @@
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.Safety;
 using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Safety;
@@ -14,8 +15,8 @@ public enum RoofSafetyOverrideRole
 }
 
 /// <summary>
-/// The safety service (<c>RoofSafety</c> section): how the sources are read and how Open treats the result
-/// (docs/safety-service.md). Read from the controller's configuration; not in the settings catalogue yet.
+/// The safety service (<c>RoofSafety</c> section): the sources it reads, how it reads them, and how Open treats the
+/// result (docs/safety-service.md). Read from the controller's configuration; not in the settings catalogue.
 /// </summary>
 public sealed class RoofSafetyOptions
 {
@@ -51,6 +52,65 @@ public sealed class RoofSafetyOptions
     /// reading makes its source Unknown.
     /// </summary>
     public TimeSpan MaxReadingAge { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// The telescope mounts read, each an ASCOM Alpaca <c>Telescope</c> (its <c>AtPark</c>), in the order the reasons list
+    /// them. Read at start: a change takes effect when the controller starts again.
+    /// </summary>
+    public List<RoofSafetyTelescopeOptions> Telescopes { get; set; } = [];
+
+    /// <summary>
+    /// The weather sources read, each an ASCOM Alpaca <c>SafetyMonitor</c> (its <c>IsSafe</c>), set Required or Ignored.
+    /// Read at start: a change takes effect when the controller starts again.
+    /// </summary>
+    public List<RoofSafetyWeatherSourceOptions> WeatherSources { get; set; } = [];
+}
+
+/// <summary>
+/// One ASCOM Alpaca device the safety service reads. The controller only reads it (HTTP GET): it never connects,
+/// disconnects, parks or moves the device. Its address goes in the controller's local settings, never in the repository,
+/// and is never logged or shown.
+/// </summary>
+public abstract class RoofSafetyAlpacaDeviceOptions
+{
+    /// <summary>The longest name a reason quotes.</summary>
+    public const int MaxNameLength = 64;
+
+    /// <summary>The name every client's reasons quote ("Main", "Cloud sensor"). Each device of a kind needs its own.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Alpaca device server's address: http or https, the host and the port (for example <c>http://192.0.2.10:11111</c>),
+    /// with a path only when a proxy puts the Alpaca API under one. No credentials, query or fragment. The address is
+    /// pinned: the controller never looks for the device elsewhere (no Alpaca discovery).
+    /// </summary>
+    public string Url { get; set; } = string.Empty;
+
+    /// <summary>The device's Alpaca device number on that server (0 for the first of its type).</summary>
+    public int DeviceNumber { get; set; }
+
+    /// <summary>How old this device's reading may be and still count; null takes <see cref="RoofSafetyOptions.MaxReadingAge"/>.</summary>
+    public TimeSpan? MaxReadingAge { get; set; }
+}
+
+/// <summary>One telescope mount (<c>RoofSafety:Telescopes</c>), read through its ASCOM Alpaca <c>Telescope</c>.</summary>
+public sealed class RoofSafetyTelescopeOptions : RoofSafetyAlpacaDeviceOptions
+{
+    /// <summary>
+    /// True (the default) when the mount can reach the roof's path: the roof may open only while it is shown clear of the
+    /// roof, which today means parked. False for a mount that cannot, which is shown but never decides the conditions.
+    /// </summary>
+    public bool BlocksRoof { get; set; } = true;
+}
+
+/// <summary>One weather source (<c>RoofSafety:WeatherSources</c>), read through its ASCOM Alpaca <c>SafetyMonitor</c>.</summary>
+public sealed class RoofSafetyWeatherSourceOptions : RoofSafetyAlpacaDeviceOptions
+{
+    /// <summary>
+    /// Required (the default): the roof may open only while this source has a recent reading that says safe. Ignored: shown,
+    /// but it never decides the conditions (a sensor being serviced, say).
+    /// </summary>
+    public RoofWeatherSourceRequirement Requirement { get; set; } = RoofWeatherSourceRequirement.Required;
 }
 
 /// <summary>Refuses <see cref="RoofSafetyOptions"/> the service cannot use, so the controller does not start with them.</summary>
@@ -85,6 +145,81 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
             failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.MaxReadingAge)} must be longer than {nameof(RoofSafetyOptions.PollInterval)} plus {nameof(RoofSafetyOptions.ReadTimeout)} and at most 1 h, or a reading goes stale before the next one.");
         }
 
+        ValidateDevices(options, nameof(RoofSafetyOptions.Telescopes), options.Telescopes, failures);
+        ValidateDevices(options, nameof(RoofSafetyOptions.WeatherSources), options.WeatherSources, failures);
+        for (var i = 0; i < (options.WeatherSources?.Count ?? 0); i++)
+        {
+            if (options.WeatherSources![i] is { } source && !Enum.IsDefined(source.Requirement))
+            {
+                failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.WeatherSources)}:{i}:{nameof(RoofSafetyWeatherSourceOptions.Requirement)} must be Required or Ignored.");
+            }
+        }
+
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    /// <summary>The most devices of one kind the service reads.</summary>
+    public const int MaxDevicesPerKind = 16;
+
+    /// <summary>An absolute http or https address with a host, and no credentials, query or fragment.</summary>
+    internal static bool IsUsableUrl(string? url)
+        => Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            && uri.Host.Length > 0
+            && uri.UserInfo.Length == 0
+            && uri.Query.Length == 0
+            && uri.Fragment.Length == 0;
+
+    // A failure names the setting by its index, never the address it holds.
+    private static void ValidateDevices<T>(RoofSafetyOptions options, string kind, List<T>? devices, List<string> failures)
+        where T : RoofSafetyAlpacaDeviceOptions
+    {
+        if (devices is null)
+        {
+            return;
+        }
+
+        if (devices.Count > MaxDevicesPerKind)
+        {
+            failures.Add($"{RoofSafetyOptions.SectionName}:{kind} lists {devices.Count} devices; at most {MaxDevicesPerKind} are read.");
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < devices.Count; i++)
+        {
+            var key = $"{RoofSafetyOptions.SectionName}:{kind}:{i}";
+            var device = devices[i];
+            if (device is null)
+            {
+                failures.Add($"{key} is empty: give its Name, Url and DeviceNumber.");
+                continue;
+            }
+
+            var name = device.Name?.Trim() ?? string.Empty;
+            if (name.Length == 0 || name.Length > RoofSafetyAlpacaDeviceOptions.MaxNameLength || name.Any(char.IsControl))
+            {
+                failures.Add($"{key}:{nameof(RoofSafetyAlpacaDeviceOptions.Name)} must be 1 to {RoofSafetyAlpacaDeviceOptions.MaxNameLength} characters, with no control characters.");
+            }
+            else if (!names.Add(name))
+            {
+                failures.Add($"{key}:{nameof(RoofSafetyAlpacaDeviceOptions.Name)} repeats the name of another of the {kind}: each needs its own, or their reasons cannot be told apart.");
+            }
+
+            if (!IsUsableUrl(device.Url))
+            {
+                failures.Add($"{key}:{nameof(RoofSafetyAlpacaDeviceOptions.Url)} must be the Alpaca device server's http or https address, such as http://192.0.2.10:11111, with no credentials, query or fragment.");
+            }
+
+            if (device.DeviceNumber < 0)
+            {
+                failures.Add($"{key}:{nameof(RoofSafetyAlpacaDeviceOptions.DeviceNumber)} must be 0 or more.");
+            }
+
+            if (device.MaxReadingAge is { } age
+                && (age <= options.PollInterval + options.ReadTimeout || age > RoofSafetyOptions.MaxMaxReadingAge))
+            {
+                failures.Add($"{key}:{nameof(RoofSafetyAlpacaDeviceOptions.MaxReadingAge)} must be longer than {nameof(RoofSafetyOptions.PollInterval)} plus {nameof(RoofSafetyOptions.ReadTimeout)} and at most 1 h, or its reading goes stale before the next one.");
+            }
+        }
     }
 }

@@ -177,7 +177,7 @@ public sealed class RoofTerminalUiSafetyTests
     {
         var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
         using var host = RoofClientApiTests.CreateHost(
-            configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount),
+            configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount).AddSingleton<IWeatherSafetySource>(new SimulatedWeatherSafetySource("Cloud sensor")),
             settings: Warn);
         using var rig = new CliRig(host);
         rig.UseApiKey(TestApiKeys.Viewer);

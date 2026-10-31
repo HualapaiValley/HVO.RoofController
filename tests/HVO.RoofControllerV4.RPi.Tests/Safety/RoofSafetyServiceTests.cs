@@ -14,7 +14,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Safety;
 
 /// <summary>
 /// The safety service against simulated sources and a manual clock: each state (Safe, Unsafe, Unknown) with its
-/// reasons, staleness per source, failed, hung and blocking reads, and the logged transitions.
+/// reasons, the owner's readiness rule (a required weather source, every scope that can block the roof clear of it),
+/// the weather alone, staleness per source, failed, hung and blocking reads, and the logged transitions.
 /// </summary>
 [TestClass]
 public sealed class RoofSafetyServiceTests
@@ -75,7 +76,7 @@ public sealed class RoofSafetyServiceTests
         var safety = service.GetCurrent();
 
         safety.State.Should().Be(RoofSafetyState.Unknown);
-        safety.Reasons.Should().Equal("Telescope 'Main' has not been read yet");
+        safety.Reasons.Should().Equal("Telescope 'Main' has not been read yet", RoofSafetyStatus.NoRequiredWeatherSourceReason);
         safety.Sources.Single().Should().BeEquivalentTo(new
         {
             Name = "Main",
@@ -165,13 +166,186 @@ public sealed class RoofSafetyServiceTests
         _logger.Entries.Should().NotContain(entry => entry.Message.Contains("cannot be reached"), "only the failure's type is logged, never its message");
     }
 
+    // ---- The readiness rule (#220): a required weather source, every scope that can block the roof clear ----------
+
+    [TestMethod]
+    public async Task AParkedMountAlone_IsNeverSafe_ForWantOfARequiredWeatherSource()
+    {
+        using var service = Create([new SimulatedTelescopeParkSource("Main")]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Unknown, "Open counts as Safe only when a fresh weather source reports (#220, Q11)");
+        safety.Reasons.Should().Equal(RoofSafetyStatus.NoRequiredWeatherSourceReason);
+        safety.Reasons.Should().Equal("No required weather source configured");
+        safety.Sources.Single().State.Should().Be(RoofSafetyState.Safe, "the mount itself is parked");
+        safety.WeatherState.Should().Be(RoofSafetyState.Unknown);
+        safety.WeatherReasons.Should().Equal(RoofSafetyStatus.NoRequiredWeatherSourceReason);
+    }
+
+    [TestMethod]
+    public async Task AnUnparkedMount_WithNoRequiredWeather_IsUnsafe_AndSaysBoth()
+    {
+        using var service = Create([new SimulatedTelescopeParkSource("Main", isParked: false)]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Unsafe);
+        safety.Reasons.Should().Equal("Telescope 'Main' is not parked", RoofSafetyStatus.NoRequiredWeatherSourceReason);
+    }
+
+    [TestMethod]
+    public async Task SafeWeather_WithNoTelescope_IsSafe()
+    {
+        using var service = Create(weather: [new SimulatedWeatherSafetySource("Cloud sensor")]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Safe, "with no scope configured, none can block the roof");
+        safety.WeatherState.Should().Be(RoofSafetyState.Safe);
+        safety.WeatherReasons.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task EveryRequiredWeatherSource_MustBeSafe_NotJustOne()
+    {
+        var first = new SimulatedWeatherSafetySource("Cloud sensor");
+        var second = new SimulatedWeatherSafetySource("Rain sensor") { Behaviour = SimulatedSourceBehaviour.Fails };
+        using var service = Create(weather: [first, second]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Unknown);
+        safety.Reasons.Should().Equal("Weather monitor 'Rain sensor' cannot be read");
+        safety.WeatherState.Should().Be(RoofSafetyState.Unknown);
+        safety.WeatherReasons.Should().Equal("Weather monitor 'Rain sensor' cannot be read");
+    }
+
+    [TestMethod]
+    public async Task AnIgnoredWeatherSource_IsShown_ButNeverDecides()
+    {
+        var required = new SimulatedWeatherSafetySource("Cloud sensor");
+        var ignored = new SimulatedWeatherSafetySource("Old sensor", isSafe: false) { Requirement = RoofWeatherSourceRequirement.Ignored };
+        var unread = new SimulatedWeatherSafetySource("Spare sensor") { Requirement = RoofWeatherSourceRequirement.Ignored, Behaviour = SimulatedSourceBehaviour.Fails };
+        using var service = Create(weather: [required, ignored, unread]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Safe);
+        safety.Reasons.Should().BeEmpty();
+        safety.WeatherState.Should().Be(RoofSafetyState.Safe, "an ignored source is left out of the weather too");
+        safety.Sources.Select(source => (source.Name, source.State, source.Counts, source.Reason)).Should().Equal(
+            ("Cloud sensor", RoofSafetyState.Safe, true, "Weather monitor 'Cloud sensor' reports safe weather"),
+            ("Old sensor", RoofSafetyState.Unsafe, false, "Weather monitor 'Old sensor' reports unsafe weather"),
+            ("Spare sensor", RoofSafetyState.Unknown, false, "Weather monitor 'Spare sensor' cannot be read"));
+    }
+
+    [TestMethod]
+    public async Task OnlyIgnoredWeatherSources_AreUnknown_ForWantOfARequiredOne()
+    {
+        var ignored = new SimulatedWeatherSafetySource("Cloud sensor") { Requirement = RoofWeatherSourceRequirement.Ignored };
+        using var service = Create([new SimulatedTelescopeParkSource("Main")], [ignored]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Unknown, "a source set Ignored never makes the conditions Safe");
+        safety.Reasons.Should().Equal(RoofSafetyStatus.NoRequiredWeatherSourceReason);
+        safety.WeatherState.Should().Be(RoofSafetyState.Unknown);
+    }
+
+    [TestMethod]
+    public async Task AScopeThatCannotBlockTheRoof_IsShown_ButNeverDecides()
+    {
+        var main = new SimulatedTelescopeParkSource("Main");
+        var solar = new SimulatedTelescopeParkSource("Solar", isParked: false) { BlocksRoof = false };
+        var guide = new SimulatedTelescopeParkSource("Guide") { BlocksRoof = false, Behaviour = SimulatedSourceBehaviour.Fails };
+        using var service = Create([main, solar, guide], [new SimulatedWeatherSafetySource("Cloud sensor")]);
+
+        await service.PollAsync(CancellationToken.None);
+        var safety = service.GetCurrent();
+
+        safety.State.Should().Be(RoofSafetyState.Safe, "only a scope that can block the roof must be clear of it");
+        safety.Sources.Select(source => (source.Name, source.State, source.Counts)).Should().Equal(
+            ("Main", RoofSafetyState.Safe, true),
+            ("Solar", RoofSafetyState.Unsafe, false),
+            ("Guide", RoofSafetyState.Unknown, false),
+            ("Cloud sensor", RoofSafetyState.Safe, true));
+
+        main.IsParked = false;
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().Reasons.Should().Equal("Telescope 'Main' is not parked");
+    }
+
+    [TestMethod]
+    public async Task TheWeatherAlone_LeavesEveryTelescopeOut()
+    {
+        var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
+        var weather = new SimulatedWeatherSafetySource("Cloud sensor");
+        using var service = Create([mount], [weather]);
+
+        await service.PollAsync(CancellationToken.None);
+        var unparked = service.GetCurrent();
+        weather.IsSafe = false;
+        await service.PollAsync(CancellationToken.None);
+        var rain = service.GetCurrent();
+        _time.Advance(TimeSpan.FromSeconds(61));
+        var stale = service.GetCurrent();
+
+        unparked.State.Should().Be(RoofSafetyState.Unsafe);
+        unparked.WeatherState.Should().Be(RoofSafetyState.Safe, "an unparked mount is not weather: the Alpaca SafetyMonitor must not say unsafe for it (#220)");
+        unparked.WeatherReasons.Should().BeEmpty();
+        rain.WeatherState.Should().Be(RoofSafetyState.Unsafe);
+        rain.WeatherReasons.Should().Equal("Weather monitor 'Cloud sensor' reports unsafe weather");
+        stale.WeatherState.Should().Be(RoofSafetyState.Unknown);
+        stale.WeatherReasons.Should().Equal("Weather monitor 'Cloud sensor': the last reading (unsafe) is older than 60 s");
+    }
+
+    [TestMethod]
+    public void NoSources_LeaveTheWeatherUnknown_ForWantOfARequiredSource()
+    {
+        using var service = Create();
+
+        var safety = service.GetCurrent();
+
+        safety.WeatherState.Should().Be(RoofSafetyState.Unknown);
+        safety.WeatherReasons.Should().Equal(RoofSafetyStatus.NoRequiredWeatherSourceReason);
+    }
+
+    [TestMethod]
+    public void ParkedIsTheOnlyProof_ThatAScopeIsClearOfTheRoof()
+    {
+        TelescopeRoofClearance.Judge(new TelescopeParkReading(IsParked: true)).Should().Be((true, "parked"));
+        TelescopeRoofClearance.Judge(new TelescopeParkReading(IsParked: false)).Should().Be((false, "not parked"));
+    }
+
+    [TestMethod]
+    public async Task SourcesWithNoRequiredWeather_WarnAtStart_AndTheStartLogSaysWhichDoNotCount()
+    {
+        var solar = new SimulatedTelescopeParkSource("Solar") { BlocksRoof = false };
+        var ignored = new SimulatedWeatherSafetySource("Cloud sensor") { Requirement = RoofWeatherSourceRequirement.Ignored };
+        using var service = Create([solar], [ignored], options: Options(o => o.InterlockMode = RoofSafetyInterlockMode.Warn));
+
+        await service.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => _logger.Entries.Any(entry => entry.Message.StartsWith("Reading 2 safety source(s)", StringComparison.Ordinal)));
+        await service.StopAsync(CancellationToken.None);
+
+        _logger.Contains(LogLevel.Warning, "No safety source is a required weather source: the conditions stay Unknown, so Open needs an override until one is configured (interlock Warn).").Should().BeTrue();
+        _logger.Contains(LogLevel.Information, "Reading 2 safety source(s) every 00:00:10 (read timeout 00:00:05): TelescopePark 'Solar' (does not block the roof), Weather 'Cloud sensor' (ignored).").Should().BeTrue();
+    }
+
     // ---- Staleness -------------------------------------------------------------------------------------------------
 
     [TestMethod]
     public async Task AReading_CountsUntilItIsOlderThanTheMaximumAge_ThenTheSourceIsUnknown()
     {
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
         await service.PollAsync(CancellationToken.None);
         mount.Behaviour = SimulatedSourceBehaviour.Fails;
 
@@ -184,8 +358,8 @@ public sealed class RoofSafetyServiceTests
 
         safety.State.Should().Be(RoofSafetyState.Unknown);
         safety.Reasons.Should().Equal("Telescope 'Main': the last reading (parked) is older than 60 s");
-        safety.Sources.Single().IsStale.Should().BeTrue();
-        safety.Sources.Single().LastReadingUtc.Should().Be(_time.GetUtcNow() - TimeSpan.FromSeconds(61));
+        safety.Sources[0].IsStale.Should().BeTrue();
+        safety.Sources[0].LastReadingUtc.Should().Be(_time.GetUtcNow() - TimeSpan.FromSeconds(61));
     }
 
     [TestMethod]
@@ -241,10 +415,10 @@ public sealed class RoofSafetyServiceTests
     public async Task AnObservationDatedInTheFuture_CountsAsNow()
     {
         var mount = new SimulatedTelescopeParkSource("Main") { ObservedUtc = _time.GetUtcNow() + TimeSpan.FromHours(1) };
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
         await service.PollAsync(CancellationToken.None);
 
-        service.GetCurrent().Sources.Single().LastReadingUtc.Should().Be(_time.GetUtcNow());
+        service.GetCurrent().Sources[0].LastReadingUtc.Should().Be(_time.GetUtcNow());
         _time.Advance(TimeSpan.FromSeconds(61));
         service.GetCurrent().State.Should().Be(RoofSafetyState.Unknown, "a future date cannot keep a reading fresh");
     }
@@ -253,7 +427,7 @@ public sealed class RoofSafetyServiceTests
     public async Task ASourceReadAgain_IsCurrentAgain_AndTheRecoveryIsLogged()
     {
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
         await service.PollAsync(CancellationToken.None);
         mount.Behaviour = SimulatedSourceBehaviour.Fails;
         _time.Advance(TimeSpan.FromSeconds(61));
@@ -275,7 +449,7 @@ public sealed class RoofSafetyServiceTests
     public async Task AReadThatDoesNotAnswer_FailsAtTheReadTimeout()
     {
         var mount = new SimulatedTelescopeParkSource("Main") { Behaviour = SimulatedSourceBehaviour.Hangs };
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
 
         var poll = service.PollAsync(CancellationToken.None);
         await WaitUntilAsync(() => mount.Reads == 1);
@@ -291,7 +465,7 @@ public sealed class RoofSafetyServiceTests
     public async Task ASourceWhoseReadIgnoresCancellation_IsNotReadAgainUntilThatReadEnds()
     {
         var mount = new SimulatedTelescopeParkSource("Main") { Behaviour = SimulatedSourceBehaviour.IgnoresCancellation };
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
         var poll = service.PollAsync(CancellationToken.None);
         await WaitUntilAsync(() => mount.Reads == 1);
         _time.Advance(TimeSpan.FromSeconds(5));
@@ -317,7 +491,7 @@ public sealed class RoofSafetyServiceTests
     public async Task TheService_ReadsAtStart_ThenOncePerPollInterval()
     {
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
 
         await service.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => mount.Reads == 1 && service.GetCurrent().State == RoofSafetyState.Safe);
@@ -371,7 +545,7 @@ public sealed class RoofSafetyServiceTests
     public async Task GoingUnknownFromSafe_IsAWarning()
     {
         var mount = new SimulatedTelescopeParkSource("Main");
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
         await service.PollAsync(CancellationToken.None);
 
         _time.Advance(TimeSpan.FromSeconds(61));
@@ -424,7 +598,7 @@ public sealed class RoofSafetyServiceTests
     public async Task ASourcesLongWords_AreCut()
     {
         var mount = new WordedSource("Main") { Failure = new RoofSafetySourceException(new string('w', 1000)) };
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
 
         await service.PollAsync(CancellationToken.None);
 
@@ -472,7 +646,7 @@ public sealed class RoofSafetyServiceTests
     public async Task ASourcesOwnWords_AreInItsReason_AndTheLog_AndGoWhenItIsReadAgain()
     {
         var mount = new WordedSource("Main") { Failure = new RoofSafetySourceException("the device is not connected") };
-        using var service = Create([mount]);
+        using var service = Create([mount], [SteadyWeather()]);
 
         await service.PollAsync(CancellationToken.None);
         service.GetCurrent().Reasons.Should().Equal("Telescope 'Main' cannot be read (the device is not connected)");
@@ -531,6 +705,74 @@ public sealed class RoofSafetyServiceTests
 
         result.Failed.Should().BeTrue();
         result.FailureMessage.Should().Contain($"RoofSafety:{setting}");
+    }
+
+    /// <summary>A required weather source that stays safe, with a maximum age (5 min) longer than any test's wait.</summary>
+    private static SimulatedWeatherSafetySource SteadyWeather() => new("Cloud sensor", maxReadingAge: TimeSpan.FromMinutes(5));
+
+    // ---- The configured Alpaca devices' settings --------------------------------------------------------------------
+
+    [TestMethod]
+    public void ConfiguredDevices_AreValid_AndDefaultToBlockingTheRoof_AndRequired()
+    {
+        var options = Options(o =>
+        {
+            o.Telescopes = [new RoofSafetyTelescopeOptions { Name = "Main", Url = "http://192.0.2.10:11111" }];
+            o.WeatherSources = [new RoofSafetyWeatherSourceOptions { Name = "Cloud sensor", Url = "https://192.0.2.11:11111/alpaca/", DeviceNumber = 2, MaxReadingAge = TimeSpan.FromMinutes(5) }];
+        });
+
+        new RoofSafetyOptionsValidator().Validate(null, options).Succeeded.Should().BeTrue();
+        options.Telescopes[0].BlocksRoof.Should().BeTrue("a scope can block the roof unless its setting says it cannot (fail safe)");
+        options.WeatherSources[0].Requirement.Should().Be(RoofWeatherSourceRequirement.Required, "a weather source counts unless set Ignored (fail safe)");
+    }
+
+    [TestMethod]
+    [DataRow("Telescopes:0:Name", "")]
+    [DataRow("Telescopes:0:Name", "a name far too long to be quoted in every reason that every client shows, as this one is")]
+    [DataRow("Telescopes:1:Name", "MAIN")]
+    [DataRow("Telescopes:0:Url", "ftp://198.51.100.10:21")]
+    [DataRow("Telescopes:0:Url", "http://user:secret@198.51.100.10:11111")]
+    [DataRow("Telescopes:0:Url", "http://198.51.100.10:11111/?device=0")]
+    [DataRow("Telescopes:0:Url", "198.51.100.10:11111")]
+    [DataRow("Telescopes:0:DeviceNumber", "-1")]
+    [DataRow("Telescopes:0:MaxReadingAge", "00:00:15")]
+    [DataRow("WeatherSources:0:Url", "")]
+    [DataRow("WeatherSources:0:Requirement", "7")]
+    [DataRow("WeatherSources:0:MaxReadingAge", "02:00:00")]
+    public void AnUnusableDeviceSetting_IsRefused_ByItsKey_WithoutRepeatingTheAddress(string key, string value)
+    {
+        var telescopes = new List<RoofSafetyTelescopeOptions> { new() { Name = "Main", Url = "http://198.51.100.10:11111" }, new() { Name = "Solar", Url = "http://198.51.100.10:11111", DeviceNumber = 1 } };
+        var weather = new List<RoofSafetyWeatherSourceOptions> { new() { Name = "Cloud sensor", Url = "http://198.51.100.11:11111" } };
+        var parts = key.Split(':');
+        RoofSafetyAlpacaDeviceOptions device = parts[0] == "Telescopes" ? telescopes[int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)] : weather[0];
+        switch (parts[2])
+        {
+            case "Name": device.Name = value; break;
+            case "Url": device.Url = value; break;
+            case "DeviceNumber": device.DeviceNumber = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture); break;
+            case "MaxReadingAge": device.MaxReadingAge = TimeSpan.Parse(value, System.Globalization.CultureInfo.InvariantCulture); break;
+            case "Requirement": ((RoofSafetyWeatherSourceOptions)device).Requirement = (RoofWeatherSourceRequirement)int.Parse(value, System.Globalization.CultureInfo.InvariantCulture); break;
+        }
+
+        var result = new RoofSafetyOptionsValidator().Validate(null, Options(o =>
+        {
+            o.Telescopes = telescopes;
+            o.WeatherSources = weather;
+        }));
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain($"RoofSafety:{key}");
+        result.FailureMessage.Should().NotContain("secret").And.NotContain("198.51.100", "a failure names the setting, never the address it holds");
+    }
+
+    [TestMethod]
+    public void MoreDevicesThanTheServiceReads_AreRefused()
+    {
+        var result = new RoofSafetyOptionsValidator().Validate(null, Options(o => o.WeatherSources =
+            [.. Enumerable.Range(0, RoofSafetyOptionsValidator.MaxDevicesPerKind + 1).Select(i => new RoofSafetyWeatherSourceOptions { Name = $"Sensor {i}", Url = "http://192.0.2.11:11111", DeviceNumber = i })]));
+
+        result.Failed.Should().BeTrue();
+        result.FailureMessage.Should().Contain("RoofSafety:WeatherSources lists 17 devices; at most 16 are read.");
     }
 
     private RoofSafetyService Create(

@@ -2,6 +2,7 @@ using System.Net;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Emulator;
+using HVO.RoofControllerV4.Simulation.Safety;
 
 namespace HVO.RoofControllerV4.Emulator;
 
@@ -30,6 +31,34 @@ public sealed class EmulatorHostOptions
 
     /// <summary>The emulated camera's frame rate (<c>/mjpg/camNN/video.mjpg</c> on the control port): 0.1 to 30.</summary>
     public double CameraFramesPerSecond { get; set; } = 5;
+
+    /// <summary>
+    /// How many ASCOM Alpaca telescope mounts the control port serves (<c>/api/v1/telescope/{n}</c>, 0 to 8), each parked
+    /// and connected at start.
+    /// </summary>
+    public int AlpacaTelescopes { get; set; } = 1;
+
+    /// <summary>
+    /// How many ASCOM Alpaca safety monitors the control port serves (<c>/api/v1/safetymonitor/{n}</c>, 0 to 8), each safe
+    /// and connected at start.
+    /// </summary>
+    public int AlpacaSafetyMonitors { get; set; } = 1;
+
+    /// <summary>The Alpaca devices the settings describe; throws when a count is out of range.</summary>
+    public EmulatedAlpacaServer AlpacaServer()
+    {
+        if (AlpacaTelescopes is < 0 or > EmulatedAlpacaServer.MaxDevicesPerType)
+        {
+            throw new InvalidOperationException($"{SectionName}:AlpacaTelescopes must be between 0 and {EmulatedAlpacaServer.MaxDevicesPerType}.");
+        }
+
+        if (AlpacaSafetyMonitors is < 0 or > EmulatedAlpacaServer.MaxDevicesPerType)
+        {
+            throw new InvalidOperationException($"{SectionName}:AlpacaSafetyMonitors must be between 0 and {EmulatedAlpacaServer.MaxDevicesPerType}.");
+        }
+
+        return new EmulatedAlpacaServer(AlpacaTelescopes, AlpacaSafetyMonitors);
+    }
 
     /// <summary>The register endpoint; throws when the address or port is not valid.</summary>
     public IPEndPoint RegisterEndPoint()

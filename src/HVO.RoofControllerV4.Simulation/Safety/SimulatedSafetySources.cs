@@ -100,6 +100,9 @@ public sealed class SimulatedTelescopeParkSource : SimulatedSafetySource, ITeles
     /// <summary>What the next answer says.</summary>
     public bool IsParked { get; set; }
 
+    /// <summary>Whether this mount can block the roof (true by default), as its setting says. Set before the service reads it.</summary>
+    public bool BlocksRoof { get; init; } = true;
+
     public async Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken)
     {
         await AnswerAsync(cancellationToken).ConfigureAwait(false);
@@ -118,6 +121,9 @@ public sealed class SimulatedWeatherSafetySource : SimulatedSafetySource, IWeath
 
     /// <summary>What the next answer says.</summary>
     public bool IsSafe { get; set; }
+
+    /// <summary>Required (the default) or Ignored, as its setting says. Set before the service reads it.</summary>
+    public RoofWeatherSourceRequirement Requirement { get; init; } = RoofWeatherSourceRequirement.Required;
 
     public async Task<WeatherSafetyReading> ReadWeatherSafetyAsync(CancellationToken cancellationToken)
     {
