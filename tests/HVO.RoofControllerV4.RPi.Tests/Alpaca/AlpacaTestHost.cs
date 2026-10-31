@@ -68,9 +68,12 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
     public static Task<AlpacaTestHost> StartAsync(Func<HttpRequestMessage, HttpResponseMessage> answer)
         => StartAsync(null, null, null, null, TestApiKeys.Viewer, waitForStatus: false, answer);
 
-    /// <summary>Starts the server in front of the controller <paramref name="server"/> serves (the emulated rig's).</summary>
-    public static Task<AlpacaTestHost> StartAsync(Func<TestServer> server, IReadOnlyDictionary<string, string?>? settings = null)
-        => StartAsync(server, null, settings, null, TestApiKeys.Viewer, waitForStatus: true);
+    /// <summary>
+    /// Starts the server in front of the controller <paramref name="server"/> serves (the emulated rig's), with its own key
+    /// <paramref name="apiKey"/> (a Viewer key by default; the Alpaca server's own account's for commands).
+    /// </summary>
+    public static Task<AlpacaTestHost> StartAsync(Func<TestServer> server, IReadOnlyDictionary<string, string?>? settings = null, string apiKey = TestApiKeys.Viewer)
+        => StartAsync(server, null, settings, null, apiKey, waitForStatus: true);
 
     private static async Task<AlpacaTestHost> StartAsync(
         Func<TestServer>? server,
