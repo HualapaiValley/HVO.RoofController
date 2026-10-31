@@ -17,7 +17,9 @@ interlock, the indicators and the override prompts on every user interface.
 [#220](https://github.com/HualapaiValley/HVO.RoofController/issues/220) (phase 2): the real sources, ASCOM Alpaca
 mounts (`Telescope.AtPark`) and weather safety monitors (`SafetyMonitor.IsSafe`), configured under `RoofSafety`
 ([docs/alpaca.md](alpaca.md)), and the owner's readiness rule. With no source configured, the conditions are Unknown,
-"No safety sources configured", so with the default Warn interlock every Open asks for the override.
+"No safety sources configured", so with the default Warn interlock every Open asks for the override. #220 (phase 3):
+an Alpaca client's Close, through the Alpaca server with its own key, is refused unless every blocking telescope, read
+again for that Close, is clear of the roof; the weather never gates it ([docs/alpaca.md](alpaca.md#the-close-rule)).
 
 - [What it reports](#what-it-reports)
 - [Sources](#sources)
@@ -107,6 +109,12 @@ is refused at every read, so the controller never reads its weather back
 ([docs/alpaca.md](alpaca.md#never-our-own-safetymonitor)). Any other `ITelescopeParkSource` or `IWeatherSafetySource` singleton (the tests'
 simulated ones, [Testing](#testing)) is read too, before the configured ones.
 
+For an Alpaca Close the service also reads the blocking telescopes **again, on demand** (`connected` and `atpark` at
+once, `ITelescopeRereadSource`), outside the controller's lock and within the Close's budget
+([The telescopes, read again](alpaca.md#the-telescopes-read-again)). A re-read and the polls share each source's
+reading: each read is numbered when it is sent, and a result older than the reading already kept is discarded, so a
+late "parked" never replaces a newer "not parked". The polls also time each `GET`, for the re-read budget.
+
 `ObservedUtc` is for a device that dates its observation: an earlier time makes the reading that much older, and a time
 in the future counts as now. Without it, the reading counts from when the read ended.
 
@@ -135,8 +143,10 @@ whose own `MaxReadingAge` is that short.
 ## The Open interlock
 
 `RoofSafety:InterlockMode` sets what Open does with the conditions. Only Open is checked, before the controller's own
-checks, which still apply to every Open it lets through. **Close and Stop are never refused for the conditions**, in
-any mode. A repeated Open while the roof is opening is checked like any other Open.
+checks, which still apply to every Open it lets through. **An ordinary Close (from a UI, `hvo-roof` or the API) and
+every Stop are never refused for the conditions**, in any mode. A repeated Open while the roof is opening is checked
+like any other Open. An Alpaca client's Close is not an ordinary one: it has its own rule, every blocking telescope
+clear, read again for it, whatever the weather and whatever the mode ([The Close rule](alpaca.md#the-close-rule)).
 
 | Mode | Safe | Unsafe or Unknown |
 |---|---|---|
@@ -306,8 +316,9 @@ Decided by the owner (#207, #215):
    audit-logged. `OverrideRole` defaults to `Operator`; `Admin` remains as a narrower setting.
 2. **Unknown is treated the same as Unsafe**, in Warn and in Block, and in the prompts and indicators: a source that
    cannot be read is not evidence of safety.
-3. **Close is never gated**, even with a telescope not parked: closing is the safe direction for weather, and blocking
-   it could leave the roof open in rain. **Stop is always available.**
+3. **An ordinary Close is never gated**, even with a telescope not parked: closing is the safe direction for weather,
+   and blocking it could leave the roof open in rain; a person closing the roof sees the telescopes. **Stop is always
+   available.** (An unattended Close through Alpaca is gated by the telescopes, decision 8.)
 4. **Nothing closes the roof automatically**: unsafe weather does not close it, and the service never moves the roof.
 5. **The command history** keeps #216: no "conditions unknown" note on an Open accepted with the interlock Off and no
    source configured; the note is kept for everything else.
@@ -320,8 +331,9 @@ Decided by the owner for the real sources (#220, 2026-10-30):
    can block the roof is clear. Each weather source is configured and set `Required` or `Ignored`. A parked telescope
    alone is no longer Safe.
 8. **Clear of the roof, not parked**: each telescope has a "blocks roof" setting, and the check asks whether the scope
-   is clear of the roof. Parked is the only proof today; a camera or safe zones can show it later. (An unattended Close
-   through Alpaca that waits for such a scope is #220's phase 3; Close through this API stays ungated, decision 3.)
+   is clear of the roof. Parked is the only proof today; a camera or safe zones can show it later. An unattended Close
+   through Alpaca waits until every such scope is clear, read again for it, or until a person grants it (#220 phase 3,
+   [docs/alpaca.md](alpaca.md#the-close-rule)); a Close through this API stays ungated (decision 3).
 
 Decided here:
 

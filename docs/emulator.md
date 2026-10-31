@@ -138,6 +138,15 @@ The register port serves one access at a time, in the order they arrive. A conne
 is closed. A request whose connection closed while it waited for its turn is not run: an I2C transfer cannot land
 after its caller has given up on it.
 
+That alone proves nothing, since an old connection's close and its successor's requests travel on separate TCP
+streams. So the controller's client puts a random tag of its own in every Hello (in fields a Hello leaves unused, so an
+older emulator still accepts it), and once a newer connection's Hello with that tag is answered, **no request of that
+client's older connections is run**, whenever its turn comes (#220). The client opens a new connection only after it
+has given up on the old one, so the first access that succeeds after a timed-out write proves that write either landed
+before it (its read-back shows it) or never will: no relay ON the controller gave up on can energize a relay after a
+Stop that verified the relays off. Connections without a tag, and other clients', are not fenced. The link status
+counts the requests fenced (`fencedRequests`).
+
 ## Control API
 
 Everything is under `/api/emulator`, in JSON. Enum values are names, such as `"Open"` or `"StuckReleased"`; numbers are
@@ -162,7 +171,7 @@ how both compose files publish it) or on a private test network.
 | `POST /relay-fault` | `{"relay": 1, "fault": "Welded"}` | Relay contact faults: `Welded`, `Dead` or `None` |
 | `POST /wiring` | `{"wiring": "SwappedLimitInputs"}` | Wiring variants, comma-separated. Examples: `SwappedDirectionRelays`, `SwappedMotorLeads`, `StopPermitBypassed`, `NoHardwiredEndStops`, `FaultMonitorWireBroken`, `RunMonitorWireBroken` |
 | `POST /bus` | `{"failReads": true, "failNextWrites": 2}` | I2C transaction failures, answered as I/O errors (the link stays up). Each field is optional; one left out is unchanged. |
-| `POST /link` | `{"outage": true}`, `{"responseDelayMilliseconds": 200}`, `{"disconnect": true}` | Link faults, each field optional. An outage closes the open connections and each new one as soon as it is accepted, as a stopped emulator would, so the controller sees connection errors. A response delay (0 to 60000 ms) models a stalled emulator: use it to exercise the controller's timeouts. `disconnect` drops the open connections once. |
+| `POST /link` | `{"outage": true}`, `{"responseDelayMilliseconds": 200}`, `{"writeHoldMilliseconds": 1500}`, `{"disconnect": true}` | Link faults, each field optional. An outage closes the open connections and each new one as soon as it is accepted, as a stopped emulator would, so the controller sees connection errors. A response delay (0 to 60000 ms) models a stalled emulator: use it to exercise the controller's timeouts. A write hold (0 to 60000 ms) holds each register write after it arrives and before it takes its turn: a write accepted but not yet carried out, a late ON; a held write is still fenced by a newer connection's Hello. `disconnect` drops the open connections once. |
 | `POST /camera` | `{"mode": "Frozen"}`, `{"framesPerSecond": 2}`, `{"disconnect": true}` | Camera faults, each field optional (see [Camera](#camera)). The mode is `Live`, `Frozen`, `Unavailable` or `Unauthorized`; the frame rate is 0.1 to 30. `disconnect` ends the open streams once, as a camera server restart does. |
 
 Each `POST` answers with the new `/status`, or with 400 and no change. A body that does not parse (malformed JSON, an
@@ -249,6 +258,7 @@ Both compose files point the controller's `RoofSafety` sources at them
 | `POST /alpaca/telescope` | `{"device": 0, "parked": false}` | Change a mount: `parked`, `connected`, `canPark` and `behaviour`, each optional; `device` defaults to 0 |
 | `POST /alpaca/safetymonitor` | `{"device": 0, "safe": false}` | Change a safety monitor: `safe`, `connected` and `behaviour`, each optional |
 | `POST /alpaca/reset` | | Every device parked or safe, able to park, connected and answering |
+| `POST /alpaca/delay` | `{"deviceType": "telescope", "device": 0, "delayMilliseconds": 200}` | How long each of a device's Device API answers waits, 0 to 10000 ms: a slow mount, to size and test the controller's re-read budget ([docs/alpaca.md](alpaca.md#the-telescopes-read-again)) |
 
 The paths are under `/api/emulator`; each `POST` answers with the new `GET /alpaca`, or with 400 and no change. The
 `behaviour` is how a device answers every request: `Answers`, `DriverError` (`ErrorNumber` `0x500`), `ServerError`
