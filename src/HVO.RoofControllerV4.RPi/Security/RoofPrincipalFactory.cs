@@ -104,6 +104,16 @@ public static class RoofPrincipalFactory
         _ => Array.Empty<string>()
     };
 
+    /// <summary>
+    /// The role an API key's principal was made with: an Alpaca account's role when it carries one, otherwise its highest
+    /// role (<see cref="GetHighestRole"/>). Null when it holds none.
+    /// </summary>
+    public static string? GetKeyRole(ClaimsPrincipal? user)
+        => user is null ? null
+            : user.IsInRole(RoofAlpacaContract.CommanderRole) ? RoofAlpacaContract.CommanderRole
+            : user.IsInRole(RoofAlpacaContract.ServerRole) ? RoofAlpacaContract.ServerRole
+            : GetHighestRole(user);
+
     /// <summary>True when <paramref name="user"/> is a person's interactive session (password or PIN), never an API key.</summary>
     public static bool IsPersonSession(ClaimsPrincipal? user)
         => GetCredentialKind(user) is RoofCredentialKind.Session or RoofCredentialKind.Pin;
