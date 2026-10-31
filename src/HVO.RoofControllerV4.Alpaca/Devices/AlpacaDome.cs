@@ -239,6 +239,25 @@ public sealed class AlpacaDome : AlpacaDevice
             text.Append(" Safety: ").Append(RoofStatusText.DescribeSafety(safety)).Append('.');
         }
 
+        if (status.Alpaca is { } alpaca)
+        {
+            text.Append(" Alpaca: ").Append(RoofAlpacaText.DescribeMode(alpaca.Mode)).Append('.');
+            if (RoofAlpacaText.DescribeHold(alpaca.Hold) is { } hold)
+            {
+                text.Append(' ').Append(hold);
+            }
+
+            if (RoofAlpacaText.DescribeLease(alpaca.OperatorLease) is { } lease)
+            {
+                text.Append(' ').Append(lease);
+            }
+        }
+
+        // Which controller answers, and what drives its relays: a test harness checks it reaches an emulated HAT before
+        // it lets anything command the roof (#220, the chain guard).
+        text.Append(" Controller: ").Append(status.ControllerName ?? "unnamed")
+            .Append(" (instance ").Append(status.ControllerInstanceId ?? "unknown")
+            .Append(", HAT ").Append(status.HatMode).Append(").");
         return text.ToString();
     }
 
