@@ -223,13 +223,14 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `lease` | operator | Renews the operator lease of the motion in progress (for scripts that use `--no-wait`). |
 | `clear-fault [--pulse-ms]` | operator | Clears a latched fault once its cause is resolved. |
 | `history [--user] [--principal-id] [--since] [--until] [--take] [--skip]` | viewer | The roof command history, newest first: your own, or everyone's for an admin (see [History](#history)). |
+| `alpaca status\|clear-hold\|grant\|revoke\|alerts\|ack` | viewer; operator to clear the hold, grant or revoke (a person's session) | The Alpaca command state: which Alpaca commands the controller accepts, the Stop hold, the operator lease, override grants and alerts (see [Alpaca](#alpaca)). |
 | `whoami` | any | The controller in use, and who the controller takes the credential to be: for a person, also their display name, short name and login type (a Linux account's names are the operating system's). |
 | `login`, `logout`, `passwd` | any | Signing in with a password (see [Setup](#setup)). |
 | `pin` | operator, admin (a person's session) | Changes your own kiosk PIN: the current one, then the new one (see [Setup](#setup)). |
 | `config show\|get\|set\|set-secret\|diff\|apply\|discard` | operator (UI group), admin | The controller's settings (see [Settings](#settings)). |
 | `users list\|show\|add\|set\|remove` | admin | The people who sign in: each one's name, display name, short name, role, login type (local, or Linux), password, PIN, sessions and last sign-in. `add` and `set` take `--display-name` and `--short-name`; on `set`, an empty one (`""`) removes it, and a name ends no session. |
 | `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). `set` gives or replaces a person's PIN and `remove` takes it (or their temporary commissioning PIN) away; both send only the PIN, so the person keeps the role the controller has for them, and both end the person's PIN sessions at every kiosk, never their password sessions. |
-| `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. |
+| `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. `--role` is `viewer`, `operator` or `admin`, or for an [Alpaca](alpaca.md) account's key `alpaca-commander` (the External Alpaca account: an Alpaca client's key, for Alpaca Close) or `alpaca-server` (the Alpaca server's own account); the controller refuses an Alpaca account's key as a kiosk's. |
 | `sessions list\|end` | admin | People's sessions. Tokens are never shown. |
 | `info` | any | `hvo-roof`'s own version, then the controller's summary: its version; right after it, `Web UI:`, where people reach the web UI (its URLs, such as `https://192.0.2.10:8088/`, from the host's address, the published port and the scheme the installer or deploy script recorded; `only on the controller's machine` when it is not published to the network; `address not known` when the deployment did not record it, and never a container's own address); then its uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and host addresses. An admin also gets the host's details (its name, system, runtime and the controller's process) under `Host details (admin):`; for anyone else, standard error says they need the Admin role. With `--json`: `{"client", "summary", "information", "metrics"}`, where `client.version` is `hvo-roof`'s full version (with its commit), as `summary.applicationVersion` is the controller's, and `information` and `metrics` are null without the Admin role. A controller older than the summary (4.2.0 and before) gives only an admin the details. |
 | `restart [--force] [--confirm-safety-critical]` | admin | Restarts the controller, so that settings read at startup take effect. The controller stops the roof and verifies the stop first, and refuses when it cannot. `health --probe ready` says when it is back. |
@@ -333,6 +334,76 @@ hvo-roof history --user ada --since 2026-10-01 --until 2026-11-01 --json
 `--json` writes the controller's page: `entries`, `totalCount`, `skip`, `take`, `allUsers`, `retentionDays`,
 `maximumEntries` and `isPersistent`.
 
+## Alpaca
+
+When the controller accepts Alpaca Close (`RoofController:Alpaca:AllowCommands`, see [alpaca.md](alpaca.md)), it keeps
+rules that only a person changes (#220):
+
+- **The Stop hold.** Every Stop (and the controller's start) sets it, except the Alpaca server's own AbortSlew, and
+  Alpaca commands wait until a person allows them again.
+- **The operator lease.** While any person holds it from an open interface, Alpaca commands are refused. It lapses 30 s
+  after the interface stops renewing it and, while Alpaca commands are on, after the controller's idle limit without
+  that person's input; Alpaca may then move the roof.
+- **Override grants.** A refused Alpaca Close raises an alert. A person may allow one Close despite exactly that alert's
+  reasons (a telescope not clear of the roof, or not known) for the override window. A grant never bypasses the fault
+  latch, the interlocks, the limits, the motor protections, a person's operator lease or the Stop hold, and a Stop that
+  sets the hold, or a newly taken operator lease, drops it.
+
+| Command | Role | What it does |
+|---------|------|--------------|
+| `alpaca status` | viewer | Which Alpaca commands are on, the Stop hold, the operator lease, the warnings, the grants, the alerts (newest first), how many telescopes block the roof and the override window. `--json` writes the status's `alpaca` object (`mode`, `hold`, `operatorLease`, `grants`, `alerts`, `warnings`, `blockingScopes`, `rereadBudgetMilliseconds`, `overrideWindowMinutes`, `scopeLatencies`). A controller without it is exit 1. |
+| `alpaca clear-hold` | operator, a person's session | **Allow Alpaca again**: clears the Stop hold. With `--json`, the hold as the controller then has it. |
+| `alpaca grant --alert ID [--yes]` | operator, a person's session | **Allow this Close once**: writes on standard error what the grant lifts, for which client, for how long and what it never bypasses, then asks. It sends exactly that alert's reasons. An alert a grant cannot lift (acknowledged, not a refused Close, or a reason other than a telescope's) is refused, exit 7, and nothing is sent. |
+| `alpaca grant --reason KEY... [--yes]` | operator, a person's session | The same for scripts, with the reasons as a refusal or alert gave them: `scope-not-clear:<telescope>` or `scope-unknown:<telescope>`. Any other reason is a usage error (exit 2). |
+| `alpaca revoke [--kind Close]` | operator, a person's session | Revokes the grant in force. Exit 7 when there is none. |
+| `alpaca alerts` | viewer | The alerts, newest first, with their ID, whether they are acknowledged, whether a grant can lift their reasons (`GRANT yes`), and the client the Alpaca server reported. `--json` writes the controller's list. |
+| `alpaca ack ID` | a person's session | Acknowledges an alert; the controller records who. |
+
+Without a terminal, or with `--json`, `grant` sends nothing until `--yes` is given (exit 10 and
+`{"sent": false, "confirmationRequired": true, ...}` until then). Where the controller lets only admins override
+(`RoofSafety:OverrideRole`), it refuses anyone else's grant.
+
+Clearing the hold, grants, revoking and acknowledging are a person's: a session from `hvo-roof login` (or local mode),
+never an API key, which the controller refuses there. With an API key, these commands send nothing and exit 6:
+
+```text
+Only a person's session may do this, and this credential is an API key: the controller refuses every API key for the Stop hold, override grants, the operator lease and alerts. Sign in with 'hvo-roof login' first. Nothing was sent.
+```
+
+```bash
+hvo-roof alpaca status
+hvo-roof alpaca alerts
+hvo-roof alpaca grant --alert 3
+hvo-roof alpaca clear-hold
+```
+
+**In the terminal interface**, **Alpaca** on the Roof page shows the same in place of the roof's state and readings
+(**Readings** shows them again), and the controller's readings say which Alpaca commands are on, the Stop hold while
+they are, and how many alerts are not acknowledged. Enter on a line offers what can be done about it, in a prompt over
+the page: **Allow Alpaca again** on the Stop hold, **Revoke** on a grant, **Acknowledge** on an alert, and
+**Allow this Close once** on a refused Close a grant can lift. That one asks again, with the question `grant` writes,
+and only **Allow this Close once** there sends the grant, with exactly the alert's reasons; Cancel or Esc sends nothing.
+F9 still sends Stop over every one of these prompts, and withdraws the prompt: its action then sends nothing. With an
+API key, each action says why it is a person's and sends nothing.
+
+![The Roof page's Alpaca section: Alpaca Close on, the Stop hold, the operator lease held by the signed-in person, the warning that no telescope blocks the roof, no grant, and a refused Close's alert](images/terminal/11-alpaca.svg)
+
+![The question before an override grant: what it lifts, for which client, for how long, and what it never bypasses, with Allow this Close once and Cancel, and Stop still visible](images/terminal/12-alpaca-grant.svg)
+
+**The operator lease in the terminal interface.** Signed in with a person's session (`hvo-roof login`) and the
+Operator role, the interface holds the operator lease while it is open, from a controller whose status has the Alpaca
+command state: a heartbeat every 10 s, which says whether you pressed a key or clicked since the last one. The
+interface's own timer and the status hub never count as your input. In the last minute before the lease lapses for want
+of input, the banner says
+`Your operator lease lapses in 42 s without input; then Alpaca may move the roof. Touch anything to keep it.`, and
+once it has lapsed, `Alpaca may now move the roof: your operator lease lapsed after no input.` After that, only your
+input takes the lease again, never a heartbeat alone. Closing the interface (or changing the connection) gives the
+lease up. Taking the lease drops any override grant in force, as every newly taken lease does.
+
+It holds no lease with an API key (the controller refuses every key one), with the Viewer role, or in local mode. In
+local mode every request is authorized as a session of its own, while the controller keeps a lease per session, so each
+heartbeat would take a new lease (and drop every grant) and none would ever lapse for want of input.
+
 ## Settings
 
 The settings are the controller's `appsettings.Local.json` (#42). `hvo-roof` reads and changes them through the API,
@@ -432,13 +503,13 @@ and the Settings page's header then says the file was edited by hand.
 
 | Key | Page | What it has |
 |-----|------|-------------|
-| F1 | Roof | The status, with Open, Close, Clear fault, Refresh and History. Each button that cannot be used says why, for example "the roof is already closed". History shows your roof commands (everyone's for an admin) in place of the controller's readings; Readings shows them again. |
+| F1 | Roof | The status, with Open, Close, Clear fault, Refresh, History and Alpaca. Each button that cannot be used says why, for example "the roof is already closed". History shows your roof commands (everyone's for an admin) in place of the controller's readings; Readings shows them again. Alpaca shows the Alpaca command state in place of the roof's state and readings, with what a person may do about it (see [Alpaca](#alpaca)). |
 | F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. A group's secrets are set and cleared together: Change on the camera's user name or password asks for both, each typed twice, and Clear secret clears both. |
 | F3 | People | People, API keys and sessions (admin). People shows each one's display name, short name, role, login type, password, PIN, sessions and last sign-in; Names sets or clears the display and short name without ending a session; PIN and Remove PIN set or take a person's PIN, keep their role and end their PIN sessions. |
 | F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's summary (version, uptimes, CPU, temperature, memory, disk, addresses), the host's details (admin), and Restart (admin). |
 | F5 | Setup | Connection, a connection check, Sign in, Sign out and First admin; below them, Names (your own display and short name) and PIN (your own PIN). |
 
-![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault, Refresh and History buttons](images/terminal/01-roof.svg)
+![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault, Refresh, History and Alpaca buttons](images/terminal/01-roof.svg)
 
 - **F9 sends Stop from every page, even over an open prompt**, and the result appears next to the button. The Stop
   button is never disabled. It is a dim red while there is nothing to stop and bright red while the newest status,
@@ -576,7 +647,10 @@ Nothing here needs the Pi, the HAT or the roof.
   - the stale view, including a single read while live status is not connected;
   - the lease while the roof moves, and motion held on no lease;
   - the HVO Dark colours, and the interface with `NO_COLOR`;
-  - the Setup, People, Settings and System pages, including confirmation of safety-critical changes.
+  - the Setup, People, Settings and System pages, including confirmation of safety-critical changes;
+  - the Alpaca section and its prompts (`RoofTerminalUiAlpacaTests`): each action sent only from its prompt, an override
+    grant with exactly its alert's reasons, F9 withdrawing a prompt, an API key refused, and the operator lease held only
+    for a person who may operate, renewed with input only after a key or a click, and released on closing.
 - **Scenarios** (`RoofCliScenarios`, `TestCategory=Scenario`) run `hvo-roof open`, `close` and `stop`, and the terminal
   interface, against the emulated roof. The operator lease is 5 s, shorter than the travel, so a motion reaches its
   limit only if the client renews the lease.
@@ -599,7 +673,7 @@ Nothing here needs the Pi, the HAT or the roof.
   colours (`.ans`), and as an SVG image drawn by `tests/cli/ansi-to-svg.py`. The controlled driver catalogue adds
   actual provider/editor/private-input/review/confirmation/quit paths in every mode and size. Driver `.cells.json`
   records whole graphemes and measured cells; the capture helper also draws NO_COLOR with light defaults.
-  See [the reproducible capture procedure](ui-redesign/terminal-evidence.md#reproduce-captures) for refreshing all ten
+  See [the reproducible capture procedure](ui-redesign/terminal-evidence.md#reproduce-captures) for refreshing all twelve
   documentation images and the full matrix from actual output.
 - **Without Docker, and on a Mac.** `tests/cli/dotnet-run-smoke.sh` builds the controller and the HAT emulator, starts
   both with `dotnet run` on loopback (the controller in the Development environment, with a throwaway admin key), waits

@@ -78,6 +78,12 @@ internal sealed class RoofTerminalUi : IDisposable
     private DateTimeOffset? _statusTakenAt;
     private volatile bool _closed;
 
+    // The operator lease held for the signed-in person while the interface is open (#220), the ticks of the one-second
+    // timer until its next heartbeat, and whether the person did anything since the last one.
+    private RoofOperatorLeaseKeeper? _operatorLease;
+    private int _leaseBeatTicks;
+    private bool _inputSinceBeat;
+
     public RoofTerminalUi(RoofCliContext context, IApplication app)
     {
         _context = context;
@@ -154,6 +160,7 @@ internal sealed class RoofTerminalUi : IDisposable
         ];
 
         _app.Keyboard.KeyDown += OnKeyDown;
+        _app.Mouse.MouseEvent += OnMouseEvent;
     }
 
     public Window Window { get; }
@@ -185,6 +192,20 @@ internal sealed class RoofTerminalUi : IDisposable
 
     /// <summary>Who the controller says the credential is; null until it has answered.</summary>
     public RoofCallerResponse? Caller { get; private set; }
+
+    /// <summary>
+    /// Whose operator lease this interface holds (<see cref="OperatorLease"/>), the signed-in person's: the idle warning and
+    /// "Alpaca may now move the roof" are about it, since only input here keeps it. Null while it holds none.
+    /// </summary>
+    public string? LeaseHolder => _operatorLease is { Refused: false } && Caller is { Kind: not RoofCredentialKind.ApiKey } caller ? caller.Name : null;
+
+    /// <summary>
+    /// The operator lease this interface holds for the signed-in person (#220): while it is held, the controller refuses
+    /// Alpaca commands. Held only with a person's session (never an API key) and the Operator role, from a controller
+    /// whose status has the Alpaca command state, and not in local mode, where every request is a session of its own.
+    /// Released when the interface closes or the connection changes.
+    /// </summary>
+    internal RoofOperatorLeaseKeeper? OperatorLease => _operatorLease;
 
     /// <summary>The newest status: from the hub, or from the answer to a command when that is newer.</summary>
     public RoofStatusResponse? Status { get; private set; }
@@ -230,6 +251,9 @@ internal sealed class RoofTerminalUi : IDisposable
     public RoofUiPanel? Panel => _panel;
 
     public string Message => _message.Text;
+
+    /// <summary>The banner under the header: a stale status, a latched fault, the mode warnings, the operator lease's idle warning.</summary>
+    public string Banner => _banner.Text;
 
     public string StopResult => _stopResult.Text;
 
@@ -315,6 +339,7 @@ internal sealed class RoofTerminalUi : IDisposable
                         Caller = caller;
                         _signInOffered = false;
                         UpdateHeader();
+                        UpdateOperatorLease();
                         _page?.ConnectionChanged();
                     }
                 });
@@ -689,9 +714,98 @@ internal sealed class RoofTerminalUi : IDisposable
             _startedMotion = false;
         }
 
+        UpdateOperatorLease();
+
         // A status read over REST while the hub is not delivering is stale at once.
         UpdateFeedState();
         _page?.StatusChanged();
+    }
+
+    /// <summary>
+    /// Starts the operator lease once the caller is a person who may operate and a status shows the controller has the
+    /// Alpaca command state (<see cref="OperatorLease"/>); its first heartbeat takes the lease at once.
+    /// </summary>
+    private void UpdateOperatorLease()
+    {
+        if (_operatorLease is not null || _closed || _client is not { } client || _context.Local
+            || Caller is not { Kind: not RoofCredentialKind.ApiKey, Role: RoofControllerApiContract.OperatorRole or RoofControllerApiContract.AdminRole }
+            || Status?.Alpaca is null)
+        {
+            return;
+        }
+
+        _operatorLease = new RoofOperatorLeaseKeeper(client);
+        _inputSinceBeat = true;
+        BeatOperatorLease();
+    }
+
+    /// <summary>
+    /// One heartbeat of the operator lease, then the next in <see cref="RoofAlpacaText.LeaseHeartbeatInterval"/>. The
+    /// heartbeats follow the interface's own clock, so they stop when the interface does. Once the person's lease has
+    /// lapsed for want of input, heartbeats alone never take it again: only the person's input does.
+    /// </summary>
+    private void BeatOperatorLease()
+    {
+        _leaseBeatTicks = (int)RoofAlpacaText.LeaseHeartbeatInterval.TotalSeconds;
+        if (_operatorLease is not { Refused: false } keeper || (!_inputSinceBeat && LeaseLapsedForPerson))
+        {
+            return;
+        }
+
+        _inputSinceBeat = false;
+        Interlocked.Increment(ref _pending);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await keeper.BeatAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _pending);
+            }
+        });
+    }
+
+    /// <summary>The operator lease this interface held lapsed for want of input, and nobody has taken one since.</summary>
+    private bool LeaseLapsedForPerson
+        => Status?.Alpaca?.OperatorLease is { Held: false, IdleLapsedHolder: { } holder } && holder == LeaseHolder;
+
+    /// <summary>
+    /// The person pressed a key or used the mouse: the next heartbeat resets the operator lease's idle clock. While the
+    /// interface warns that the lease is about to lapse, or says it has, the heartbeat is sent at once.
+    /// </summary>
+    private void NotePersonInput()
+    {
+        if (_operatorLease is not { } keeper)
+        {
+            return;
+        }
+
+        keeper.NoteInput();
+        _inputSinceBeat = true;
+        if (RoofAlpacaText.DescribeIdleWarning(Status?.Alpaca?.OperatorLease, LeaseHolder) is not null)
+        {
+            BeatOperatorLease();
+        }
+    }
+
+    /// <summary>Gives the operator lease up (best effort: it lapses by itself when its heartbeats stop).</summary>
+    private Task ReleaseOperatorLease()
+    {
+        var keeper = _operatorLease;
+        _operatorLease = null;
+        return keeper is null ? Task.CompletedTask : Task.Run(async () =>
+        {
+            try
+            {
+                await keeper.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is ObjectDisposedException or InvalidOperationException)
+            {
+                // The client went first: the lease lapses by itself.
+            }
+        });
     }
 
     /// <summary>
@@ -771,6 +885,8 @@ internal sealed class RoofTerminalUi : IDisposable
 
     private void OnKeyDown(object? sender, Key key)
     {
+        // Every key is the person's input; the timer and the status hub never are.
+        NotePersonInput();
         if (key == Key.F9)
         {
             key.Handled = true;
@@ -802,6 +918,15 @@ internal sealed class RoofTerminalUi : IDisposable
         }
     }
 
+    // A click, a press or the wheel is the person's input; the pointer only passing over the window is not.
+    private void OnMouseEvent(object? sender, Mouse mouse)
+    {
+        if (mouse.Flags != MouseFlags.None && mouse.Flags != MouseFlags.PositionReport)
+        {
+            NotePersonInput();
+        }
+    }
+
     private void OnStatusReceived(RoofStatusReceivedEventArgs e)
     {
         if (e.IsNewInstance && e.Previous is not null)
@@ -823,6 +948,11 @@ internal sealed class RoofTerminalUi : IDisposable
         if (_leaseTicks > 0 && --_leaseTicks == 0)
         {
             RenewLease();
+        }
+
+        if (_operatorLease is not null && --_leaseBeatTicks <= 0)
+        {
+            BeatOperatorLease();
         }
 
         UpdateFeedState();
@@ -954,6 +1084,9 @@ internal sealed class RoofTerminalUi : IDisposable
         {
             if (current.IsFaultLatched) notices.Add($"[FAULT] {RoofStatusText.DescribeFault(current)}. Open and Close are blocked.");
             notices.AddRange(RoofStatusText.DescribeModeWarnings(current));
+
+            // The signed-in person's operator lease about to lapse for want of input, or lapsed: Alpaca may then move the roof.
+            if (RoofAlpacaText.DescribeIdleWarning(current.Alpaca?.OperatorLease, LeaseHolder) is { } idle) notices.Add(idle);
         }
         _banner.Text = string.Join(' ', notices);
         _banner.SetScheme(_banner.Text.Length == 0 ? Theme.Base
@@ -990,6 +1123,7 @@ internal sealed class RoofTerminalUi : IDisposable
         var client = _client;
         var stops = _stops;
         var wait = StopWait;
+        var releasing = ReleaseOperatorLease();
         _feed = null;
         _client = null;
         if (feed is not null || client is not null)
@@ -1000,6 +1134,9 @@ internal sealed class RoofTerminalUi : IDisposable
                 {
                     await feed.DisposeAsync().ConfigureAwait(false);
                 }
+
+                // The lease is given up with the client it was taken with.
+                await releasing.ConfigureAwait(false);
 
                 // Disposing the client would cancel a Stop still on its way.
                 await Task.WhenAny(stops, Task.Delay(wait)).ConfigureAwait(false);
@@ -1017,6 +1154,7 @@ internal sealed class RoofTerminalUi : IDisposable
 
         _closed = true;
         _app.Keyboard.KeyDown -= OnKeyDown;
+        _app.Mouse.MouseEvent -= OnMouseEvent;
         if (_timer is not null)
         {
             _app.RemoveTimeout(_timer);
@@ -1035,14 +1173,19 @@ internal sealed class RoofTerminalUi : IDisposable
         var client = _client;
         _feed = null;
         _client = null;
+
+        // The operator lease is given up as the live status closes, within the same wait: Alpaca commands need not wait
+        // for it to lapse. One not given up in time lapses by itself when its heartbeats stop.
+        var closing = new List<Task> { ReleaseOperatorLease() };
         if (feed is not null)
         {
             // Off the interface's thread: the feed's handlers only post to it, and posting stops once closed. Not waited
             // for long: after a signal, the process has StopGrace for the answer wait, the Stop, this, and the restored
             // terminal's messages, and a feed that does not close in time is dropped with the process.
-            Task.Run(async () => await CloseFeed(feed).ConfigureAwait(false)).Wait(FeedCloseWait);
+            closing.Add(Task.Run(async () => await CloseFeed(feed).ConfigureAwait(false)));
         }
 
+        Task.WaitAll([.. closing], FeedCloseWait);
         client?.Dispose();
         _motionCancel?.Dispose();
         _closing.Dispose();

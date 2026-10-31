@@ -132,6 +132,7 @@ public static partial class RoofCli
             yield return CreateLeaseCommand();
             yield return CreateClearFaultCommand();
             yield return CreateHistoryCommand();
+            yield return CreateAlpacaCommand();
             yield return CreateWhoAmICommand();
             yield return CreateLoginCommand();
             yield return CreateLogoutCommand();

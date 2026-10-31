@@ -61,14 +61,25 @@ internal static class RoofCliFormat
         return string.Join("; ", parts);
     }
 
-    /// <summary>A role as the CLI shows it: viewer, operator or admin; any other role as the controller named it.</summary>
+    /// <summary>
+    /// A role as the CLI shows it: viewer, operator or admin, or an Alpaca account's key's alpaca-commander or
+    /// alpaca-server (#220); any other role as the controller named it.
+    /// </summary>
     public static string Role(string role) => role switch
     {
         RoofControllerApiContract.ViewerRole => "viewer",
         RoofControllerApiContract.OperatorRole => "operator",
         RoofControllerApiContract.AdminRole => "admin",
+        RoofAlpacaContract.CommanderRole => AlpacaCommanderRole,
+        RoofAlpacaContract.ServerRole => AlpacaServerRole,
         _ => role
     };
+
+    /// <summary>The External Alpaca account's role as the CLI names it (<see cref="RoofAlpacaContract.CommanderRole"/>).</summary>
+    public const string AlpacaCommanderRole = "alpaca-commander";
+
+    /// <summary>The Alpaca server's own account's role as the CLI names it (<see cref="RoofAlpacaContract.ServerRole"/>).</summary>
+    public const string AlpacaServerRole = "alpaca-server";
 
     /// <summary>viewer, operator or admin (or the controller's own names), as the controller's role; null for anything else.</summary>
     public static string? ParseRole(string? text) => text?.Trim().ToLowerInvariant() switch
@@ -76,6 +87,17 @@ internal static class RoofCliFormat
         "viewer" or "roofviewer" => RoofControllerApiContract.ViewerRole,
         "operator" or "roofoperator" => RoofControllerApiContract.OperatorRole,
         "admin" or "roofadmin" => RoofControllerApiContract.AdminRole,
+        _ => null
+    };
+
+    /// <summary>
+    /// An API key's role: a person's (<see cref="ParseRole"/>), or an Alpaca account's, alpaca-commander or alpaca-server
+    /// (or the controller's own names). Null for anything else. The controller judges which a key may have.
+    /// </summary>
+    public static string? ParseKeyRole(string? text) => ParseRole(text) ?? text?.Trim().ToLowerInvariant() switch
+    {
+        AlpacaCommanderRole or "roofalpacacommander" => RoofAlpacaContract.CommanderRole,
+        AlpacaServerRole or "roofalpacaserver" => RoofAlpacaContract.ServerRole,
         _ => null
     };
 
