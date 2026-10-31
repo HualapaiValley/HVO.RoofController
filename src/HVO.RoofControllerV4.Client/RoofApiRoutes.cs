@@ -28,6 +28,7 @@ internal static class RoofApiRoutes
     public const string KioskPin = V4 + "Auth/KioskPin";
     public const string CompleteKioskPin = V4 + "Auth/KioskPin/Complete";
     public const string PinUsers = V4 + "Auth/Pin/Users";
+    public const string PinChange = V4 + "Auth/Pin/Change";
     public const string Me = V4 + "Auth/Me";
     public const string Password = V4 + "Auth/Password";
     public const string Names = V4 + "Auth/Names";
@@ -55,6 +56,8 @@ internal static class RoofApiRoutes
     public const string CaCertificate = "ca.crt";
 
     public static string User(string name) => $"{Users}/{Segment(name)}";
+
+    public static string UserPin(string name) => $"{User(name)}/Pin";
 
     public static string ApiKey(string name) => $"{ApiKeys}/{Segment(name)}";
 

@@ -644,6 +644,50 @@ public sealed class RoofCliIdentityCommandTests
     }
 
     [TestMethod]
+    public async Task PinsSetAndRemove_SendOnlyThePin_KeepARoleChangedElsewhere_AndEndOnlyPinSessions()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+        using var kiosk = ClientTestSupport.CreateClient(host, new RoofKioskCredential(RoofClientApiTests.KioskKey));
+        using var anonymous = ClientTestSupport.CreateClient(host);
+        await kiosk.Auth.SignInWithPinAsync("olive", TestSecrets.Pin);
+        await anonymous.Auth.SignInAsync("olive", TestSecrets.Password);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(TestSecrets.OtherPin);
+
+        var set = await rig.RunAsync("pins", "set", "olive", "--json");
+
+        set.Code.Should().Be(RoofExitCode.Success, set.ToString());
+        set.Json.GetProperty("activeSessions").GetInt32().Should().Be(1, "the PIN session ended; the password session did not");
+        set.Out.Should().NotContain(TestSecrets.OtherPin);
+        var refused = await RoofClientApiTests.RefusedAsync(() => kiosk.Auth.SignInWithPinAsync("olive", TestSecrets.Pin));
+        refused.Code.Should().Be(RoofControllerErrorCode.SignInFailed, "the old PIN no longer unlocks a kiosk");
+        (await kiosk.Auth.SignInWithPinAsync("olive", TestSecrets.OtherPin)).Name.Should().Be("olive");
+
+        var removed = await rig.RunAsync("pins", "remove", "olive");
+
+        removed.Code.Should().Be(RoofExitCode.Success, removed.ToString());
+        (await UsersAsync(host)).Single().Should().Match<RoofUserResponse>(user => !user.HasPin && user.ActiveSessions == 1
+            && user.Role == RoofControllerApiContract.OperatorRole);
+    }
+
+    [TestMethod]
+    public async Task PinsSet_ForAViewer_IsRefusedByTheController()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "vera", RoofControllerApiContract.ViewerRole);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(TestSecrets.Pin);
+
+        var result = await rig.RunAsync("pins", "set", "vera");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Error.Should().Contain("[InvalidRequest]").And.Contain("Only operators and admins can have a PIN");
+    }
+
+    [TestMethod]
     public async Task PinsSet_WithABadPin_IsAUsageError()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -686,7 +730,7 @@ public sealed class RoofCliIdentityCommandTests
         var json = await rig.RunAsync("pins", "remove", "oscar", "--json");
 
         text.Code.Should().Be(RoofExitCode.Success, text.ToString());
-        text.Out.Should().Be("PIN removed for olive." + Environment.NewLine);
+        text.Out.Should().Be("PIN removed for olive. Their PIN sessions were ended." + Environment.NewLine);
         json.Code.Should().Be(RoofExitCode.Success, json.ToString());
         json.Json.GetProperty("hasPin").GetBoolean().Should().BeFalse();
         (await UsersAsync(host)).Should().OnlyContain(user => !user.HasPin && user.HasPassword);

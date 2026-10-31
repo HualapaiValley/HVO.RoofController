@@ -72,6 +72,9 @@ else
             DisplayName = RoofIdentityContract.NormalizeLabel(_displayName) ?? string.Empty,
             ShortName = RoofIdentityContract.NormalizeLabel(_shortName) ?? string.Empty
         };
+
+        // The last save's result is not this one's: it goes until this save's answer comes.
+        Message = null;
         if (await SendAsync("Your names were not changed.", async (session, cancellationToken) =>
             Show(await session.Client.Auth.ChangeNamesAsync(request, cancellationToken))))
         {

@@ -1,0 +1,134 @@
+@page "/account/pin"
+@inherits WebClientPage
+
+<PageTitle>Your PIN · HVO Roof Controller</PageTitle>
+
+<PageHeading Title="Your PIN" Description="Change the PIN you unlock a kiosk with." />
+
+<PageMessage Message="Message" />
+
+@if (_caller is null)
+{
+    <p class="web-muted" role="status" data-testid="pin-loading">@(Busy || Message is null ? "Reading your account…" : "Your account is not read.")</p>
+}
+else if (_caller.LoginType == RoofLoginTypes.Linux)
+{
+    <section class="web-card web-narrow" aria-label="Your PIN" data-testid="pin-linux">
+        <p class="web-muted">@RoofIdentityText.LinuxHasNoPin</p>
+    </section>
+}
+else if (_caller.Role == RoofControllerApiContract.ViewerRole)
+{
+    <section class="web-card web-narrow" aria-label="Your PIN" data-testid="pin-viewer">
+        <p class="web-muted">@ViewerHasNoPin</p>
+    </section>
+}
+else if (_caller.HasPin == false)
+{
+    <section class="web-card web-narrow" aria-label="Your PIN" data-testid="pin-none">
+        <p class="web-muted">@RoofIdentityText.NoPinYet</p>
+    </section>
+}
+else
+{
+    <section class="web-card web-narrow" aria-label="Your PIN" data-testid="pin-form">
+        <p class="web-muted">@RoofIdentityText.PinRule @RoofIdentityText.OwnPinChangeEndsSessions</p>
+        <EditForm FormName="change-pin" Model="_form" OnSubmit="ChangeAsync" data-testid="pin-change-form">
+            <div class="mb-3">
+                <label for="pin-current" class="form-label">Current PIN</label>
+                <InputText id="pin-current" type="password" inputmode="numeric" class="form-control" autocomplete="off"
+                           maxlength="@RoofIdentityContract.MaximumAcceptedPinLength" data-testid="pin-current" @bind-Value="_form.Current" />
+            </div>
+            <div class="mb-3">
+                <label for="pin-new" class="form-label">New PIN</label>
+                <InputText id="pin-new" type="password" inputmode="numeric" class="form-control" autocomplete="new-password"
+                           maxlength="@RoofIdentityContract.MaximumPinLength" data-testid="pin-new" @bind-Value="_form.New" />
+            </div>
+            <div class="mb-3">
+                <label for="pin-again" class="form-label">New PIN again</label>
+                <InputText id="pin-again" type="password" inputmode="numeric" class="form-control" autocomplete="new-password"
+                           maxlength="@RoofIdentityContract.MaximumPinLength" data-testid="pin-again" @bind-Value="_form.Again" />
+            </div>
+            <button type="submit" class="btn btn-primary" disabled="@Busy" data-testid="pin-change">
+                <i class="bi bi-123" aria-hidden="true"></i> Change PIN
+            </button>
+        </EditForm>
+    </section>
+}
+
+@code {
+    /// <summary>What the page says to a viewer: only operators and admins have a PIN.</summary>
+    public const string ViewerHasNoPin =
+        "Only operators and admins have a PIN, to unlock a kiosk. A kiosk shows the roof and stops it without one.";
+
+    /// <summary>What the page says when the current PIN was wrong.</summary>
+    public const string WrongCurrentPin = "The current PIN is not correct. Your PIN was not changed.";
+
+    /// <summary>What the page says when too many wrong PINs locked the person's PIN for a while.</summary>
+    public const string LockedOut =
+        "Too many wrong PINs: your PIN is locked for a while, here and at every kiosk. Wait, then try again. Your PIN was not changed. Stop still works.";
+
+    /// <summary>What the page says when the controller's answer never came: the PIN may have been changed.</summary>
+    public const string MayHaveChanged =
+        "Your PIN may have been changed: unlock a kiosk with the new one to find out. If it is refused, the current one still works.";
+
+    private readonly PinForm _form = new();
+    private RoofCallerResponse? _caller;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await SendAsync("Your account could not be read.", async (session, cancellationToken) =>
+                _caller = await session.Client.Auth.GetCallerAsync(cancellationToken));
+        }
+    }
+
+    /// <summary>
+    /// Checks the PINs as typed, then sends them. The last change's result goes when this one starts, and the PINs are
+    /// forgotten whatever the answer.
+    /// </summary>
+    private async Task ChangeAsync()
+    {
+        if (RoofIdentityText.CheckPinChange(_form.Current, _form.New, _form.Again) is { } problem)
+        {
+            Message = Danger(problem);
+            return;
+        }
+
+        var (current, replacement) = (_form.Current!, _form.New!);
+        Message = null;
+        try
+        {
+            if (await SendAsync("Your PIN was not changed.", (session, cancellationToken) =>
+                session.Client.Auth.ChangePinAsync(current, replacement, cancellationToken)))
+            {
+                Message = Success(RoofIdentityText.OwnPinChanged);
+            }
+            else
+            {
+                Message = LastFailure switch
+                {
+                    RoofApiException { Code: RoofControllerErrorCode.SignInFailed } => Danger(WrongCurrentPin),
+                    RoofApiException { Code: RoofControllerErrorCode.SignInLockedOut } => Danger(LockedOut),
+                    // The request may have reached the controller before the answer was lost.
+                    TimeoutException or HttpRequestException => Warning($"{RoofText.DescribeFailure(LastFailure)} {MayHaveChanged}"),
+                    _ => Message
+                };
+            }
+        }
+        finally
+        {
+            _form.Current = _form.New = _form.Again = null;
+        }
+    }
+
+    private sealed class PinForm
+    {
+        public string? Current { get; set; }
+
+        public string? New { get; set; }
+
+        public string? Again { get; set; }
+    }
+}

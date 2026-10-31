@@ -405,6 +405,67 @@ public sealed partial class RoofIdentityStore
         });
 
     /// <summary>
+    /// A signed-in person changes their own PIN (#205): the new one replaces their PIN, or the emulator's temporary one.
+    /// Their other PIN sessions end; <paramref name="keepSessionId"/> stays open, and so do their password sessions.
+    /// Refused when the PIN, password or role changed since <paramref name="expectedStamp"/> was read.
+    /// </summary>
+    public RoofIdentityResult<RoofUserChange> ChangeOwnPin(string name, string expectedStamp, string newPinHash, string keepSessionId)
+        => Mutate<RoofUserChange>((document, now) =>
+        {
+            var index = document.Users.FindIndex(user => Same(user.Name, name));
+            if (index < 0 || !string.Equals(document.Users[index].Stamp, expectedStamp, StringComparison.Ordinal))
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.SignInFailed, "The current PIN is not correct.");
+            }
+
+            var before = document.Users[index];
+            var failure = CheckUserSecrets(before.Role, before.PasswordHash, newPinHash);
+            if (failure is not null)
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.InvalidRequest, failure);
+            }
+
+            var after = before with { PinHash = newPinHash, TemporaryPin = false, Stamp = NewStamp(), UpdatedUtc = now };
+            document.Users[index] = after;
+            var ended = document.Sessions.RemoveAll(session =>
+                session.Provider != "linux" && Same(session.UserName, before.Name) && session.Kind == RoofCredentialKind.Pin
+                && !string.Equals(session.Id, keepSessionId, StringComparison.Ordinal));
+            return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
+        });
+
+    /// <summary>
+    /// An admin sets (<paramref name="newPinHash"/>) or removes (null) a person's PIN (#205), whatever their role is now.
+    /// Their PIN sessions end; their password sessions stay. Removing a PIN the person does not have changes nothing.
+    /// </summary>
+    public RoofIdentityResult<RoofUserChange> SetPin(string name, string? newPinHash)
+        => Mutate<RoofUserChange>((document, now) =>
+        {
+            var index = document.Users.FindIndex(user => Same(user.Name, name));
+            if (index < 0)
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.IdentityNotFound, $"No person is named '{name}'.");
+            }
+
+            var before = document.Users[index];
+            if (newPinHash is null && before.PinHash is null && !before.TemporaryPin)
+            {
+                return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(before, 0));
+            }
+
+            var failure = CheckUserSecrets(before.Role, before.PasswordHash, newPinHash);
+            if (failure is not null)
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.InvalidRequest, failure);
+            }
+
+            var after = before with { PinHash = newPinHash, TemporaryPin = false, Stamp = NewStamp(), UpdatedUtc = now };
+            document.Users[index] = after;
+            var ended = document.Sessions.RemoveAll(session =>
+                session.Provider != "linux" && Same(session.UserName, before.Name) && session.Kind == RoofCredentialKind.Pin);
+            return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
+        });
+
+    /// <summary>
     /// A signed-in person changes their own display and short name (#209). A null name is left as it is, an empty one is
     /// removed, and any other (normalized and checked) replaces it. Changes no stamp and ends no session.
     /// </summary>

@@ -42,8 +42,8 @@ and `RoofCertificateAuthorityTests` check both over real HTTPS, against CAs and 
 | Property | Endpoints |
 |----------|-----------|
 | `Roof` | `RoofControl`: status, open, close, lease, clear fault, configuration, the command history (`RoofHistoryText` words its entries) |
-| `Auth` | `Auth`: sign-in with a password or a PIN, the caller, refresh, sign-out, password change, PIN users |
-| `Identity` | `Identity`: people, API keys and sessions (admin) |
+| `Auth` | `Auth`: sign-in with a password or a PIN, the caller, refresh, sign-out, password change, own names, own PIN change (`ChangePinAsync`), PIN users |
+| `Identity` | `Identity`: people, a person's PIN alone (`SetPinAsync`, `RemovePinAsync`), API keys and sessions (admin) |
 | `Settings` | `Settings`: the catalogue, the values, a group change, reloading or discarding a hand edit |
 | `System` | `System`: the summary (any role), restart, information and metrics (admin) |
 | `Health` | `/health`, `/health/ready`, `/health/live` |

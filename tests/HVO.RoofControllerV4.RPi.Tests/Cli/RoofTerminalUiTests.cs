@@ -1551,10 +1551,89 @@ public sealed class RoofTerminalUiTests
         tui.Ui.Message.Should().Contain(RoofIdentityText.OwnNamesWhere);
     }
 
-    /// <summary>Saves a password session for a new operator <paramref name="name"/>, as <c>hvo-roof login</c> would.</summary>
-    private static void SignedIn(RoofApiTestHost host, CliRig rig, string name)
+    [TestMethod]
+    public void Setup_Pin_APersonChangesTheirOwn_KeepsTheSession_AndTheirOtherPinSessionsEnd()
     {
-        RoofClientApiTests.AddUserAsync(host, name, RoofControllerApiContract.OperatorRole).GetAwaiter().GetResult();
+        const string newPin = "8642";
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        SignedIn(host, rig, "ada", TestSecrets.Pin);
+        var kiosk = new RoofKioskCredential(RoofClientApiTests.KioskKey);
+        using var atTheKiosk = ClientTestSupport.CreateClient(host, kiosk);
+        OffTheLoop(async () => await atTheKiosk.Auth.SignInWithPinAsync("ada", TestSecrets.Pin));
+        using var tui = Started(rig);
+        tui.Ui.ShowPage(4);
+
+        Click(tui, "PIN");
+        tui.WaitIdle("your PIN", () => tui.Ui.Panel is not null);
+        tui.Ui.Panel!.Prompt.Title.Should().Be("Your PIN (ada)");
+        tui.Ui.Panel.Prompt.Message.Should().Contain(RoofIdentityText.OwnPinChangeEndsSessions);
+        tui.Ui.Panel.Fields.Should().OnlyContain(field => field.Secret, "a PIN is typed in private fields");
+        Fill(tui, TestSecrets.Pin, newPin, "1111");
+        tui.Ui.Panel.Press("Change");
+        tui.Ui.Panel!.Error.Should().Be("The two PINs differ.", "a mistyped new PIN is refused before it is sent");
+        Fill(tui, TestSecrets.OtherPin, newPin, newPin);
+        tui.Ui.Panel.Press("Change");
+        tui.WaitIdle("the wrong PIN", () => tui.Ui.Message.StartsWith("The current PIN", StringComparison.Ordinal));
+
+        tui.Ui.Message.Should().Be("The current PIN is not correct. Your PIN was not changed.");
+        tui.Ui.Panel.Should().BeNull("a wrong current PIN is not a refused session: sign-in is not offered");
+        tui.Ui.Caller!.Kind.Should().Be(RoofCredentialKind.Session);
+
+        Click(tui, "PIN");
+        tui.WaitIdle("your PIN again", () => tui.Ui.Panel is not null);
+        Fill(tui, TestSecrets.Pin, newPin, newPin);
+        tui.Ui.Panel!.Press("Change");
+        tui.WaitIdle("the PIN changed", () => tui.Ui.Message == RoofIdentityText.OwnPinChanged);
+
+        tui.Screen.Should().NotContainAny(TestSecrets.Pin, TestSecrets.OtherPin, newPin);
+        RoofSessionInfoResponse[] sessions = [];
+        OffTheLoop(async () =>
+        {
+            using var admin = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+            sessions = await admin.Identity.GetSessionsAsync();
+        });
+        sessions.Should().ContainSingle("the kiosk's PIN session ended; this password session stays open")
+            .Which.Kind.Should().Be(RoofCredentialKind.Session);
+        OffTheLoop(async () => (await atTheKiosk.Auth.SignInWithPinAsync("ada", newPin)).Name.Should().Be("ada"));
+    }
+
+    [TestMethod]
+    public void Setup_Pin_WithoutAPin_OrWithAnApiKey_SaysWhyAndAsksNothing()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using (var rig = new CliRig(host))
+        {
+            SignedIn(host, rig, "ada");
+            using var tui = Started(rig);
+            tui.Ui.ShowPage(4);
+
+            Click(tui, "PIN");
+            tui.WaitIdle("the answer", () => tui.Ui.Message == RoofIdentityText.NoPinYet);
+
+            tui.Ui.Panel.Should().BeNull("a person without a PIN has none to change: an admin gives the first one");
+        }
+
+        using (var rig = new CliRig(host))
+        {
+            rig.UseApiKey(TestApiKeys.Operator);
+            using var tui = Started(rig);
+            tui.Ui.ShowPage(4);
+
+            Click(tui, "PIN");
+            tui.WaitIdle("the answer", () => tui.Ui.Message.StartsWith("A PIN is a person's", StringComparison.Ordinal));
+
+            tui.Ui.Panel.Should().BeNull("an API key has no PIN");
+        }
+    }
+
+    /// <summary>
+    /// Saves a password session for a new operator <paramref name="name"/>, with a PIN when <paramref name="pin"/> is
+    /// given, as <c>hvo-roof login</c> would.
+    /// </summary>
+    private static void SignedIn(RoofApiTestHost host, CliRig rig, string name, string? pin = null)
+    {
+        RoofClientApiTests.AddUserAsync(host, name, RoofControllerApiContract.OperatorRole, pin).GetAwaiter().GetResult();
         RoofSessionCredential? session = null;
         OffTheLoop(async () =>
         {
@@ -1826,6 +1905,45 @@ public sealed class RoofTerminalUiTests
 
         UserRole(host, "grace").Should().Be(RoofControllerApiContract.AdminRole, "the list's out-of-date role is not sent back");
         people.Describe().Should().MatchRegex("grace +admin");
+    }
+
+    [TestMethod]
+    public void People_PinAndRemovePin_SendOnlyThePin_KeepARoleChangedElsewhere_AndEndThePinSessions()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        RoofClientApiTests.AddUserAsync(host, "grace", RoofControllerApiContract.OperatorRole, TestSecrets.Pin).GetAwaiter().GetResult();
+        using var atTheKiosk = ClientTestSupport.CreateClient(host, new RoofKioskCredential(RoofClientApiTests.KioskKey));
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        using var tui = Started(rig);
+        tui.Press(Key.F3);
+        tui.WaitIdle("the lists");
+        var people = (RoofUiPeoplePage)tui.Ui.CurrentPage;
+
+        // Another admin makes grace an admin after the list was read.
+        OffTheLoop(async () =>
+        {
+            using var other = ClientTestSupport.CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+            await other.Identity.UpdateUserAsync("grace", new RoofUserUpdateRequest { Role = RoofControllerApiContract.AdminRole });
+        });
+        OffTheLoop(async () => await atTheKiosk.Auth.SignInWithPinAsync("grace", TestSecrets.Pin));
+        UsersOf(host).Single().ActiveSessions.Should().Be(1);
+        people.Select("grace");
+        Click(tui, "PIN");
+        Fill(tui, TestSecrets.OtherPin, TestSecrets.OtherPin);
+        tui.Ui.Panel!.Press("Set");
+        tui.WaitIdle("the new PIN", () => tui.Ui.Message == "Set the PIN of grace.");
+
+        UserRole(host, "grace").Should().Be(RoofControllerApiContract.AdminRole, "only the PIN is sent, never the list's role");
+        UsersOf(host).Single().ActiveSessions.Should().Be(0, "the PIN session at the kiosk ended");
+
+        people.Select("grace");
+        Click(tui, "Remove PIN");
+        tui.Ui.Panel!.Prompt.Message.Should().Contain(RoofIdentityText.PinRemoveEndsSessions);
+        tui.Ui.Panel.Press("Remove PIN");
+        tui.WaitIdle("the PIN removed", () => tui.Ui.Message == "Removed the PIN of grace.");
+
+        UsersOf(host).Single().Should().Match<RoofUserResponse>(user => !user.HasPin && user.Role == RoofControllerApiContract.AdminRole);
     }
 
     [TestMethod]

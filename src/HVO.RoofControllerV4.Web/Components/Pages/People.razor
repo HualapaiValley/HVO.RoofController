@@ -139,7 +139,7 @@ else if (_tab == UsersTab)
                                                     <PanelActions Error="@_panelError" Action="Set" TestId="user-panel-send" Busy="Busy" OnAction="() => SetPinAsync(user)" OnCancel="Close" />
                                                     break;
                                                 case RemovePinPanel:
-                                                    <p>Remove the PIN of @user.Name? Their PIN sessions end.</p>
+                                                    <p>Remove the PIN of @user.Name? @RoofIdentityText.PinRemoveEndsSessions</p>
                                                     <PanelActions Error="@_panelError" Action="Remove PIN" Danger="true" TestId="user-panel-send" Busy="Busy" OnAction="() => RemovePinAsync(user)" OnCancel="Close" />
                                                     break;
                                                 default:
@@ -575,11 +575,20 @@ else
         _panelError = _pin.Length == 0 ? RoofIdentityText.PinRule : RoofIdentityText.CheckNewPin(_pin, _pinAgain);
         return _panelError is not null
             ? Task.CompletedTask
-            : UpdateAsync(user, new RoofUserUpdateRequest { Pin = _pin }, $"Set the PIN of {user.Name}.");
+            : ChangeAsync($"{user.Name} could not be changed.", async (client, cancellationToken) =>
+            {
+                // The PIN's own endpoint (#205): the role is not sent, so a role another admin changed meanwhile stands.
+                await client.Identity.SetPinAsync(user.Name, _pin, cancellationToken);
+                return $"Set the PIN of {user.Name}.";
+            });
     }
 
     private Task RemovePinAsync(RoofUserResponse user)
-        => UpdateAsync(user, new RoofUserUpdateRequest { RemovePin = true }, $"Removed the PIN of {user.Name}.");
+        => ChangeAsync($"{user.Name} could not be changed.", async (client, cancellationToken) =>
+        {
+            await client.Identity.RemovePinAsync(user.Name, cancellationToken);
+            return $"Removed the PIN of {user.Name}.";
+        });
 
     /// <summary>
     /// Sends <paramref name="request"/>. The update always carries the role: a request that does not change it carries

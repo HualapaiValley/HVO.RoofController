@@ -22,6 +22,7 @@ public enum KioskPage
     Notices,
     StopResult,
     Terminal,
+    ChangePin,
 
     /// <summary>The unlocking person's details and their recent roof commands; only while someone has unlocked it.</summary>
     History
@@ -52,6 +53,7 @@ public sealed class KioskShell : UserControl
     private readonly Button _navSystem;
     private readonly Button _navAbout;
     private readonly Button _navLock;
+    private readonly Button _navPin;
     private readonly Button _navTerminal;
     private readonly Button _navHistory;
     private readonly KioskTerminalExit? _terminalExit;
@@ -117,11 +119,13 @@ public sealed class KioskShell : UserControl
         _navSystem = Nav("System", "nav-system", () => ShowPage(KioskPage.System));
         _navAbout = Nav("About", "nav-about", () => ShowPage(KioskPage.About));
         _navLock = Nav(console.Wording.SignInAction, "nav-lock", LockOrUnlock);
+        _navPin = Nav("Change PIN", "nav-change-pin", () => ShowPage(KioskPage.ChangePin));
         _navTerminal = Nav("Terminal", "nav-terminal", () => ShowPage(KioskPage.Terminal));
         _navTerminal.IsVisible = terminalExit is not null;
-        // History is offered only while someone has unlocked the kiosk, just before Lock, so only Lock moves when it comes.
+        // History is offered only while someone has unlocked the kiosk, before Change PIN and Lock, so only they move when
+        // it comes.
         _navHistory = Nav("History", "nav-history", () => ShowPage(KioskPage.History));
-        var nav = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navSettings, _navSystem, _navAbout, _navTerminal, _navHistory, _navLock } };
+        var nav = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navSettings, _navSystem, _navAbout, _navTerminal, _navHistory, _navPin, _navLock } };
         var navFrame = new Border { Background = KioskTheme.Surface, BorderBrush = KioskTheme.Frame, BorderThickness = new Thickness(0, 1, 0, 0), Child = nav };
 
         Stop = new Button
@@ -230,7 +234,8 @@ public sealed class KioskShell : UserControl
     /// <summary>
     /// Shows a page. Settings and System need a password session, History someone signed in, and Unlock needs the client
     /// signed out; each reads what it shows when it opens. Unlock is the PIN pad on the kiosk and the name and password in
-    /// the app.
+    /// the app. Change PIN (#205) is the PIN pad again, for the person who unlocked the kiosk with a PIN; leaving it forgets
+    /// every PIN typed.
     /// </summary>
     public void ShowPage(KioskPage page)
     {
@@ -238,16 +243,18 @@ public sealed class KioskShell : UserControl
         if (Page == KioskPage.Terminal && page != KioskPage.Terminal) _terminalExit?.Cancel();
         if (page == KioskPage.Terminal && _terminalPage is null) page = KioskPage.Roof;
         if ((page is KioskPage.Settings or KioskPage.System && (!view.IsUnlocked || _console.Wording.SignIn == KioskSignIn.Pin))
-            || (page == KioskPage.Unlock && view.IsUnlocked) || (page == KioskPage.History && !view.IsUnlocked))
+            || (page == KioskPage.Unlock && view.IsUnlocked) || (page == KioskPage.History && !view.IsUnlocked)
+            || (page == KioskPage.ChangePin && (!view.IsUnlocked || _console.Wording.SignIn != KioskSignIn.Pin)))
         {
             page = KioskPage.Roof;
         }
 
+        if (Page == KioskPage.ChangePin && page != KioskPage.ChangePin) PinPad.EndChange();
         Page = page;
         Control content = page switch
         {
             KioskPage.Unlock when _console.Wording.SignIn == KioskSignIn.Password => SignInPage,
-            KioskPage.Unlock => PinPage,
+            KioskPage.Unlock or KioskPage.ChangePin => PinPage,
             KioskPage.Settings => SettingsPage,
             KioskPage.System => SystemPage,
             KioskPage.About => AboutPage,
@@ -274,6 +281,10 @@ public sealed class KioskShell : UserControl
                 PinPage.Reset();
                 PinPad.Select(PinPad.Users.Count == 1 ? PinPad.Selected : null);
                 _ = PinPad.LoadUsersAsync();
+                break;
+            case KioskPage.ChangePin:
+                PinPage.Reset();
+                PinPad.BeginChange();
                 break;
             case KioskPage.Settings when Settings.Form is null:
                 _ = Settings.LoadAsync();
@@ -407,7 +418,7 @@ public sealed class KioskShell : UserControl
         if (Page == KioskPage.Settings && Settings.Question is not null) { Settings.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.System && System.Question is not null) { System.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.Terminal) { _terminalExit?.Cancel(); ShowPage(KioskPage.Roof); e.Handled = true; }
-        else if (Page == KioskPage.Unlock)
+        else if (Page is KioskPage.Unlock or KioskPage.ChangePin)
         {
             PinPad.Select(null);
             PasswordForm.Clear();
@@ -456,8 +467,9 @@ public sealed class KioskShell : UserControl
         _navSettings.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navSystem.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navHistory.IsVisible = view.IsUnlocked;
+        _navPin.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Pin;
         KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
-        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navTerminal, KioskPage.Terminal), (_navHistory, KioskPage.History), (_navLock, KioskPage.Unlock) })
+        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navTerminal, KioskPage.Terminal), (_navHistory, KioskPage.History), (_navPin, KioskPage.ChangePin), (_navLock, KioskPage.Unlock) })
         {
             KioskTheme.Selected(button, page == Page);
             if (page == Page)

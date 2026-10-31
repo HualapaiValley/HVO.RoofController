@@ -31,9 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Kiosk and Mac app **History** (#206, #208): while someone has unlocked the kiosk (or signed in to the app), a History
   page shows them as the controller knows them (`Auth/Me`: name, role, login type, how they signed in, short name),
   read-only, and their own 20 most recent roof commands (`mine=true`, an admin's too), newest first: the time, the
-  command, the controller's answer (a refusal with its code), the roof after it and where it came from. **Read again** reads them afresh; a locked kiosk
-  offers no History and keeps nothing read for the next person. Names are changed in the web UI or the terminal, as the
-  page says, never at the kiosk.
+  command, the controller's answer (a refusal with its code), the roof after it and where it came from. **Read again**
+  reads them afresh; a locked kiosk offers no History and keeps nothing read for the next person. Names are changed in
+  the web UI or the terminal, as the page says, never at the kiosk.
 - Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
   Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
   age) and bounded, non-overlapping reads. It is on every status snapshot and status hub message (`safety`), at
@@ -71,6 +71,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   URLs built from them, the published web port and the scheme (`RoofHost__*`) at every deploy; a rig not open to the
   network says the web UI is only on that machine. A controller in a container never shows its bridge address as where
   to reach it (#209).
+- People change their own PIN (#205): `POST api/v4.0/Auth/Pin/Change` with the current and new PIN, from a PIN session
+  at a kiosk or a password session. The current PIN is always checked, with the PIN sign-in lockouts and rate limit;
+  the session that made the change stays open, and so do the person's password sessions, while their other PIN
+  sessions end. The emulator's temporary PIN gives way to a personal one, and the owner of the kiosk's commissioned PIN
+  changes it from a kiosk session opened with it; a Linux account's password session has no PIN here (409
+  `IdentityReadOnly`). `Auth/Me` says whether the caller has a PIN to change (`hasPin`). Admins set, replace or remove
+  anyone's PIN with `PUT`/`DELETE api/v4.0/Identity/Users/{name}/Pin`, without sending the role back; the person's PIN
+  sessions end. Every change is audit-logged without the PIN. No identity-store schema change, so a rollback still
+  reads the store ([docs/security.md](docs/security.md#changing-a-pin)).
+- PIN changes in every UI (#205): on the kiosk, **Change PIN** in the bottom bar while unlocked with a PIN (confirm
+  the current PIN on the PIN pad, then type the new one twice; the kiosk stays unlocked); the web UI's new **Your PIN**
+  page (`/account/pin`, linked from the header for operators and admins); `hvo-roof pin`; and a **PIN** action on the
+  terminal interface's Setup page. The web UI's People page, `hvo-roof pins set`/`pins remove` and the terminal's
+  People page set and remove PINs on the PIN's own endpoints, so a role changed meanwhile by another admin is kept.
 
 ### Changed
 
@@ -92,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Controller not configured yet.`, `Controller unreachable.`, `Reading…` or `Not available` where a value is not
   known (#208).
 - Kiosk Terminal: **Exit UI to terminal** is at the top of the page, always on screen, above the explanation (#208).
+
+### Fixed
+
+- The web UI's **Your names** page no longer shows the last save's "saved" while a new save is on its way: the result
+  appears when that save's own answer comes (#205).
 
 ## [4.2.0] - 2026-10-30
 

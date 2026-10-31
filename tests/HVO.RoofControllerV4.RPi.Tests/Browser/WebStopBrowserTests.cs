@@ -33,6 +33,8 @@ public sealed class WebStopBrowserTests
         ("/system", "[data-testid=system-information] [data-testid=system-fact]"),
         ("/account/password", "main h1"),
         ("/account/names", "[data-testid=names-form]"),
+        // Whatever the person's PIN, the page says what it can do once it has read their account (#205).
+        ("/account/pin", "main section[aria-label='Your PIN']"),
     ];
 
     private WebBrowser? _browser;

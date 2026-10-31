@@ -12,7 +12,9 @@ namespace HVO.RoofControllerV4.Screens;
 /// Separate bounded people and private PIN steps; setup never grants an operator session. The PIN step is a compact,
 /// centred keypad of fixed-size keys. The people step shows each person as a read-only card (<see cref="KioskPerson"/>:
 /// name, role, login type, short name, last sign-in), to choose from only, and its Cancel goes back to the PIN step (with
-/// the person chosen before, if any); the PIN step's Cancel leaves the page.
+/// the person chosen before, if any); the PIN step's Cancel leaves the page. While the kiosk is unlocked, the same keypad
+/// changes the person's own PIN (<see cref="KioskPinPad.ChangingPin"/>, #205): no people step and no Person key, and a
+/// result step once it changed.
 /// </summary>
 public sealed class KioskPinPage : UserControl
 {
@@ -139,6 +141,8 @@ public sealed class KioskPinPage : UserControl
         _masked.Text = _pad.Length == 0 ? "—" : _pad.Masked;
         KioskTheme.SetText(_unlock, _pad.ActionLabel);
         _unlock.IsEnabled = _pad.CanUnlock;
+        // Changing your own PIN is for the person who unlocked the kiosk: there is no one else to choose.
+        _person.IsVisible = !_pad.ChangingPin;
         foreach (var key in _keys.Where(button => button != _unlock))
             key.IsEnabled = !_pad.Unlocking && !(key == _person && _pad.ChoosingPin);
         // Without a person, choosing one is the next step.
@@ -148,24 +152,41 @@ public sealed class KioskPinPage : UserControl
             if (_needsPerson == true) KioskTheme.Colour(_person, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
             else KioskTheme.Colour(_person, RoofUiPalette.Badge, RoofUiPalette.Text, RoofUiPalette.Border);
         }
-        if (_pad.Error is { } error && error != _dismissedError)
+        if (_pad.PinChanged)
+        {
+            if (Content is not KioskPager { Name: "pin-changed-result" })
+            {
+                var done = new KioskPager(_metrics, "pin-changed-result");
+                var text = KioskTheme.Label(RoofIdentityText.OwnPinChanged, _metrics.Font, KioskTheme.Brush(RoofUiPalette.SuccessText));
+                text.Name = "pin-changed";
+                done.SetItems([
+                    KioskTheme.Label("Change PIN", _metrics.Large, KioskTheme.Accent), text,
+                    KioskTheme.Label("This kiosk stays unlocked. Use your new PIN next time.", _metrics.Font, KioskTheme.Muted),
+                    KioskTheme.TouchButton("Done", "pin-done", _metrics, Cancel)
+                ]);
+                Content = done;
+            }
+        }
+        else if (_pad.Error is { } error && error != _dismissedError)
         {
             var message = new KioskPager(_metrics, "pin-result");
             var text = KioskTheme.Label(error, _metrics.Font, KioskTheme.Brush(RoofUiPalette.Danger));
             text.Name = "pin-error";
+            // Changing your PIN needs no list of people: trying again goes back to the keypad.
+            var reread = _pad.Users.Count == 0 && !_pad.ChangingPin;
             message.SetItems([
-                KioskTheme.Label("PIN / setup result", _metrics.Large, KioskTheme.Accent), text,
-                KioskTheme.TouchButton(_pad.Users.Count == 0 ? "Read people again" : "Try again", "pin-retry", _metrics, () =>
+                KioskTheme.Label(_pad.ChangingPin ? "Change PIN" : "PIN / setup result", _metrics.Large, KioskTheme.Accent), text,
+                KioskTheme.TouchButton(reread ? "Read people again" : "Try again", "pin-retry", _metrics, () =>
                 {
                     _dismissedError = error;
-                    if (_pad.Users.Count == 0) _ = _pad.LoadUsersAsync();
+                    if (reread) _ = _pad.LoadUsersAsync();
                     Update();
                 }),
                 KioskTheme.TouchButton("Cancel", "pin-cancel", _metrics, Cancel)
             ]);
             Content = message;
         }
-        else if (_pad.Selected is null && !_keypad)
+        else if (_pad.Selected is null && !_keypad && !_pad.ChangingPin)
         {
             if (!ReferenceEquals(_shownUsers, _pad.Users) || Content != _peopleStep)
             {
@@ -222,7 +243,8 @@ public sealed class KioskPinPage : UserControl
     private void Cancel()
     {
         Reset();
-        _pad.Select(null);
+        if (_pad.ChangingPin || _pad.PinChanged) _pad.EndChange();
+        else _pad.Select(null);
         _cancel();
     }
 }

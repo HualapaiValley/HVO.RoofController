@@ -73,6 +73,7 @@ public sealed class RoofClientCoverageTests
         ("Auth.SignOut", client => client.Auth.SignOutAsync()),
         ("Auth.ChangePassword", client => client.Auth.ChangePasswordAsync("not-a-password", "not-a-password-either")),
         ("Auth.ChangeNames", client => client.Auth.ChangeNamesAsync(new RoofNamesChangeRequest { DisplayName = "Alice Example" })),
+        ("Auth.ChangePin", client => client.Auth.ChangePinAsync("2468", "1357")),
         ("Identity.GetPrincipals", client => client.Identity.GetPrincipalsAsync()),
         ("Identity.EnrollPrincipal", client => client.Identity.EnrollPrincipalAsync(
             new RoofPrincipalEnrollRequest
@@ -92,6 +93,8 @@ public sealed class RoofClientCoverageTests
         ("Identity.UpdateUser", client => client.Identity.UpdateUserAsync(
             "alice", new RoofUserUpdateRequest { Role = RoofControllerApiContract.OperatorRole })),
         ("Identity.RemoveUser", client => client.Identity.RemoveUserAsync("alice")),
+        ("Identity.SetPin", client => client.Identity.SetPinAsync("alice", "2468")),
+        ("Identity.RemovePin", client => client.Identity.RemovePinAsync("alice")),
         ("Identity.GetApiKeys", client => client.Identity.GetApiKeysAsync()),
         ("Identity.AddApiKey", client => client.Identity.AddApiKeyAsync(
             new RoofApiKeyCreateRequest { Name = "ci", Role = RoofControllerApiContract.OperatorRole })),

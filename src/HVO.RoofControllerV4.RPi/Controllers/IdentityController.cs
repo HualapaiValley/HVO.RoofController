@@ -228,6 +228,94 @@ public sealed class IdentityController : ControllerBase
             });
     }
 
+    /// <summary>
+    /// Sets or replaces a person's PIN (#205), whatever their role is now: operators and admins only. Their PIN sessions
+    /// end, at every kiosk; their password sessions, and the admin's own session, do not.
+    /// </summary>
+    /// <response code="200">The person, without their secrets.</response>
+    /// <response code="400">The PIN is not four digits or is the reserved temporary PIN, or the person is a viewer.</response>
+    /// <response code="404">No person has that name.</response>
+    /// <response code="429">Too many PINs are being hashed at once; retry shortly.</response>
+    [HttpPut("Users/{name}/Pin", Name = nameof(SetUserPin))]
+    [ProducesResponseType(typeof(RoofUserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]
+    public async Task<ActionResult<RoofUserResponse>> SetUserPin(string name, [FromBody] RoofPinSetRequest request, CancellationToken cancellationToken)
+    {
+        if (SecretFormatProblem(null, request.Pin) is { } invalid)
+        {
+            return Invalid(invalid);
+        }
+
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        if (!_identity.TryGetUser(name, out var person))
+        {
+            return NoSuchUser();
+        }
+
+        if (RoofIdentityStore.CheckUserSecrets(person.Role, person.PasswordHash, "unchanged") is { } refused)
+        {
+            // Refused before hashing; the store checks again with the role the person has when the PIN is saved.
+            return Invalid(refused);
+        }
+
+        var pinHash = await HashAsync(request.Pin, cancellationToken).ConfigureAwait(false);
+        if (pinHash is null)
+        {
+            return HasherBusy();
+        }
+
+        return Change(
+            () => _identity.SetPin(name, pinHash),
+            change =>
+            {
+                _logger.LogWarning(
+                    "AUDIT {Caller} set {Name}'s PIN from {Remote}; {Ended} PIN session(s) ended.",
+                    Caller, change.User.Name, Remote, change.SessionsEnded);
+                return Ok(ToResponse(change.User, _identity.ActiveSessions));
+            });
+    }
+
+    /// <summary>
+    /// Removes a person's PIN (#205), or their temporary commissioning PIN: they can no longer unlock a kiosk until an
+    /// admin gives them a new one. Their PIN sessions end; their password sessions do not. A person without a PIN is left
+    /// as they are.
+    /// </summary>
+    /// <response code="200">The person, without their secrets.</response>
+    /// <response code="400">The person has no password, so without a PIN they could not sign in.</response>
+    /// <response code="404">No person has that name.</response>
+    [HttpDelete("Users/{name}/Pin", Name = nameof(RemoveUserPin))]
+    [ProducesResponseType(typeof(RoofUserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public ActionResult<RoofUserResponse> RemoveUserPin(string name)
+    {
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        if (!_identity.TryGetUser(name, out _))
+        {
+            return NoSuchUser();
+        }
+
+        return Change(
+            () => _identity.SetPin(name, null),
+            change =>
+            {
+                _logger.LogWarning(
+                    "AUDIT {Caller} removed {Name}'s PIN from {Remote}; {Ended} PIN session(s) ended.",
+                    Caller, change.User.Name, Remote, change.SessionsEnded);
+                return Ok(ToResponse(change.User, _identity.ActiveSessions));
+            });
+    }
+
     /// <summary>Removes a person and ends their sessions.</summary>
     /// <response code="204">Removed.</response>
     /// <response code="404">No person has that name.</response>

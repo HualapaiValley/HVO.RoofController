@@ -406,7 +406,13 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                     return error;
                 }
 
-                Update(user, new RoofUserUpdateRequest { Pin = values[0] }, $"Set the PIN of {user.Name}.");
+                // Only the PIN is sent: the person keeps the role the controller has for them now.
+                var pin = values[0];
+                Send($"Changing {user.Name}…", async (client, cancellationToken) =>
+                {
+                    await client.Identity.SetPinAsync(user.Name, pin, cancellationToken).ConfigureAwait(false);
+                    return $"Set the PIN of {user.Name}.";
+                });
                 return null;
             })]));
     }
@@ -418,8 +424,12 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             return;
         }
 
-        Confirm($"Remove the PIN of {user.Name}? Their PIN sessions end.", "Remove PIN", ()
-            => Update(user, new RoofUserUpdateRequest { RemovePin = true }, $"Removed the PIN of {user.Name}."));
+        Confirm($"Remove the PIN of {user.Name}? {RoofIdentityText.PinRemoveEndsSessions}", "Remove PIN", ()
+            => Send($"Changing {user.Name}…", async (client, cancellationToken) =>
+            {
+                await client.Identity.RemovePinAsync(user.Name, cancellationToken).ConfigureAwait(false);
+                return $"Removed the PIN of {user.Name}.";
+            }));
     }
 
     private void RemoveUser()

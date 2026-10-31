@@ -61,6 +61,30 @@ public sealed class YourNamesPageTests
     }
 
     [TestMethod]
+    public async Task ASecondSave_ShowsNoResult_UntilItsOwnAnswerComes()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.OperatorRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        cut.Input("[data-testid=names-display-name]", "Ada Example");
+        cut.Click("[data-testid=names-save]");
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
+        var answer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.HoldAnswer = request => request.RequestUri!.AbsolutePath.TrimStart('/') == NamesPath ? answer.Task : Task.CompletedTask;
+
+        cut.Input("[data-testid=names-short-name]", "Ada");
+        cut.Click("[data-testid=names-save]");
+
+        cut.FindAll("[data-testid=page-message]").Should().BeEmpty("the first save's result is not this save's");
+        cut.Find("[data-testid=names-save]").HasAttribute("disabled").Should().BeTrue("the save is on its way");
+        answer.SetResult();
+        cut.WaitForAssertion(() => Message(cut).Should().Be("Your names were saved."));
+        using var admin = harness.Admin();
+        (await admin.Identity.GetUserAsync("ada")).ShortName.Should().Be("Ada");
+    }
+
+    [TestMethod]
     public async Task AnInvalidName_IsRefusedBeforeAnythingIsSent()
     {
         using var harness = new WebAdminHarness();
