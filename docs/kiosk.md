@@ -152,7 +152,7 @@ shows the person. Locking the kiosk hides History and forgets what it read, so t
 
 <p>
   <img src="images/kiosk/history-800x480.png" alt="History on the first 7-inch display: the unlocked person, read-only, and their recent roof commands, a refused Open in amber" width="400">
-  <img src="images/kiosk/history-1280x720.png" alt="History at 1280x720: the person and their newest commands, newest first, with page controls when the list overflows" width="480">
+  <img src="images/kiosk/history-1280x720.png" alt="History at 1280x720: the person, their commands newest first, how long the controller keeps them, and where names are changed" width="480">
 </p>
 
 ### Settings

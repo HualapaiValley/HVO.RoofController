@@ -158,7 +158,7 @@ public sealed class KioskPersonHistoryTests
             Texts(screen, "history-entry-0").Should().Equal(
                 RoofStatusText.Time(KioskHarness.Start.AddMinutes(3)), "Stop", "Accepted", "Roof after: Stopped", "From kiosk");
             Texts(screen, "history-entry-1").Should().Equal(
-                RoofStatusText.Time(KioskHarness.Start.AddMinutes(2)), "Open", "Accepted (conditions unknown)", "Roof after: Opening", "From kiosk");
+                RoofStatusText.Time(KioskHarness.Start.AddMinutes(2)), "Open", "Accepted", "Roof after: Opening", "From kiosk");
             ReadOnly(screen, "history-reload");
         });
         var shown = await ReadEveryPageAsync(screen, "history-pages");
