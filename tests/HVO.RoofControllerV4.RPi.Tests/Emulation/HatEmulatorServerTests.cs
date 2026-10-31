@@ -311,6 +311,45 @@ public sealed class HatEmulatorServerTests
     }
 
     [TestMethod]
+    public async Task AHeldWriteOfAnOlderConnection_IsFencedByTheSameClientsNewerHello_EvenWhileItsConnectionStaysOpen()
+    {
+        await using var rig = ServerRig.Start();
+        rig.Server.WriteHold = TimeSpan.FromMilliseconds(500);
+        rig.Server.HoldWhen = frame => frame.Register == SmI010Board.RelaySetRegister;
+        using var old = await RawLink.ConnectAsync(rig.Server);
+        await old.HelloAsync(clientTag: 0x1234);
+
+        // The old connection's ON is accepted and held; the client gives up on it but its connection is not closed (a
+        // close the server has not seen yet), and it reconnects with the same tag.
+        await old.SendAsync(Write(2, SmI010Board.RelaySetRegister, 0x01));
+        using var fresh = await RawLink.ConnectAsync(rig.Server);
+        await fresh.HelloAsync(clientTag: 0x1234);
+        (await fresh.RequestAsync(Read(2, SmI010Board.RelayValueRegister, 1))).Payload.Span[0].Should().Be(0);
+
+        (await old.ReceiveOrClosedAsync()).Should().BeNull("the fenced write is not run and its connection closes");
+        rig.Server.FencedRequests.Should().Be(1);
+        rig.Plant.Hat.RelayRegister.Should().Be(0, "an ON the client gave up on never lands after its next connection's Hello");
+        (await fresh.RequestAsync(Read(3, SmI010Board.RelayValueRegister, 1))).Kind.Should().Be(HatEmulatorFrameKind.Ok);
+    }
+
+    [TestMethod]
+    public async Task OtherClientsAndUntaggedConnections_AreNotFenced()
+    {
+        await using var rig = ServerRig.Start();
+        using var first = await RawLink.ConnectAsync(rig.Server);
+        await first.HelloAsync(clientTag: 7);
+        using var other = await RawLink.ConnectAsync(rig.Server);
+        await other.HelloAsync(clientTag: 8);
+        using var untagged = await RawLink.ConnectAsync(rig.Server);
+        await untagged.HelloAsync();
+
+        (await first.RequestAsync(Write(2, SmI010Board.RelayValueRegister, 0x08))).Kind.Should().Be(HatEmulatorFrameKind.Ok);
+        (await other.RequestAsync(Read(2, SmI010Board.RelayValueRegister, 1))).Kind.Should().Be(HatEmulatorFrameKind.Ok);
+        (await untagged.RequestAsync(Read(2, SmI010Board.RelayValueRegister, 1))).Kind.Should().Be(HatEmulatorFrameKind.Ok);
+        rig.Server.FencedRequests.Should().Be(0);
+    }
+
+    [TestMethod]
     public async Task ConnectionsDroppedAsTheyAreAccepted_AndDisposal_LeaveNoConnectionsOrErrors()
     {
         var rig = ServerRig.Start();
@@ -498,9 +537,9 @@ public sealed class HatEmulatorServerTests
             return response!.Value;
         }
 
-        public async Task HelloAsync()
+        public async Task HelloAsync(int clientTag = 0)
         {
-            var reply = await RequestAsync(HatEmulatorProtocol.CreateHello(1));
+            var reply = await RequestAsync(clientTag == 0 ? HatEmulatorProtocol.CreateHello(1) : HatEmulatorProtocol.CreateHello(1, clientTag));
             reply.Kind.Should().Be(HatEmulatorFrameKind.Ok);
         }
 

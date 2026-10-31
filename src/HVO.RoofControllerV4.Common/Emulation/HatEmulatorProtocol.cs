@@ -168,6 +168,25 @@ public static class HatEmulatorProtocol
     /// <summary>The Hello request.</summary>
     public static HatEmulatorFrame CreateHello(uint sequence) => new(HatEmulatorFrameKind.Hello, sequence, 0, 0, HelloPayload(Version));
 
+    /// <summary>The largest client tag (<see cref="CreateHello(uint, int)"/>): 24 bits.</summary>
+    public const int MaxClientTag = 0xFF_FFFF;
+
+    /// <summary>
+    /// The Hello request carrying <paramref name="clientTag"/> (1 to <see cref="MaxClientTag"/>) in its Register and Count
+    /// fields, which a Hello leaves otherwise unused, so an emulator that predates it still accepts the Hello. An emulator
+    /// that reads it fences the same client's older connections (#220, N3): a request of an older connection of that tag
+    /// is never run once the newer connection's Hello is answered.
+    /// </summary>
+    public static HatEmulatorFrame CreateHello(uint sequence, int clientTag)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(clientTag, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(clientTag, MaxClientTag);
+        return new(HatEmulatorFrameKind.Hello, sequence, (byte)(clientTag >> 16), (ushort)(clientTag & 0xFFFF), HelloPayload(Version));
+    }
+
+    /// <summary>The client tag a Hello carries, or 0 when it carries none (an older client, or a raw one).</summary>
+    public static int ReadClientTag(in HatEmulatorFrame hello) => (hello.Register << 16) | hello.Count;
+
     /// <summary>The Hello request with another version, for tests of the version check.</summary>
     public static HatEmulatorFrame CreateHello(uint sequence, ushort version) => new(HatEmulatorFrameKind.Hello, sequence, 0, 0, HelloPayload(version));
 

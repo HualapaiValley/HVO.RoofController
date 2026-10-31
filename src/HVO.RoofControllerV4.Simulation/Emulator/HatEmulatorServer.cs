@@ -16,9 +16,18 @@ namespace HVO.RoofControllerV4.Simulation.Emulator;
 /// the connection stays up; a malformed request is answered with ProtocolError and the connection closes.
 /// </summary>
 /// <remarks>
-/// A request whose connection has closed by the time its turn comes (the client timed out and gave up, or the link was
-/// dropped) is not run: an I2C transfer cannot complete after the caller has given up on it, so a late access must not
-/// land after the client's next ones.
+/// <para>A request whose connection has closed by the time its turn comes (the client timed out and gave up, or the link
+/// was dropped) is not run: an I2C transfer cannot complete after the caller has given up on it, so a late access must not
+/// land after the client's next ones.</para>
+/// <para>That check alone is not proof: a connection's close and its successor's requests are separate TCP streams. So a
+/// Hello that carries a client tag (<see cref="HatEmulatorProtocol.CreateHello(uint, int)"/>) fences that client's older
+/// connections (#220, N3): it takes the access gate, and from then on a request of an older connection with the same tag
+/// is never run, whenever its turn comes; its connection is closed instead. Connections without a tag, and other
+/// clients', are not fenced. The controller's socket client
+/// opens a new connection only after it has given up on the old one, so once a new connection's Hello is answered,
+/// every write the client gave up on has either landed already (and the client's next read-back sees it) or never
+/// will. That is the emulator transport's guarantee that a timed-out ON cannot energize a relay after a Stop that
+/// reported success.</para>
 /// </remarks>
 /// <remarks>
 /// The controls <see cref="Outage"/>, <see cref="ResponseDelay"/> and <see cref="DisconnectAll"/> break the link the way
@@ -40,6 +49,11 @@ public sealed class HatEmulatorServer : IAsyncDisposable
     private long _requests;
     private long _responseDelayTicks;
     private long _helloTimeoutTicks = TimeSpan.FromSeconds(5).Ticks;
+    private long _writeHoldTicks;
+    private long _fencedRequests;
+
+    // The newest connection whose Hello carried each client tag.
+    private readonly ConcurrentDictionary<int, long> _latestHello = new();
     private volatile bool _outage;
     private int _disposed;
 
@@ -85,6 +99,27 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             Interlocked.Exchange(ref _responseDelayTicks, value.Ticks);
         }
     }
+
+    /// <summary>
+    /// How long each Write is held after it arrives and before it takes its turn, to model a write accepted by the
+    /// transport but not yet carried out (a late ON, #220 N3). Zero by default. A held write is still fenced by a newer
+    /// connection's Hello when its turn comes.
+    /// </summary>
+    public TimeSpan WriteHold
+    {
+        get => TimeSpan.FromTicks(Interlocked.Read(ref _writeHoldTicks));
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero);
+            Interlocked.Exchange(ref _writeHoldTicks, value.Ticks);
+        }
+    }
+
+    /// <summary>Which writes <see cref="WriteHold"/> holds: every write when null (tests pick one, such as a relay ON).</summary>
+    public Func<HatEmulatorFrame, bool>? HoldWhen { get; set; }
+
+    /// <summary>Requests not run because a newer connection's Hello had fenced their connection.</summary>
+    public long FencedRequests => Interlocked.Read(ref _fencedRequests);
 
     /// <summary>How long a new connection may take to send its Hello before it is closed. Five seconds by default.</summary>
     public TimeSpan HelloTimeout
@@ -239,6 +274,7 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         // Leave the accept loop's thread at once: the loop starts the next accept without waiting for this connection.
         // DisconnectAll, an outage or the shutdown may close the connection at any point from here.
         await Task.Yield();
+        var clientTag = 0;
         try
         {
             using (var hello = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -246,10 +282,12 @@ public sealed class HatEmulatorServer : IAsyncDisposable
                 hello.CancelAfter(HelloTimeout);
                 try
                 {
-                    if (!await HelloAsync(stream, hello.Token).ConfigureAwait(false))
+                    if (await HelloAsync(id, stream, hello.Token).ConfigureAwait(false) is not { } tag)
                     {
                         return;
                     }
+
+                    clientTag = tag;
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -267,13 +305,19 @@ public sealed class HatEmulatorServer : IAsyncDisposable
                     break;
                 }
 
+
                 if (HatEmulatorProtocol.CheckAccess(frame) is { } problem)
                 {
                     await RefuseAsync(stream, frame.Sequence, problem, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
-                if (await ExecuteAsync(frame, client, cancellationToken).ConfigureAwait(false) is not { } response)
+                if (frame.Kind == HatEmulatorFrameKind.Write && WriteHold is { } hold && hold > TimeSpan.Zero && (HoldWhen?.Invoke(frame) ?? true))
+                {
+                    await Task.Delay(hold, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (await ExecuteAsync(id, clientTag, frame, client, cancellationToken).ConfigureAwait(false) is not { } response)
                 {
                     break;
                 }
@@ -339,33 +383,60 @@ public sealed class HatEmulatorServer : IAsyncDisposable
         }
     }
 
-    private async Task<bool> HelloAsync(NetworkStream stream, CancellationToken cancellationToken)
+    /// <summary>Answers the Hello; returns its client tag (0 for none), or null when the connection must close.</summary>
+    private async Task<int?> HelloAsync(long id, NetworkStream stream, CancellationToken cancellationToken)
     {
         var hello = await HatEmulatorProtocol.ReadFrameAsync(stream, cancellationToken).ConfigureAwait(false);
         if (hello is not { } frame)
         {
-            return false;
+            return null;
         }
 
         if (HatEmulatorProtocol.CheckHello(frame) is { } problem)
         {
             _logger.LogWarning("HAT emulator: refused a connection: {Reason}", problem);
             await RefuseAsync(stream, frame.Sequence, problem, cancellationToken).ConfigureAwait(false);
-            return false;
+            return null;
+        }
+
+        // The fence: from here no request of this client's older connections runs, whenever its turn comes. Under the
+        // access gate, so an access already running finishes first and none of an older connection starts after.
+        var tag = HatEmulatorProtocol.ReadClientTag(frame);
+        if (tag != 0)
+        {
+            await _accessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                _latestHello[tag] = id;
+            }
+            finally
+            {
+                _accessGate.Release();
+            }
         }
 
         var settings = _target().ConnectionSettings;
         var reply = HatEmulatorProtocol.CreateHelloReply(frame.Sequence, settings.BusId, settings.DeviceAddress);
         await HatEmulatorProtocol.WriteFrameAsync(stream, reply, cancellationToken).ConfigureAwait(false);
-        return true;
+        return tag;
     }
 
-    /// <summary>Runs the access, or returns null without running it when the connection has closed while it waited its turn.</summary>
-    private async Task<HatEmulatorFrame?> ExecuteAsync(HatEmulatorFrame request, TcpClient client, CancellationToken cancellationToken)
+    /// <summary>
+    /// Runs the access, or returns null without running it when the connection has closed while it waited its turn, or a
+    /// newer connection's Hello has fenced it.
+    /// </summary>
+    private async Task<HatEmulatorFrame?> ExecuteAsync(long id, int clientTag, HatEmulatorFrame request, TcpClient client, CancellationToken cancellationToken)
     {
         await _accessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (clientTag != 0 && _latestHello.TryGetValue(clientTag, out var latest) && latest != id)
+            {
+                Interlocked.Increment(ref _fencedRequests);
+                _logger.LogInformation("HAT emulator: a {Kind} from a connection a newer Hello fenced was not run", request.Kind);
+                return null;
+            }
+
             if (HasClosed(client))
             {
                 return null;
