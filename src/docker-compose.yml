@@ -51,6 +51,11 @@ services:
       - HatEmulator__Host=hat-emulator
       # And the camera is the emulator's MJPEG camera of the emulated roof.
       - BlueIris__BaseUrl=http://hat-emulator:5290
+      # And the safety sources are the emulator's ASCOM Alpaca mount and weather safety monitor (docs/alpaca.md).
+      - RoofSafety__Telescopes__0__Name=Emulated mount
+      - RoofSafety__Telescopes__0__Url=http://hat-emulator:5290
+      - RoofSafety__WeatherSources__0__Name=Emulated weather
+      - RoofSafety__WeatherSources__0__Url=http://hat-emulator:5290
       - RoofControllerSecurity__ApiKeys__0__Name=dev-admin
       - RoofControllerSecurity__ApiKeys__0__Role=RoofAdmin
       - RoofControllerSecurity__ApiKeys__0__Key=${HVO_DEV_ROOF_API_KEY:-}

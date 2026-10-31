@@ -107,14 +107,18 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   within 27 s of the signal, also at the container's process limit: the supervisor forks only to start a process, and
   only with room for it, and the stop forks nothing until the controller and the web UI have ended. A whole container
   killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
-- Safety conditions (`RoofSafety:InterlockMode`, default `Warn`): the safety service reports Safe, Unsafe or Unknown
-  (no source, a source not read, failing or older than its `MaxReadingAge`) with reasons from telescope-park and weather
-  sources, on every status and at `GET /api/v4.0/Safety`. `Warn`, the owner's policy, refuses Open
-  (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`, which anyone who may open may send
-  (`OverrideRole`, default `Operator`; audit-logged); every UI asks before it sends it. `Block` refuses Open
-  (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is checked: never Close or Stop,
-  and the service never moves the roof. No real source exists yet: which devices to read (ASCOM Alpaca or another)
-  awaits the owner's decision, so add none without it ([docs/safety-service.md](docs/safety-service.md)).
+- Safety conditions (`RoofSafety:InterlockMode`, default `Warn`): the safety service reads ASCOM Alpaca mounts
+  (`RoofSafety:Telescopes`, `AtPark`) and weather safety monitors (`RoofSafety:WeatherSources`, `IsSafe`), with GET
+  only, and reports Safe, Unsafe or Unknown with reasons, on every status and at `GET /api/v4.0/Safety`. The owner's
+  rule (#220): Safe only when at least one required weather source has a fresh safe reading and every scope that can
+  block the roof (`BlocksRoof`) is clear of it, which today means parked; a source not read, failing or older than its
+  `MaxReadingAge` is Unknown, and a weather source set `Ignored` or a scope that cannot block the roof never decides.
+  The status also carries the weather alone (`weatherState`, never the telescopes) for the Alpaca SafetyMonitor.
+  `Warn`, the owner's policy, refuses Open (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`,
+  which anyone who may open may send (`OverrideRole`, default `Operator`; audit-logged); every UI asks before it sends
+  it. `Block` refuses Open (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is
+  checked: never Close or Stop, and the service never moves the roof. A device's address is private: never log, show
+  or commit one ([docs/safety-service.md](docs/safety-service.md), [docs/alpaca.md](docs/alpaca.md)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

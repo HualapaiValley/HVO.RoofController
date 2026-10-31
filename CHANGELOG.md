@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- ASCOM Alpaca safety sources (#220, phase 2): the safety service reads Alpaca mounts' `AtPark`
+  (`RoofSafety:Telescopes`) and weather safety monitors' `IsSafe` (`RoofSafety:WeatherSources`), with `GET` only, never
+  writing `Connected` or parking anything, at pinned addresses. Each has a `Name`, `Url`, `DeviceNumber` and optional
+  `MaxReadingAge`; a mount has `BlocksRoof` (default true), a weather source `Requirement` (`Required`, the default, or
+  `Ignored`). A device that is not connected, answers an Alpaca error or an HTTP error, cannot be reached, answers
+  something that is not the Alpaca JSON or does not answer in time is a failed read with the reason in fixed words
+  (`the device is not connected`, `no answer within 5 s`, …), and goes Unknown once its last reading is too old; a mount
+  that cannot park is a configuration error. No log, reason or trace names a device's address. On the Pi the settings
+  go in the secrets directory, one file per setting ([docs/alpaca.md](docs/alpaca.md)).
+- The weather alone on every status and at `GET /api/v4.0/Safety` (`weatherState`, `weatherReasons`), never including
+  the telescopes, for the weather-only Alpaca SafetyMonitor; and each source's `counts`.
+- The HAT emulator serves fake ASCOM Alpaca mounts and weather safety monitors on its control port
+  (`Emulator:AlpacaTelescopes`, `Emulator:AlpacaSafetyMonitors`, one of each by default), with park, weather,
+  connection, `CanPark` and failure states set through `/api/emulator/alpaca`; both compose files point the controller
+  at them, so an emulated rig's conditions are Safe until the emulator says otherwise.
+
+### Changed
+
+- The safety conditions follow the owner's readiness rule (#220): Safe only when at least one required weather source
+  has a fresh reading that says safe and every scope that can block the roof is clear of it (parked, for now). A parked
+  telescope alone is now Unknown, "No required weather source configured". A weather source set `Ignored` and a mount
+  with `BlocksRoof: false` are shown, marked `[ignored]` or `[does not block the roof]` on every interface, but never
+  decide.
+
 ## [4.3.0] - 2026-10-30
 
 ### Added
