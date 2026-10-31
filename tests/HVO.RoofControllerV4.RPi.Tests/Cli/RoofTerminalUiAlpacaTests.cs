@@ -126,7 +126,8 @@ public sealed class RoofTerminalUiAlpacaTests
         var question = tui.Ui.Panel!;
         question.Should().NotBeSameAs(actions);
         question.Prompt.Title.Should().Be($"{RoofAlpacaText.GrantCloseLabel}?");
-        question.Prompt.Message.Should().Be(string.Join('\n', RoofAlpacaText.DescribeGrantQuestion(alert, 5)));
+        question.Prompt.Message.Should().Be(string.Join('\n', [.. RoofAlpacaText.DescribeGrantQuestion(alert, 5), RoofCliAlpaca.StepAwayQuestion]),
+            "this interface holds the operator lease, so the person is told that granting steps them away from it");
         question.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.GrantCloseLabel, "Cancel");
         AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty("nothing is sent before the person confirms");
 
@@ -345,15 +346,22 @@ public sealed class RoofTerminalUiAlpacaTests
         tui.WaitIdle("the fourth heartbeat", () => Beats(requests).Count == 4);
         Beats(requests)[3].Should().NotContain("input=true");
 
-        tui.App.InjectMouse(new Mouse { Flags = MouseFlags.LeftButtonClicked, ScreenPosition = new System.Drawing.Point(2, 2) });
+        tui.App.InjectMouse(new Mouse { Flags = MouseFlags.LeftButtonPressed, ScreenPosition = new System.Drawing.Point(2, 2) });
         tui.Pump();
         tui.Tick(10);
         tui.WaitIdle("the fifth heartbeat", () => Beats(requests).Count == 5);
-        Beats(requests)[4].Should().EndWith("?input=true", "a click is the person's input");
+        Beats(requests)[4].Should().EndWith("?input=true", "a press is the person's input");
+
+        // A release, or the click made of it, arrives after the press it ends, and may come after a grant it confirmed.
+        tui.App.InjectMouse(new Mouse { Flags = MouseFlags.LeftButtonReleased, ScreenPosition = new System.Drawing.Point(2, 2) });
+        tui.Pump();
+        tui.Tick(10);
+        tui.WaitIdle("the sixth heartbeat", () => Beats(requests).Count == 6);
+        Beats(requests)[5].Should().NotContain("input=true");
     }
 
     [TestMethod]
-    public void TheIdleWarning_AndAlpacaMayNowMove_AreInTheBanner_AndAfterTheLapseOnlyInputTakesTheLeaseAgain()
+    public void TheIdleWarning_AndAlpacaMayNowMove_AreInTheBanner_AndAKeyThenRenewsTheLeaseAtOnce()
     {
         using var host = AlpacaCliSupport.CreateHost();
         var requests = new ConcurrentQueue<string>();
@@ -371,20 +379,84 @@ public sealed class RoofTerminalUiAlpacaTests
         });
         tui.Ui.Banner.Should().Contain("Your operator lease lapses in 42 s without input; then Alpaca may move the roof. Touch anything to keep it.");
 
-        // Then that it lapsed: the banner says Alpaca may now move the roof, and heartbeats stop until the person is back.
+        // Then that it lapsed: the banner says Alpaca may now move the roof. The heartbeats go on without input (the
+        // controller takes the lease back only with input), and the person's key sends one with it at once.
         tui.Ui.Apply(tui.Ui.Status! with
         {
             StatusVersion = current.StatusVersion + 101,
             Alpaca = current.Alpaca! with { OperatorLease = new RoofOperatorLeaseState { Held = false, IdleLapsedHolder = "ada" } }
         });
         tui.Ui.Banner.Should().Contain(RoofAlpacaText.MayNowMove);
-        tui.Tick(25);
-        Settle(tui);
-        Beats(requests).Should().HaveCount(1, "a heartbeat alone never takes the lease again");
+        tui.Tick(10);
+        tui.WaitIdle("a heartbeat", () => Beats(requests).Count == 2);
+        Beats(requests)[1].Should().NotContain("input=true");
 
         tui.Press(Key.F1);
-        tui.WaitIdle("the lease taken again", () => Beats(requests).Count == 2);
-        Beats(requests)[1].Should().EndWith("?input=true");
+        tui.WaitIdle("the lease taken again", () => Beats(requests).Count == 3);
+        Beats(requests)[2].Should().EndWith("?input=true", "a key while the lease has lapsed takes it back at once");
+    }
+
+    [TestMethod]
+    public void AllowThisCloseOnce_StepsThePersonAwayFromTheLease_HeartbeatsGoOnWithoutTakingItBack_AndTheirNextKeyDoes()
+    {
+        using var host = AlpacaCliSupport.CreateHost();
+        AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host) { WrapHandler = inner => new RequestLog(inner, requests) };
+        SignedIn(host, rig, "ada");
+        using var tui = Started(rig);
+        var commands = AlpacaCliSupport.Commands(host);
+        tui.WaitIdle("the operator lease", () => commands.GetStatus().OperatorLease.Held);
+        var page = ShowAlpaca(tui);
+
+        Enter(tui, page, RoofUiAlpacaItemKind.Alert);
+        tui.Ui.Panel!.Press(RoofAlpacaText.GrantCloseLabel);
+        var question = tui.Ui.Panel!;
+        question.Prompt.Message.Should().EndWith("\n" + RoofCliAlpaca.StepAwayQuestion);
+
+        // Confirmed with Enter, as the person would: that key is input, and must not count after the grant.
+        question.Buttons[0].HasFocus.Should().BeTrue();
+        tui.Press(Key.Enter);
+        tui.WaitIdle("the grant", () => tui.Ui.Message.StartsWith("Granted.", StringComparison.Ordinal));
+
+        commands.Grants().Should().ContainSingle();
+        commands.GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away from the lease with the grant");
+        tui.Ui.SteppedAway.Should().NotBeNull();
+        tui.WaitIdle("the banner", () => tui.Ui.Banner.Contains(
+            "You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Press any key to take control back; that cancels the grant.",
+            StringComparison.Ordinal));
+        page.Alpaca.Items.Should().Contain(item => item.Text.StartsWith("You stepped away", StringComparison.Ordinal));
+
+        // The heartbeats go on, without input, and the lease stays released: the grant can be used.
+        var beats = Beats(requests).Count;
+        tui.Tick(10);
+        tui.WaitIdle("a heartbeat", () => Beats(requests).Count == beats + 1);
+        tui.Tick(10);
+        tui.WaitIdle("another heartbeat", () => Beats(requests).Count == beats + 2);
+        var afterGrant = requests.SkipWhile(request => !request.StartsWith("POST /api/v4.0/alpaca/grants", StringComparison.Ordinal)).Skip(1)
+            .Where(request => request.StartsWith("POST ", StringComparison.Ordinal) && request.Contains("/alpaca/lease", StringComparison.Ordinal)).ToList();
+        afterGrant.Should().HaveCount(2).And.OnlyContain(request => !request.Contains("input=true"), "no input crosses or follows the grant");
+        commands.GetStatus().OperatorLease.Held.Should().BeFalse("heartbeats alone never take it back");
+        commands.Grants().Should().ContainSingle();
+        tui.Ui.Banner.Should().Contain("You stepped away from the operator lease");
+
+        // The person's next key takes control back at once, and that cancels the grant.
+        tui.Press(Key.F1);
+        tui.WaitIdle("the lease taken back", () => commands.GetStatus().OperatorLease.Held);
+        Beats(requests)[^1].Should().EndWith("?input=true");
+        commands.GetStatus().OperatorLease.Holder.Should().Be("ada");
+        commands.Grants().Should().BeEmpty("taking the lease back drops the grant");
+        tui.Ui.SteppedAway.Should().BeNull();
+        tui.WaitIdle("the banner cleared", () => !tui.Ui.Banner.Contains("stepped away", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void SteppedAway_WhileAnotherPersonHoldsTheLease_SaysAlpacaStaysRefused()
+    {
+        RoofCliAlpaca.DescribeSteppedAway(null, new RoofOperatorLeaseState { Held = true, Holder = "grace" })
+            .Should().Be("You stepped away from the operator lease, but grace holds it: Alpaca commands stay refused. Press any key to take control back.");
+        RoofCliAlpaca.DescribeSteppedAway(null, new RoofOperatorLeaseState())
+            .Should().Be("You stepped away from the operator lease: Alpaca may move the roof. Press any key to take control back.");
     }
 
     [TestMethod]

@@ -280,6 +280,36 @@ internal static class RoofCliAlpaca
 
     public static readonly string[] AlertHeaders = ["ID", "STATE", "GRANT", "ALERT"];
 
+    /// <summary>Said with the grant question while the interface holds the operator lease: granting steps the person away.</summary>
+    public const string StepAwayQuestion =
+        "Granting steps you away from the operator lease this interface holds, as a grant never lifts a person's lease: until "
+        + "you press a key, nothing here holds Alpaca commands off. Your next key takes control back and cancels the grant.";
+
+    /// <summary>
+    /// The banner after the person stepped away from the operator lease with <paramref name="grant"/> (null once it is used,
+    /// lapsed or revoked): what Alpaca may now do, and that a key takes control back. <paramref name="lease"/> is the lease
+    /// as the status shows it: another person's still refuses Alpaca commands.
+    /// </summary>
+    public static string DescribeSteppedAway(RoofOverrideGrant? grant, RoofOperatorLeaseState? lease)
+    {
+        if (lease is { Held: true, Holder: { Length: > 0 } holder })
+        {
+            return $"You stepped away from the operator lease, but {holder} holds it: Alpaca commands stay refused. "
+                + (grant is null ? "Press any key to take control back." : "Press any key to take control back; that cancels the grant.");
+        }
+
+        return grant is null
+            ? "You stepped away from the operator lease: Alpaca may move the roof. Press any key to take control back."
+            : $"You stepped away from the operator lease: Alpaca may close the roof once in the next {Duration(grant.SecondsRemaining)}. "
+                + "Press any key to take control back; that cancels the grant.";
+    }
+
+    /// <summary>Seconds as the shared wording gives them: whole minutes from 90 s, seconds below.</summary>
+    public static string Duration(double seconds)
+        => seconds >= 90
+            ? $"{Math.Ceiling(seconds / 60).ToString(CultureInfo.InvariantCulture)} min"
+            : $"{Math.Max(0, Math.Ceiling(seconds)).ToString(CultureInfo.InvariantCulture)} s";
+
     /// <summary>Whose lease lapsed for want of input, while nobody holds one.</summary>
     public static string LeaseLapsed(string holder) => $"No operator lease: {holder}'s lapsed after no input, so Alpaca may move the roof.";
 

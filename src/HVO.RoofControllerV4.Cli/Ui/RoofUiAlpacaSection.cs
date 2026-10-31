@@ -80,7 +80,7 @@ internal sealed class RoofUiAlpacaSection
     /// <summary>Shows the newest status's Alpaca command state.</summary>
     public void Show()
     {
-        _items = DescribeItems(_ui.Connection is not null, _ui.Status, _ui.LeaseHolder);
+        _items = DescribeItems(_ui.Connection is not null, _ui.Status, _ui.LeaseNotice);
         List.Show([.. _items.Select(item => item.Text)]);
     }
 
@@ -97,10 +97,11 @@ internal sealed class RoofUiAlpacaSection
     }
 
     /// <summary>
-    /// The section's lines: the commands setting, the hold, the lease, the idle warning for <paramref name="person"/> (whose
-    /// lease this interface holds), the warnings, the grants and the alerts (newest first, as the controller orders them).
+    /// The section's lines: the commands setting, the hold, the lease and what the interface says about the lease it holds
+    /// (<paramref name="leaseNotice"/>: stepped away with a grant, or the idle warning), the warnings, the grants and the
+    /// alerts (newest first, as the controller orders them).
     /// </summary>
-    internal static IReadOnlyList<RoofUiAlpacaItem> DescribeItems(bool connected, RoofStatusResponse? status, string? person)
+    internal static IReadOnlyList<RoofUiAlpacaItem> DescribeItems(bool connected, RoofStatusResponse? status, string? leaseNotice)
     {
         if (!connected)
         {
@@ -125,9 +126,9 @@ internal sealed class RoofUiAlpacaSection
                 : new(RoofUiAlpacaItemKind.Info, RoofCliAlpaca.HoldClear),
             new(RoofUiAlpacaItemKind.Info, RoofCliAlpaca.DescribeLease(alpaca.OperatorLease))
         };
-        if (RoofAlpacaText.DescribeIdleWarning(alpaca.OperatorLease, person) is { } idle)
+        if (leaseNotice is not null)
         {
-            items.Add(new(RoofUiAlpacaItemKind.Info, idle));
+            items.Add(new(RoofUiAlpacaItemKind.Info, leaseNotice));
         }
 
         items.AddRange(alpaca.Warnings.Select(warning => new RoofUiAlpacaItem(RoofUiAlpacaItemKind.Info, $"Warning: {warning}")));
@@ -200,13 +201,19 @@ internal sealed class RoofUiAlpacaSection
 
     /// <summary>
     /// Asks whether to grant an override for one Close despite <paramref name="alert"/>'s reasons, with what it lifts, for
-    /// whom and for how long (the shared question). Only its confirmation sends the grant, lifting exactly the alert's
-    /// reasons; Cancel or Esc sends nothing.
+    /// whom and for how long (the shared question), and, while this interface holds the operator lease, that granting
+    /// steps the person away from it. Only its confirmation sends the grant, lifting exactly the alert's reasons; Cancel or
+    /// Esc sends nothing.
     /// </summary>
     internal void AskGrant(RoofAlpacaAlert alert)
     {
         var keys = alert.ReasonKeys.ToArray();
-        var lines = RoofAlpacaText.DescribeGrantQuestion(alert, _ui.Status?.Alpaca?.OverrideWindowMinutes ?? 0);
+        var lines = RoofAlpacaText.DescribeGrantQuestion(alert, _ui.Status?.Alpaca?.OverrideWindowMinutes ?? 0).ToList();
+        if (_ui.OperatorLease is { Refused: false })
+        {
+            lines.Add(RoofCliAlpaca.StepAwayQuestion);
+        }
+
         Ask(new RoofUiPrompt($"{RoofAlpacaText.GrantCloseLabel}?", string.Join('\n', lines), [], [Action(RoofAlpacaText.GrantCloseLabel, () => Grant(keys))]));
     }
 
@@ -276,11 +283,16 @@ internal sealed class RoofUiAlpacaSection
         return $"Acknowledged alert {alert.Id}.";
     });
 
-    private void Grant(IReadOnlyList<string> keys) => Send("Granting one Alpaca Close…", async (client, cancellationToken) =>
+    // Through the shell: while it holds the operator lease, the person steps away from it with the grant.
+    private void Grant(IReadOnlyList<string> keys)
     {
-        var grant = await client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, keys, cancellationToken).ConfigureAwait(false);
-        return $"Granted. {RoofAlpacaText.DescribeGrant(grant)}";
-    });
+        var keeper = _ui.OperatorLease;
+        Send("Granting one Alpaca Close…", async (client, cancellationToken) =>
+        {
+            var grant = await _ui.GrantCloseAsync(client, keeper, keys, cancellationToken).ConfigureAwait(false);
+            return $"Granted. {RoofAlpacaText.DescribeGrant(grant)}";
+        });
+    }
 
     /// <summary>Sends one request; its result is said on the message line, and the status hub brings the new state.</summary>
     private void Send(string busy, Func<RoofControllerClient, CancellationToken, Task<string>> send)

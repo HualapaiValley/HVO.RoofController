@@ -79,10 +79,10 @@ internal sealed class RoofTerminalUi : IDisposable
     private volatile bool _closed;
 
     // The operator lease held for the signed-in person while the interface is open (#220), the ticks of the one-second
-    // timer until its next heartbeat, and whether the person did anything since the last one.
+    // timer until its next heartbeat, and the grant the person stepped away from it with, until their next input.
     private RoofOperatorLeaseKeeper? _operatorLease;
     private int _leaseBeatTicks;
-    private bool _inputSinceBeat;
+    private RoofOverrideGrant? _steppedAway;
 
     public RoofTerminalUi(RoofCliContext context, IApplication app)
     {
@@ -194,8 +194,9 @@ internal sealed class RoofTerminalUi : IDisposable
     public RoofCallerResponse? Caller { get; private set; }
 
     /// <summary>
-    /// Whose operator lease this interface holds (<see cref="OperatorLease"/>), the signed-in person's: the idle warning and
-    /// "Alpaca may now move the roof" are about it, since only input here keeps it. Null while it holds none.
+    /// Whose operator lease this interface holds (<see cref="OperatorLease"/>), the signed-in person's: the idle warning,
+    /// "Alpaca may now move the roof" and stepping away with a grant are about it, since only input here keeps it or takes
+    /// it back. Null while it holds none.
     /// </summary>
     public string? LeaseHolder => _operatorLease is { Refused: false } && Caller is { Kind: not RoofCredentialKind.ApiKey } caller ? caller.Name : null;
 
@@ -206,6 +207,32 @@ internal sealed class RoofTerminalUi : IDisposable
     /// Released when the interface closes or the connection changes.
     /// </summary>
     internal RoofOperatorLeaseKeeper? OperatorLease => _operatorLease;
+
+    /// <summary>
+    /// The grant the person stepped away from the operator lease with (<see cref="GrantCloseAsync"/>), until their next
+    /// key or click takes it back; null otherwise.
+    /// </summary>
+    internal RoofOverrideGrant? SteppedAway => _steppedAway;
+
+    /// <summary>
+    /// What the banner and the Alpaca section say about the lease this interface holds: that the person stepped away from
+    /// it with a grant, or that it is about to lapse, or has lapsed, for want of input. Null otherwise.
+    /// </summary>
+    internal string? LeaseNotice
+    {
+        get
+        {
+            var lease = Status?.Alpaca?.OperatorLease;
+            var person = LeaseHolder;
+            if (_steppedAway is { } away && person is not null && !(lease is { Held: true } && lease.Holder == person))
+            {
+                // While the grant is in force it says so; once it is used, lapsed or revoked, that the person is still away.
+                return RoofCliAlpaca.DescribeSteppedAway(Status?.Alpaca?.Grants.FirstOrDefault(grant => grant.Id == away.Id), lease);
+            }
+
+            return RoofAlpacaText.DescribeIdleWarning(lease, person);
+        }
+    }
 
     /// <summary>The newest status: from the hub, or from the answer to a command when that is newer.</summary>
     public RoofStatusResponse? Status { get; private set; }
@@ -735,24 +762,24 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         _operatorLease = new RoofOperatorLeaseKeeper(client);
-        _inputSinceBeat = true;
+        _steppedAway = null;
         BeatOperatorLease();
     }
 
     /// <summary>
     /// One heartbeat of the operator lease, then the next in <see cref="RoofAlpacaText.LeaseHeartbeatInterval"/>. The
-    /// heartbeats follow the interface's own clock, so they stop when the interface does. Once the person's lease has
-    /// lapsed for want of input, heartbeats alone never take it again: only the person's input does.
+    /// heartbeats follow the interface's own clock, so they stop when the interface does. After the lease lapsed for want
+    /// of input, or the person stepped away from it with a grant, the controller takes a heartbeat as keeping the session
+    /// alive only: the lease is taken back only by one that carries the person's input.
     /// </summary>
     private void BeatOperatorLease()
     {
         _leaseBeatTicks = (int)RoofAlpacaText.LeaseHeartbeatInterval.TotalSeconds;
-        if (_operatorLease is not { Refused: false } keeper || (!_inputSinceBeat && LeaseLapsedForPerson))
+        if (_operatorLease is not { Refused: false } keeper)
         {
             return;
         }
 
-        _inputSinceBeat = false;
         Interlocked.Increment(ref _pending);
         _ = Task.Run(async () =>
         {
@@ -767,13 +794,10 @@ internal sealed class RoofTerminalUi : IDisposable
         });
     }
 
-    /// <summary>The operator lease this interface held lapsed for want of input, and nobody has taken one since.</summary>
-    private bool LeaseLapsedForPerson
-        => Status?.Alpaca?.OperatorLease is { Held: false, IdleLapsedHolder: { } holder } && holder == LeaseHolder;
-
     /// <summary>
     /// The person pressed a key or used the mouse: the next heartbeat resets the operator lease's idle clock. While the
-    /// interface warns that the lease is about to lapse, or says it has, the heartbeat is sent at once.
+    /// interface says the lease is about to lapse, has lapsed, or that the person stepped away from it with a grant, the
+    /// heartbeat is sent at once: the person takes control back (which drops the grant).
     /// </summary>
     private void NotePersonInput()
     {
@@ -783,11 +807,42 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         keeper.NoteInput();
-        _inputSinceBeat = true;
-        if (RoofAlpacaText.DescribeIdleWarning(Status?.Alpaca?.OperatorLease, LeaseHolder) is not null)
+        var now = LeaseNotice is not null;
+        _steppedAway = null;
+        if (now)
         {
             BeatOperatorLease();
+            UpdateFeedState();
+            _page?.StatusChanged();
         }
+    }
+
+    /// <summary>
+    /// Grants an override for one Alpaca Close lifting exactly <paramref name="reasonKeys"/>. While this interface holds
+    /// the operator lease, the person steps away from it with the grant (the controller ends it, since a grant never lifts
+    /// a person's lease): no heartbeat crosses the grant, the input that confirmed it does not count after it, and only
+    /// their next key or click takes the lease back, which drops the grant. The banner says so meanwhile.
+    /// </summary>
+    internal async Task<RoofOverrideGrant> GrantCloseAsync(
+        RoofControllerClient client, RoofOperatorLeaseKeeper? keeper, IReadOnlyList<string> reasonKeys, CancellationToken cancellationToken)
+    {
+        if (keeper is not { Refused: false })
+        {
+            return await client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasonKeys, cancellationToken).ConfigureAwait(false);
+        }
+
+        var grant = await keeper.StepAwayAsync(token => client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasonKeys, token), cancellationToken)
+            .ConfigureAwait(false);
+        Post(() =>
+        {
+            if (ReferenceEquals(keeper, _operatorLease))
+            {
+                _steppedAway = grant;
+                UpdateFeedState();
+                _page?.StatusChanged();
+            }
+        });
+        return grant;
     }
 
     /// <summary>Gives the operator lease up (best effort: it lapses by itself when its heartbeats stop).</summary>
@@ -795,6 +850,7 @@ internal sealed class RoofTerminalUi : IDisposable
     {
         var keeper = _operatorLease;
         _operatorLease = null;
+        _steppedAway = null;
         return keeper is null ? Task.CompletedTask : Task.Run(async () =>
         {
             try
@@ -918,14 +974,19 @@ internal sealed class RoofTerminalUi : IDisposable
         }
     }
 
-    // A click, a press or the wheel is the person's input; the pointer only passing over the window is not.
+    // A button pressed, or the wheel, is the person's input; the pointer only passing over the window is not. A click is
+    // counted at its press only: its release, and the click made of them, may come after a grant it confirmed, and must
+    // not take the operator lease back.
     private void OnMouseEvent(object? sender, Mouse mouse)
     {
-        if (mouse.Flags != MouseFlags.None && mouse.Flags != MouseFlags.PositionReport)
+        if ((mouse.Flags & PersonMouseInput) != 0)
         {
             NotePersonInput();
         }
     }
+
+    private const MouseFlags PersonMouseInput = MouseFlags.LeftButtonPressed | MouseFlags.MiddleButtonPressed | MouseFlags.RightButtonPressed
+        | MouseFlags.Button4Pressed | MouseFlags.WheeledUp | MouseFlags.WheeledDown | MouseFlags.WheeledLeft | MouseFlags.WheeledRight;
 
     private void OnStatusReceived(RoofStatusReceivedEventArgs e)
     {
@@ -1085,8 +1146,9 @@ internal sealed class RoofTerminalUi : IDisposable
             if (current.IsFaultLatched) notices.Add($"[FAULT] {RoofStatusText.DescribeFault(current)}. Open and Close are blocked.");
             notices.AddRange(RoofStatusText.DescribeModeWarnings(current));
 
-            // The signed-in person's operator lease about to lapse for want of input, or lapsed: Alpaca may then move the roof.
-            if (RoofAlpacaText.DescribeIdleWarning(current.Alpaca?.OperatorLease, LeaseHolder) is { } idle) notices.Add(idle);
+            // The person stepped away from the operator lease with a grant, or it is about to lapse for want of input, or
+            // has: Alpaca may then move the roof, and a key takes control back.
+            if (LeaseNotice is { } lease) notices.Add(lease);
         }
         _banner.Text = string.Join(' ', notices);
         _banner.SetScheme(_banner.Text.Length == 0 ? Theme.Base

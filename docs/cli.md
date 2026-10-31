@@ -347,7 +347,9 @@ rules that only a person changes (#220):
 - **Override grants.** A refused Alpaca Close raises an alert. A person may allow one Close despite exactly that alert's
   reasons (a telescope not clear of the roof, or not known) for the override window. A grant never bypasses the fault
   latch, the interlocks, the limits, the motor protections, a person's operator lease or the Stop hold, and a Stop that
-  sets the hold, or a newly taken operator lease, drops it.
+  sets the hold, or a newly taken operator lease, drops it. So the person who grants steps away: the controller ends
+  their operator lease in every interface they have open, and only their input there takes it back, which drops the
+  grant. `hvo-roof alpaca grant` holds no lease itself.
 
 | Command | Role | What it does |
 |---------|------|--------------|
@@ -392,13 +394,22 @@ API key, each action says why it is a person's and sends nothing.
 
 **The operator lease in the terminal interface.** Signed in with a person's session (`hvo-roof login`) and the
 Operator role, the interface holds the operator lease while it is open, from a controller whose status has the Alpaca
-command state: a heartbeat every 10 s, which says whether you pressed a key or clicked since the last one. The
-interface's own timer and the status hub never count as your input. In the last minute before the lease lapses for want
-of input, the banner says
+command state: a heartbeat every 10 s, which says whether you did anything since the last one. A key, a mouse button
+pressed or the wheel is your input; a button's release (and the click made of it) is not, nor are the interface's own
+timer and the status hub. In the last minute before the lease lapses for want of input, the banner says
 `Your operator lease lapses in 42 s without input; then Alpaca may move the roof. Touch anything to keep it.`, and
-once it has lapsed, `Alpaca may now move the roof: your operator lease lapsed after no input.` After that, only your
-input takes the lease again, never a heartbeat alone. Closing the interface (or changing the connection) gives the
-lease up. Taking the lease drops any override grant in force, as every newly taken lease does.
+once it has lapsed, `Alpaca may now move the roof: your operator lease lapsed after no input.` The heartbeats go on,
+but the controller takes the lease back only with your input: your next key or click, which the interface then sends at
+once. Closing the interface (or changing the connection) gives the lease up. Taking the lease drops any override grant
+in force, as every newly taken lease does.
+
+**Stepping away with a grant.** While the interface holds the lease, **Allow this Close once** steps you away from it,
+since a grant never lifts a person's lease: the question says so, and the controller ends your lease with the grant. No
+heartbeat crosses the grant, and the key or click that confirmed it does not count after it. The banner (and the Alpaca
+section) then says
+`You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Press any key to take control back; that cancels the grant.`,
+and once the grant is used, lapsed or revoked, that you are still away. The heartbeats go on without taking the lease
+back. Your next key or click takes control back at once, which cancels the grant.
 
 It holds no lease with an API key (the controller refuses every key one), with the Viewer role, or in local mode. In
 local mode every request is authorized as a session of its own, while the controller keeps a lease per session, so each
@@ -650,7 +661,8 @@ Nothing here needs the Pi, the HAT or the roof.
   - the Setup, People, Settings and System pages, including confirmation of safety-critical changes;
   - the Alpaca section and its prompts (`RoofTerminalUiAlpacaTests`): each action sent only from its prompt, an override
     grant with exactly its alert's reasons, F9 withdrawing a prompt, an API key refused, and the operator lease held only
-    for a person who may operate, renewed with input only after a key or a click, and released on closing.
+    for a person who may operate, renewed with input only after a key or a click, released on closing, and stepped away
+    from with a grant: heartbeats go on without taking it back, and the next key takes it back and cancels the grant.
 - **Scenarios** (`RoofCliScenarios`, `TestCategory=Scenario`) run `hvo-roof open`, `close` and `stop`, and the terminal
   interface, against the emulated roof. The operator lease is 5 s, shorter than the travel, so a motion reaches its
   limit only if the client renews the lease.
