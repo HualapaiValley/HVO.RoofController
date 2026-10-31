@@ -21,7 +21,7 @@ closes it: `OpenShutter` and `CloseShutter` are refused. Later phases of #220 ad
 - [The protocol](#the-protocol)
 - [Security](#security)
 - [Running it](#running-it)
-- [Settings](#settings)
+- [Server settings](#server-settings)
 - [Discovery](#discovery)
 - [Conformance](#conformance)
 - [Not yet](#not-yet)
@@ -195,7 +195,7 @@ the [deploy script](deployment.md) or the [installer](install.md) ([Not yet](#no
    dotnet publish HVO.RoofControllerV4.Alpaca -c Release -o ~/hvo-roof-alpaca
    ```
 
-3. **Run it** with its settings in the environment ([Settings](#settings)):
+3. **Run it** with its settings in the environment ([Settings](#server-settings)):
 
    ```bash
    Alpaca__Enabled=true \
@@ -211,7 +211,7 @@ the [deploy script](deployment.md) or the [installer](install.md) ([Not yet](#no
 4. **Connect a client.** In NINA, choose the dome from the Alpaca devices it discovers, or give it the server's address
    and port. Then open `http://<address>:11111/setup` in a browser to see what the server sees.
 
-## Settings
+## Server settings
 
 The settings are the `Alpaca` section, from the environment (`Alpaca__Port=11111`) or the command line
 (`--Alpaca:Port=11111`). There is no settings file, and the controller's [settings catalogue](security.md#settings)
