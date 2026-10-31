@@ -181,6 +181,11 @@ public sealed partial class RoofAlpacaCommands
             _logger.LogInformation("Alpaca Close accepted on ticket {TicketId} (ClientID {ClientId} at {ClientAddress}, reported){Grant}",
                 ticket.Id, client.ClientId, client.Address, admission.UsedGrant is { } used ? $" with override grant {used.Id}" : string.Empty);
         }
+        else if (result.Error is RoofControllerException { Code: RoofControllerErrorCode.FaultLatched })
+        {
+            // A latch refuses every Close; the UIs say so beside the latch itself (§6).
+            RaiseAlert("Refused", RoofAlpacaCommandKind.Close, "An Alpaca Close was refused: a safety fault is latched; a person clears it after checking the roof.", ["fault-latched"], client);
+        }
 
         return new RoofAlpacaCommandOutcome(result, admission.Reasons, admission.UsedGrant?.Id);
     }

@@ -252,6 +252,7 @@ public sealed class RoofAlpacaCloseTests
 
         outcome.Code().Should().Be(RoofControllerErrorCode.FaultLatched);
         rig.Commands.Grants().Should().ContainSingle("a hard protection refuses before the use-up point");
+        rig.Commands.Alerts().Should().ContainSingle(alert => alert.ReasonKeys.Contains("fault-latched"), "a latch refusing an Alpaca Close is an alert (§6)");
     }
 
     [TestMethod]
