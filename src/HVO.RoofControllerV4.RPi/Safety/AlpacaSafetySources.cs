@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Sockets;
 using System.Text.Json;
+using HVO.RoofControllerV4.Common.Alpaca;
 using HVO.RoofControllerV4.Common.Safety;
 
 namespace HVO.RoofControllerV4.RPi.Safety;
@@ -84,10 +85,70 @@ public sealed class AlpacaDevice
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(member);
         var transaction = NextTransaction();
-        var answer = await ReadAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+        var answer = await ReadAsync(DevicePath(member), transaction, cancellationToken).ConfigureAwait(false);
         using (answer)
         {
             return ReadValue(answer.RootElement, transaction);
+        }
+    }
+
+    /// <summary>
+    /// Reads a text member (<c>driverinfo</c>). Throws <see cref="RoofSafetySourceException"/> unless the device answered
+    /// it cleanly with text; ends with <paramref name="cancellationToken"/>.
+    /// </summary>
+    public async Task<string> ReadTextAsync(string member, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(member);
+        var transaction = NextTransaction();
+        var answer = await ReadAsync(DevicePath(member), transaction, cancellationToken).ConfigureAwait(false);
+        using (answer)
+        {
+            return ReadEnvelope(answer.RootElement, transaction) is { ValueKind: JsonValueKind.String } text
+                ? text.GetString()!
+                : throw new RoofSafetySourceException("the Alpaca server's answer has no text Value");
+        }
+    }
+
+    /// <summary>
+    /// The <c>Value</c> of a Management API answer from the device's server (<c>v1/description</c>,
+    /// <c>v1/configureddevices</c>), or null when the server does not give one cleanly: a server need not serve it (one
+    /// behind a proxy, say), so its absence is not a failed read. Ends with <paramref name="cancellationToken"/>.
+    /// </summary>
+    public async Task<JsonElement?> TryReadManagementAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        JsonDocument answer;
+        try
+        {
+            answer = await ReadAsync($"management/{path}", NextTransaction(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (RoofSafetySourceException)
+        {
+            return null;
+        }
+
+        using (answer)
+        {
+            if (answer.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            JsonElement? value = null;
+            foreach (var property in answer.RootElement.EnumerateObject())
+            {
+                if (string.Equals(property.Name, "Value", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (value is not null)
+                    {
+                        return null;
+                    }
+
+                    value = property.Value.Clone();
+                }
+            }
+
+            return value;
         }
     }
 
@@ -100,6 +161,15 @@ public sealed class AlpacaDevice
     /// is a failed read that neither makes nor refreshes a reading. The device's own <c>ErrorMessage</c> is never quoted.
     /// </summary>
     internal static bool ReadValue(JsonElement answer, uint clientTransaction)
+        => ReadEnvelope(answer, clientTransaction) switch
+        {
+            { ValueKind: JsonValueKind.True } => true,
+            { ValueKind: JsonValueKind.False } => false,
+            _ => throw new RoofSafetySourceException("the Alpaca server's answer has no true or false Value")
+        };
+
+    /// <summary>The <c>Value</c> of an unambiguous success (<see cref="ReadValue"/>), or null when it has none.</summary>
+    private static JsonElement? ReadEnvelope(JsonElement answer, uint clientTransaction)
     {
         if (answer.ValueKind != JsonValueKind.Object)
         {
@@ -148,12 +218,7 @@ public sealed class AlpacaDevice
             throw new RoofSafetySourceException("the Alpaca server's answer reports success with an error message");
         }
 
-        return fields.TryGetValue("Value", out var value) ? value.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            _ => throw new RoofSafetySourceException("the Alpaca server's answer has no true or false Value")
-        } : throw new RoofSafetySourceException("the Alpaca server's answer has no true or false Value");
+        return fields.TryGetValue("Value", out var value) ? value : null;
     }
 
     /// <summary>An Alpaca error number in words: its number and the ASCOM exception it stands for.</summary>
@@ -178,11 +243,11 @@ public sealed class AlpacaDevice
             : string.Create(CultureInfo.InvariantCulture, $"the device reports Alpaca error 0x{error:X3} ({meaning})");
     }
 
-    private async Task<JsonDocument> ReadAsync(string member, uint transaction, CancellationToken cancellationToken)
+    private string DevicePath(string member) => string.Create(CultureInfo.InvariantCulture, $"api/v1/{DeviceType}/{DeviceNumber}/{member.ToLowerInvariant()}");
+
+    private async Task<JsonDocument> ReadAsync(string path, uint transaction, CancellationToken cancellationToken)
     {
-        var uri = new Uri(
-            _server,
-            string.Create(CultureInfo.InvariantCulture, $"api/v1/{DeviceType}/{DeviceNumber}/{member.ToLowerInvariant()}?ClientID={ClientId}&ClientTransactionID={transaction}"));
+        var uri = new Uri(_server, string.Create(CultureInfo.InvariantCulture, $"{path}?ClientID={ClientId}&ClientTransactionID={transaction}"));
 
         var client = _clients.CreateClient(HttpClientName);
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
@@ -348,12 +413,30 @@ public sealed class AlpacaTelescopeParkSource : ITelescopeParkSource
 }
 
 /// <summary>
-/// Whether the weather is safe, from an ASCOM Alpaca <c>SafetyMonitor</c>: <c>Connected</c>, then <c>IsSafe</c>. A monitor
-/// that is not connected is a failed read ("the device is not connected"), never safe or unsafe weather.
+/// Whether the weather is safe, from an ASCOM Alpaca <c>SafetyMonitor</c>: its identity (below), <c>Connected</c>, then
+/// <c>IsSafe</c>. A monitor that is not connected is a failed read ("the device is not connected"), never safe or unsafe
+/// weather.
 /// </summary>
+/// <remarks>
+/// The monitor is never this roof controller's own Alpaca SafetyMonitor, which publishes the weather the controller
+/// reads: reading it would loop (#220). At first contact, and again after any failed read, the monitor's identity is
+/// checked before its IsSafe is read: its own DriverInfo (which a hub relays) must not be this controller's Alpaca
+/// server's (<see cref="AlpacaServerIdentity"/>), and when its server's Management API describes this controller's
+/// Alpaca server and lists the monitor, the monitor's UniqueID is one of that server's own. Either refuses the monitor
+/// (<see cref="OwnDeviceFailure"/>), a failed read every time. A server that serves no Management API is judged by the
+/// monitor's DriverInfo alone. A hub that hides both fails safe: the monitor then reads its own unsafe answer, never
+/// safe weather.
+/// </remarks>
 public sealed class AlpacaSafetyMonitorSource : IWeatherSafetySource
 {
+    /// <summary>The failure's words for this roof controller's own SafetyMonitor.</summary>
+    public const string OwnDeviceFailure =
+        "configuration error: the device is this roof controller's own Alpaca SafetyMonitor, which publishes the weather the controller reads (a loop)";
+
     private readonly AlpacaDevice _device;
+
+    // True once this connection's monitor was checked not to be ours; false again after any failed read.
+    private volatile bool _checked;
 
     public AlpacaSafetyMonitorSource(RoofSafetyWeatherSourceOptions options, IHttpClientFactory clients)
     {
@@ -372,11 +455,63 @@ public sealed class AlpacaSafetyMonitorSource : IWeatherSafetySource
 
     public async Task<WeatherSafetyReading> ReadWeatherSafetyAsync(CancellationToken cancellationToken)
     {
-        if (!await _device.ReadBooleanAsync("connected", cancellationToken).ConfigureAwait(false))
+        try
         {
-            throw new RoofSafetySourceException("the device is not connected");
+            // First, before Connected: the identity is readable unconnected, and a hub relaying our own monitor connects it.
+            if (!_checked)
+            {
+                await RefuseOwnMonitorAsync(cancellationToken).ConfigureAwait(false);
+                _checked = true;
+            }
+
+            if (!await _device.ReadBooleanAsync("connected", cancellationToken).ConfigureAwait(false))
+            {
+                throw new RoofSafetySourceException("the device is not connected");
+            }
+
+            return new WeatherSafetyReading(await _device.ReadBooleanAsync("issafe", cancellationToken).ConfigureAwait(false));
+        }
+        catch
+        {
+            // Whatever failed (the device restarted, another took its address), the next contact checks it again.
+            _checked = false;
+            throw;
+        }
+    }
+
+    private async Task RefuseOwnMonitorAsync(CancellationToken cancellationToken)
+    {
+        // The device's own words, which a hub relays as they are.
+        if (AlpacaServerIdentity.IsOwnDriverInfo(await _device.ReadTextAsync("driverinfo", cancellationToken).ConfigureAwait(false)))
+        {
+            throw new RoofSafetySourceException(OwnDeviceFailure);
         }
 
-        return new WeatherSafetyReading(await _device.ReadBooleanAsync("issafe", cancellationToken).ConfigureAwait(false));
+        // Its server: this controller's Alpaca server lists its own devices' UniqueIDs, this monitor's among them.
+        if (await _device.TryReadManagementAsync("v1/description", cancellationToken).ConfigureAwait(false) is not { ValueKind: JsonValueKind.Object } description
+            || !string.Equals(Text(description, "ServerName"), AlpacaServerIdentity.ServerName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (await _device.TryReadManagementAsync("v1/configureddevices", cancellationToken).ConfigureAwait(false) is { ValueKind: JsonValueKind.Array } devices
+            && devices.EnumerateArray().Any(device => device.ValueKind == JsonValueKind.Object
+                && string.Equals(Text(device, "DeviceType"), "SafetyMonitor", StringComparison.OrdinalIgnoreCase)
+                && Number(device, "DeviceNumber") == _device.DeviceNumber
+                && !string.IsNullOrWhiteSpace(Text(device, "UniqueID"))))
+        {
+            throw new RoofSafetySourceException(OwnDeviceFailure);
+        }
     }
+
+    private static string? Text(JsonElement value, string name)
+        => value.EnumerateObject().FirstOrDefault(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)).Value is { ValueKind: JsonValueKind.String } text
+            ? text.GetString()
+            : null;
+
+    private static int? Number(JsonElement value, string name)
+        => value.EnumerateObject().FirstOrDefault(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)).Value is { ValueKind: JsonValueKind.Number } number
+            && number.TryGetInt32(out var result)
+            ? result
+            : null;
 }

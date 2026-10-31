@@ -145,7 +145,7 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 | `HVO.RoofControllerV4.Client` | Client library for the REST API and the status hub, shared by every UI client ([its README](src/HVO.RoofControllerV4.Client/README.md)) |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the command line and terminal interface, over the client library ([docs/cli.md](docs/cli.md)) |
 | `HVO.RoofControllerV4.Web` | The web UI: Blazor Server, over the client library ([docs/web.md](docs/web.md)) |
-| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome, off by default, over the client library ([docs/alpaca.md](docs/alpaca.md)) |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, off by default, over the client library ([docs/alpaca.md](docs/alpaca.md)) |
 | `HVO.RoofControllerV4.Screens` | The screens and view models of the kiosk and the Mac app: Avalonia controls in HVO Dark, over the client library |
 | `HVO.RoofControllerV4.Kiosk` | `hvo-roof-kiosk`: the touchscreen kiosk, drawing the screens through DRM ([docs/kiosk.md](docs/kiosk.md)) |
 | `HVO.RoofControllerV4.Mac` | `HVO Roof.app`: the Mac app, the screens in a window, and its bundle scripts ([docs/mac.md](docs/mac.md)) |

@@ -35,7 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a key under `RoofSafety` that no setting has, stops the controller at start rather than dropping a device
   ([docs/alpaca.md](docs/alpaca.md)).
 - The weather alone on every status and at `GET /api/v4.0/Safety` (`weatherState`, `weatherReasons`), never including
-  the telescopes, for the weather-only Alpaca SafetyMonitor; and each source's `counts`.
+  the telescopes; and each source's `counts`.
+- The Alpaca server serves the observatory's weather as **SafetyMonitor 0** (#220, phase 2), beside Dome 0 and with the
+  same settings, protocol and security: `IsSafe` is true only while the controller's `weatherState` is Safe, never
+  counting the telescopes, so an observing program that parks and closes on an unsafe monitor does not do so when a
+  mount unparks. Unsafe or unknown weather, a controller that does not report it, and an error (not connected `0x407`,
+  the controller unreachable or silent for 3 s `0x500`) all read unsafe (`Value` false). Its connection is its own; its
+  `UniqueID` is kept beside the Dome's in `alpaca-devices.json` (a phase 1 file gains it, the Dome's unchanged); the
+  setup page shows it; ConformU checks it in CI with no errors and no issues. The controller refuses this SafetyMonitor
+  as one of its own weather sources, by its `DriverInfo` (also through a hub) and by its server's `UniqueID`s, so it
+  never reads its own weather back.
 - The HAT emulator serves fake ASCOM Alpaca mounts and weather safety monitors on its control port
   (`Emulator:AlpacaTelescopes`, `Emulator:AlpacaSafetyMonitors`, one of each by default), with park, weather,
   connection, `CanPark` and failure states set through `/api/emulator/alpaca`; both compose files point the controller

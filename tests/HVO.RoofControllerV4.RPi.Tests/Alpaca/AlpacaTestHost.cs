@@ -160,6 +160,29 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
     public Task<HttpResponseMessage> PutRawAsync(string member, string form)
         => Http.PutAsync($"/api/v1/dome/0/{member}", new StringContent(form, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded"));
 
+    /// <summary>GETs a member of <paramref name="device"/> (<c>safetymonitor/0</c>, say) and returns the envelope.</summary>
+    public async Task<JsonElement> GetDeviceAsync(string device, string member, string query = "ClientID=1&ClientTransactionID=1")
+    {
+        using var response = await Http.GetAsync($"/api/v1/{device}/{member}?{query}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
+    }
+
+    /// <summary>PUTs a member of <paramref name="device"/>, form-encoded, and returns the response as it is.</summary>
+    public Task<HttpResponseMessage> PutDeviceRawAsync(string device, string member, string form)
+        => Http.PutAsync($"/api/v1/{device}/{member}", new StringContent(form, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded"));
+
+    /// <summary>PUTs a member of <paramref name="device"/>, form-encoded, and returns the envelope.</summary>
+    public async Task<JsonElement> PutDeviceAsync(string device, string member, string form = "ClientID=1&ClientTransactionID=1")
+    {
+        using var response = await PutDeviceRawAsync(device, member, form);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
+    }
+
+    /// <summary>The server's in-memory handler, for a client in the test process (the controller's Alpaca sources, say).</summary>
+    public HttpMessageHandler CreateHandler() => _app.GetTestServer().CreateHandler();
+
     /// <summary>Connects client <paramref name="clientId"/> at the test's address.</summary>
     public async Task ConnectAsync(uint clientId = 1)
         => (await PutAsync("connected", $"Connected=true&ClientID={clientId}&ClientTransactionID=1")).GetProperty("ErrorNumber").GetInt32().Should().Be(0);

@@ -63,7 +63,7 @@ conditions are Unknown.
 |---|---|
 | `state` | `Safe`, `Unsafe` or `Unknown`. |
 | `reasons` | Why it is not Safe: the counting sources' Unsafe reasons first, then their Unknown ones', then `No required weather source configured` when it applies; or only `No safety sources configured`. Empty when Safe. |
-| `weatherState`, `weatherReasons` | The weather alone, with no telescope: `Safe` only when at least one weather source is required and every required one says safe, recently; `Unsafe` when one says unsafe; otherwise `Unknown`, with the same words. What the controller's Alpaca `SafetyMonitor` publishes ([docs/alpaca.md](alpaca.md#the-weather-alone)). |
+| `weatherState`, `weatherReasons` | The weather alone, with no telescope: `Safe` only when at least one weather source is required and every required one says safe, recently; `Unsafe` when one says unsafe; otherwise `Unknown`, with the same words. What the Alpaca server's SafetyMonitor 0 publishes as `IsSafe` ([docs/alpaca.md](alpaca.md#the-weather-as-safetymonitor-0)). |
 | `sources[]` | Each source: `name`, `kind` (`TelescopePark` or `Weather`), `state`, `reason`, `detail` (extra words from the source, at most 200 characters), `lastReadingUtc`, `isStale`, `maxReadingAgeSeconds`, `counts` (false for a weather source set `Ignored` or a telescope that cannot block the roof; true from a controller that does not say). |
 | `stateSinceUtc` | When `state` last changed. |
 | `interlockMode` | `Off`, `Warn` or `Block` ([The Open interlock](#the-open-interlock)). |
@@ -98,11 +98,13 @@ The source interfaces are in `HVO.RoofControllerV4.Common.Safety`, so the simula
 
 Both extend `IRoofSafetySource`: a `Name` that the reasons quote, and an optional `MaxReadingAge` of the source's own.
 An adapter reads its device when asked and throws when it cannot (a `RoofSafetySourceException` when it can say why in
-words fit to show); it polls nothing and caches nothing, since the service does both.
+words fit to show); it polls nothing and caches no reading, since the service does both (the
+SafetyMonitor adapter remembers only that its device was checked not to be the controller's own, until a read fails).
 
 The controller's adapters read ASCOM Alpaca devices: `AlpacaTelescopeParkSource` for each of `RoofSafety:Telescopes`
-and `AlpacaSafetyMonitorSource` for each of `RoofSafety:WeatherSources`, in the order configured
-([docs/alpaca.md](alpaca.md)). Any other `ITelescopeParkSource` or `IWeatherSafetySource` singleton (the tests'
+and `AlpacaSafetyMonitorSource` for each of `RoofSafety:WeatherSources`, in the order configured; a weather source
+that is the Alpaca server's own SafetyMonitor is refused, so the controller never reads its weather back
+([docs/alpaca.md](alpaca.md#never-our-own-safetymonitor)). Any other `ITelescopeParkSource` or `IWeatherSafetySource` singleton (the tests'
 simulated ones, [Testing](#testing)) is read too, before the configured ones.
 
 `ObservedUtc` is for a device that dates its observation: an earlier time makes the reading that much older, and a time

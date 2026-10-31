@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Web;
 using FluentAssertions;
+using HVO.RoofControllerV4.Common.Alpaca;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Common.Safety;
 using HVO.RoofControllerV4.RPi.Safety;
@@ -77,7 +78,7 @@ public sealed class AlpacaSafetySourceTests
         recorder.Requests.Select(request => request.Uri.AbsolutePath).Should().Equal(
             "/api/v1/telescope/0/connected", "/api/v1/telescope/0/canpark", "/api/v1/telescope/0/atpark",
             "/api/v1/telescope/0/connected", "/api/v1/telescope/0/canpark", "/api/v1/telescope/0/atpark",
-            "/api/v1/safetymonitor/0/connected", "/api/v1/safetymonitor/0/issafe");
+            "/api/v1/safetymonitor/0/driverinfo", "/management/v1/description", "/api/v1/safetymonitor/0/connected", "/api/v1/safetymonitor/0/issafe");
         var queries = recorder.Requests.Select(request => HttpUtility.ParseQueryString(request.Uri.Query)).ToList();
         queries.Select(query => query["ClientID"]).Distinct().Should().ContainSingle()
             .Which.Should().Match(id => uint.Parse(id!, CultureInfo.InvariantCulture) >= 1 && uint.Parse(id!, CultureInfo.InvariantCulture) <= 65535,
@@ -293,6 +294,72 @@ public sealed class AlpacaSafetySourceTests
         make.Should().Throw<ArgumentException>().Which.Message.Should().NotContain("secret").And.NotContain("example.test");
     }
 
+    // ---- Never this roof controller's own SafetyMonitor (#220): no loop ------------------------------------------
+
+    [TestMethod]
+    public async Task OurOwnSafetyMonitor_ByItsDriverInfo_IsRefused_AndItsIsSafeNeverRead()
+    {
+        // As through a hub that relays our device: the server is another, the device says it is ours.
+        var server = new FakeAlpacaServer { DriverInfo = AlpacaServerIdentity.ServerName + " 4.4.0: the observatory's weather" };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Loop"), new Factory(() => server));
+
+        var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+
+        (await read.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(AlpacaSafetyMonitorSource.OwnDeviceFailure);
+        server.Paths.Should().NotContain(path => path.EndsWith("/issafe", StringComparison.Ordinal), "a loop is refused before it is read");
+    }
+
+    [TestMethod]
+    public async Task OurOwnAlpacaServer_ByTheUniqueIdItListsForTheDevice_IsRefused()
+    {
+        // The device's own words are another's, but its server is ours and lists the device's UniqueID as its own.
+        var server = new FakeAlpacaServer { ServerName = AlpacaServerIdentity.ServerName, UniqueId = "0d5f6a1c-2b3e-4c5d-9e8f-102938475610" };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Loop"), new Factory(() => server));
+
+        var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+
+        (await read.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(AlpacaSafetyMonitorSource.OwnDeviceFailure);
+        server.Paths.Should().Contain("/management/v1/configureddevices").And.NotContain(path => path.EndsWith("/issafe", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task AnotherServersDevice_IsChecked_OncePerConnection_AndAgainAfterAFailedRead()
+    {
+        var server = new FakeAlpacaServer();
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server));
+
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+        server.Fail = true;
+        var failed = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+        await failed.Should().ThrowAsync<RoofSafetySourceException>();
+        server.Fail = false;
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+
+        server.Paths.Count(path => path.EndsWith("/driverinfo", StringComparison.Ordinal)).Should().Be(2, "checked at first contact, and again after the failed read");
+        server.Paths.Count(path => path == "/management/v1/description").Should().Be(2);
+        server.Paths.Count(path => path.EndsWith("/issafe", StringComparison.Ordinal)).Should().Be(3);
+        server.Methods.Should().OnlyContain(method => method == HttpMethod.Get);
+    }
+
+    [TestMethod]
+    public async Task AServerWithoutTheManagementApi_IsStillRead_ByItsDevicesOwnWords()
+    {
+        var server = new FakeAlpacaServer { ServesManagement = false };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server));
+
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task TheEmulatorsSafetyMonitor_IsNotOurs()
+    {
+        await using var emulator = new EmulatorHost();
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Clients(emulator));
+
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+    }
+
     // ---- With the safety service ---------------------------------------------------------------------------------
 
     [TestMethod]
@@ -418,6 +485,57 @@ public sealed class AlpacaSafetySourceTests
     /// <summary>An Alpaca answer with these fields, the request's ClientTransactionID and a ServerTransactionID.</summary>
     private static string Envelope(string fields) => "{" + fields + ",\"ClientTransactionID\":$TX,\"ServerTransactionID\":1}";
 
+    /// <summary>
+    /// An Alpaca server with one safety monitor, answering cleanly by path: its DriverInfo and its management API's
+    /// description and configured devices as set, IsSafe true, or (<see cref="Fail"/>) HTTP 500 to every device request.
+    /// </summary>
+    private sealed class FakeAlpacaServer : HttpMessageHandler
+    {
+        public string DriverInfo { get; init; } = "Another vendor's driver 2.1";
+
+        public string ServerName { get; init; } = "Another Alpaca server";
+
+        public string UniqueId { get; init; } = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+
+        public bool ServesManagement { get; init; } = true;
+
+        public bool Fail { get; set; }
+
+        public List<string> Paths { get; } = [];
+
+        public List<HttpMethod> Methods { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            lock (Paths)
+            {
+                Paths.Add(path);
+                Methods.Add(request.Method);
+            }
+
+            var transaction = HttpUtility.ParseQueryString(request.RequestUri.Query)["ClientTransactionID"] ?? "0";
+            string? value = path switch
+            {
+                "/management/v1/description" when ServesManagement => "{\"ServerName\":\"" + ServerName + "\",\"Manufacturer\":\"Someone\",\"ManufacturerVersion\":\"1\",\"Location\":\"\"}",
+                "/management/v1/configureddevices" when ServesManagement => "[{\"DeviceName\":\"Weather\",\"DeviceType\":\"SafetyMonitor\",\"DeviceNumber\":0,\"UniqueID\":\"" + UniqueId + "\"}]",
+                "/api/v1/safetymonitor/0/driverinfo" when !Fail => "\"" + DriverInfo + "\"",
+                "/api/v1/safetymonitor/0/connected" or "/api/v1/safetymonitor/0/issafe" when !Fail => "true",
+                _ => null
+            };
+            if (value is null)
+            {
+                return Task.FromResult(new HttpResponseMessage(path.StartsWith("/management", StringComparison.Ordinal) ? HttpStatusCode.BadRequest : HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("no", Encoding.UTF8, "text/plain")
+                });
+            }
+
+            var body = "{\"Value\":" + value + ",\"ClientTransactionID\":" + transaction + ",\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+        }
+    }
+
     /// <summary>Makes every client on the handler given, as the controller's named client would be.</summary>
     internal sealed class Factory(Func<HttpMessageHandler> handler) : IHttpClientFactory
     {
@@ -468,8 +586,9 @@ public sealed class AlpacaSafetySourceTests
     }
 
     /// <summary>
-    /// Answers <c>connected</c> and <c>canpark</c> true, and every other member with <see cref="Body"/>, in which
-    /// <c>$TX</c> stands for the request's ClientTransactionID.
+    /// Answers <c>connected</c> and <c>canpark</c> true and <c>driverinfo</c> with another vendor's words, serves no
+    /// management API, and answers every other member with <see cref="Body"/>, in which <c>$TX</c> stands for the
+    /// request's ClientTransactionID.
     /// </summary>
     private sealed class AnsweringHandler(string body, bool sendLength) : HttpMessageHandler
     {
@@ -478,10 +597,17 @@ public sealed class AlpacaSafetySourceTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (path.StartsWith("/management/", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("not served", Encoding.UTF8, "text/plain") });
+            }
+
             var transaction = HttpUtility.ParseQueryString(request.RequestUri.Query)["ClientTransactionID"] ?? "0";
             var answer = (path.EndsWith("/connected", StringComparison.Ordinal) || path.EndsWith("/canpark", StringComparison.Ordinal)
                 ? "{\"Value\":true,\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}"
-                : Body).Replace("$TX", transaction, StringComparison.Ordinal);
+                : path.EndsWith("/driverinfo", StringComparison.Ordinal)
+                    ? "{\"Value\":\"Another vendor's driver\",\"ClientTransactionID\":$TX,\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}"
+                    : Body).Replace("$TX", transaction, StringComparison.Ordinal);
             HttpContent content = sendLength
                 ? new StringContent(answer, Encoding.UTF8, "application/json")
                 : new StreamContent(new ForwardOnlyStream(Encoding.UTF8.GetBytes(answer)));

@@ -190,7 +190,9 @@ public sealed class AlpacaProtocolTests
         description.GetProperty("Value").GetProperty("Manufacturer").GetString().Should().Be("Hualapai Valley Observatory");
         description.GetProperty("Value").GetProperty("ManufacturerVersion").GetString().Should().NotContain("+", "the version without its commit");
         description.GetProperty("Value").GetProperty("Location").GetString().Should().Be("Test observatory");
-        var device = devices.GetProperty("Value").EnumerateArray().Should().ContainSingle().Subject;
+        // The roof first; the weather (phase 2) beside it, AlpacaSafetyMonitorTests.
+        devices.GetProperty("Value").GetArrayLength().Should().Be(2);
+        var device = devices.GetProperty("Value")[0];
         device.GetProperty("DeviceName").GetString().Should().Be(AlpacaDome.DeviceName);
         device.GetProperty("DeviceType").GetString().Should().Be("Dome");
         device.GetProperty("DeviceNumber").GetInt32().Should().Be(0);
