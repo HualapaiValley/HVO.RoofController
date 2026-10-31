@@ -78,6 +78,36 @@ public sealed record KioskView
     public bool HoldsLease { get; init; }
 
     /// <summary>
+    /// True while the kiosk keeps the Alpaca operator lease (#220) for the person who unlocked it (an operator): its
+    /// heartbeats go on, and while anyone holds it, the controller refuses Alpaca commands. Whether it is held now (it may
+    /// have lapsed, or the person stepped away by granting) is the status's. Not the lease of a motion
+    /// (<see cref="HoldsLease"/>).
+    /// </summary>
+    public bool KeepsOperatorLease { get; init; }
+
+    /// <summary>
+    /// The unlocking person's Alpaca operator lease, about to lapse for want of input or lapsed
+    /// (<see cref="RoofAlpacaText.DescribeIdleWarning"/>); null otherwise.
+    /// </summary>
+    public string? AlpacaIdleWarning { get; init; }
+
+    /// <summary>
+    /// After the unlocking person granted an override here, which stepped them away from the operator lease, and while
+    /// nobody holds it: what Alpaca may do, and that a touch takes control back and cancels the grant
+    /// (<see cref="RoofAlpacaText.DescribeSteppedAway"/>); null otherwise.
+    /// </summary>
+    public string? AlpacaSteppedAway { get; init; }
+
+    /// <summary>
+    /// True when the controller reports its Alpaca command state and there is something to see or do there: Alpaca
+    /// commands are on, or an alert, a grant, a warning or the person's idle warning is shown. With commands off and
+    /// nothing to show, the Alpaca page is not offered.
+    /// </summary>
+    public bool OffersAlpaca => Status?.Alpaca is { } alpaca
+        && (alpaca.Mode != RoofAlpacaCommandMode.Off || alpaca.Alerts.Count > 0 || alpaca.Grants.Count > 0 || alpaca.Warnings.Count > 0
+            || AlpacaIdleWarning is not null || AlpacaSteppedAway is not null);
+
+    /// <summary>
     /// The safety override question the kiosk asks before it sends Open, while the conditions are not Safe and the
     /// controller's interlock asks for an override (Warn mode); null when it asks nothing. Open is sent with the override
     /// only once the person confirms (<see cref="KioskConsole.OpenWithSafetyOverrideAsync"/>).

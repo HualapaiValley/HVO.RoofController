@@ -78,6 +78,14 @@ What the app offers depends on the person's role, as the controller gives it, an
   `Secrets are not typed in this app: set them in the web UI or with hvo-roof.`
 - **System**: the app's own version, the controller's summary for every role (its version, uptimes, CPU, temperature,
   memory, disk and addresses), its health checks and readiness, and for an admin the host's details and **Restart**.
+- **Alpaca** (#220), as on the kiosk ([Alpaca](kiosk.md#alpaca)), while the controller takes Alpaca commands or has an
+  Alpaca alert, grant or warning to show: the Stop hold and **Allow Alpaca again**, the operator lease, grants with
+  **Revoke**, and alerts with **Acknowledge** and **Allow this Close once**, which asks first (Escape answers Cancel).
+  While an operator is signed in and Alpaca commands are on, the app holds the operator lease for them, so the
+  controller refuses Alpaca commands; every click and key is their input, and signing out gives it up. Granting steps
+  them away from it, so the Close they allowed can run; their next click or key takes control back and cancels the grant.
+
+![The Alpaca page in the app: the Stop hold, the operator lease, a grant with Revoke, and alerts newest first with Allow this Close once and Acknowledge](images/mac/alpaca-p1-1280x800.png)
 
 People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here; so are display and short names:
 your own in the web UI (your account) or the terminal (Setup), anyone's by an admin (#209).
@@ -313,7 +321,8 @@ Nothing here needs a Mac, the controller's Pi or the roof.
 - **The screens** (`MacScreenTests`): the signed-out page, the sign-in page (a dot per character, Return signs in,
   Escape leaves without the password, a wrong password empties its box), and a setting typed in a text box, at 1280x800
   and 960x600, drawn headless (Avalonia's headless platform with Skia), with the kiosk's checks that nothing overlaps
-  and no text is cut off.
+  and no text is cut off. `KioskAlpacaTests` draws the Alpaca page at both sizes too, and checks the app's operator
+  lease (an operator's, not a viewer's) and Escape on the grant question.
 - **The program** (`MacProgramTests`): the settings and where they are read from, the device key, exit code 78 and
   the refusal, `--check`'s flag, and the bundle's `Info.plist`. CI runs the published program without settings to
   check that code.
@@ -334,7 +343,7 @@ artifact. To refresh them, from `src/`:
 
 ```bash
 HVO_KIOSK_RENDERS_DIR=/tmp/mac-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-  --filter "FullyQualifiedName~Mac"
+  --filter "FullyQualifiedName~Mac|FullyQualifiedName~KioskAlpacaTests"
 for f in ../docs/images/mac/*-*x*.png; do
   source="/tmp/mac-renders/mac-$(basename "$f")"
   [ ! -f "/tmp/mac-renders/$(basename "$f")" ] || source="/tmp/mac-renders/$(basename "$f")"
