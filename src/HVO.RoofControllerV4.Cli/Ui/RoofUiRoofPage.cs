@@ -9,7 +9,9 @@ namespace HVO.RoofControllerV4.Cli.Ui;
 /// The roof: its status from the hub, and Open, Close and Clear fault. A stale status is shown only as the last known
 /// state, and motion is not offered on it: the roof could not be watched. Open and Close hold the operator lease while
 /// the roof moves, as <c>hvo-roof open</c> does. History shows the roof command history (#206) in place of the
-/// controller's readings: the caller's own commands, or everyone's for an admin.
+/// controller's readings: the caller's own commands, or everyone's for an admin. Alpaca shows the Alpaca command state
+/// (#220) in place of the roof's state and readings, with what a person may do about it
+/// (<see cref="RoofUiAlpacaSection"/>).
 /// </summary>
 internal sealed class RoofUiRoofPage : RoofUiPage
 {
@@ -21,7 +23,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
     private readonly Label _blocked;
     private readonly TerminalReadingView _state;
     private readonly TerminalReadingView _readings;
+    private readonly FrameView _stateFrame;
     private readonly FrameView _readingsFrame;
+    private readonly RoofUiAlpacaSection _alpaca;
     private bool _commandInFlight;
     private string[]? _history;
 
@@ -35,6 +39,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         _status = TextBlock(0, 1);
         var state = new FrameView { Title = "ROOF STATE", X = 0, Y = 1, Width = Dim.Percent(50), Height = Dim.Fill(3) };
         var readings = new FrameView { Title = ReadingsTitle, X = Pos.Right(state), Y = 1, Width = Dim.Fill(), Height = Dim.Fill(3) };
+        _stateFrame = state;
         _readingsFrame = readings;
         Ui.Theme.SetFrame(state);
         Ui.Theme.SetFrame(readings);
@@ -43,7 +48,8 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         state.Add(_state);
         readings.Add(_readings);
         _blocked = new Label { X = 0, Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 2 };
-        Add(_status, state, readings, _blocked);
+        _alpaca = new RoofUiAlpacaSection(ui);
+        Add(_status, state, readings, _alpaca.Frame, _blocked);
         OpenButton = AddButton("Open", null, () => Move(RoofMotionDirection.Opening));
         CloseButton = AddButton("Close", OpenButton, () => Move(RoofMotionDirection.Closing));
         OpenButton.SetScheme(Ui.Theme.Open);
@@ -51,6 +57,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         ClearFaultButton = AddButton("Clear fault", CloseButton, ClearFault);
         var refresh = AddButton("Refresh", ClearFaultButton, Refresh);
         HistoryButton = AddButton("History", refresh, ToggleHistory);
+        AlpacaButton = AddButton(RoofAlpacaText.Title, HistoryButton, ToggleAlpaca);
         Ui.StopSent += WithdrawSafetyQuestion;
     }
 
@@ -65,6 +72,15 @@ internal sealed class RoofUiRoofPage : RoofUiPage
 
     /// <summary>True while the command history is shown in place of the controller's readings.</summary>
     public bool ShowsHistory { get; private set; }
+
+    /// <summary>Shows the Alpaca command state in place of the roof's state and readings, or them again.</summary>
+    public Button AlpacaButton { get; }
+
+    /// <summary>True while the Alpaca command state is shown in place of the roof's state and readings.</summary>
+    public bool ShowsAlpaca { get; private set; }
+
+    /// <summary>The Alpaca command state and its actions.</summary>
+    internal RoofUiAlpacaSection Alpaca => _alpaca;
 
     public override void Shown() => StatusChanged();
 
@@ -101,7 +117,13 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             _state.Show(rows.Where(row => IsStateRow(row.Label))
                 .Select(row => $"{row.Label}:  {row.Value}").Prepend(heading).ToArray());
             ShowReadings(rows.Where(row => !IsStateRow(row.Label))
-                .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status)).ToArray());
+                .Select(row => $"{row.Label}:  {row.Value}").Concat(RoofStatusText.DescribeModeWarnings(status))
+                .Concat(RoofUiAlpacaSection.DescribeSummary(status)).ToArray());
+        }
+
+        if (ShowsAlpaca)
+        {
+            _alpaca.Show();
         }
 
         var open = BlockReason(RoofMotionDirection.Opening);
@@ -120,7 +142,9 @@ internal sealed class RoofUiRoofPage : RoofUiPage
     private static bool IsStateRow(string label)
         => label is "Roof" or "Last stop" or "Fault" or "Safety" or RoofStatusText.SafetySourceLabel or "Lease" or "Watchdog" or "Last error";
 
-    public override string Describe() => string.Join('\n', (Ui.Status is null ? new[] { _status.Text } : _state.Lines).Concat(_readings.Lines).Append(_blocked.Text));
+    public override string Describe() => string.Join('\n', ShowsAlpaca
+        ? _alpaca.List.Items.Prepend(_status.Text).Append(_blocked.Text)
+        : (Ui.Status is null ? new[] { _status.Text } : _state.Lines).Concat(_readings.Lines).Append(_blocked.Text));
 
     /// <summary>
     /// Why Open or Close is not offered; null when it is. The rules every client shares (RoofCommandRules), and quitting,
@@ -323,6 +347,11 @@ internal sealed class RoofUiRoofPage : RoofUiPage
     /// <summary>Shows the command history in place of the readings, reading it again; or the readings again.</summary>
     internal void ToggleHistory()
     {
+        if (ShowsAlpaca)
+        {
+            ShowAlpaca(false);
+        }
+
         ShowsHistory = !ShowsHistory;
         _readingsFrame.Title = ShowsHistory ? HistoryTitle : ReadingsTitle;
         HistoryButton.Text = ShowsHistory ? "Readings" : "History";
@@ -333,6 +362,31 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         }
 
         StatusChanged();
+    }
+
+    /// <summary>Shows the Alpaca command state in place of the roof's state and readings, or them again.</summary>
+    internal void ToggleAlpaca()
+    {
+        if (!ShowsAlpaca && ShowsHistory)
+        {
+            ToggleHistory();
+        }
+
+        ShowAlpaca(!ShowsAlpaca);
+        StatusChanged();
+        if (ShowsAlpaca)
+        {
+            _alpaca.List.SetFocus();
+        }
+    }
+
+    private void ShowAlpaca(bool show)
+    {
+        ShowsAlpaca = show;
+        _stateFrame.Visible = !show;
+        _readingsFrame.Visible = !show;
+        _alpaca.Frame.Visible = show;
+        AlpacaButton.Text = show ? "Readings" : RoofAlpacaText.Title;
     }
 
     /// <summary>The readings, unless the history is shown in their place.</summary>
