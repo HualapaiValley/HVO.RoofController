@@ -24,6 +24,7 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
     private bool _input = true;
     private bool _held;
     private bool _refused;
+    private bool _closed;
     // One heartbeat at a time, and none while a grant is answered (StepAwayAsync).
     private readonly SemaphoreSlim _sending = new(1, 1);
     private RoofOperatorLeaseState? _state;
@@ -55,7 +56,7 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_timer is not null || _stopping.IsCancellationRequested)
+            if (_timer is not null || _closed)
             {
                 return;
             }
@@ -77,13 +78,17 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
     public async Task BeatAsync()
     {
         bool input;
+        CancellationToken stopping;
         lock (_gate)
         {
-            if (_refused || _stopping.IsCancellationRequested)
+            // Closed is set under this lock before the token's source is cancelled and disposed, so the token read here
+            // is always a live one (a heartbeat racing DisposeAsync ends cancelled, never with ObjectDisposedException).
+            if (_refused || _closed)
             {
                 return;
             }
 
+            stopping = _stopping.Token;
             input = _input;
             _input = false;
         }
@@ -101,7 +106,7 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
 
         try
         {
-            var state = await _client.Alpaca.HoldLeaseAsync(input, _stopping.Token).ConfigureAwait(false);
+            var state = await _client.Alpaca.HoldLeaseAsync(input, stopping).ConfigureAwait(false);
             lock (_gate)
             {
                 _state = state;
@@ -167,6 +172,12 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
         bool held;
         lock (_gate)
         {
+            if (_closed)
+            {
+                return;
+            }
+
+            _closed = true;
             _timer?.Dispose();
             _timer = null;
             held = _held && !_refused;

@@ -139,4 +139,24 @@ public sealed class RoofOperatorLeaseKeeperTests
 
         BeatHadInput(controller.Requests.Single()).Should().BeTrue("nothing was granted, so the person is still at the UI");
     }
+
+    [TestMethod]
+    public async Task AHeartbeatAfterOrDuringDisposal_EndsQuietly_AndDisposingTwiceIsHarmless()
+    {
+        var (client, controller) = Create();
+        using var _ = client;
+        var keeper = new RoofOperatorLeaseKeeper(client);
+        await keeper.BeatAsync();
+        controller.HoldBeat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = keeper.BeatAsync();
+        await ClientTestSupport.WaitUntilAsync(() => controller.Requests.Count >= 2, "the second heartbeat is sent");
+
+        await keeper.DisposeAsync();
+        await keeper.DisposeAsync();
+        await inFlight; // cancelled by the disposal, never ObjectDisposedException
+        await keeper.BeatAsync(); // the timer's last tick after disposal: nothing is sent
+
+        controller.Requests.Count(request => request.Contains("/lease", StringComparison.OrdinalIgnoreCase) && request.StartsWith("POST", StringComparison.Ordinal))
+            .Should().Be(2);
+    }
 }
