@@ -71,7 +71,7 @@ public sealed class SafetyApiTests
         status.Safety.Sources.Single().Should().BeEquivalentTo(new { Name = "Main", Kind = RoofSafetySourceKind.TelescopePark, IsStale = false });
     }
 
-    // ---- Off (the test host's; the controller's default is Warn, SafetyAlpacaApiTests) -----------------------------
+    // ---- Off (the test host's; the controller's default is Warn, SafetyDefaultApiTests) ----------------------------
 
     [TestMethod]
     public async Task Off_OpenGoesAhead_WhateverTheConditions()
