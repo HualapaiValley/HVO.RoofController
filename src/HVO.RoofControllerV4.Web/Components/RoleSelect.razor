@@ -1,13 +1,16 @@
-@* Picks one of the controller's roles. The option in effect is marked selected, so it shows before the page is interactive. *@
+@* Picks one of the controller's roles. The option in effect is marked selected, so it shows before the page is interactive.
+   An API key's choice (KeyRoles) also offers the Alpaca accounts' roles (#220), which a person never has. *@
 <select id="@Id" class="form-select form-select-sm" data-testid="@TestId" @onchange="ChangeAsync">
-    @foreach (var role in Roles)
+    @foreach (var role in KeyRoles ? AllKeyRoles : PersonRoles)
     {
         <option value="@role" selected="@(role == Value)">@WebRoles.Describe(role)</option>
     }
 </select>
 
 @code {
-    private static readonly string[] Roles = [WebRoles.Viewer, WebRoles.Operator, WebRoles.Admin];
+    private static readonly string[] PersonRoles = [WebRoles.Viewer, WebRoles.Operator, WebRoles.Admin];
+
+    private static readonly string[] AllKeyRoles = [.. PersonRoles, WebRoles.AlpacaCommander, WebRoles.AlpacaServer];
 
     [Parameter, EditorRequired] public string Id { get; set; } = default!;
 
@@ -17,5 +20,12 @@
 
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
 
-    private Task ChangeAsync(ChangeEventArgs e) => ValueChanged.InvokeAsync(WebRoles.Normalize(e.Value?.ToString()) ?? WebRoles.Viewer);
+    /// <summary>True for an API key's role: the Alpaca accounts' roles are offered too.</summary>
+    [Parameter] public bool KeyRoles { get; set; }
+
+    private Task ChangeAsync(ChangeEventArgs e)
+    {
+        var role = e.Value?.ToString();
+        return ValueChanged.InvokeAsync((KeyRoles ? WebRoles.NormalizeKeyRole(role) : WebRoles.Normalize(role)) ?? WebRoles.Viewer);
+    }
 }

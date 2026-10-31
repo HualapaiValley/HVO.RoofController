@@ -64,3 +64,37 @@
     });
     update();
 })();
+
+// #220: the person's deliberate input on the page, a click (or tap) or a key, keeps their operator lease from idling out,
+// and takes it back after they stepped away. Scrolling does not count, nor a lone modifier key, nor anything the browser
+// does not mark as the person's (a script's event, a timer, a status update). The control that sends a grant
+// (data-alpaca-step-away) is the person stepping away, never input after it. The live page hears of input at most once
+// a second (its heartbeat goes every 10 s).
+window.hvoInput = (() => {
+    "use strict";
+    const modifiers = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock"]);
+    let page = null;
+    let last = 0;
+    function note(event) {
+        if (!page || !event.isTrusted) return;
+        if (event.type === "keydown" && modifiers.has(event.key)) return;
+        if (event.target instanceof Element && event.target.closest("[data-alpaca-step-away]")) {
+            // The next click or key after the grant counts at once.
+            last = 0;
+            return;
+        }
+        const now = Date.now();
+        if (now - last < 1000) return;
+        last = now;
+        page.invokeMethodAsync("NoteInput").catch(() => { });
+    }
+    for (const type of ["click", "keydown"]) {
+        document.addEventListener(type, note, { capture: true, passive: true });
+    }
+    return {
+        watch(reference) {
+            page = reference;
+            last = 0;
+        }
+    };
+})();

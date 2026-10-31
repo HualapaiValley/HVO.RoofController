@@ -165,6 +165,45 @@ public static class RoofAlpacaText
         }));
     }
 
+    /// <summary>The grant question's title, above <see cref="DescribeGrantQuestion"/>'s lines.</summary>
+    public const string GrantQuestionTitle = "Allow one Alpaca Close?";
+
+    /// <summary>The grant question's button that grants the override.</summary>
+    public const string GrantConfirmLabel = "Allow one Close";
+
+    /// <summary>The grant question's button that grants nothing.</summary>
+    public const string GrantCancelLabel = "Cancel";
+
+    /// <summary>Said when the person answered the grant question with Cancel.</summary>
+    public const string GrantCancelled = "No Close was allowed: the question was cancelled.";
+
+    /// <summary>Said when a Stop, or the end of the person's session, withdrew the grant question before its answer.</summary>
+    public const string GrantWithdrawn = "No Close was allowed: Stop withdrew the question.";
+
+    /// <summary>Said after a person cleared the human Stop hold.</summary>
+    public const string HoldCleared = "Alpaca commands are no longer held after a Stop; every other Alpaca rule still applies.";
+
+    /// <summary>
+    /// Said to a person who granted an override and so stepped away from the operator lease: while their grant lasts Alpaca
+    /// may close the roof once, and their next click or key takes the lease back, which cancels the grant.
+    /// </summary>
+    public static string DescribeSteppedAway(RoofOverrideGrant? grant)
+        => grant is { Kind: RoofAlpacaCommandKind.Close }
+            ? $"You stepped away: Alpaca may close the roof once in the next {Duration(grant.SecondsRemaining)}. Click or type on this page to take control back; that cancels the grant."
+            : "You stepped away: Alpaca may move the roof. Click or type on this page to take control back.";
+
+    /// <summary>Said after a person revoked a grant: "The grant for one Close is revoked."</summary>
+    public static string DescribeRevoked(RoofAlpacaCommandKind kind) => $"The grant for one {kind} is revoked.";
+
+    /// <summary>Who acknowledged an alert: "Acknowledged by ada.", or null while it is not acknowledged.</summary>
+    public static string? DescribeAcknowledgement(RoofAlpacaAlert alert)
+    {
+        ArgumentNullException.ThrowIfNull(alert);
+        return alert.Acknowledged
+            ? $"Acknowledged{(alert.AcknowledgedBy is { Length: > 0 } by ? $" by {by}" : string.Empty)}."
+            : null;
+    }
+
     private static string Duration(double seconds)
         => seconds >= 90
             ? $"{Math.Ceiling(seconds / 60).ToString(CultureInfo.InvariantCulture)} min"

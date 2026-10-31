@@ -66,11 +66,11 @@ pages, and when the check itself fails the page says nothing rather than somethi
 
 | Page | Who sees it | What it has |
 |------|-------------|-------------|
-| Roof (`/`) | everyone | The position, what was commanded, Open, Close and Clear fault (Operator and Admin), the operator lease while a move started here runs, the roof camera, and the status in detail. |
+| Roof (`/`) | everyone | The position, what was commanded, Open, Close and Clear fault (Operator and Admin), the operator lease while a move started here runs, the roof camera, the [Alpaca](#alpaca) panel, and the status in detail. |
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
 | History (`/history`) | everyone | The roof commands the controller was sent, accepted or refused, newest first: the person's own, or everyone's for an admin, who may pick one person or key. |
-| People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove) and sessions (end). |
+| People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove, the Alpaca accounts' roles too) and sessions (end). |
 | System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
 | Your names (`/account/names`) | everyone | The person's own display and short name; for a Linux account, its names from the operating system, read-only. **Your names** in the header opens it. |
@@ -150,6 +150,50 @@ controller or the camera. A stream ends when the person's session ends.
 
 The camera is in the web UI only: the terminal interface has none.
 
+#### Alpaca
+
+![The Alpaca panel on a desktop: Alpaca may close the roof, the Stop hold with Allow Alpaca again, the operator lease, the question before one Close is allowed, and a refused Close's alert](images/web/20-alpaca-desktop.jpg)
+
+The roof page's **Alpaca** panel shows what the controller does with Alpaca commands (#220,
+[docs/alpaca.md](alpaca.md)), from the same live status. The controller decides everything; the page offers only what
+the person's role allows.
+
+- **Which commands are on** (`RoofController:Alpaca:AllowCommands`): `Alpaca commands are off`, or
+  `Alpaca may close the roof (never open it)`. With commands off the panel is that line alone, with any grant or alert.
+  The controller's standing warnings are banners at the top of the page, for example
+  `Alpaca Close checks no telescope: no telescope is set to block the roof.`
+- **The Stop hold.** Every Stop, from any client, sets it (so does the controller's start), except the Alpaca server's
+  own AbortSlew; until a person clears it, the controller refuses every Alpaca command. The panel says who set it, and
+  an operator's **Allow Alpaca again** clears it (`DELETE api/v4.0/alpaca/hold`, logged with their name).
+- **The operator lease.** While an operator or an admin has any page of the web UI open, their session holds the
+  operator lease (a heartbeat every 10 s), and while any person holds it the controller refuses Alpaca commands; the
+  panel says who holds it. A viewer holds none. Only the person's own input on one of their pages keeps it: a click or
+  a tap, a key (not a lone Shift, Ctrl, Alt or Meta), moving to another page, or Stop; scrolling, a timer, a new status
+  or a page drawn again never does. While Alpaca commands are on, a lease lapses after
+  `RoofController:Lease:OperatorLeaseIdleMinutes` (10 by default) without input. Every page warns in the last minute
+  (`Your operator lease lapses in 50 s without input; then Alpaca may move the roof. Touch anything to keep it.`), and
+  once it has lapsed says `Alpaca may now move the roof: your operator lease lapsed after no input.`; the heartbeats go
+  on, but the controller gives the lease back only with input, so the person's next click or key takes it again.
+  Closing the person's last page, signing out and the session ending release it. A page whose browser went away
+  without closing it holds the lease until the web UI drops its connection (up to 3 minutes), or the lease idles out.
+- **Alerts**, newest first: an Alpaca Close the controller refused, and a client refused as not authorised, each with
+  how often, when, and the client the Alpaca server reported. Anyone signed in may **Acknowledge** one.
+- **Allowing one Close.** On the alert of a Close refused only because a telescope is not clear of the roof, or its
+  state is unknown, an operator sees **Allow this Close once** (an admin only, while `RoofSafety:OverrideRole` is
+  `Admin`). It sends nothing: the panel asks first, `Allow one Alpaca Close?`, with what the grant lifts (exactly the
+  alert's reasons), the client it was refused for, how long it lasts (`RoofController:Alpaca:OverrideWindowMinutes`, 5
+  by default) and that it never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's
+  operator lease or the Stop hold. **Allow one Close** grants it; **Cancel**, and any Stop, withdraw the question
+  without sending anything. The grant is listed with who gave it and the time left, and **Revoke** removes it. The next
+  Alpaca Close from any client uses it, once no person holds the operator lease.
+- **Stepping away.** A grant never lifts a person's operator lease, so the person who grants steps away with it: the
+  controller ends their lease, in every session of theirs, and every page of the session they granted from says
+  `You stepped away: Alpaca may close the roof once in the next 5 min. Click or type on this page to take control back; that cancels the grant.`
+  The click (or key) that sent the grant does not count, nor do the page's renders: the heartbeats go on without input
+  and the lease stays released. The person's next click or key on any of their pages takes it back, and taking it back
+  drops the grant, as any person taking the lease does. Another person's lease is untouched and still refuses.
+- A refusal of any of these, and what each did, is said under **Command feedback**.
+
 ### Health
 
 ![The Health page: the controller is ready, the container's supervisor, and the controller's health checks](images/web/04-health-desktop.jpg)
@@ -214,6 +258,12 @@ page says when it keeps them in memory only.
 An admin adds people and sets their role, password and [kiosk](kiosk.md) PIN, adds and rotates API keys, and ends sessions
 ([Managing people, keys and sessions](security.md#managing-people-keys-and-sessions)). A new key's secret is shown
 once, as it is created; neither the page nor the controller shows it again.
+
+An API key's role may also be one of the two Alpaca accounts' (#220, [docs/alpaca.md](alpaca.md)): the
+**External Alpaca account (RoofAlpacaCommander)**, the key Alpaca clients send through the Alpaca server to close the
+roof while Alpaca commands are on, and the **Alpaca server's own account (RoofAlpacaServer)**. A person never has
+these roles, and neither is ever a kiosk's key: choosing one clears and disables **A kiosk's key**. The key list names
+the role.
 
 **PIN** sets or replaces a person's [kiosk](kiosk.md) PIN, and **Remove PIN** removes it (or their temporary
 commissioning PIN), each with the PIN's own endpoint (`PUT` and `DELETE Identity/Users/{name}/Pin`): the page never
@@ -381,7 +431,11 @@ Nothing here needs the Pi, the HAT or the roof.
 
 - **Pages** are rendered with bUnit against a fake controller (`tests/HVO.RoofControllerV4.RPi.Tests/Web`): what each
   role is offered, the stale view, the lease, settings changes, secrets and refusals, people and keys, restart and
-  forced restart, and the web UI's host (sign-in, the cookie, the origin check, the headers and Stop).
+  forced restart, and the web UI's host (sign-in, the cookie, the origin check, the headers and Stop). The Alpaca panel
+  and the operator lease run against the controller's own Alpaca command state in process: the hold, grants (sent only
+  after the question, with exactly the alert's reasons), alerts, the lease taken by the first page and released by the
+  last, input from the person's actions only, an idle lease not taken again without input, and a grant that steps the
+  person away until their next click (`WebAlpacaBrowserTests` checks that last in Chromium too).
 - **Browser tests** (`TestCategory=Browser`, `tests/HVO.RoofControllerV4.RPi.Tests/Browser`) run the web UI in
   Chromium against the whole controller and the emulated roof, on phones over HTTPS, and on tablets (upright and
   sideways) and a desktop window over HTTP: sign-in, the session cookie, a session that expires while its page is open,

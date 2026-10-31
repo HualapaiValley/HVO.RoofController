@@ -229,9 +229,10 @@ else if (_tab == KeysTab)
                 <label for="key-name" class="form-label">Name</label>
                 <input id="key-name" class="form-control form-control-sm" autocomplete="off" data-testid="key-name" @bind="_name" @bind:event="oninput" />
                 <label for="key-role" class="form-label">Role</label>
-                <RoleSelect Id="key-role" TestId="key-role" @bind-Value="_role" />
+                <RoleSelect Id="key-role" TestId="key-role" KeyRoles="true" @bind-Value="_role" @bind-Value:after="OnKeyRoleChanged" />
+                <KeyRoleHelp Role="@_role" TestId="key-role-help" />
                 <div class="form-check">
-                    <input id="key-kiosk" type="checkbox" class="form-check-input" data-testid="key-kiosk" @bind="_kiosk" />
+                    <input id="key-kiosk" type="checkbox" class="form-check-input" data-testid="key-kiosk" @bind="_kiosk" disabled="@WebRoles.IsAlpacaAccount(_role)" />
                     <label for="key-kiosk" class="form-check-label">A kiosk's key</label>
                 </div>
                 <PanelActions Error="@_panelError" Action="Add" TestId="key-add-send" Busy="Busy" OnAction="AddKeyAsync" OnCancel="Close" />
@@ -271,9 +272,10 @@ else if (_tab == KeysTab)
                                                     case ChangeKeyPanel:
                                                         <p class="web-muted">@KioskHelp</p>
                                                         <label for="key-new-role" class="form-label">Role of @key.Name</label>
-                                                        <RoleSelect Id="key-new-role" TestId="key-new-role" @bind-Value="_role" />
+                                                        <RoleSelect Id="key-new-role" TestId="key-new-role" KeyRoles="true" @bind-Value="_role" @bind-Value:after="OnKeyRoleChanged" />
+                                                        <KeyRoleHelp Role="@_role" TestId="key-new-role-help" />
                                                         <div class="form-check">
-                                                            <input id="key-new-kiosk" type="checkbox" class="form-check-input" data-testid="key-new-kiosk" @bind="_kiosk" />
+                                                            <input id="key-new-kiosk" type="checkbox" class="form-check-input" data-testid="key-new-kiosk" @bind="_kiosk" disabled="@WebRoles.IsAlpacaAccount(_role)" />
                                                             <label for="key-new-kiosk" class="form-check-label">A kiosk's key</label>
                                                         </div>
                                                         <PanelActions Error="@_panelError" Action="Change" TestId="key-panel-send" Busy="Busy" OnAction="() => ChangeKeyAsync(key)" OnCancel="Close" />
@@ -468,7 +470,9 @@ else
         _target = target;
         _panelError = null;
         _name = string.Empty;
-        _role = WebRoles.Normalize(role) ?? WebRoles.Viewer;
+
+        // A key may have an Alpaca account's role (#220); a person never does.
+        _role = WebRoles.NormalizeKeyRole(role) ?? WebRoles.Viewer;
         _password = _passwordAgain = _pin = _pinAgain = string.Empty;
         _displayName = _shortName = string.Empty;
         _kiosk = kiosk;
@@ -619,13 +623,13 @@ else
             return Task.CompletedTask;
         }
 
-        var request = new RoofApiKeyCreateRequest { Name = name, Role = _role, Kiosk = _kiosk };
+        var request = new RoofApiKeyCreateRequest { Name = name, Role = _role, Kiosk = KioskFor(_role) };
         return ShowSecretAsync($"The key {name} could not be added.", (client, cancellationToken) => client.Identity.AddApiKeyAsync(request, cancellationToken));
     }
 
     private Task ChangeKeyAsync(RoofApiKeyResponse key)
     {
-        var request = new RoofApiKeyUpdateRequest { Role = _role, Kiosk = _kiosk };
+        var request = new RoofApiKeyUpdateRequest { Role = _role, Kiosk = KioskFor(_role) };
         return ChangeAsync($"The key {key.Name} could not be changed.", async (client, cancellationToken) =>
         {
             var changed = await client.Identity.UpdateApiKeyAsync(key.Name, request, cancellationToken);
@@ -661,6 +665,18 @@ else
                 return own ? "Ended this page's own session: sign in again to go on." : $"Ended the session of {session.Name}.";
             },
             readAgain: !own);
+
+    // An Alpaca account's key is never a kiosk's (#220): choosing one clears and disables the kiosk box, and a tick is
+    // never sent with one.
+    private void OnKeyRoleChanged()
+    {
+        if (WebRoles.IsAlpacaAccount(_role))
+        {
+            _kiosk = false;
+        }
+    }
+
+    private bool KioskFor(string role) => _kiosk && !WebRoles.IsAlpacaAccount(role);
 
     private static string YesNo(bool value) => value ? "yes" : "no";
 
