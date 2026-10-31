@@ -1,9 +1,12 @@
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using HVO.RoofControllerV4.RPi.Tests.Security;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Playwright;
 using static Microsoft.Playwright.Assertions;
 
@@ -188,6 +191,39 @@ public sealed class WebScreenshotTests
         await page.GetByTestId("setting-review").ScrollIntoViewIfNeededAsync();
         await shots.TakeAsync("08-setting-review", wholePage: false, startAtTop: false);
 
+    }
+
+    [TestMethod]
+    public async Task TheAlpacaPanel_WithTheStopHold_TheLease_AnAlert_AndTheGrantQuestion_IsCaptured()
+    {
+        // #220: Alpaca Close on, no telescope set to block the roof (the controller warns of it), the Stop hold from the
+        // controller's start, the admin's page holding the operator lease, and a refused Close's alert from a client at a
+        // documentation address, as the controller raises it.
+        var settings = new Dictionary<string, string?>(DocumentedHost)
+        {
+            [$"{RoofAlpacaCommandOptions.SectionName}:AllowCommands"] = nameof(RoofAlpacaCommandMode.CloseOnly)
+        };
+        var options = Scenario.Production(travelMeters: 2.0, settings: settings) with { Camera = true };
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, options, WebDevices.Desktop);
+        var page = browser.Page;
+        await browser.SignInAsync(WebBrowser.Admin);
+        await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
+        await Expect(page.GetByTestId("alpaca-lease")).ToHaveTextAsync(new Regex("^Operator lease held by ada: Alpaca commands are refused"), new() { Timeout = 15_000 });
+
+        browser.Rig.App.Services.GetRequiredService<RoofAlpacaCommands>().RaiseAlert(
+            "Refused",
+            RoofAlpacaCommandKind.Close,
+            "An Alpaca Close was refused: Telescope 'Main' is not parked.",
+            [RoofAlpacaContract.ReasonKey(RoofAlpacaContract.ScopeNotClearKind, "Main")],
+            new RoofAlpacaClient(7, 3, "192.0.2.50", "header"));
+        await page.GetByTestId("alpaca-grant-ask").ClickAsync();
+
+        await Expect(page.GetByTestId("alpaca-question")).ToBeVisibleAsync();
+        await Expect(page.GetByTestId("alpaca-warning")).ToHaveTextAsync(RoofAlpacaCommands.NoBlockingScopeWarning);
+        await Expect(page.GetByTestId("alpaca-clear-hold")).ToBeEnabledAsync();
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        browser.Rig.App.Services.GetRequiredService<RoofAlpacaCommands>().Grants().Should().BeEmpty("nothing is granted before the person confirms");
+        await new Screens(this, browser, "desktop").TakeAsync("20-alpaca");
     }
 
     [TestMethod]

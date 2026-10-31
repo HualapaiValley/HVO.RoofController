@@ -34,10 +34,17 @@ public sealed class WebSessionStore : IDisposable
     /// <summary>The sessions held, open or ended (tests).</summary>
     internal int Count => _sessions.Count;
 
+    /// <summary>
+    /// True (always, outside tests) when each operator's session holds the operator lease while their pages are open
+    /// (<see cref="WebSession.OperatorLease"/>, #220). Tests about something else turn it off, so its heartbeats do not move
+    /// their status feed.
+    /// </summary>
+    internal bool HoldOperatorLeases { get; set; } = true;
+
     /// <summary>Holds a session that has just signed in.</summary>
     public WebSession Open(RoofSessionCredential session)
     {
-        var opened = new WebSession(session, _stopKey, _connector, _time);
+        var opened = new WebSession(session, _stopKey, _connector, _time, HoldOperatorLeases);
         lock (_gate)
         {
             if (_sessions.TryGetValue(opened.Id, out var previous))
@@ -76,7 +83,8 @@ public sealed class WebSessionStore : IDisposable
                     new RoofSessionCredential(ticket.Token, ticket.Name, ticket.Role, ticket.SessionId, ticket.ExpiresUtc),
                     _stopKey,
                     _connector,
-                    _time);
+                    _time,
+                    HoldOperatorLeases);
                 _sessions[session.Id] = session;
                 _logger.LogInformation("Web session for {Name} ({Role}) picked up again from its cookie", session.Name, session.Role);
             }

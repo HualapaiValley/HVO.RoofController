@@ -99,13 +99,19 @@ internal sealed class WebRoofHarness : IDisposable
     /// </summary>
     /// <param name="settings">The controller's settings beyond the test host's (the safety interlock's mode, say).</param>
     /// <param name="configureServices">More of the controller's services (simulated safety sources, say).</param>
+    /// <param name="operatorLease">
+    /// True: an operator's session holds the operator lease while the page is open (#220), as it always does outside the
+    /// tests; its heartbeats go as the web UI's clock moves. Off by default, so they do not move other tests' status feeds.
+    /// </param>
     public static async Task<WebRoofHarness> CreateAsync(
         string? role = RoofControllerApiContract.OperatorRole,
         WebStopKey? stopKey = null,
         IDictionary<string, string?>? settings = null,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        bool operatorLease = false)
     {
         var harness = new WebRoofHarness(settings, configureServices);
+        harness.Store.HoldOperatorLeases = operatorLease;
         var user = new ClaimsPrincipal(new ClaimsIdentity());
         if (role is not null)
         {

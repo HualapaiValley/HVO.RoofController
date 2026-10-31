@@ -64,3 +64,28 @@
     });
     update();
 })();
+
+// #220: the person's own input on the page (a click or tap, a key, a form, scrolling) keeps their operator lease from
+// idling out. Only events the browser marks as the person's count, never a script's, a timer or a status update, and
+// the live page hears of them at most once every 2 s (its heartbeat goes every 10 s).
+window.hvoInput = (() => {
+    "use strict";
+    let page = null;
+    let last = 0;
+    function note(event) {
+        if (!page || !event.isTrusted) return;
+        const now = Date.now();
+        if (now - last < 2000) return;
+        last = now;
+        page.invokeMethodAsync("NoteInput").catch(() => { });
+    }
+    for (const type of ["pointerdown", "keydown", "submit", "wheel"]) {
+        document.addEventListener(type, note, { capture: true, passive: true });
+    }
+    return {
+        watch(reference) {
+            page = reference;
+            last = 0;
+        }
+    };
+})();

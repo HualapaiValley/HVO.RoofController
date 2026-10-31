@@ -1,12 +1,14 @@
 using System.Net;
 using HVO.RoofControllerV4.Client;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HVO.RoofControllerV4.Web.Sessions;
 
 /// <summary>
 /// A person signed in to the web UI: their controller session and a client of the controller that uses it. Every page
 /// the person has open shares it. The controller decides what they may do; the web UI only mirrors their role to choose
-/// what to offer. Their pages share one status feed (the controller allows a few hub connections per session).
+/// what to offer. Their pages share one status feed (the controller allows a few hub connections per session), and an
+/// operator's pages share one operator lease (<see cref="OperatorLease"/>, #220).
 /// </summary>
 public sealed class WebSession : IDisposable
 {
@@ -20,7 +22,7 @@ public sealed class WebSession : IDisposable
     private long _stopsSent;
     private int _disposed;
 
-    internal WebSession(RoofSessionCredential session, WebStopKey stopKey, RoofControllerConnector connector, TimeProvider time)
+    internal WebSession(RoofSessionCredential session, WebStopKey stopKey, RoofControllerConnector connector, TimeProvider time, bool holdOperatorLease = true)
     {
         ArgumentNullException.ThrowIfNull(session);
         Id = session.SessionId ?? throw new ArgumentException("The session has no identifier.", nameof(session));
@@ -31,6 +33,15 @@ public sealed class WebSession : IDisposable
         _connector = connector;
         Credential = new RoofWebCredential(session, stopKey.Value);
         Client = connector.Create(Credential, RequestTimeout);
+        if (holdOperatorLease && WebRoles.Implied(Role).Contains(WebRoles.Operator))
+        {
+            OperatorLease = new WebOperatorLease(
+                Client,
+                Name,
+                time,
+                Client.Options.LoggerFactory?.CreateLogger<WebOperatorLease>() ?? NullLogger<WebOperatorLease>.Instance);
+        }
+
         session.Ended += OnEnded;
     }
 
@@ -51,6 +62,12 @@ public sealed class WebSession : IDisposable
 
     /// <summary>The person's client of the controller.</summary>
     public RoofControllerClient Client { get; }
+
+    /// <summary>
+    /// The operator lease the person's pages hold while any is open (#220): for an operator or an admin; null for a
+    /// viewer, who may not hold it.
+    /// </summary>
+    public WebOperatorLease? OperatorLease { get; }
 
     /// <summary>True once the controller refused the session or the person signed out.</summary>
     public bool IsEnded => Credential.Session.IsEnded;
@@ -101,6 +118,12 @@ public sealed class WebSession : IDisposable
         Volatile.Write(ref _signedOut, 1);
         try
         {
+            // The lease is released while the session can still release it.
+            if (OperatorLease is { } lease)
+            {
+                await lease.CloseAsync().ConfigureAwait(false);
+            }
+
             await Client.Auth.SignOutAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -116,6 +139,8 @@ public sealed class WebSession : IDisposable
     /// </summary>
     public async Task<RoofStopResult> StopAsync(CancellationToken cancellationToken = default)
     {
+        // Pressing Stop is the person doing something: it keeps their operator lease.
+        OperatorLease?.NoteInput();
         Interlocked.Increment(ref _stopsSent);
         StopSent?.Invoke(this, EventArgs.Empty);
         RoofStopResult result;
@@ -180,6 +205,7 @@ public sealed class WebSession : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             Credential.Session.Ended -= OnEnded;
+            _ = OperatorLease?.CloseAsync();
             RoofStatusFeed? feed;
             lock (_feedGate)
             {
@@ -210,6 +236,9 @@ public sealed class WebSession : IDisposable
     private void OnEnded(object? sender, EventArgs e)
     {
         Interlocked.CompareExchange(ref _endedAtTicks, _time.GetUtcNow().UtcTicks, 0);
+
+        // Nothing is renewed for a session that ended (its release is refused, and the lease lapses by itself).
+        _ = OperatorLease?.CloseAsync();
         Ended?.Invoke(this, EventArgs.Empty);
     }
 }

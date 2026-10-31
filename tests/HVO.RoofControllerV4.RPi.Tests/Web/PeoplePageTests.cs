@@ -527,6 +527,60 @@ public sealed class PeoplePageTests
     }
 
     [TestMethod]
+    public async Task AKey_MayHaveAnAlpacaAccountsRole_NeverAKiosks_AndTheListNamesIt()
+    {
+        using var harness = new WebAdminHarness();
+        var session = await harness.SignInAsync("ada", RoofControllerApiContract.AdminRole);
+        await using var context = harness.Context(session);
+        var cut = Loaded(context);
+        cut.Click("[data-testid=user-add]");
+        cut.WaitForElement("[data-testid=user-role]");
+        cut.FindAll("[data-testid=user-role] option").Select(option => option.TextContent).Should().Equal(["Viewer", "Operator", "Admin"], "a person never has an Alpaca account's role");
+        cut.Click("[data-testid=people-tab][data-tab=keys]");
+        cut.WaitForElement("[data-testid=key-add]");
+
+        cut.Click("[data-testid=key-add]");
+        cut.WaitForElement("[data-testid=key-role]");
+        cut.FindAll("[data-testid=key-role] option").Select(option => $"{option.GetAttribute("value")}: {option.TextContent}").Should().Equal(
+            "RoofViewer: Viewer",
+            "RoofOperator: Operator",
+            "RoofAdmin: Admin",
+            "RoofAlpacaCommander: External Alpaca account (RoofAlpacaCommander)",
+            "RoofAlpacaServer: Alpaca server's own account (RoofAlpacaServer)");
+        cut.FindAll("[data-testid=key-role-help]").Should().BeEmpty();
+        cut.Input("[data-testid=key-name]", "observatory-alpaca");
+        cut.Change("[data-testid=key-kiosk]", true);
+        cut.Change("[data-testid=key-role]", RoofAlpacaContract.CommanderRole);
+
+        cut.WaitForAssertion(() =>
+        {
+            var kiosk = cut.Find("[data-testid=key-kiosk]");
+            kiosk.HasAttribute("disabled").Should().BeTrue("an Alpaca account's key is never a kiosk's");
+            kiosk.HasAttribute("checked").Should().BeFalse();
+            cut.Find("[data-testid=key-role-help]").TextContent.Should().Be(WebRoles.DescribeAlpacaAccount(RoofAlpacaContract.CommanderRole));
+        });
+        cut.Click("[data-testid=key-add-send]");
+
+        cut.WaitForAssertion(() => Message(cut).Should().Be("The key observatory-alpaca is ready (External Alpaca account (RoofAlpacaCommander))."));
+        Row(cut.Find("[data-testid=key][data-name=observatory-alpaca]")).Should().Be("observatory-alpaca | External Alpaca account (RoofAlpacaCommander) | no | managed | 2026-09-29 12:00:00Z");
+        cut.Click("[data-testid=key-secret-done]");
+
+        KeyAction(cut, "observatory-alpaca", "key-change");
+        cut.WaitForElement("[data-testid=key-new-role]");
+        cut.Find("[data-testid=key-new-role] option[selected]").GetAttribute("value").Should().Be(RoofAlpacaContract.CommanderRole, "the panel opens with the key's role");
+        cut.Find("[data-testid=key-new-kiosk]").HasAttribute("disabled").Should().BeTrue();
+        cut.Change("[data-testid=key-new-role]", RoofAlpacaContract.ServerRole);
+        cut.WaitForAssertion(() => cut.Find("[data-testid=key-new-role-help]").TextContent.Should().Be(WebRoles.DescribeAlpacaAccount(RoofAlpacaContract.ServerRole)));
+        cut.Click("[data-testid=key-panel-send]");
+
+        cut.WaitForAssertion(() => Message(cut).Should().Be("The key observatory-alpaca is now Alpaca server's own account (RoofAlpacaServer)."));
+        Row(cut.Find("[data-testid=key][data-name=observatory-alpaca]")).Should().StartWith("observatory-alpaca | Alpaca server's own account (RoofAlpacaServer) | no | managed");
+        using var admin = harness.Admin();
+        (await admin.Identity.GetApiKeysAsync()).Single(key => key.Name == "observatory-alpaca")
+            .Should().BeEquivalentTo(new { Role = RoofAlpacaContract.ServerRole, Kiosk = false });
+    }
+
+    [TestMethod]
     public async Task EndingAnotherSession_AndThePagesOwn()
     {
         using var harness = new WebAdminHarness();

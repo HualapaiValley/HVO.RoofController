@@ -1,0 +1,60 @@
+@using Microsoft.JSInterop
+@inherits WebRoofComponent
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+
+@* On every page (#220): what the signed-in person is told about their operator lease idling out, in the last minute
+   before it does and once it has ("Alpaca may now move the roof"). It also passes the person's own input on the page
+   (js/ui.js: their clicks, keys, forms and scrolling) and their navigation to the page's console, which keeps their
+   operator lease; a timer or a status update never does. *@
+@if (View.AlpacaIdleWarning is { } warning)
+{
+    <div class="alert alert-warning web-mode-banner" role="alert" data-testid="alpaca-idle-banner">
+        <p><i class="bi bi-hourglass-split me-1" aria-hidden="true"></i>@warning</p>
+    </div>
+}
+
+@code {
+    /// <summary>The browser's function that starts passing the person's input to <see cref="NoteInput"/>.</summary>
+    public const string WatchFunction = "hvoInput.watch";
+
+    private DotNetObjectReference<AlpacaBanner>? _self;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        Navigation.LocationChanged += OnLocationChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _self = DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync(WatchFunction, _self);
+        }
+        catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException)
+        {
+            // Without the script (or once the page has gone) only the page's own buttons and navigation count as input.
+        }
+    }
+
+    /// <summary>The person did something on the page (called from the browser, at most once every 2 s).</summary>
+    [JSInvokable]
+    public void NoteInput() => Roof.NoteInput();
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => Roof.NoteInput();
+
+    protected override void Dispose(bool disposing)
+    {
+        Navigation.LocationChanged -= OnLocationChanged;
+        _self?.Dispose();
+        base.Dispose(disposing);
+    }
+}

@@ -99,6 +99,15 @@
                 <span>Safety inputs: @RoofStatusText.DescribeInputs(status). Motion may be refused.</span>
             </div>
         }
+
+        @* #220: the controller's standing Alpaca warnings ("Alpaca Close checks no telescope", a re-read budget too short). *@
+        @foreach (var warning in View.Alpaca?.State.Warnings ?? [])
+        {
+            <div class="rc2-banner rc2-banner-warn" role="alert" data-testid="alpaca-warning">
+                <i class="bi bi-hdd-network" aria-hidden="true"></i>
+                <span>@warning</span>
+            </div>
+        }
     </div>
 
     <section class="rc-overview" aria-label="Roof overview">
@@ -166,7 +175,7 @@
 
     </section>
 
-    <div class="rc2-main">
+    <div class="rc2-main @(View.Alpaca is not null ? "rc2-main--alpaca" : null)">
         <section class="rc2-card rc2-controls" aria-labelledby="rc2-controls-title">
             <div class="rc2-card-head">
                 <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2" aria-hidden="true"></i>Controls</h2>
@@ -233,6 +242,114 @@
 
             </div>
         </section>
+
+        @if (View.Alpaca is { } alpaca)
+        {
+            // #220: which Alpaca commands the controller accepts, the Stop hold, the operator lease, grants and alerts.
+            <section class="rc2-card rc2-alpaca @(alpaca.Compact ? "rc2-alpaca--compact" : null)" aria-labelledby="rc2-alpaca-title"
+                     data-testid="alpaca" data-mode="@alpaca.State.Mode">
+                <div class="rc2-card-head">
+                    <h2 class="rc2-card-title" id="rc2-alpaca-title"><i class="bi bi-hdd-network me-2" aria-hidden="true"></i>@RoofAlpacaText.Title</h2>
+                </div>
+                <div class="rc2-card-body">
+                    <p class="rc2-alpaca-mode" data-testid="alpaca-mode">@alpaca.Mode</p>
+                    @if (View.AlpacaIdleWarning is { } idle)
+                    {
+                        <p class="rc2-alpaca-line rc2-alpaca-line--warn" role="alert" data-testid="alpaca-idle">
+                            <i class="bi bi-hourglass-split" aria-hidden="true"></i><span>@idle</span>
+                        </p>
+                    }
+                    @if (alpaca.Hold is { } held)
+                    {
+                        <div class="rc2-alpaca-line rc2-alpaca-line--warn" data-testid="alpaca-hold">
+                            <i class="bi bi-pause-circle" aria-hidden="true"></i>
+                            <span class="flex-grow-1">@held</span>
+                            @if (alpaca.CanClearHold)
+                            {
+                                <button class="btn btn-sm btn-outline-light" type="button" data-testid="alpaca-clear-hold"
+                                        disabled="@(alpaca.Busy is not null)" @onclick="Roof.ClearAlpacaHoldAsync">
+                                    <i class="bi bi-play-circle me-1" aria-hidden="true"></i>@RoofAlpacaText.ClearHoldLabel
+                                </button>
+                            }
+                        </div>
+                    }
+                    @if (alpaca.Lease is { } lease)
+                    {
+                        <p class="rc2-alpaca-line" data-testid="alpaca-lease"><i class="bi bi-person-check" aria-hidden="true"></i><span>@lease</span></p>
+                    }
+                    @if (alpaca.Question is { } grantQuestion)
+                    {
+                        // Nothing is granted until the person confirms; Stop withdraws the question. Stop stays below.
+                        <div class="rc2-safety-question rc2-alpaca-question" role="alertdialog" aria-labelledby="alpaca-question-title" data-testid="alpaca-question">
+                            <h3 class="rc2-safety-question-title" id="alpaca-question-title"><i class="bi bi-shield-exclamation me-2" aria-hidden="true"></i>@grantQuestion.Title</h3>
+                            @foreach (var line in grantQuestion.Lines)
+                            {
+                                <p>@line</p>
+                            }
+                            <div class="rc2-alpaca-actions">
+                                <button class="btn btn-warning" type="button" data-testid="alpaca-question-confirm" disabled="@(alpaca.Busy is not null)" @onclick="Roof.GrantAlpacaCloseAsync">
+                                    <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i>@RoofAlpacaText.GrantConfirmLabel
+                                </button>
+                                <button class="btn btn-outline-light" type="button" data-testid="alpaca-question-cancel" @onclick="Roof.CancelAlpacaGrant">@RoofAlpacaText.GrantCancelLabel</button>
+                            </div>
+                        </div>
+                    }
+                    @if (alpaca.Grants.Count > 0)
+                    {
+                        <ul class="rc2-alpaca-list" data-testid="alpaca-grants" aria-label="Override grants">
+                            @foreach (var grant in alpaca.Grants)
+                            {
+                                <li class="rc2-alpaca-item rc2-alpaca-item--grant" data-testid="alpaca-grant" data-kind="@grant.Kind">
+                                    <span>@grant.Text</span>
+                                    @if (alpaca.CanRevoke)
+                                    {
+                                        <button class="btn btn-sm btn-outline-light" type="button" data-testid="alpaca-revoke"
+                                                disabled="@(alpaca.Busy is not null)" @onclick="() => Roof.RevokeAlpacaGrantAsync(grant.Kind)">@RoofAlpacaText.RevokeLabel</button>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                    @if (alpaca.Alerts.Count > 0)
+                    {
+                        <ul class="rc2-alpaca-list" data-testid="alpaca-alerts" aria-label="Alpaca alerts, newest first">
+                            @foreach (var alert in alpaca.Alerts)
+                            {
+                                <li class="rc2-alpaca-item rc2-alpaca-item--alert @(alert.Acknowledgement is not null ? "rc2-alpaca-item--acknowledged" : null)"
+                                    data-testid="alpaca-alert" data-id="@alert.Id">
+                                    <span class="rc2-alpaca-text">
+                                        @alert.Text
+                                        @if (alert.Acknowledgement is { } acknowledged)
+                                        {
+                                            <small class="d-block" data-testid="alpaca-alert-acknowledged">@acknowledged</small>
+                                        }
+                                    </span>
+                                    @if (alert.CanGrant || alert.CanAcknowledge)
+                                    {
+                                        <span class="rc2-alpaca-actions">
+                                            @if (alert.CanGrant)
+                                            {
+                                                <button class="btn btn-sm btn-warning" type="button" data-testid="alpaca-grant-ask"
+                                                        disabled="@(alpaca.Busy is not null)" @onclick="() => Roof.AskAlpacaGrant(alert.Id)">@RoofAlpacaText.GrantCloseLabel</button>
+                                            }
+                                            @if (alert.CanAcknowledge)
+                                            {
+                                                <button class="btn btn-sm btn-outline-light" type="button" data-testid="alpaca-acknowledge"
+                                                        disabled="@(alpaca.Busy is not null)" @onclick="() => Roof.AcknowledgeAlpacaAlertAsync(alert.Id)">@RoofAlpacaText.AcknowledgeLabel</button>
+                                            }
+                                        </span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                    @if (alpaca.Busy is { } sending)
+                    {
+                        <p class="rc2-blocked" data-testid="alpaca-busy" aria-live="polite"><span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>@sending</p>
+                    }
+                </div>
+            </section>
+        }
 
         <section class="rc2-card rc2-camera" aria-labelledby="rc2-camera-title" data-testid="cameras">
             <div class="rc2-card-head">

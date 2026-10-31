@@ -1,0 +1,11 @@
+@* What an API key with an Alpaca account's role is for (#220); nothing for a person's role. *@
+@if (WebRoles.DescribeAlpacaAccount(Role) is { } help)
+{
+    <p class="web-muted web-editor-help" data-testid="@TestId">@help</p>
+}
+
+@code {
+    [Parameter] public string? Role { get; set; }
+
+    [Parameter] public string? TestId { get; set; }
+}
