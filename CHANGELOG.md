@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-10-30
+
 ### Added
 
 - Roof command history (#206): the controller records every Open, Close, Stop and Clear fault sent to its API,
