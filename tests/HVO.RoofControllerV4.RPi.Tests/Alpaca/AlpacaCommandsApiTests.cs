@@ -357,3 +357,33 @@ public sealed class AlpacaCommandsApiTests
         return probes;
     }
 }
+
+/// <summary>
+/// The Alpaca accounts' keys stay valid for the status hub's periodic re-check (#220): a key carries its account role
+/// beside the Viewer role it reads with, and the re-check must compare the account role, or the Alpaca server's hub
+/// connection is closed as "re-roled" and its status goes stale.
+/// </summary>
+[TestClass]
+public sealed class AlpacaAccountKeyValidityTests
+{
+    [TestMethod]
+    [DataRow(RoofAlpacaContract.ServerRole)]
+    [DataRow(RoofAlpacaContract.CommanderRole)]
+    [DataRow(RoofControllerApiContract.ViewerRole)]
+    public void AnAccountsKey_StaysValid_AndIsInvalid_OnceReRoled(string role)
+    {
+        var monitor = KeyStoreFactory.Monitor(KeyStoreFactory.Key("account", role, "test-account-key-not-a-real-secret-0001"));
+        using var keys = KeyStoreFactory.Create(monitor);
+        var validator = HVO.RoofControllerV4.RPi.Security.RoofCredentialValidator.ForKeysOnly(keys);
+        keys.TryValidate("test-account-key-not-a-real-secret-0001", out var identity).Should().BeTrue();
+        var user = HVO.RoofControllerV4.RPi.Security.RoofPrincipalFactory.Create(identity!, "ApiKey");
+
+        validator.IsStillValid(user).Should().BeTrue();
+
+        monitor.Set(new HVO.RoofControllerV4.RPi.Security.RoofControllerSecurityOptions
+        {
+            ApiKeys = [KeyStoreFactory.Key("account", role == RoofControllerApiContract.ViewerRole ? RoofAlpacaContract.ServerRole : RoofControllerApiContract.ViewerRole, "test-account-key-not-a-real-secret-0001")]
+        });
+        validator.IsStillValid(user).Should().BeFalse("a re-roled key closes its hub connections");
+    }
+}

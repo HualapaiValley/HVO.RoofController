@@ -43,9 +43,10 @@ public sealed class RoofCredentialValidator
                 if (user.HasClaim(RoofPrincipalFactory.OwnedKeyClaimType, "true"))
                     return _identity?.OwnedKeyIsCurrent(user.FindFirst(RoofPrincipalFactory.KeyIdClaimType)!.Value) == true
                         && _providers?.PrincipalIsCurrent(user.FindFirst(RoofPrincipalFactory.PrincipalIdClaimType)?.Value) == true;
+                // An Alpaca account's key (#220) carries its account role beside the Viewer role it reads with.
                 return _keys.TryFindByKeyId(user.FindFirst(RoofPrincipalFactory.KeyIdClaimType)?.Value, out var key)
                     && string.Equals(key.Name, user.Identity.Name, StringComparison.Ordinal)
-                    && string.Equals(key.Role, role, StringComparison.Ordinal);
+                    && string.Equals(key.Role, RoofPrincipalFactory.GetKeyRole(user), StringComparison.Ordinal);
 
             case RoofCredentialKind.Session:
             case RoofCredentialKind.Pin:
