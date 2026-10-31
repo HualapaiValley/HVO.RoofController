@@ -219,8 +219,9 @@ done
 t send-keys -t "${session}" F1
 wait_screen "the roof page again" 5 "┤F1 Roof├"
 
-# Another client starts the roof; F9 in the interface stops it. The controller has no safety source, so the default
-# Warn interlock asks every Open for the override (#215), given here.
+# Another client starts the roof; F9 in the interface stops it. The controller may have no safety source, when the
+# default Warn interlock asks every Open for the override (#215), so it is given here; while the conditions are Safe (the
+# compose rigs' emulated Alpaca devices, #220) the controller ignores it.
 run open 0 open --no-wait --override-safety
 wait_screen "the interface shows the roof moving" 15 "Opening"
 save 06-opening
