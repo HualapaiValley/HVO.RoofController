@@ -25,7 +25,13 @@ public enum KioskPage
     ChangePin,
 
     /// <summary>The unlocking person's details and their recent roof commands; only while someone has unlocked it.</summary>
-    History
+    History,
+
+    /// <summary>
+    /// The Alpaca command state (#220): the Stop hold, the operator lease, override grants and alerts; only while there is
+    /// something to show (<see cref="KioskView.OffersAlpaca"/>).
+    /// </summary>
+    Alpaca
 }
 
 /// <summary>
@@ -56,6 +62,7 @@ public sealed class KioskShell : UserControl
     private readonly Button _navPin;
     private readonly Button _navTerminal;
     private readonly Button _navHistory;
+    private readonly Button _navAlpaca;
     private readonly KioskTerminalExit? _terminalExit;
     private readonly KioskTerminalPage? _terminalPage;
     private readonly TextBlock _stopMessage;
@@ -86,6 +93,8 @@ public sealed class KioskShell : UserControl
         AboutPage = new KioskAboutPage(console, System, metrics);
         History = new KioskHistoryPanel(console);
         HistoryPage = new KioskHistoryPage(History, metrics);
+        Alpaca = new KioskAlpacaPanel(console);
+        AlpacaPage = new KioskAlpacaPage(Alpaca, console, metrics);
         Background = KioskTheme.Background;
         Foreground = KioskTheme.Text;
         FontSize = metrics.Font;
@@ -125,7 +134,11 @@ public sealed class KioskShell : UserControl
         // History is offered only while someone has unlocked the kiosk, before Change PIN and Lock, so only they move when
         // it comes.
         _navHistory = Nav("History", "nav-history", () => ShowPage(KioskPage.History));
-        var nav = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = metrics.Gap, LineSpacing = metrics.Gap, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navSettings, _navSystem, _navAbout, _navTerminal, _navHistory, _navPin, _navLock } };
+        // Alpaca is offered only while the controller takes Alpaca commands or has something about them to show (#220).
+        _navAlpaca = Nav(RoofAlpacaText.Title, "nav-alpaca", () => ShowPage(KioskPage.Alpaca));
+        _navAlpaca.IsVisible = false;
+        // One row: the buttons narrow to their words (never below the touch target) rather than wrap (KioskNavPanel).
+        var nav = new KioskNavPanel { Name = "nav", Spacing = metrics.Gap, WideWidth = metrics.NavWidth, Margin = new Thickness(metrics.Gap), Children = { _navRoof, _navReadings, _navNotices, _navAlpaca, _navSettings, _navSystem, _navAbout, _navTerminal, _navHistory, _navPin, _navLock } };
         var navFrame = new Border { Background = KioskTheme.Surface, BorderBrush = KioskTheme.Frame, BorderThickness = new Thickness(0, 1, 0, 0), Child = nav };
 
         Stop = new Button
@@ -228,6 +241,12 @@ public sealed class KioskShell : UserControl
     /// <summary>The unlocking person's details, read-only, and their recent roof commands (#206, #208).</summary>
     public KioskHistoryPage HistoryPage { get; }
 
+    /// <summary>What the Alpaca page does: allow Alpaca again, grant, revoke and acknowledge (#220).</summary>
+    public KioskAlpacaPanel Alpaca { get; }
+
+    /// <summary>The Alpaca command state, from the status, and its actions (#220).</summary>
+    public KioskAlpacaPage AlpacaPage { get; }
+
     /// <summary>The page shown.</summary>
     public KioskPage Page { get; private set; } = KioskPage.Roof;
 
@@ -244,12 +263,15 @@ public sealed class KioskShell : UserControl
         if (page == KioskPage.Terminal && _terminalPage is null) page = KioskPage.Roof;
         if ((page is KioskPage.Settings or KioskPage.System && (!view.IsUnlocked || _console.Wording.SignIn == KioskSignIn.Pin))
             || (page == KioskPage.Unlock && view.IsUnlocked) || (page == KioskPage.History && !view.IsUnlocked)
+            || (page == KioskPage.Alpaca && !view.OffersAlpaca)
             || (page == KioskPage.ChangePin && (!view.IsUnlocked || _console.Wording.SignIn != KioskSignIn.Pin)))
         {
             page = KioskPage.Roof;
         }
 
         if (Page == KioskPage.ChangePin && page != KioskPage.ChangePin) PinPad.EndChange();
+        // A grant question is answered on its page, or not at all.
+        if (Page == KioskPage.Alpaca && page != KioskPage.Alpaca && Alpaca.Question is not null) Alpaca.Dismiss();
         Page = page;
         Control content = page switch
         {
@@ -263,6 +285,7 @@ public sealed class KioskShell : UserControl
             KioskPage.StopResult => _stopResult,
             KioskPage.Terminal => _terminalPage!,
             KioskPage.History => HistoryPage,
+            KioskPage.Alpaca => AlpacaPage,
             _ => RoofPage
         };
 
@@ -322,6 +345,7 @@ public sealed class KioskShell : UserControl
             Settings.Reset();
             System.Reset();
             History.Reset();
+            Alpaca.Reset();
             if (Page != KioskPage.Roof)
             {
                 ShowPage(KioskPage.Roof);
@@ -333,6 +357,12 @@ public sealed class KioskShell : UserControl
         UpdateBanners(view);
         RoofPage.Update(view);
         AboutPage.Update(view);
+        AlpacaPage.Update(view);
+        if (Page == KioskPage.Alpaca && !view.OffersAlpaca)
+        {
+            ShowPage(KioskPage.Roof);
+        }
+
         UpdateNav(view);
 
         _stopMessage.Text = view.StopMessage;
@@ -418,6 +448,7 @@ public sealed class KioskShell : UserControl
         if (Page == KioskPage.Roof && _console.View.SafetyQuestion is not null) { _console.CancelSafetyOverride(); e.Handled = true; }
         else if (Page == KioskPage.Settings && Settings.Question is not null) { Settings.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.System && System.Question is not null) { System.Dismiss(); e.Handled = true; }
+        else if (Page == KioskPage.Alpaca && Alpaca.Question is not null) { Alpaca.Dismiss(); e.Handled = true; }
         else if (Page == KioskPage.Terminal) { _terminalExit?.Cancel(); ShowPage(KioskPage.Roof); e.Handled = true; }
         else if (Page is KioskPage.Unlock or KioskPage.ChangePin)
         {
@@ -457,8 +488,10 @@ public sealed class KioskShell : UserControl
 
     private Button Nav(string text, string name, Action click)
     {
+        // At least the touch target; the bar gives each its comfortable width (NavWidth) while they fit on one row, and the
+        // button fills the width it is given.
         var button = KioskTheme.TouchButton(text, name, _metrics, click);
-        button.MinWidth = _metrics.NavWidth;
+        button.HorizontalAlignment = HorizontalAlignment.Stretch;
         button.FontSize = _metrics.Font;
         return button;
     }
@@ -468,9 +501,10 @@ public sealed class KioskShell : UserControl
         _navSettings.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navSystem.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Password;
         _navHistory.IsVisible = view.IsUnlocked;
+        _navAlpaca.IsVisible = view.OffersAlpaca;
         _navPin.IsVisible = view.IsUnlocked && _console.Wording.SignIn == KioskSignIn.Pin;
         KioskTheme.SetText(_navLock, view.IsUnlocked ? _console.Wording.SignOutAction : _console.Wording.SignInAction);
-        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navTerminal, KioskPage.Terminal), (_navHistory, KioskPage.History), (_navPin, KioskPage.ChangePin), (_navLock, KioskPage.Unlock) })
+        foreach (var (button, page) in new[] { (_navRoof, KioskPage.Roof), (_navReadings, KioskPage.Readings), (_navNotices, KioskPage.Notices), (_navAlpaca, KioskPage.Alpaca), (_navSettings, KioskPage.Settings), (_navSystem, KioskPage.System), (_navAbout, KioskPage.About), (_navTerminal, KioskPage.Terminal), (_navHistory, KioskPage.History), (_navPin, KioskPage.ChangePin), (_navLock, KioskPage.Unlock) })
         {
             KioskTheme.Selected(button, page == Page);
             if (page == Page)
@@ -520,6 +554,11 @@ public sealed class KioskShell : UserControl
             warnings.Add(("relays-banner", $"Relays: {RoofStatusText.DescribeRelays(relays)}.", KioskNoticeLevel.Warning));
         if (view.Status is { InputsHealthy: false } inputs)
             warnings.Add(("inputs-banner", $"Safety inputs: {RoofStatusText.DescribeInputs(inputs)}.", KioskNoticeLevel.Warning));
+        var safetyIo = warnings.Any(warning => warning.Name is "relays-banner" or "inputs-banner");
+        // #220: the unlocking person's operator lease about to lapse (or lapsed), and the controller's Alpaca warnings.
+        if (view.AlpacaIdleWarning is { } idle) warnings.Add(("alpaca-idle-banner", idle, KioskNoticeLevel.Warning));
+        if (view.Status?.Alpaca is { } alpaca)
+            warnings.AddRange(alpaca.Warnings.Select(text => ("alpaca-warning", text, KioskNoticeLevel.Warning)));
         // A bounded summary stays visible on every page. Full, unabridged warnings are in Readings, before the values.
         if (warnings.Count > 0)
         {
@@ -527,8 +566,11 @@ public sealed class KioskShell : UserControl
                 : view.IsUnreachable ? "Controller unreachable. Motion unavailable."
                 : view.IsStale ? "STALE: last known status. Motion unavailable."
                 : view.Status is { } roof && RoofCommandRules.HasFault(roof) ? "Fault latched. Motion refused. Readings has details."
+                : view.AlpacaIdleWarning is { } lapsing ? lapsing
                 : view.ModeWarnings.Count > 0 ? "Simulation / safety mode warning. Readings has details."
-                : !view.IsStarted ? "Connecting to the controller…" : "Safety I/O warning. Readings has details.";
+                : !view.IsStarted ? "Connecting to the controller…"
+                : safetyIo ? "Safety I/O warning. Readings has details."
+                : "Alpaca warning. Readings has details.";
             _banners.Children.Add(KioskTheme.Banner(text, warnings.Max(w => w.Level), _metrics, "safety-summary"));
         }
         var readings = new List<Control> { KioskTheme.Label("Controller readings", _metrics.Large, KioskTheme.Accent, FontWeight.SemiBold) };

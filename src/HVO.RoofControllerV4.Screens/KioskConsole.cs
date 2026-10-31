@@ -20,6 +20,11 @@ namespace HVO.RoofControllerV4.Screens;
 /// <para>A motion started here holds the operator lease: the kiosk renews it while the roof moves, and stops renewing
 /// when the roof stops, when Stop is sent, and when the kiosk locks. The controller then stops the roof when the lease
 /// runs out. The kiosk does not lock itself while it holds the lease.</para>
+/// <para>While a person with the Operator role has unlocked it (or signed in to the app), and the controller takes Alpaca
+/// commands, the kiosk holds the Alpaca operator lease for them (#220, <see cref="RoofOperatorLeaseKeeper"/>): while anyone
+/// holds it, the controller refuses Alpaca commands. Its heartbeats say whether the person touched the screen since the
+/// last; nothing else counts as their input. It is given up when the kiosk locks, or the commands are turned off. When it lapses for want of input (only while Alpaca commands are on), the
+/// kiosk stops renewing it, so the lapse stands, until the person's next touch takes it again.</para>
 /// <para>A status is shown as current only while the hub delivers it. Motion is not offered on a stale status: the roof
 /// could not be watched. Stop wins: an Open or Close accepted after a Stop was sent is stopped again.</para>
 /// <para>Thread-safe. <see cref="Changed"/> is raised on any thread; a view marshals it to its UI thread.</para>
@@ -34,6 +39,13 @@ public sealed class KioskConsole : IAsyncDisposable
 
     /// <summary>How soon a lease renewal that failed is tried again, while the roof moves.</summary>
     public static TimeSpan LeaseRetryDelay { get; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// How much sooner than the operator lease keeper's last answer said the controller may report the person's operator
+    /// lease lapsed for want of input, and the kiosk still take it as lapsed (#220). A report much sooner is an old one,
+    /// from before the lease was taken again.
+    /// </summary>
+    internal static TimeSpan OperatorLeaseLapseTolerance { get; } = TimeSpan.FromSeconds(5);
 
     private readonly RoofControllerClient _client;
     private readonly RoofKioskCredential _kiosk;
@@ -70,6 +82,12 @@ public sealed class KioskConsole : IAsyncDisposable
     private DateTimeOffset _screenTimeoutDue;
     private bool _readingScreenTimeout;
     private PendingQuestion? _safetyQuestion;
+    private RoofOperatorLeaseKeeper? _operatorLease;
+    private RoofOperatorLeaseState? _operatorLeaseState;
+    private DateTimeOffset _operatorLeaseStateAt;
+    private DateTimeOffset _lastInput = DateTimeOffset.MinValue;
+    private bool _operatorLeaseLapsed;
+    private bool _idleWarned;
     private KioskView _view;
 
     /// <param name="client">The kiosk's client, whose credential is a <see cref="RoofKioskCredential"/>.</param>
@@ -140,6 +158,7 @@ public sealed class KioskConsole : IAsyncDisposable
             feed.StatusReceived += OnStatusReceived;
             feed.StateChanged += OnFeedStateChanged;
             _tickTimer.Change(_options.Tick, _options.Tick);
+            KeepOperatorLeaseLocked();
         }
 
         feed.Start();
@@ -159,6 +178,7 @@ public sealed class KioskConsole : IAsyncDisposable
     public bool Touch()
     {
         bool woke;
+        var retaken = false;
         RoofSessionResponse? keepAlive = null;
         lock (_gate)
         {
@@ -172,6 +192,20 @@ public sealed class KioskConsole : IAsyncDisposable
             _blank = false;
             _lastTouch = now;
             _lastActivity = now;
+
+            // The person's input: the operator lease's next heartbeat says so, and a lease that lapsed for want of input is
+            // taken again.
+            _lastInput = now;
+            if (_operatorLease is { } keeper)
+            {
+                keeper.NoteInput();
+            }
+            else if (_operatorLeaseLapsed)
+            {
+                KeepOperatorLeaseLocked();
+                retaken = true;
+            }
+
             if (_session is { } session && !_keepingAlive && now - _keptAliveAt >= GetKeepAliveInterval(session))
             {
                 _keepingAlive = true;
@@ -179,7 +213,7 @@ public sealed class KioskConsole : IAsyncDisposable
             }
         }
 
-        if (woke)
+        if (woke || retaken)
         {
             Publish();
         }
@@ -516,6 +550,7 @@ public sealed class KioskConsole : IAsyncDisposable
     {
         RoofStatusFeed? feed;
         Task stops;
+        RoofOperatorLeaseKeeper? operatorLease;
         lock (_gate)
         {
             if (_disposed)
@@ -529,6 +564,7 @@ public sealed class KioskConsole : IAsyncDisposable
             }
 
             DropLeaseLocked();
+            operatorLease = DropOperatorLeaseLocked();
             _disposed = true;
             feed = _feed;
             if (feed is not null)
@@ -541,6 +577,9 @@ public sealed class KioskConsole : IAsyncDisposable
         }
 
         _kiosk.PinSessionChanged -= OnPinSessionChanged;
+
+        // Given up while the person's session, if there is one, still works.
+        await ReleaseOperatorLeaseAsync(operatorLease).ConfigureAwait(false);
         _closing.Cancel();
         await _leaseTimer.DisposeAsync().ConfigureAwait(false);
         await _tickTimer.DisposeAsync().ConfigureAwait(false);
@@ -970,11 +1009,17 @@ public sealed class KioskConsole : IAsyncDisposable
             }
 
             DropLeaseLocked();
+            var operatorLease = DropOperatorLeaseLocked();
             AddNoticeLocked(notice, level);
             _logger.LogInformation("Kiosk locked ({Notice}); it was unlocked by {Name}", notice, session.Name);
 
-            // Run off the lock: ending the PIN session raises PinSessionChanged.
-            _signingOut = Task.Run(() => SignOutAsync(session));
+            // Run off the lock: ending the PIN session raises PinSessionChanged. The operator lease is given up first,
+            // while the session that holds it still works.
+            _signingOut = Task.Run(async () =>
+            {
+                await ReleaseOperatorLeaseAsync(operatorLease).ConfigureAwait(false);
+                await SignOutAsync(session).ConfigureAwait(false);
+            });
         }
 
         Publish();
@@ -1007,6 +1052,7 @@ public sealed class KioskConsole : IAsyncDisposable
 
     private void OnPinSessionChanged(object? sender, RoofSessionResponse? session)
     {
+        RoofOperatorLeaseKeeper? released;
         lock (_gate)
         {
             if (_disposed)
@@ -1015,14 +1061,16 @@ public sealed class KioskConsole : IAsyncDisposable
             }
 
             var now = _time.GetUtcNow();
-            // A question asked of one person is never answered by the next.
+            // A question asked of one person is never answered by the next, and their operator lease is never the next's.
             _safetyQuestion = null;
+            released = DropOperatorLeaseLocked();
             if (session is not null)
             {
                 _session = session;
                 _keptAliveAt = now;
                 _lastActivity = now;
                 WakeLocked(now);
+                KeepOperatorLeaseLocked();
             }
             else if (_session is not null)
             {
@@ -1036,6 +1084,7 @@ public sealed class KioskConsole : IAsyncDisposable
             }
         }
 
+        _ = ReleaseOperatorLeaseAsync(released);
         Publish();
     }
 
@@ -1120,6 +1169,21 @@ public sealed class KioskConsole : IAsyncDisposable
                 }
             }
 
+            // The idle warning counts down; the screen comes on when it starts, so it is seen. That is not the person's input.
+            var idleWarning = AlpacaIdleWarningLocked(now);
+            if (idleWarning is null)
+            {
+                _idleWarned = false;
+            }
+            else if (!_idleWarned)
+            {
+                _idleWarned = true;
+                WakeLocked(now);
+                changed = true;
+            }
+
+            changed |= !string.Equals(idleWarning, _view.AlpacaIdleWarning, StringComparison.Ordinal);
+
             if (_options.Blanking && !_blank && _screenTimeout > TimeSpan.Zero && now - _lastTouch >= _screenTimeout && !KeepAwakeLocked())
             {
                 _blank = true;
@@ -1192,6 +1256,8 @@ public sealed class KioskConsole : IAsyncDisposable
 
     private void OnStatusReceived(object? sender, RoofStatusReceivedEventArgs e)
     {
+        RoofOperatorLeaseKeeper? lapsed;
+        RoofOperatorLeaseKeeper? off;
         lock (_gate)
         {
             if (_disposed)
@@ -1213,8 +1279,12 @@ public sealed class KioskConsole : IAsyncDisposable
             }
 
             ApplyLocked(e.Status);
+            lapsed = TakeLapsedOperatorLeaseLocked();
+            off = FollowAlpacaCommandsLocked();
         }
 
+        _ = ReleaseOperatorLeaseAsync(lapsed);
+        _ = ReleaseOperatorLeaseAsync(off);
         Publish();
     }
 
@@ -1317,6 +1387,8 @@ public sealed class KioskConsole : IAsyncDisposable
             CloseBlock = notOffered ?? RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Closing, command),
             ClearFaultBlock = notOffered ?? RoofCommandRules.GetClearFaultBlockReason(command),
             HoldsLease = _holdsLease,
+            KeepsOperatorLease = _operatorLease is { Refused: false },
+            AlpacaIdleWarning = AlpacaIdleWarningLocked(_time.GetUtcNow()),
             SafetyQuestion = _safetyQuestion?.Question,
             StopMessage = _stopMessage,
             StopOutcome = _stopOutcome,
@@ -1326,6 +1398,138 @@ public sealed class KioskConsole : IAsyncDisposable
             IdleLock = _options.IdleLock,
             Notices = _notices.ToArray()
         };
+    }
+
+    // The person who unlocked the kiosk, an operator, holds the operator lease while it is unlocked and the controller
+    // takes Alpaca commands (#220). With them off, or from a controller that does not report them, there is nothing to hold.
+    private void KeepOperatorLeaseLocked()
+    {
+        if (_disposed || !_started || _operatorLease is not null || _session is not { } session || !IsOperator(session.Role)
+            || _status?.Alpaca is not { Mode: not RoofAlpacaCommandMode.Off })
+        {
+            return;
+        }
+
+        var keeper = new RoofOperatorLeaseKeeper(_client, _time, _logger);
+        keeper.StateChanged += OnOperatorLeaseChanged;
+        _operatorLease = keeper;
+        _operatorLeaseState = null;
+        _operatorLeaseLapsed = false;
+        keeper.Start();
+    }
+
+    // Follows the controller's Alpaca commands setting: on, the person's operator lease is kept (unless it lapsed for want
+    // of input: only a touch takes it again); off, it is given up. Returns a keeper to give up off the lock, or null.
+    private RoofOperatorLeaseKeeper? FollowAlpacaCommandsLocked()
+    {
+        if (_status?.Alpaca is { Mode: not RoofAlpacaCommandMode.Off })
+        {
+            if (!_operatorLeaseLapsed)
+            {
+                KeepOperatorLeaseLocked();
+            }
+
+            return null;
+        }
+
+        return DropOperatorLeaseLocked();
+    }
+
+    // Stops keeping the operator lease; the caller gives it up off the lock (ReleaseOperatorLeaseAsync).
+    private RoofOperatorLeaseKeeper? DropOperatorLeaseLocked()
+    {
+        var keeper = _operatorLease;
+        _operatorLease = null;
+        _operatorLeaseState = null;
+        _operatorLeaseLapsed = false;
+        if (keeper is not null)
+        {
+            keeper.StateChanged -= OnOperatorLeaseChanged;
+        }
+
+        return keeper;
+    }
+
+    // Stops the heartbeats and gives the lease up; never throws.
+    private async Task ReleaseOperatorLeaseAsync(RoofOperatorLeaseKeeper? keeper)
+    {
+        if (keeper is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await keeper.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            _logger.LogDebug(error, "Giving the operator lease up failed; it lapses by itself");
+        }
+    }
+
+    private void OnOperatorLeaseChanged(object? sender, EventArgs e)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _operatorLease is not { } keeper || !ReferenceEquals(sender, keeper))
+            {
+                return;
+            }
+
+            _operatorLeaseState = keeper.State;
+            _operatorLeaseStateAt = _time.GetUtcNow();
+        }
+
+        Publish();
+    }
+
+    /// <summary>
+    /// The keeper, taken out, when the person's operator lease lapsed for want of input: the controller says so, the
+    /// keeper's last answer said it was due about now, and the person has not touched the screen since. Its heartbeats
+    /// would take the lease again, so they stop; the person's next touch takes it again. Null otherwise.
+    /// </summary>
+    private RoofOperatorLeaseKeeper? TakeLapsedOperatorLeaseLocked()
+    {
+        if (_operatorLease is null || _session is not { } session
+            || _status?.Alpaca?.OperatorLease is not { Held: false } lease
+            || !string.Equals(lease.IdleLapsedHolder, session.Name, StringComparison.Ordinal)
+            || _operatorLeaseState is not { IdleSecondsRemaining: { } left }
+            || _lastInput > _operatorLeaseStateAt
+            || _time.GetUtcNow() < _operatorLeaseStateAt + TimeSpan.FromSeconds(left) - OperatorLeaseLapseTolerance)
+        {
+            return null;
+        }
+
+        var keeper = DropOperatorLeaseLocked();
+        _operatorLeaseLapsed = true;
+        _logger.LogInformation("The operator lease of {Name} lapsed after no input; it is taken again at their next touch", session.Name);
+        return keeper;
+    }
+
+    // The unlocking person's idle warning: from the keeper's newest answer, counted down here, or else from the status.
+    // Once their lease lapsed here, Alpaca may move the roof while nobody holds a lease, even when a heartbeat on its way
+    // took the lease again before the kiosk stopped them and gave it up (so the status names nobody whose lease lapsed).
+    private string? AlpacaIdleWarningLocked(DateTimeOffset now)
+    {
+        if (_session is not { } session)
+        {
+            return null;
+        }
+
+        var lease = _status?.Alpaca?.OperatorLease;
+        if (_operatorLeaseLapsed && lease is { Held: false })
+        {
+            return RoofAlpacaText.MayNowMove;
+        }
+
+        if (_operatorLease is not null && _operatorLeaseState is { Held: true, IdleSecondsRemaining: { } left } answer
+            && string.Equals(answer.Holder, session.Name, StringComparison.Ordinal))
+        {
+            lease = answer with { IdleSecondsRemaining = Math.Max(0, left - (now - _operatorLeaseStateAt).TotalSeconds) };
+        }
+
+        return RoofAlpacaText.DescribeIdleWarning(lease, session.Name);
     }
 
     private sealed record Command(RoofSessionResponse Session, long StopsSent, CancellationToken Closing, DateTimeOffset SentAt);

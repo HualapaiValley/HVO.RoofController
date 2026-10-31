@@ -50,7 +50,8 @@ confirms the correction after a coordinated restart.
 
 - **Navigation** along the bottom: Roof, Readings, Notices, About, Terminal and Unlock; while unlocked, History,
   [Change PIN](#change-your-pin) and Lock in Unlock's place. Administration belongs in the CLI/TUI or web UI. Terminal
-  appears only in the systemd-managed direct-display kiosk.
+  appears only in the systemd-managed direct-display kiosk. [Alpaca](#alpaca) appears after Notices while the controller
+  takes Alpaca commands, or has an Alpaca alert, grant or warning to show.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the kiosk renews it (`Renewing lease (6 s left)`), and
   who unlocked the kiosk (`olga (Operator)`), or `Locked`.
@@ -214,6 +215,46 @@ health checks; for an admin, the host's details and **Restart**, while others re
 `The host's details (its name, system, runtime and the controller's process) need the Admin role.`
 
 ![An admin's System page: this kiosk's version, the controller's summary, and Restart](images/kiosk/admin-system-1280x720.png)
+
+## Alpaca
+
+While the controller takes Alpaca commands (`RoofController:Alpaca:AllowCommands`, [docs/alpaca.md](alpaca.md)), or
+has an Alpaca alert, grant or warning to show, **Alpaca** in the bottom bar shows its Alpaca command state (#220), in the
+words the web UI and the terminal use. Anyone at the kiosk can read it; its actions need someone who unlocked it, and
+go with their PIN session (the controller refuses the kiosk's device key for every one of them).
+
+- **Which commands are on**: `Alpaca may close the roof (never open it)`, or `Alpaca commands are off`.
+- **The Stop hold.** Every Stop but the Alpaca server's own AbortSlew sets it, and so does the controller's start:
+  `Alpaca commands are held after a Stop (…): a person must allow them again.` **Allow Alpaca again** clears it, for an
+  operator; the controller logs it with their name.
+- **The operator lease.** While an operator has unlocked the kiosk, the kiosk holds the operator lease for them, and
+  the controller refuses every Alpaca command: `Operator lease held by olga: Alpaca commands are refused; it lapses
+  after 10 min without input.` Every touch on the screen is their input; nothing else is (not the status, not a timer).
+  While Alpaca commands are on, it lapses after the controller's idle limit (`RoofController:Lease:OperatorLeaseIdleMinutes`)
+  without input. In its last minute the summary under the header says `Your operator lease lapses in 45 s without input;
+  then Alpaca may move the roof. Touch anything to keep it.` (the screen comes on for it), and once it lapsed
+  `Alpaca may now move the roof: your operator lease lapsed after no input.` The kiosk then stops renewing it, so the
+  lapse stands, until the next touch takes it again. Locking gives it up. It is not a motion's lease (the
+  `Renewing lease` badge), and the kiosk still never locks itself while it renews that one.
+- **Override grants**: what each lifts, who granted it and how long it has left, and **Revoke** for an operator.
+- **Alerts**, newest first, with how often and the client the Alpaca server reported: **Acknowledge** for anyone who
+  unlocked the kiosk and, on a refused Close whose every reason is a telescope, **Allow this Close once** for an
+  operator. That asks first, with **Allow this Close once** and **Cancel** always on the screen below the question:
+  what the grant lifts (exactly the alert's reasons), for which client, that it lasts the override window and is used up
+  by one Close, and that it never bypasses the fault latch, the interlocks, the limits, the motor protections, a
+  person's operator lease or the Stop hold. Nothing is sent until the answer; Cancel, Esc, another page and the kiosk
+  locking send nothing. While the kiosk is unlocked its own operator lease still refuses Alpaca commands, so a grant made
+  here is used once the kiosk locks, within the window. Where only an admin may grant an override
+  (`RoofSafety:OverrideRole`), a PIN session cannot, and the page says why.
+- **Warnings** from the controller (`Alpaca Close checks no telescope: …`) are on the page, in the summary under the header
+  (`Alpaca warning. Readings has details.`), and whole on Readings.
+
+The page is bounded pages, paged only when it overflows, and Stop stays at the right throughout.
+
+<p>
+  <img src="images/kiosk/alpaca-p1-1280x720.png" alt="The Alpaca page: Close only, the idle warning in the summary, the Stop hold with Allow Alpaca again, the operator lease, a grant with Revoke, and Stop at the right" width="480">
+  <img src="images/kiosk/alpaca-grant-question-p1-800x480.png" alt="Allow this Close once asks first on the first 7-inch display: the reasons it lifts, the client, the window, what it never bypasses, and the answers below" width="400">
+</p>
 
 ## The status
 
@@ -531,6 +572,11 @@ Nothing here needs the Pi, the display or the roof.
   `KioskPinChangeTests` changes a PIN on the keypad (a personal PIN and the commissioned one): the kiosk stays
   unlocked, a wrong current PIN ends nothing, a new PIN that cannot be right is never sent, and every PIN typed is
   forgotten on Cancel, on another page and when the kiosk locks, with Stop whole on every step.
+  `KioskAlpacaTests` (#220) covers the Alpaca page and the operator lease: the lease held only while an operator is
+  signed in (not a viewer) and given up on Lock, heartbeats that say input only after a touch (never for a status or a
+  timer), the idle warning, the lapse that stands until the next touch, Allow Alpaca again, a grant that sends exactly
+  the alert's reasons after the question and nothing on Cancel, Esc or the lock, Acknowledge and Revoke, and everything at
+  once in bounded pages at every size, the Mac app's too.
 - **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.
@@ -557,7 +603,7 @@ Nothing here needs the Pi, the display or the roof.
 
   ```bash
   HVO_KIOSK_RENDERS_DIR=/tmp/kiosk-renders dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release \
-    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests|FullyQualifiedName~KioskPinChangeTests|FullyQualifiedName~KioskPersonHistoryTests|FullyQualifiedName~KioskSafetyOverrideTests"
+    --filter "FullyQualifiedName~KioskRenderTests|FullyQualifiedName~KioskRedesignTests|FullyQualifiedName~KioskCommissioningFlowTests|FullyQualifiedName~KioskTerminalRenderTests|FullyQualifiedName~KioskPolishTests|FullyQualifiedName~KioskPinChangeTests|FullyQualifiedName~KioskPersonHistoryTests|FullyQualifiedName~KioskSafetyOverrideTests|FullyQualifiedName~KioskAlpacaTests"
   for f in ../docs/images/kiosk/*.png; do
     if [ -f "/tmp/kiosk-renders/$(basename "$f")" ]; then cp "/tmp/kiosk-renders/$(basename "$f")" "$f"; fi
   done
