@@ -143,6 +143,7 @@ CI, and each check lists the installation assumptions the emulator cannot prove.
 | `HVO.RoofControllerV4.Client` | Client library for the REST API and the status hub, shared by every UI client ([its README](src/HVO.RoofControllerV4.Client/README.md)) |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the command line and terminal interface, over the client library ([docs/cli.md](docs/cli.md)) |
 | `HVO.RoofControllerV4.Web` | The web UI: Blazor Server, over the client library ([docs/web.md](docs/web.md)) |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome, off by default, over the client library ([docs/alpaca.md](docs/alpaca.md)) |
 | `HVO.RoofControllerV4.Screens` | The screens and view models of the kiosk and the Mac app: Avalonia controls in HVO Dark, over the client library |
 | `HVO.RoofControllerV4.Kiosk` | `hvo-roof-kiosk`: the touchscreen kiosk, drawing the screens through DRM ([docs/kiosk.md](docs/kiosk.md)) |
 | `HVO.RoofControllerV4.Mac` | `HVO Roof.app`: the Mac app, the screens in a window, and its bundle scripts ([docs/mac.md](docs/mac.md)) |
@@ -262,6 +263,7 @@ Configure access only when a specific development task needs it:
 | [Security](docs/security.md) | API keys, roles, people and sessions, remote settings and restart, HTTPS and the web UI's sign-in |
 | [Safety conditions](docs/safety-service.md) | The safety service: telescope park and weather sources, Safe/Unsafe/Unknown with reasons and staleness, the Open interlock (Warn by default) and the override prompts on every interface, future sources, and the decisions and open questions |
 | [Web UI](docs/web.md) | The browser interface: signing in, the pages, Stop, its settings and screenshots |
+| [Alpaca server](docs/alpaca.md) | The roof as an ASCOM Alpaca Dome for astronomy software (phase 1: read-only, and AbortSlew stops the roof): the members, error numbers, security, settings, discovery and ConformU |
 | [Kiosk](docs/kiosk.md) | The touchscreen at the roof: the screens, unlocking with a PIN, Stop, installing it on the Pi, its settings and screenshots |
 | [Mac app](docs/mac.md) | The kiosk's screens in a window on a Mac: signing in with a password, Stop, installing it and its device key, its settings, building and signing it on Linux, and screenshots |
 | [Installing](docs/install.md) | `install.sh` and `hvo-roof-install`: preparing the Pi, the roles and where each runs, the guards, the wizard, answers files, `--plan`, certificates, upgrades, rollbacks, backups, the install record and the log, exit codes, troubleshooting and screenshots |

@@ -985,14 +985,16 @@ public sealed class SettingsApiTests
         var roof = new RoofDouble();
         using var host = StartHost(roof, logs);
         using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        // Taken before the restart: an accepted restart stops the host, which can dispose its services before the answer
+        // is read.
+        var signal = host.Services.GetRequiredService<RoofRestartSignal>();
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
         var response = await admin.PostAsync(Restart, content: null);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
         (await ApiJson.ReadAsync<RoofRestartResponse>(response)).ExitCode.Should().Be(RoofSettingsContract.RestartExitCode);
         roof.Mock.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.Once());
-        var signal = host.Services.GetRequiredService<RoofRestartSignal>();
-        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
         await WaitUntilAsync(() => signal.Requested && lifetime.ApplicationStopping.IsCancellationRequested, "the restart to be requested");
         logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning
             && entry.Message == "AUDIT controller restart requested by test-admin: roof stopped and verified; exiting with code 75");

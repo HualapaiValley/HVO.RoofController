@@ -42,6 +42,7 @@ macOS machine with Docker.
 |---|---|
 | `HVO.RoofControllerV4.RPi` | The controller: ASP.NET Core on the Pi. It drives the Sequent Microsystems HAT over I2C (`HVO.Iot.Devices`) and serves the REST API and the status hub. It serves no pages. Its own rules: [AGENTS.md](src/HVO.RoofControllerV4.RPi/AGENTS.md). |
 | `HVO.RoofControllerV4.Web` | The web UI, Blazor Server: a separate process in the controller's container ([docs/web.md](docs/web.md)). |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome, a separate process, off by default, over the client library with its own key. Phase 1 reads and stops (AbortSlew), never opens or closes ([docs/alpaca.md](docs/alpaca.md)). |
 | `HVO.RoofControllerV4.Client` | The client library every UI uses: the REST API, the status hub, credentials and the CA, Stop, and the shared wording and palette. |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the commands and the Terminal.Gui interface ([docs/cli.md](docs/cli.md)). |
 | `HVO.RoofControllerV4.TerminalUi` | HVO Dark for Terminal.Gui, shared by `hvo-roof` and the installer. |
@@ -59,6 +60,7 @@ src/                          # the projects, HVO.RoofController.sln, global.jso
 tests/
   HVO.RoofControllerV4.RPi.Tests/   # every .NET test (MSTest): unit, API, UI, installer, emulated plant and scenarios
   cli/ container/ deploy/ emulator/ install/ installer/ mac/   # shell and Python tests of the scripts and containers
+  alpaca/                                                      # ConformU against the Alpaca server and the emulator
   docs/ releasing/ security/ versioning/                       # tests of the build/ scripts
 build/                        # version, release, image, doc-link and secret-scan scripts
 docs/                         # how everything works; start from README.md's documentation table
@@ -170,7 +172,8 @@ The browser tests need Chromium from Playwright
 scripts have their own tests, which CI runs; run the ones for what you change, from the repository root:
 
 ```bash
-python3 -m unittest discover -s tests/<docs|releasing|security|cli|mac> -p 'test_*.py'
+python3 -m unittest discover -s tests/<docs|releasing|security|cli|mac|alpaca> -p 'test_*.py'
+tests/alpaca/conformu.sh          # the Alpaca server under a pinned ConformU, against the HAT emulator
 tests/versioning/version-tests.sh
 tests/deploy/deploy-script-tests.sh
 build/check-doc-links.py          # every relative link and anchor in the Markdown resolves

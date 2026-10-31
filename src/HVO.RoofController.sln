@@ -29,6 +29,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HVO.RoofControllerV4.Termin
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HVO.RoofControllerV4.Installer", "HVO.RoofControllerV4.Installer\HVO.RoofControllerV4.Installer.csproj", "{619F20EA-D8AF-4FFC-9EF5-0103E90DDCB2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HVO.RoofControllerV4.Alpaca", "HVO.RoofControllerV4.Alpaca\HVO.RoofControllerV4.Alpaca.csproj", "{D5696639-2E91-437F-AD56-7D158BC940C5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -195,6 +197,18 @@ Global
 		{619F20EA-D8AF-4FFC-9EF5-0103E90DDCB2}.Release|x64.Build.0 = Release|Any CPU
 		{619F20EA-D8AF-4FFC-9EF5-0103E90DDCB2}.Release|x86.ActiveCfg = Release|Any CPU
 		{619F20EA-D8AF-4FFC-9EF5-0103E90DDCB2}.Release|x86.Build.0 = Release|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Debug|x64.Build.0 = Debug|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Debug|x86.Build.0 = Debug|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Release|x64.ActiveCfg = Release|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Release|x64.Build.0 = Release|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Release|x86.ActiveCfg = Release|Any CPU
+		{D5696639-2E91-437F-AD56-7D158BC940C5}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
