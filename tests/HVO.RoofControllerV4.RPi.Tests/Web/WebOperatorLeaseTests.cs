@@ -176,8 +176,8 @@ public sealed class WebOperatorLeaseTests
             var grant = harness.Alpaca().Grants().Should().ContainSingle().Subject;
             harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
             lease.SteppedAway.Should().BeTrue();
-            var stepped = RoofAlpacaText.DescribeSteppedAway(harness.Console.View.Status!.Alpaca!.Grants.Single());
-            stepped.Should().StartWith("You stepped away: Alpaca may close the roof once in the next 5 min.");
+            var stepped = RoofAlpacaText.DescribeSteppedAway(harness.Console.View.Status!.Alpaca!.Grants.Single(), RoofAlpacaText.ClickToTakeBack);
+            stepped.Should().StartWith("You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Click or type on this page");
             Text(page.Find("[data-testid=alpaca-lease-notice]")).Should().Be(stepped);
             harness.Console.View.AlpacaLeaseNotice.Should().Be(stepped);
         });

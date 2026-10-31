@@ -54,7 +54,7 @@ public sealed class WebAlpacaBrowserTests
         await page.GetByTestId("alpaca-grant-ask").ClickAsync();
         await page.GetByTestId("alpaca-question-confirm").ClickAsync();
 
-        await Expect(page.GetByTestId("alpaca-lease-notice")).ToContainTextAsync("You stepped away: Alpaca may close the roof once in the next");
+        await Expect(page.GetByTestId("alpaca-lease-notice")).ToContainTextAsync("You stepped away from the operator lease: Alpaca may close the roof once in the next");
         await Expect(page.GetByTestId("alpaca-lease-banner")).ToContainTextAsync("Click or type on this page to take control back; that cancels the grant.");
         alpaca.Grants().Should().ContainSingle();
         alpaca.GetStatus().OperatorLease.Held.Should().BeFalse("the operator stepped away with the grant");

@@ -1297,7 +1297,7 @@ public sealed class WebRoofConsole : IDisposable
     // (one goes at once when they act on a warning), and without them the status.
     private string? LeaseNoticeLocked()
         => _session is not { } person ? null
-            : _operatorLease is { SteppedAway: true } ? RoofAlpacaText.DescribeSteppedAway(_status?.Alpaca?.Grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Close))
+            : _operatorLease is { SteppedAway: true } ? RoofAlpacaText.DescribeSteppedAway(_status?.Alpaca?.Grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Close), RoofAlpacaText.ClickToTakeBack)
             : _operatorLease is { State: not null } lease ? lease.IdleWarning
             : RoofAlpacaText.DescribeIdleWarning(_status?.Alpaca?.OperatorLease, person.Name);
 
