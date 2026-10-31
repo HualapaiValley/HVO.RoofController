@@ -204,4 +204,24 @@ public sealed class RoofOperatorLeaseTests
         (await rig.CloseAsync()).Rule().Should().Be("LeaseHeld");
         rig.Commands.Grants().Should().ContainSingle("a person's lease refuses before any grant is used");
     }
+
+    [TestMethod]
+    public async Task EachPersonsHeartbeat_AnswersTheirOwnLease_SoASecondOperatorSeesTheirOwnIdleWarning()
+    {
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("grace"), input: true);
+        time.Advance(TimeSpan.FromMinutes(2));
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: true);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("grace"), input: true); // grace keeps hers fresh
+        time.Advance(TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(30)); // ada: 9 min 30 s without input
+        var ada = rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("grace", "the status names the oldest holder");
+        ada.Holder.Should().Be("ada", "a heartbeat answers its own holder");
+        ada.IdleSecondsRemaining.Should().BeApproximately(30, 1);
+        RoofAlpacaText.DescribeIdleWarning(ada, "ada").Should().Contain("lapses in");
+    }
 }

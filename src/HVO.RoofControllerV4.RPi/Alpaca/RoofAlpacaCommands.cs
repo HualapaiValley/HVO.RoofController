@@ -231,6 +231,12 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             return new RoofOperatorLeaseState { Held = false, Holder = null, IdleSecondsRemaining = null, IdleLapsedHolder = _idleLapsedHolder };
         }
 
+        return LeaseStateOf_NoLock(lease, now);
+    }
+
+    /// <summary><paramref name="lease"/>'s own state: what a heartbeat answers its holder, so each person sees their own idle clock.</summary>
+    private RoofOperatorLeaseState LeaseStateOf_NoLock(OperatorLease lease, long now)
+    {
         double? idle = null;
         if (_mode != RoofAlpacaCommandMode.Off)
         {
@@ -335,7 +341,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 lease.LastInput = now;
             }
 
-            state = LeaseState_NoLock(now);
+            state = LeaseStateOf_NoLock(lease, now);
         }
 
         if (taken)
