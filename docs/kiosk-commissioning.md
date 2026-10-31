@@ -25,6 +25,12 @@ at RoofOperator even when the owner is an administrator.
 
 ![Confirm a PIN](images/kiosk/commissioning-confirm-800x480.png)
 
+Later, the owner changes the personal PIN at the kiosk like anyone else (#205): unlock with it, choose **Change PIN**,
+enter it once more, then the new one twice ([kiosk.md](kiosk.md), [Changing a PIN](security.md#changing-a-pin)). The
+current PIN is checked against the same saved count of failures, the owner's other PIN sessions end, and the session
+that made the change stays open. A forgotten personal PIN still needs the administrator recovery below: an admin's PIN
+reset applies to people in the identity store, not to this credential.
+
 The PIN pad masks digits and distinguishes native and virtual namesakes by provider and selection ID.
 Cancel clears the local token and PIN; the server grant expires after five minutes. Cancel does not extend the
 24-hour installation window or itself permanently retire pending access. Restart discards setup tokens; an eligible

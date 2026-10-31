@@ -15,15 +15,15 @@ stop_boundary_case() (
   done
 
   # These are the functions' dependencies, never the supervisor's top-level startup, HAT access or UI preparation.
-  # shellcheck disable=SC2317 # called by the production functions loaded with eval above
+  # shellcheck disable=SC2317,SC2329 # called by the production functions loaded with eval above
   tasks_free() { return 0; }
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   raise_oom_score_adj() { return 0; }
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   stamp() { NOW_US=1; }
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   log() { :; }
-  # shellcheck disable=SC2317
+  # shellcheck disable=SC2317,SC2329
   write_state() { :; }
 
   # The real exec functions must reach this executable on the no-stop path, including exec_ui's env -i invocation.
@@ -52,7 +52,7 @@ APP
   # detected by the fork/start counters even though the child's intact check would still suppress the application.
   # The prefork case stops AFTER the parent's final guard; only the child's inherited flag can suppress execution.
   # The child-entry case changes only the forked shell's flag, so it independently exercises the child guard too.
-  # shellcheck disable=SC2317 # called by the inherited DEBUG trap
+  # shellcheck disable=SC2317,SC2329 # called by the inherited DEBUG trap
   stop_boundary_debug() {
     local command=$1 caller=$2
     if [[ "${BASHPID}" == "${parent_pid}" ]]; then

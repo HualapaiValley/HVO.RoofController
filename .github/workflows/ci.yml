@@ -27,12 +27,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  # The build and the tests, half of what build-and-test requires; the publish jobs below are the other half.
+  unit-tests:
     runs-on: ubuntu-latest
-    # Serial supported-RID publishes and expanded workflow tests share this bounded job budget.
     timeout-minutes: 30
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
@@ -171,6 +169,93 @@ jobs:
             python3 ../build/check-web-publish.py "web-publish/$rid"
           done
 
+      # The kiosk's screens at 1280x720 (the Pi Touch Display 2) and 800x480 (the original 7-inch touchscreen), and the
+      # Mac app's (mac-*) at 1280x800 and 960x600.
+      - name: Upload kiosk renders
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kiosk-renders-${{ github.run_id }}
+          path: src/TestResults/kiosk-renders/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
+      # The installer's wizard pages at 100x30, as ANSI (.ans) and drawn as SVG by tests/cli/ansi-to-svg.py: the
+      # screenshots in docs/install.md.
+      - name: Draw the installer renders
+        if: always()
+        run: |
+          shopt -s nullglob
+          for ans in TestResults/installer-renders/*.ans; do
+            python3 ../tests/cli/ansi-to-svg.py "$ans" "${ans%.ans}.svg" --title hvo-roof-install \
+              --cells "${ans%.ans}.cells.json" --mask-local-host
+          done
+
+      - name: Upload installer renders
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer-renders-${{ github.run_id }}
+          path: |
+            src/TestResults/installer-renders/*.ans
+            src/TestResults/installer-renders/*.svg
+            src/TestResults/installer-renders/*.cells.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ github.run_id }}
+          path: src/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  # The published terminal programs, hvo-roof and hvo-roof-install, beside the tests rather than after them: each
+  # publish is a self-contained, ReadyToRun, compressed single file per runtime, about 45 s of one job's time each.
+  publish-terminal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      AVALONIA_TELEMETRY_OPTOUT: 1
+    defaults:
+      run:
+        # The dotnet host resolves global.json from the working directory upward, not from
+        # the project path, so every dotnet command runs from src/ where the SDK pin lives.
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Every program built here is 4.0.0-ci.<run>, or the release's version when the release workflow runs this one
+      # (docs/releasing.md). MSBuild reads the Version variable as a property, so every restore, build and publish below
+      # gets it; the SDK adds the commit (+<sha>) from the checkout.
+      - name: Product version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          version=${RELEASE_VERSION:-$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")}
+          echo "Product version: ${version}"
+          echo "Version=${version}" >> "$GITHUB_ENV"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
+        with:
+          dotnet-version: '10.0.402'
+
       # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof and hvo-roof-install for osx-arm64, and HVO
       # Roof.app. A Mac with Apple silicon runs no program that is not signed, ad hoc at least. Its release
       # is checked against a pinned SHA-256. Not RCODESIGN_*: rcodesign reads those variables as its own settings, and
@@ -212,38 +297,6 @@ jobs:
             echo "::error file=Directory.Build.props::hvo-roof --version printed ${actual}, not ${expected}"
             exit 1
           fi
-
-      # hvo-roof-kiosk as one self-contained file for the Pi (docs/kiosk.md), and for linux-x64 to check that the file
-      # runs: with no device key it refuses its settings (exit 78) before it opens a display.
-      - name: Publish hvo-roof-kiosk
-        run: |
-          for rid in linux-arm64 linux-x64; do
-            dotnet publish HVO.RoofControllerV4.Kiosk -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-kiosk/$rid"
-            test -x "hvo-roof-kiosk/$rid/hvo-roof-kiosk"
-          done
-          file hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk | grep -q 'ARM aarch64'
-          status=0
-          ./hvo-roof-kiosk/linux-x64/hvo-roof-kiosk 2> kiosk-stderr.txt || status=$?
-          cat kiosk-stderr.txt
-          if [ "$status" -ne 78 ] || ! grep -q 'The roof kiosk did not start' kiosk-stderr.txt; then
-            echo "::error file=src/HVO.RoofControllerV4.Kiosk/Program.cs::hvo-roof-kiosk without settings exited ${status}, not 78 with its settings message"
-            exit 1
-          fi
-          # The artifact: the Pi's program and its deploy files side by side, the directory docs/kiosk.md installs from.
-          # Every file the page installs must be in it.
-          mkdir kiosk-artifact
-          cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk kiosk-artifact/
-          # Splash resources are embedded in the installer, not standalone kiosk assets.
-          cp HVO.RoofControllerV4.Kiosk/deploy/{hvo-roof-kiosk.service,hvo-roof-terminal.service,terminal-handoff.sh,99-hvo-roof-kiosk-backlight.rules,appsettings.Local.example.json} kiosk-artifact/
-          installs=$(grep -oP '^\s*sudo install -m [0-7]+ \K[^ ]+(?= )' ../docs/kiosk.md)
-          test -n "$installs"
-          for file in $installs; do
-            if [ ! -f "kiosk-artifact/$file" ]; then
-              echo "::error file=docs/kiosk.md::docs/kiosk.md installs ${file}, which the hvo-roof-kiosk artifact does not have"
-              exit 1
-            fi
-          done
-          ls -l kiosk-artifact
 
       # hvo-roof-install as one self-contained file for each machine it installs on: linux-arm64 (the Pi), linux-x64 (a
       # PC test rig) and osx-arm64 (a Mac, signed ad hoc as hvo-roof is). The linux-x64 file is run: its version, and
@@ -299,6 +352,82 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload hvo-roof
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hvo-roof-${{ github.run_id }}
+          path: |
+            src/hvo-roof/*/hvo-roof
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload hvo-roof-install
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hvo-roof-install-${{ github.run_id }}
+          path: |
+            src/hvo-roof-install/*/hvo-roof-install
+          if-no-files-found: error
+          retention-days: 14
+
+  # The kiosk, the Mac app and the native authentication worker, published as publish-terminal publishes its programs.
+  publish-apps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      AVALONIA_TELEMETRY_OPTOUT: 1
+    defaults:
+      run:
+        # The dotnet host resolves global.json from the working directory upward, not from
+        # the project path, so every dotnet command runs from src/ where the SDK pin lives.
+        working-directory: src
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Every program built here is 4.0.0-ci.<run>, or the release's version when the release workflow runs this one
+      # (docs/releasing.md). MSBuild reads the Version variable as a property, so every restore, build and publish below
+      # gets it; the SDK adds the commit (+<sha>) from the checkout.
+      - name: Product version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          version=${RELEASE_VERSION:-$(../build/version.sh --ci "$GITHUB_RUN_NUMBER")}
+          echo "Product version: ${version}"
+          echo "Version=${version}" >> "$GITHUB_ENV"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        # Keep CI on the current product SDK even while the dev-container minimum is older.
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
+        with:
+          dotnet-version: '10.0.402'
+
+      # rcodesign signs the Mac programs ad hoc on Linux (no Xcode): hvo-roof and hvo-roof-install for osx-arm64, and HVO
+      # Roof.app. A Mac with Apple silicon runs no program that is not signed, ad hoc at least. Its release
+      # is checked against a pinned SHA-256. Not RCODESIGN_*: rcodesign reads those variables as its own settings, and
+      # refuses ones it does not know.
+      - name: Install rcodesign
+        env:
+          APPLE_CODESIGN_VERSION: 0.29.0
+          APPLE_CODESIGN_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+        run: |
+          archive="apple-codesign-${APPLE_CODESIGN_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive.tar.gz" \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${APPLE_CODESIGN_VERSION}/$archive.tar.gz"
+          echo "${APPLE_CODESIGN_SHA256}  $RUNNER_TEMP/$archive.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/$archive/rcodesign" --version
+          echo "APPLE_CODESIGN=$RUNNER_TEMP/$archive/rcodesign" >> "$GITHUB_ENV"
+
       # HVO Roof.app (docs/mac.md): published for osx-arm64 and made into the bundle, signed ad hoc by rcodesign, and
       # published for linux-x64 to check that the program refuses missing settings (exit 78) before it opens a window.
       # The mac-app job runs the bundle on a Mac.
@@ -327,6 +456,38 @@ jobs:
           # Zipped here, as the Finder would, so the programs keep their execute bits and the bundle its signature.
           (cd mac-artifact && zip -qry "hvo-roof-mac-${GITHUB_RUN_ID}.zip" "HVO Roof.app")
 
+      # hvo-roof-kiosk as one self-contained file for the Pi (docs/kiosk.md), and for linux-x64 to check that the file
+      # runs: with no device key it refuses its settings (exit 78) before it opens a display.
+      - name: Publish hvo-roof-kiosk
+        run: |
+          for rid in linux-arm64 linux-x64; do
+            dotnet publish HVO.RoofControllerV4.Kiosk -c Release -r "$rid" -v minimal -p:ContinuousIntegrationBuild=true -o "hvo-roof-kiosk/$rid"
+            test -x "hvo-roof-kiosk/$rid/hvo-roof-kiosk"
+          done
+          file hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk | grep -q 'ARM aarch64'
+          status=0
+          ./hvo-roof-kiosk/linux-x64/hvo-roof-kiosk 2> kiosk-stderr.txt || status=$?
+          cat kiosk-stderr.txt
+          if [ "$status" -ne 78 ] || ! grep -q 'The roof kiosk did not start' kiosk-stderr.txt; then
+            echo "::error file=src/HVO.RoofControllerV4.Kiosk/Program.cs::hvo-roof-kiosk without settings exited ${status}, not 78 with its settings message"
+            exit 1
+          fi
+          # The artifact: the Pi's program and its deploy files side by side, the directory docs/kiosk.md installs from.
+          # Every file the page installs must be in it.
+          mkdir kiosk-artifact
+          cp hvo-roof-kiosk/linux-arm64/hvo-roof-kiosk kiosk-artifact/
+          # Splash resources are embedded in the installer, not standalone kiosk assets.
+          cp HVO.RoofControllerV4.Kiosk/deploy/{hvo-roof-kiosk.service,hvo-roof-terminal.service,terminal-handoff.sh,99-hvo-roof-kiosk-backlight.rules,appsettings.Local.example.json} kiosk-artifact/
+          installs=$(grep -oP '^\s*sudo install -m [0-7]+ \K[^ ]+(?= )' ../docs/kiosk.md)
+          test -n "$installs"
+          for file in $installs; do
+            if [ ! -f "kiosk-artifact/$file" ]; then
+              echo "::error file=docs/kiosk.md::docs/kiosk.md installs ${file}, which the hvo-roof-kiosk artifact does not have"
+              exit 1
+            fi
+          done
+          ls -l kiosk-artifact
+
       - name: Publish optional native authentication worker
         run: |
           for rid in linux-arm64 linux-x64; do
@@ -339,24 +500,6 @@ jobs:
         with:
           name: hvo-roof-linux-auth-${{ github.run_id }}
           path: src/hvo-roof-linux-auth/*/HVO.RoofControllerV4.LinuxAuth
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload hvo-roof
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: hvo-roof-${{ github.run_id }}
-          path: |
-            src/hvo-roof/*/hvo-roof
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload hvo-roof-install
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: hvo-roof-install-${{ github.run_id }}
-          path: |
-            src/hvo-roof-install/*/hvo-roof-install
           if-no-files-found: error
           retention-days: 14
 
@@ -377,51 +520,31 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # The kiosk's screens at 1280x720 (the Pi Touch Display 2) and 800x480 (the original 7-inch touchscreen), and the
-      # Mac app's (mac-*) at 1280x800 and 960x600.
-      - name: Upload kiosk renders
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: kiosk-renders-${{ github.run_id }}
-          path: src/TestResults/kiosk-renders/*.png
-          if-no-files-found: warn
-          retention-days: 14
-
-      # The installer's wizard pages at 100x30, as ANSI (.ans) and drawn as SVG by tests/cli/ansi-to-svg.py: the
-      # screenshots in docs/install.md.
-      - name: Draw the installer renders
-        if: always()
+  # The required check: the solution built and tested, Debug and Release, and every program published, in the three jobs
+  # it needs. It reports a failure, never a skip, when one of them did not succeed.
+  build-and-test:
+    needs: [ unit-tests, publish-terminal, publish-apps ]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The build, the tests and every publish succeeded
+        env:
+          UNIT_TESTS: ${{ needs.unit-tests.result }}
+          PUBLISH_TERMINAL: ${{ needs.publish-terminal.result }}
+          PUBLISH_APPS: ${{ needs.publish-apps.result }}
         run: |
-          shopt -s nullglob
-          for ans in TestResults/installer-renders/*.ans; do
-            python3 ../tests/cli/ansi-to-svg.py "$ans" "${ans%.ans}.svg" --title hvo-roof-install \
-              --cells "${ans%.ans}.cells.json" --mask-local-host
+          echo "unit-tests: ${UNIT_TESTS}; publish-terminal: ${PUBLISH_TERMINAL}; publish-apps: ${PUBLISH_APPS}"
+          for result in "$UNIT_TESTS" "$PUBLISH_TERMINAL" "$PUBLISH_APPS"; do
+            if [ "$result" != success ]; then
+              echo "::error::build-and-test needs unit-tests, publish-terminal and publish-apps to succeed"
+              exit 1
+            fi
           done
 
-      - name: Upload installer renders
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installer-renders-${{ github.run_id }}
-          path: |
-            src/TestResults/installer-renders/*.ans
-            src/TestResults/installer-renders/*.svg
-            src/TestResults/installer-renders/*.cells.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: test-results-${{ github.run_id }}
-          path: src/TestResults/**
-          if-no-files-found: warn
-          retention-days: 7
-
   terminal-distributions:
-    needs: build-and-test
+    needs: publish-terminal
+    if: ${{ !cancelled() && needs.publish-terminal.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -495,7 +618,8 @@ jobs:
   # runner, as root. The runner is thrown away after, and has no screen: the kiosk logs where it would draw, then stops
   # there, which stays an assumption of docs/kiosk.md.
   installer-kiosk:
-    needs: build-and-test
+    needs: publish-apps
+    if: ${{ !cancelled() && needs.publish-apps.result == 'success' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     env:
@@ -549,7 +673,8 @@ jobs:
   # device key made through the controller's API in process, its settings, and --check. And what the keychain step reads:
   # a keychain of the test's own listed by `security find-certificate -Z`, and SSL trust exported from the admin domain.
   installer-mac:
-    needs: build-and-test
+    needs: publish-apps
+    if: ${{ !cancelled() && needs.publish-apps.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 30
     env:
@@ -625,7 +750,8 @@ jobs:
           retention-days: 14
 
   mac-app:
-    needs: build-and-test
+    needs: publish-apps
+    if: ${{ !cancelled() && needs.publish-apps.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -680,7 +806,8 @@ jobs:
   # emulator run with dotnet run (tests/cli/dotnet-run-smoke.sh), and the client's certificate checks. No hardware: the
   # roof is the emulator's.
   mac-cli:
-    needs: build-and-test
+    needs: publish-terminal
+    if: ${{ !cancelled() && needs.publish-terminal.result == 'success' }}
     runs-on: macos-latest
     timeout-minutes: 30
     env:
@@ -704,7 +831,7 @@ jobs:
       # An artifact keeps no execute bits; a release's asset is downloaded the same way, and docs/cli.md sets the bit.
       - name: Check the signature and the version
         env:
-          VERSION: ${{ needs.build-and-test.outputs.version }}
+          VERSION: ${{ needs.publish-terminal.outputs.version }}
         run: |
           cli="$RUNNER_TEMP/hvo-roof/osx-arm64/hvo-roof"
           chmod +x "$cli"
@@ -778,6 +905,24 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # The shipped container uses GNU timeout to kill a preparation's whole process group. Ubuntu 26.04 defaults
+      # to uutils, whose timeout leaves the fixture's descendant running. Test with the production dependency.
+      - name: Ensure GNU timeout
+        run: |
+          if ! timeout --version | grep -Fq 'timeout (GNU coreutils)'; then
+            if ! command -v gnutimeout >/dev/null; then
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends gnu-coreutils
+            fi
+            gnu_tools="$RUNNER_TEMP/roof-gnu-timeout"
+            mkdir -p "$gnu_tools"
+            ln -s "$(command -v gnutimeout)" "$gnu_tools/timeout"
+            echo "$gnu_tools" >> "$GITHUB_PATH"
+            export PATH="$gnu_tools:$PATH"
+          fi
+          timeout --version
+          timeout --version | grep -Fq 'timeout (GNU coreutils)'
+
       - name: Syntax and ShellCheck
         run: |
           bash -n src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh
@@ -802,7 +947,7 @@ jobs:
             src/HVO.RoofControllerV4.Mac/bundle/bundle.py src/HVO.RoofControllerV4.Mac/bundle/make-icns.py \
             build/release-compose.py tests/releasing/test_release_compose.py build/release-assets.py \
             tests/releasing/test_release_assets.py tests/install/on-terminal build/check-doc-links.py \
-            tests/docs/test_check_doc_links.py
+            tests/docs/test_check_doc_links.py tests/ci/test_publish_workflow.py
           shellcheck --version
           shellcheck src/HVO.RoofControllerV4.RPi/deploy-roofcontroller-rpi.sh tests/deploy/deploy-script-tests.sh \
             tests/emulator/*.sh tests/installer/rig-scenario.sh tests/cli/terminal-smoke.sh \
@@ -836,6 +981,10 @@ jobs:
 
       # build/check-doc-links.py: every relative link and anchor in the Markdown files resolves, to a file git tracks
       # (its tests, then every Markdown file git tracks).
+      # Required suites run for every changed path; the aggregate fails for every unsuccessful publisher result.
+      - name: CI publish gate tests
+        run: python3 -m unittest discover -s tests/ci -p 'test_*.py' -v
+
       - name: Docs links
         run: |
           python3 -m unittest discover -s tests/docs -p 'test_*.py' -v
@@ -867,7 +1016,9 @@ jobs:
 
       # The container's supervisor and health check (src/HVO.RoofControllerV4.RPi/container), with stand-in processes.
       - name: Container supervisor tests
-        run: tests/container/supervisor-tests.sh
+        run: |
+          python3 -m unittest discover -s tests/container -p 'test_*.py' -v
+          tests/container/supervisor-tests.sh
 
       - name: Compose profiles
         working-directory: src/HVO.RoofControllerV4.RPi

@@ -137,6 +137,10 @@ input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-
 .web-table thead th { color: var(--roof-muted); font-weight: 500; }
 .web-row-actions td { border-top: 0; padding-top: 0; padding-bottom: 20px; }
 .table-responsive { max-width: 100%; }
+.web-history-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 16px; }
+.web-history-filters > div { min-width: 10rem; }
+.web-history-refused { color: var(--roof-warning); }
+.web-history-pager { margin-top: 12px; }
 .web-secret { border-color: var(--roof-warning); }
 .web-secret-value { font-family: var(--bs-font-monospace); }
 .web-facts { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr); gap: 12px 20px; margin: 0 0 16px; }
@@ -159,6 +163,12 @@ input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-
     color: var(--roof-danger-text) !important; background: var(--roof-danger-background) !important; border: 1px solid var(--roof-danger) !important; font-weight: 600;
 }
 .web-stop-action:focus-visible { outline: 3px solid var(--roof-danger-text); outline-offset: 3px; text-decoration: underline; }
+/* #208: while the dashboard's last known status shows the roof moving, Stop is the bright danger tone (RoofUiPalette's
+   StopButtonActive pair); idle it keeps the dim pair above. Colour only: Stop is never disabled. */
+body:has([data-roof-motion="moving"]) .web-stop-action, body:has([data-roof-motion="moving"]) .web-stop-action:hover,
+body:has([data-roof-motion="moving"]) .web-stop-action:focus, body:has([data-roof-motion="moving"]) .web-stop-action:active {
+    color: var(--roof-background) !important; background: var(--roof-danger) !important; border: 1px solid var(--roof-danger-text) !important;
+}
 .web-stop-button { flex: 0 0 auto; min-height: 62px; min-width: 220px; font-size: 16px; }
 .web-stop-result, .reconnect-stop-result { margin: 0; min-width: 0; font-size: 13px; }
 [data-web-stop-result][data-state="sent"] { color: var(--roof-info); }

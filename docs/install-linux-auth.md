@@ -65,7 +65,10 @@ its configured Unix peer UID is zero. That does not authorize its connection to 
 
 Only /run/hvo-roof-linux-auth/controller and the single read-only assertion key are mounted into the
 controller container. The local helper socket, enrollment file, PAM configuration and host password
-database are not mounted. The worker preserves its runtime directory across restarts so the directory
+database are not mounted. The controller asks the worker, over that socket, for an enrolled account's full name (the
+first field of its GECOS entry, `POST /v1/profile`) at each Linux sign-in and shows it, read-only, as the account's
+display name (#209); the name grants nothing. To change it, change the account's full name on the host
+(`sudo chfn -f "Full Name" <user>`); the controller shows it after the account's next sign-in. The worker preserves its runtime directory across restarts so the directory
 bind mount remains attached to the same inode. A feature-owned Docker unit drop-in orders the worker
 before Docker at boot; the installer does not restart Docker.
 

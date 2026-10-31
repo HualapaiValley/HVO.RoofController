@@ -7,7 +7,7 @@ commissioning scenarios, the Pi image build and the HAT emulator image. The form
 
 | Workflow | Runner | Triggers | Purpose |
 |---|---|---|---|
-| `ci.yml` | GitHub-hosted `ubuntu-latest`, `ubuntu-24.04-arm` and `macos-latest` | push to `main`, pull requests, nightly, called by `release.yml` | Build and test the server graph (Debug with coverage, then Release with warnings as errors); the installer, the kiosk, the Mac app, `hvo-roof` on macOS, the deploy script, `install.sh` and the build scripts; and `build/secret-scan.py` over the files and every commit since the Blue Iris credential's (#22). The scenario, browser and soak categories run in `scenarios.yml` |
+| `ci.yml` | GitHub-hosted `ubuntu-latest`, `ubuntu-24.04-arm` and `macos-latest` | push to `main`, pull requests, nightly, called by `release.yml` | Build and test the server graph (Debug with coverage, then Release with warnings as errors); the installer, the kiosk, the Mac app, `hvo-roof` on macOS, the deploy script, `install.sh` and the build scripts; and `build/secret-scan.py` over the files and every commit since the Blue Iris credential's (#22). The scenario, browser and soak categories run in `scenarios.yml`. Tests (`unit-tests`) and publishes (`publish-terminal`, `publish-apps`) run side by side; `build-and-test` passes only when all three succeed |
 | `scenarios.yml` | GitHub-hosted `ubuntu-latest` and `ubuntu-24.04-arm` | push to `main`, pull requests, nightly, manual, called by `release.yml` | The commissioning checks as emulated scenarios: the `Scenario` tests (a 90 s C14 soak included), the web UI in Chromium with phone, tablet and desktop emulation, and the container lifecycle, C12 deploy and rollback, a deploy of a pulled image, and Compose migration (`tests/emulator/deploy-scenarios.sh`), and a test rig set up, upgraded and rolled back by `hvo-roof-install` on x64 and arm64 (`tests/installer/rig-scenario.sh`). Nightly and on demand, the C14 soak runs for two hours and publishes its invariant results to the run summary and an artifact |
 | `pi-image.yml` | GitHub-hosted `ubuntu-latest` | push and pull requests touching the Pi image inputs, weekly, manual | Check the [base image pins](#base-images), build the controller's image for `linux/arm64` (the Pi) and `linux/amd64` from a clean builder, and check each platform's version labels; nothing is pushed or deployed |
 | `release.yml` | GitHub-hosted `ubuntu-latest` and `ubuntu-24.04-arm` | a `v*` tag, manual | A draft release: checks the tag against the version, runs `ci.yml` and `scenarios.yml`, pushes the images to GHCR and makes the assets, each image's offline archives included, in the `release` environment, then installs a rig from the draft end to end, from those archives with ghcr.io out of reach. A person checks and publishes it ([releasing.md](releasing.md)) |
@@ -20,6 +20,15 @@ written at the end of a completed run. File formats and interpretation are descr
 [C14 commissioning](commissioning.md#c14-rv-6-soak); diagnostics do not change its pass criteria.
 Only the C14 test step requests `MALLOC_ARENA_MAX=2`; tiered compilation and every existing criterion remain in place.
 The [memory investigation](c14-memory-investigation.md) records the evidence and the resulting harness scope.
+
+Tests and required matrix legs run for every changed path. No dependency classifier skips jobs. Artifact consumers
+wait only for the publisher that supplies their input; the required `build-and-test` aggregate fails when any build,
+test or publisher fails, is skipped, or is cancelled.
+
+The `deploy-script` job selects and verifies GNU `timeout` through a job-local PATH directory when the hosted image
+supplies another implementation. Its supervisor fixtures require GNU `timeout`'s process-group termination, as the
+shipped container does; Ubuntu 26.04's default uutils `timeout` leaves a fixture descendant running. The delayed-reaping
+regression distinguishes a killed helper waiting to be reaped from a live process.
 
 CI's `terminal-distributions` matrix runs the final release-assembled installer and CLI on Linux x64,
 Linux arm64 and macOS arm64, after macOS signing. It checks offline notices, help/version, nonterminal

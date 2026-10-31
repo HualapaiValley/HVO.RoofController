@@ -23,9 +23,9 @@ Operator includes Viewer.
 
 | Role (`Role` value) | Policy name        | Allows                                                                |
 |---------------------|--------------------|-----------------------------------------------------------------------|
-| `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera streams, the status hub, the settings it may read |
+| `RoofViewer`        | `RoofViewerPolicy` | Roof status, `/health` details, camera streams, the status hub, the settings it may read, its own roof command history |
 | `RoofOperator`      | `RoofOperatorPolicy` | Everything above, plus Open, Close, ClearFault, lease renewal and the `ui` settings |
-| `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus every other setting, `System/*` (including Restart) and the OpenAPI document |
+| `RoofAdmin`         | `RoofAdminPolicy`  | Everything above, plus every other setting, `System/*` (including Restart), the OpenAPI document and everyone's roof command history |
 
 Stop uses its own policy, `RoofStopPolicy`. Any authenticated caller (any key or session) may stop the roof, because
 Stop never starts motion. Sign-in lockouts never apply to Stop.
@@ -46,26 +46,32 @@ other route refuses such a request with 401, and never falls back to the key.
 |----------------------------------------------------------|-------------------|---------|-----------------|
 | `GET  /api/v4.0/RoofControl/Status`                      | Viewer            | 200 `RoofStatusResponse` (after a forced hardware read) | 401, 403, 500 |
 | `GET  /api/v4.0/RoofControl/Mode`                        | anonymous         | 200 `RoofModeResponse` (the HAT mode and whether the limit switches are ignored, nothing else, from the last status, without a hardware read) | 403 (`https_required`, as on every route but the probes) |
-| `POST /api/v4.0/RoofControl/Open`                        | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
+| `GET  /api/v4.0/Safety`                                  | Viewer            | 200 `RoofSafetyStatus` (telescope park and weather: Safe, Unsafe or Unknown, the reasons, each source; [docs/safety-service.md](safety-service.md)) | 401, 403 |
+| `POST /api/v4.0/RoofControl/Open[?overrideSafety=true]`  | Operator; the override needs `RoofSafety:OverrideRole` (Operator by default, so anyone who may open) | 200 `RoofStatusResponse` | 400, 401, 403, 409 (also `SafetyOverrideRequired`, `SafetyInterlockActive`), 503, 500 |
 | `POST /api/v4.0/RoofControl/Close`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409, 503, 500 |
 | `POST /api/v4.0/RoofControl/Stop`                        | Stop (any key or session) | 200 `RoofStatusResponse` | 401, 503, 500 |
 | `POST /api/v4.0/RoofControl/Lease`                       | Operator          | 200 `RoofStatusResponse` | 401, 403, 409 (`LeaseNotActive`), 503 |
 | `POST /api/v4.0/RoofControl/ClearFault?pulseMs=250`      | Operator          | 200 `RoofStatusResponse` | 400 (`pulseMs` outside 50-2000), 401, 403, 409, 503 |
+| `GET  /api/v4.0/RoofControl/History?user=&principalId=&mine=&from=&to=&skip=&take=` | Viewer (own commands; Admin: everyone's, or with `mine=true` their own) | 200 `RoofCommandHistoryPage`, newest first ([The command history](#the-command-history)) | 400 (`take` outside 1-500, a negative `skip`, `to` before `from`), 401, 403 (not an admin, and `user` or `principalId` is someone else) |
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
 | `POST /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` | 400, 401, 403, 409, 503 (`SettingsStoreUnavailable`) |
 | `GET  /api/v4.0/Settings`, `GET /api/v4.0/Settings/Catalogue` | Viewer (API key or session) | 200 `RoofSettingsResponse`, `RoofSettingsCatalogueResponse` (only the settings the caller may read) | 401 |
 | `POST /api/v4.0/Settings/{group}`                        | Operator for `ui`, Admin for every other group | 200 `RoofSettingsResponse` | 400, 401, 403 (`SettingNotPermitted`), 404 (`SettingNotFound`), 409, 503 (`SettingsStoreUnavailable`) |
 | `POST /api/v4.0/Settings/Reload`, `POST /api/v4.0/Settings/Discard` | Admin (API key or session) | 200 `RoofSettingsResponse` | 400, 401, 403, 409, 503 |
 | `POST /api/v4.0/System/Restart`                          | Admin (API key or session) | 202 `RoofRestartResponse`, then the controller exits with code 75 | 401, 403, 409 (`RestartRefused`) |
+| `GET  /api/v4.0/System/Summary`                          | Viewer (API key or session, a kiosk key and a PIN session too) | 200 `SystemSummaryResponse`: the controller's version and uptime, where people reach the web UI (`webUiUrls`, `webUiAccess`: [Where people reach the web UI](deployment.md#where-people-reach-the-web-ui)), and its machine's uptime, CPU use, load and temperature, memory, data disk and addresses (null where it could not read one); no host name, path or user | 401 |
 | `GET  /api/v1.0/System/info`, `GET /api/v1.0/System/metrics` | Admin         | 200 | 401, 403 |
 | `GET  /api/v1.0/Camera/{cameraId}/mjpeg` (1-99)          | Viewer (API key or session) | 200 MJPEG | 401, 502, 503, 504 |
 | `POST /api/v4.0/Auth/Session`                            | anonymous         | 200 `RoofSessionResponse` | 400, 401 (`SignInFailed`), 429 (`SignInLockedOut`, `SignInBusy`), 503 |
 | `POST /api/v4.0/Auth/Pin`                                | a kiosk key (API key only) | 200 `RoofSessionResponse` | 400, 401, 403 (`KioskKeyRequired`), 429, 503 |
-| `GET  /api/v4.0/Auth/Pin/Users`                          | a kiosk key (API key only) | 200 `RoofPinUserResponse[]` | 401, 403 (`KioskKeyRequired`), 503 |
-| `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` | 401 |
+| `GET  /api/v4.0/Auth/Pin/Users`                          | a kiosk key (API key only) | 200 `RoofPinUserResponse[]` (names, roles, display and short names, login type and last sign-in; nothing secret) | 401, 403 (`KioskKeyRequired`), 503 |
+| `GET  /api/v4.0/Auth/Me`                                 | any key or session | 200 `RoofCallerResponse` (a person's display and short name, and whether they have a PIN to change, too) | 401 |
 | `DELETE /api/v4.0/Auth/Session`                          | a session (signs it out) | 204 | 400 (an API key), 401, 503 |
 | `POST /api/v4.0/Auth/Password`                           | a session (own password) | 204 | 400, 401 (`SignInFailed`), 429, 503 |
+| `POST /api/v4.0/Auth/Pin/Change`                         | a PIN session at a kiosk or a password session (own PIN) | 204 | 400 (an invalid new PIN, no PIN to change, or an API key), 401 (`SignInFailed`: the current PIN), 409 (`IdentityReadOnly` for a Linux account's password session), 429, 503 |
+| `POST /api/v4.0/Auth/Names`                              | a password session (own names) | 200 `RoofCallerResponse` | 400 (an invalid name, or an API key), 401, 403 (`CredentialNotAllowed` for a PIN session), 409 (`IdentityReadOnly` for a Linux account), 503 |
 | `GET, POST /api/v4.0/Identity/Users`, `GET, PUT, DELETE /api/v4.0/Identity/Users/{name}` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed` for a PIN session), 404, 409, 429, 503 |
+| `PUT, DELETE /api/v4.0/Identity/Users/{name}/Pin`        | Admin (not a PIN session) | 200 `RoofUserResponse` | 400, 401, 403, 404, 429, 503 |
 | `GET, POST /api/v4.0/Identity/ApiKeys`, `PUT, DELETE /api/v4.0/Identity/ApiKeys/{name}`, `POST .../ApiKeys/{name}/Rotate` | Admin (not a PIN session) | 200, 201, 204 | 400, 401, 403 (`CredentialNotAllowed`), 404, 409, 503 |
 | `GET  /api/v4.0/Identity/Sessions`, `DELETE /api/v4.0/Identity/Sessions/{id}` | Admin (not a PIN session) | 200, 204 | 401, 403 (`CredentialNotAllowed`), 404, 503 |
 | `GET  /openapi/v4.json`                                  | Admin (API key or session) outside Development | 200 | 401, 403 |
@@ -189,6 +195,10 @@ doing so could revive revoked credentials. Roll back only to a compatible releas
 current revocations. The native worker and its protected configuration are covered by the installer's managed-file
 ownership and recovery checks.
 
+The display name, short name and last sign-in (#209) are optional fields of the schemas above, not a new schema: a
+store written before them loads unchanged, and a release from before them reads a store with them, ignoring them. That
+release drops them the next time it saves the store, so after a rollback and a later upgrade, set the names again.
+
 ## Provisioning API keys
 
 Keys are secrets. Never put them in `appsettings*.json`, `launchSettings.json`, compose files or the `.http` samples.
@@ -297,15 +307,22 @@ API in its identity store.
   `X-Api-Key`. Only a kiosk key may do it; any other key gets 403 `KioskKeyRequired`. Only operators and admins may
   have a PIN. A PIN session ends after `PinSessionIdleTimeout` (default 10 minutes) without a request, and after
   `PinSessionLifetime` (default 12 hours) in any case. It also ends when its kiosk key is removed or is no longer a
-  kiosk key. `GET /api/v4.0/Auth/Pin/Users` lists the people who can sign in with a PIN, for the kiosk's picker.
+  kiosk key. `GET /api/v4.0/Auth/Pin/Users` lists the people who can sign in with a PIN, for the kiosk's picker, with
+  each one's display and short name, login type and last sign-in.
   Between sessions a kiosk shows status and offers Stop with its own key, which has the `RoofViewer` role.
 - **The Mac app** ([mac.md](mac.md)) signs people in with a password, as above. Between sessions it shows status and
   offers Stop with the device key made for that Mac: an ordinary `RoofViewer` key, not a kiosk key, so a Mac's key that
   is lost cannot be used to try PINs. Removing the key at the controller cuts that Mac off at once.
-- **Who am I.** `GET /api/v4.0/Auth/Me` returns the caller's name, role and kind (`ApiKey`, `Session` or `Pin`).
+- **Who am I.** `GET /api/v4.0/Auth/Me` returns the caller's name, role and kind (`ApiKey`, `Session` or `Pin`), and
+  for a person in the identity store their display and short name, and `hasPin`: whether they have a PIN they can
+  change ([Changing a PIN](#changing-a-pin)).
 - **Sign out.** `DELETE /api/v4.0/Auth/Session` ends the session that sent it.
 - **Own password.** `POST /api/v4.0/Auth/Password` with `currentPassword` and `newPassword` changes a signed-in
   person's password. Their other sessions end; this one stays open.
+- **Own names.** `POST /api/v4.0/Auth/Names` with `displayName` and `shortName` changes a signed-in person's own names
+  ([Names and last sign-in](#names-and-last-sign-in)).
+- **Own PIN.** `POST /api/v4.0/Auth/Pin/Change` with `currentPin` and `newPin` changes a signed-in person's own PIN,
+  at a kiosk or with a password ([Changing a PIN](#changing-a-pin)).
 
 New virtual passwords are 7 to 256 characters with no composition rule. New personal PINs are exactly four ASCII digits; the temporary commissioning code is reserved. Existing credentials are preserved. Linux passwords retain PAM policy. Names are 1 to 64 letters, digits, `.`, `_`, `@` or `-`,
 starting with a letter or digit. Passwords and PINs are stored as PBKDF2 hashes. Session tokens and managed keys are
@@ -338,7 +355,7 @@ name's count can be forgotten, which could show that it is not a person. Each ad
 so a caller with many IPv6 networks can fill those slots within seconds, where one IPv4 address needs hours.)
 
 Each caller may try `SignInAttemptsPerMinute` sign-ins (default 30; 0 turns the limit off) across `Auth/Session`,
-`Auth/Pin` and `Auth/Password`. A kiosk counts by its key, a signed-in person changing their password by their name,
+`Auth/Pin`, `Auth/Password` and `Auth/Pin/Change`. A kiosk counts by its key, a signed-in person changing their password or PIN by their name,
 and an anonymous `Auth/Session` by its remote address, whatever credential comes with it. A public IPv6 address from
 another network counts by its /64 network, since one host there can pick a new address for every attempt; a loopback,
 link-local or unique local IPv6 address, or one in the controller's own /64, counts by itself, since every host on the
@@ -362,7 +379,8 @@ Admins manage everything under `/api/v4.0/Identity`:
 
 | Route | What it does |
 |-------|--------------|
-| `GET/POST Identity/Users`, `GET/PUT/DELETE Identity/Users/{name}` | People. A person needs a password, a PIN or both. Secrets are never returned, only whether each is set. Changing a person's role or password ends all their sessions; changing or removing the PIN ends their PIN sessions; removing them ends every session. |
+| `GET/POST Identity/Users`, `GET/PUT/DELETE Identity/Users/{name}` | People. A person needs a password, a PIN or both. Secrets are never returned, only whether each is set. Changing a person's role or password ends all their sessions; changing or removing the PIN ends their PIN sessions; removing them ends every session. Each person may have a display name and a short name ([Names and last sign-in](#names-and-last-sign-in)). |
+| `PUT/DELETE Identity/Users/{name}/Pin` | A person's PIN alone: `PUT` with `{"pin": ...}` sets or replaces it, `DELETE` removes it (or the temporary commissioning PIN). The role is not sent, so it cannot be changed back by mistake. Their PIN sessions end ([Changing a PIN](#changing-a-pin)). |
 | `GET/POST Identity/ApiKeys`, `PUT/DELETE Identity/ApiKeys/{name}`, `POST Identity/ApiKeys/{name}/Rotate` | API keys. The list includes the configured keys, marked `Configuration` and read-only (409 `IdentityReadOnly`). The controller generates a managed key's value and returns it once, on create and on rotate. A kiosk key must have the `RoofViewer` role. |
 | `GET Identity/Sessions`, `DELETE Identity/Sessions/{id}` | Open sessions (never their tokens), and ending one. |
 
@@ -379,6 +397,73 @@ A change that would leave no admin credential is refused with 409 `LastAdministr
 API key, or an admin with a password. Every change, sign-in and sign-out is logged as an `AUDIT` entry, and each failed
 or locked-out sign-in as a `SECURITY` warning, with the name and remote address and never a secret. A request with a removed, rotated or re-roled key, or an ended
 session, is refused at once. A status hub connection that used it closes within a second.
+
+### Changing a PIN
+
+A person changes **their own PIN** with `POST Auth/Pin/Change` and `{"currentPin": ..., "newPin": ...}` (#205):
+
+- **Where.** From a PIN session at a kiosk (the kiosk's PIN pad) or from a password session (the web UI's **Your
+  PIN**, the terminal's Setup page, `hvo-roof pin`). An API key is refused (400). A PIN session may change only its own
+  PIN: a PIN works at a kiosk alone, so this creates nothing that works anywhere else, and the current PIN is asked for
+  again, so an unlocked kiosk left behind is not enough.
+- **The current PIN is always checked**, as a PIN sign-in checks it: a wrong one is 401 `SignInFailed` (the session
+  stays open) and counts towards the same lockouts, the name's PIN at every kiosk and, from a PIN session, that kiosk,
+  with the same `SignInAttemptsPerMinute` limit. After `LockoutThreshold` wrong PINs the change, and PIN sign-in for
+  that name, are refused with 429 `SignInLockedOut` until the lockout ends.
+- **The new PIN** follows the rules above (exactly four digits, not the temporary commissioning code) and must differ
+  from the current one; otherwise 400 `InvalidRequest`, before anything is checked.
+- **Who has one.** A person changes a PIN they have: their own, or in the emulator the temporary commissioning PIN,
+  which then gives way to the personal one. The first PIN is an admin's to give; a person with none gets 400.
+  `hasPin` on `GET Auth/Me` says which, so a client offers the change only to someone who can make it.
+- **Linux accounts** have no PIN of their own here: a Linux account's password session is refused with 409
+  `IdentityReadOnly`. The kiosk's commissioned PIN ([kiosk-commissioning.md](kiosk-commissioning.md)), which may
+  belong to a Linux account, is changed the same way from a kiosk session opened with it, checked against its own
+  durable count of failures.
+
+**What ends.** The session that made the change stays open. The person's password sessions stay open too: a PIN is not
+their password. Their **other PIN sessions end, at every kiosk**, whichever of their PINs opened them (a local
+owner of the commissioned PIN may also have a personal one): someone who learned the old PIN, or a kiosk left unlocked in
+their name, loses it at once. A sign-in already checking the old PIN when the change is saved is refused.
+
+An **admin** sets, replaces or removes anyone's PIN with `PUT` or `DELETE Identity/Users/{name}/Pin` (the web UI's
+People page, `hvo-roof pins set` and `pins remove`, the terminal's People page), or with `pin` and `removePin` on
+`PUT Identity/Users/{name}`. That needs an admin API key or an admin's password session, never a PIN session, and no
+current PIN: it is how a forgotten PIN is reset. Only operators and admins may have a PIN, and a person with no password
+keeps theirs. All the person's PIN sessions end; their password sessions, and the admin's own session, do not.
+
+Every change is an `AUDIT` entry with who changed whose PIN, from where (the kiosk's name for a PIN session) and how
+many sessions ended, and every refused current PIN is a `SECURITY` warning; neither ever holds a PIN. The identity
+store keeps only the new PIN's hash, in the fields it already had, so a rollback still reads it.
+
+### Names and last sign-in
+
+A person has a sign-in name (the rules above) and, optionally, a **display name** (a friendly name, up to 64
+characters) and a **short name** (up to 16, for narrow places such as a kiosk). Both are trimmed, and may not hold a
+control, formatting (such as a bidirectional override) or private-use character. A name left out (null) is kept and an
+empty one is removed; a change is an `AUDIT` change of the person, and ends no session. Names are changed only where
+there is a keyboard:
+
+- a person changes their own with `POST Auth/Names`, from a password session (the web UI's **Your names**, the
+  terminal's Setup page). A PIN session at a kiosk is refused (403 `CredentialNotAllowed`), and so is an API key (400);
+- an admin changes anyone's with `DisplayName` and `ShortName` on `POST Identity/Users` and `PUT Identity/Users/{name}`
+  (the web UI's People page, `hvo-roof users set`, the terminal's People page).
+
+An enrolled **Linux account's names come from the operating system**: its display name is its full name (the first
+field of its GECOS entry, from the native worker's `/v1/profile`, refreshed at each Linux sign-in and kept when the
+worker cannot say), and its short name is its user name. They are read-only in the controller: `POST Auth/Names` from a
+Linux session is refused with 409 `IdentityReadOnly`, and no route sets them. A worker older than `/v1/profile` gives
+no full name, and the user name stands alone. The full name is display text only: it authenticates and grants nothing.
+
+The controller records a person's **last sign-in** (`LastLoginUtc`) in the same save as the session each successful
+sign-in opens: a password, a PIN at a kiosk, an enrolled Linux account (its password, a local grant, or its kiosk PIN).
+A refused one changes nothing. A person who has not signed in since the controller began recording it shows none.
+`LoginType` says how the person signs in: `Local` for a person in the identity store, `Linux` for an enrolled Linux
+account (derived from the provider: `virtual` is `Local`, `linux` is `Linux`); a later type is a new string, so clients
+show it as given.
+
+The people list (`RoofUserResponse`), the kiosk's picker (`RoofPinUserResponse`) and the Linux enrollments
+(`RoofPrincipalResponse`, last sign-in only) carry them. The kiosk's picker therefore tells anyone at a kiosk who has a
+PIN and when they last signed in, as it already told their names and roles.
 
 ### The identity store
 
@@ -402,6 +487,62 @@ Back the directory up with the secrets directory.
   on it; the deployment check does (below).
 - The deployment check (`--validate-deployment`) reads the file and saves a probe file next to it. It fails when the
   directory is missing, not writable, or the file is not valid, and when the identity settings are invalid.
+
+### The command history
+
+The controller records every roof command its API is sent (#206): Open, Close, Stop and Clear fault, accepted or
+refused, and refused lease renewals (an accepted renewal only keeps a recorded motion going). Each entry has the time,
+the name of the person or key as it was then, the identifier it is matched by (`principalId`, below), `principalKind`
+(`Person`, `ApiKey` or `Anonymous`; a person's own key counts as the person), how they signed in, the kiosk for a PIN
+session, the person an API key said it acted for (`X-On-Behalf-Of`, shown, never matched), the address and the program
+the request's `User-Agent` names (not verified; the client library sends `<program>/<version>`), the result with the
+refusal's code and explanation, and the roof's status, stop reason and fault latch afterwards. An Open sent while the
+observatory's safety conditions are not Safe also has them (`safetyState`), and `safetyOverride` when the controller
+accepted it only because the caller overrode them; an Open the safety interlock refused is a refusal with its code. An
+Open accepted while nothing watches the conditions (`RoofSafety:InterlockMode` `Off` and no safety source configured)
+has no `safetyState`: its Unknown says nothing (#216). Unsafe, Unknown from a configured source or in `Warn` or
+`Block`, an override and a refusal keep it. A request refused before it reaches the roof (no credential, or a role too
+low) is not a command and is not recorded.
+
+- **Identifiers, never names.** The history matches who sent a command by an identifier, never by a name alone:
+  `principal:<id>` for a person the identity store gives a principal ID (schema 2 and later, and every Linux principal),
+  `person:<name>@<created>` for one it does not (schema 1; a person keeps this one when the store later gives them a
+  principal ID, so their earlier commands stay theirs), and `key:<key id>` for an API key (the non-reversible
+  identifier of its value). So a person removed and added again under the same name, or a key named like a person,
+  never reads another's commands, and a rotated key is a new credential whose earlier commands stay under the old
+  identifier.
+- **Who reads it.** `GET RoofControl/History` needs the Viewer role. Anyone but an admin, a PIN session included (a PIN
+  session is never an admin's), reads only the commands recorded under their own identifiers; naming anyone else, by
+  `user` or `principalId`, is refused with 403. An admin reads everyone's, and may pick one person's or key's: `user`
+  finds whoever is named so now, and `principalId` the identifier an entry shows, for someone since removed or a key
+  since rotated. `mine=true` reads only the caller's own commands, by their identifiers, an admin's too: a search by
+  name would also find a key named like them. The kiosk's and the Mac app's History use it (#208).
+- **Where from.** The address is the one that connected, except for a command the web UI sends for a person: the web
+  UI names the person's browser in `X-Forwarded-For` (the address that connected to the web UI, never a header the
+  browser sent), and the controller believes it only from `RoofCommandHistory:TrustedProxies` (by default its own
+  loopback, 127.0.0.0/8 and ::1, which only the web UI and the supervisor in its container use: everything else reaches
+  it through Docker's bridge) and only when the header holds one address. The entry then gives the browser's address and
+  the web UI's (`forwardedBy`). The header is used for nothing else: sign-in limits and the HTTPS rule still see the
+  address that connected.
+- **Anonymous Stops.** Stop is never limited. With `AllowAnonymousStop`, anonymous Stops from one source (an IPv6
+  address from another network by its /64) with the same answer, each within 10 minutes of the last, are one entry with
+  a `count` and `lastTimestampUtc`, and anonymous entries have a cap of their own (500), apart from
+  `MaximumEntries`, so nobody signed out can push anyone's commands out of the history.
+- **Where it is kept.** `RoofCommandHistory:StorePath`, or `command-history.jsonl` in the identity store's directory
+  when that is not set; with neither, in memory only (logged, and the page's `isPersistent` is false). One JSON object
+  per line, mode 0600. A command is kept in memory at once, and written in the background within about a second, with
+  whatever else came meanwhile, so a slow or failing disk never delays a command's answer; a write that fails is logged
+  and retried, and the controller writes what was recorded when it stops. A changed entry (a count) is one more line,
+  and the last line of an entry counts. A last line cut short by a power cut, or a tail of zeroes, is skipped when the
+  file is read, the entries before it are kept, and the next write leaves it out. A file or directory that cannot be
+  read leaves the history in memory only, and the file as it is.
+- **How long, and how big.** `RoofCommandHistory:Retention` (default 90 days, 1 to 3650 days) and
+  `RoofCommandHistory:MaximumEntries` (default 10,000, 100 to 20,000), the oldest going first. The file is compacted
+  once it holds a quarter more lines than are kept. A value out of range is logged, and its default used: the history
+  never stops the controller from starting. These are read at startup. The installer's backups hold the identity
+  store's directory whole, so they hold the history too, and a restore puts it back: about 4 MB at the default, and at
+  most about 30 MB at 20,000 (every line the longest it can be), inside half the 64 MB a backup takes in all
+  (`RoofCommandHistoryTests.TheLargestFile_FitsWellInsideABackup` checks it).
 
 ## Settings
 
@@ -727,7 +868,8 @@ never returned to clients outside Development.
 ## Logging
 
 Keys, session tokens, passwords, PINs, cookies and Blue Iris credentials are never logged. Outgoing Blue Iris request
-headers are redacted in HTTP client logs. Each command logs the caller's key or person name and remote address.
+headers are redacted in HTTP client logs. Each command logs the caller's key or person name and remote address, and is recorded in the
+[command history](#the-command-history).
 Configuration and settings changes, restarts, sign-ins, sign-outs and identity changes log an `AUDIT` entry. Failed and locked-out sign-ins
 log a `SECURITY` warning. A refused session token is logged at Warning with the remote address.
 

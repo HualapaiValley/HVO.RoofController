@@ -7,6 +7,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-10-30
+
+### Added
+
+- Roof command history (#206): the controller records every Open, Close, Stop and Clear fault sent to its API,
+  accepted or refused (with the refusal's code and explanation), and refused lease renewals, with who sent it (person
+  or key, how they signed in, the kiosk for a PIN, the person a key acted for), the address and the program it came
+  from (the person's browser for the web UI, which names it in `X-Forwarded-For`; the controller believes that only
+  from its own loopback, `RoofCommandHistory:TrustedProxies`), and the roof's status afterwards. Who sent a command is
+  matched by an identifier (a person's principal ID, or their name and creation; a key's ID), never by a name alone.
+  Stop is never limited; anonymous Stops from one source are one entry with a count, under a cap of their own. An Open
+  sent while the safety conditions are not Safe (#207) records them, with the safety interlock's refusals
+  (`SafetyOverrideRequired`, `SafetyInterlockActive`) and whether it went ahead on a safety override; an Open accepted
+  with the interlock `Off` and no safety source configured records none, so it shows plain "Accepted" rather than
+  "Accepted (conditions unknown)" (#216). It keeps them in `command-history.jsonl` next to the identity store (so
+  backups hold it), or at
+  `RoofCommandHistory:StorePath`, for 90 days and up to 10,000 commands (`RoofCommandHistory:Retention`,
+  `RoofCommandHistory:MaximumEntries`). `GET api/v4.0/RoofControl/History` pages them, newest first, with `user`,
+  `principalId`, `from`, `to`, `skip` and `take`: an admin reads everyone's, anyone else (a kiosk PIN session included)
+  only their own; `mine=true` reads only the caller's own, an admin's too (by identifier: a search by name also finds a
+  key named like them). The web UI's new **History** page, the terminal interface's **History** on the Roof page and
+  `hvo-roof history [--user] [--since] [--until]` show them; the kiosk has a hook for a person's recent commands. The
+  client library now names the program in each request's `User-Agent`.
+- Kiosk and Mac app **History** (#206, #208): while someone has unlocked the kiosk (or signed in to the app), a History
+  page shows them as the controller knows them (`Auth/Me`: name, role, login type, how they signed in, short name),
+  read-only, and their own 20 most recent roof commands (`mine=true`, an admin's too), newest first: the time, the
+  command, the controller's answer (a refusal with its code), the roof after it and where it came from. **Read again**
+  reads them afresh; a locked kiosk offers no History and keeps nothing read for the next person. Names are changed in
+  the web UI or the terminal, as the page says, never at the kiosk.
+- Safety conditions (#207, foundation): a controller safety service combines telescope-park and weather sources into
+  Safe, Unsafe or Unknown with reasons, with per-source staleness (`RoofSafety:MaxReadingAge`, a source's own maximum
+  age) and bounded, non-overlapping reads; a source that cannot be read, times out or is stale is Unknown, with why
+  ("cannot be read (no answer within 5 s)"). It is on every status snapshot and status hub message (`safety`), at
+  `GET /api/v4.0/Safety` (Viewer) and in the client library (`GetSafetyAsync`), and every change is logged. No real
+  source exists yet (which devices to read awaits the owner's decision), so the conditions are Unknown ("No safety
+  sources configured"); simulated sources test it ([docs/safety-service.md](docs/safety-service.md)).
+- The Open interlock on the safety conditions, `RoofSafety:InterlockMode`: `Warn` (the default and the owner's policy:
+  while the conditions are not Safe, Open is refused with `SafetyOverrideRequired` unless the request carries
+  `overrideSafety=true`, which anyone who may open the roof may send, `RoofSafety:OverrideRole` `Operator` by default;
+  overrides are audit-logged), `Off` (Open unchanged, an Open while not Safe logged) or `Block` (refused with
+  `SafetyInterlockActive`). Unknown counts as Unsafe. Close and Stop are never refused for the conditions, and nothing
+  closes the roof by itself (#207, #215).
+- Safety override prompts (#215): while the interlock asks for an override, Open in the web UI, the kiosk, the Mac app
+  and `hvo-roof ui` asks first, with the conditions and their reasons, and sends Open with the override only on
+  **Open anyway**; Cancel, Stop, Close and the end of the session (the kiosk locking) withdraw the question, and a
+  refusal for want of the override (the conditions changed) asks too. `hvo-roof open` says how to give it
+  (`--override-safety`).
+- Safety indicators with reasons on every interface (#207): a safety panel on the web UI's roof page (the state, the
+  reasons, each source and what Open does) beside its badge; the first reason and what Open does under the kiosk's and
+  Mac app's safety chip; a Safety row and a row per source in every client's status (`hvo-roof status`, the terminal
+  interface's ROOF STATE, the web UI's status card, the kiosk's Readings); and the state on `hvo-roof status --watch`
+  lines.
+- `GET api/v4.0/System/Summary` for every role (a viewer, an operator, an admin, a kiosk key, a PIN session): the
+  controller's version and uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and
+  addresses, each null when it cannot be read. `System/info` and `System/metrics` stay admin-only. The client library
+  reads it with `System.GetSummaryAsync()` and describes it with `RoofSystemText.DescribeSummary` (#209).
+- People have an optional display name and short name, set by an admin (`DisplayName` and `ShortName` on
+  `POST`/`PUT Identity/Users`; on a change an empty one removes it, and none ends a session), and the controller records
+  each person's and each Linux account's last sign-in (password, PIN or Linux). `RoofUserResponse`,
+  `RoofPinUserResponse` and `Auth/Me` carry the names, the people list and the kiosk's picker the last sign-in and a
+  `LoginType` (`Local` or `Linux`, derived from the provider), and `RoofPrincipalResponse` the last sign-in. They are
+  optional fields of the identity store, with no new schema, so a rollback still reads it (#209).
+- The web UI's People page, `hvo-roof users` and the terminal's People page show the names, login type and last
+  sign-in, and set or clear the names (`--display-name`, `--short-name`; **Names**). The kiosk's PIN picker shows a
+  person's display name (#209).
+- People change their own display and short name where there is a keyboard: `POST api/v4.0/Auth/Names` from a password
+  session, the web UI's **Your names** page and the terminal's Setup page; a PIN session at a kiosk cannot. An enrolled
+  Linux account's names come from the operating system (its GECOS full name, from the native worker's new
+  `/v1/profile`, and its user name) and are read-only (#209).
+- Where people reach the web UI: the summary's `webUiUrls` and `webUiAccess` (`Network`, `LocalOnly` or `Unknown`),
+  shown first after the version on the kiosk's About page, in `hvo-roof info`, the terminal's and the web UI's System
+  pages. The installer gives the deploy script the host's LAN addresses (`HOST_ADDRESSES`), and the script passes the
+  URLs built from them, the published web port and the scheme (`RoofHost__*`) at every deploy; a rig not open to the
+  network says the web UI is only on that machine. A controller in a container never shows its bridge address as where
+  to reach it (#209).
+- People change their own PIN (#205): `POST api/v4.0/Auth/Pin/Change` with the current and new PIN, from a PIN session
+  at a kiosk or a password session. The current PIN is always checked, with the PIN sign-in lockouts and rate limit;
+  the session that made the change stays open, and so do the person's password sessions, while their other PIN
+  sessions end. The emulator's temporary PIN gives way to a personal one, and the owner of the kiosk's commissioned PIN
+  changes it from a kiosk session opened with it; a Linux account's password session has no PIN here (409
+  `IdentityReadOnly`). `Auth/Me` says whether the caller has a PIN to change (`hasPin`). Admins set, replace or remove
+  anyone's PIN with `PUT`/`DELETE api/v4.0/Identity/Users/{name}/Pin`, without sending the role back; the person's PIN
+  sessions end. Every change is audit-logged without the PIN. No identity-store schema change, so a rollback still
+  reads the store ([docs/security.md](docs/security.md#changing-a-pin)).
+- PIN changes in every UI (#205): on the kiosk, **Change PIN** in the bottom bar while unlocked with a PIN (confirm
+  the current PIN on the PIN pad, then type the new one twice; the kiosk stays unlocked); the web UI's new **Your PIN**
+  page (`/account/pin`, linked from the header for operators and admins); `hvo-roof pin`; and a **PIN** action on the
+  terminal interface's Setup page. The web UI's People page, `hvo-roof pins set`/`pins remove` and the terminal's
+  People page set and remove PINs on the PIN's own endpoints, so a role changed meanwhile by another admin is kept.
+
+### Changed
+
+- **Open asks for a safety override by default** (#215): the safety interlock's default is now `Warn`, so while the
+  safety conditions are not Safe, and always while no safety source exists (the conditions are Unknown, as they are
+  until real sources are added), every Open needs the override, which each interface asks for and the controller
+  audit-logs. Set `RoofSafety:InterlockMode` to `Off` to keep Open as it was. Scripts that open the roof add
+  `--override-safety` (or `overrideSafety=true`).
+- The controller's version and summary are no longer admin-only in any UI: the web UI's System page (now in every
+  role's navigation), `hvo-roof info`, the terminal's System page, and the kiosk's and Mac app's About and System pages
+  show them to every role, a locked kiosk too; the host's details and the restarts stay admin-only. A controller that
+  cannot be reached is said so (`Controller unreachable.`) (#209).
+- Stop, Open and Close show the roof's state in colour in the kiosk, the Mac app, the web UI and `hvo-roof ui`: Stop
+  is a dim red while there is nothing to stop and bright red while the roof moves (never disabled); Open and Close are
+  green while offered, bright green while the roof moves their way, and neutral grey while not offered. The colours are
+  shared aliases of the canonical HVO Dark roles (#208).
+- Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person is a read-only card, two a row: their display
+  name, their role and login type (and a pending first-time setup) as chips, then their short name and last sign-in;
+  a row too tall for a page (the longest names) is shown one card under another, each the page's width. Choosing a card only chooses; Cancel on
+  the people step returns to the keypad (#208).
+- Kiosk pages show Previous, Next and the page count only when their contents overflow (#208).
+- Kiosk and Mac About: labelled cards for the device, the controller (its version, then where the web UI is) and the
+  controller's host (the summary's uptimes, CPU, temperature, memory, disk and addresses), saying
+  `Controller not configured yet.`, `Controller unreachable.`, `Reading…` or `Not available` where a value is not
+  known (#208).
+- Kiosk Terminal: **Exit UI to terminal** is at the top of the page, always on screen, above the explanation (#208).
+
+### Fixed
+
+- The web UI's **Your names** page no longer shows the last save's "saved" while a new save is on its way: the result
+  appears when that save's own answer comes (#205).
+
+## [4.2.0] - 2026-10-30
+
 ### Added
 
 - Kiosk **Terminal → Exit UI to terminal**: a verified operator PIN and confirmation close only the UI, release

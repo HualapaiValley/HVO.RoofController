@@ -29,8 +29,12 @@ public sealed class WebStopBrowserTests
         ("/health", "[data-testid=health-overall]"),
         ("/settings", "[data-testid=settings-summary]"),
         ("/people", "[data-testid=users]"),
-        ("/system", "[data-testid=system-fact]"),
+        // The host's details are read after the summary (an admin signs in here): the page is whole once they show.
+        ("/system", "[data-testid=system-information] [data-testid=system-fact]"),
         ("/account/password", "main h1"),
+        ("/account/names", "[data-testid=names-form]"),
+        // Whatever the person's PIN, the page says what it can do once it has read their account (#205).
+        ("/account/pin", "main section[aria-label='Your PIN']"),
     ];
 
     private WebBrowser? _browser;

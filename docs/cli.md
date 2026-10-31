@@ -168,9 +168,21 @@ hvo-roof login ada        # asks for the password; saves the session
 hvo-roof whoami
 hvo-roof logout           # ends the session; a saved API key is kept
 hvo-roof passwd           # changes the signed-in person's password
+hvo-roof pin              # changes the signed-in person's own kiosk PIN
 ```
 
-The terminal interface's **Setup (F5)** page does the same: Connection, Check, Sign in, Sign out and First admin.
+The terminal interface's **Setup (F5)** page does the same: Connection, Check, Sign in, Sign out and First admin, with
+your own Names and PIN on a row below them.
+
+`hvo-roof pin` (#205) changes the PIN you unlock a kiosk with, signed in with your password (a session from `login`). It
+asks for your current PIN, then the new one (twice in a terminal; once from standard input), and never shows them. A
+new PIN is exactly four digits, not the reserved temporary PIN `0000` and not the PIN you have now. The controller
+checks the current PIN as a kiosk's PIN sign-in does: a wrong one is refused (exit 7) and leaves your session open, and
+repeated wrong ones lock your PIN out for a while, at every kiosk too (exit 7, with when to try again). The change keeps
+this session and your other password sessions open, and ends your PIN sessions at every kiosk. It asks for nothing,
+and says why (exit 7), when there is no PIN to change: you have none yet (an admin gives the first one, with
+`pins set`), you signed in with a Linux account (it has no PIN here), or the credential is an API key. It is refused in
+local mode, as `login` and `passwd` are.
 
 ## Credentials
 
@@ -207,17 +219,19 @@ Every command takes `--json`, `--controller` and `--credentials-file`, and `--he
 | `status [--watch]` | viewer | The roof's status. `--watch` follows the status hub, with one line per change of the roof's state (not one per heartbeat), and says so when the status goes stale, or when no status has arrived 3 s after it started. |
 | `health [--probe ready\|live]` | viewer | The controller's health checks. Exits 8 unless the controller is healthy. `--probe` asks the anonymous readiness or liveness probe, which needs no credential. |
 | `stop` | viewer | **Stop roof.** Sent at once over REST. Exits 9 when the relays could not be verified off. |
-| `open`, `close [--no-wait]` | operator | Starts the motion and follows it to the end, renewing the operator lease. Ctrl+C sends Stop. |
+| `open`, `close [--no-wait]` | operator | Starts the motion and follows it to the end, renewing the operator lease. Ctrl+C sends Stop. `open --override-safety` opens even though the [safety conditions](safety-service.md) are not safe, where the controller's interlock is in Warn mode and you have its override role; the controller logs it. |
 | `lease` | operator | Renews the operator lease of the motion in progress (for scripts that use `--no-wait`). |
 | `clear-fault [--pulse-ms]` | operator | Clears a latched fault once its cause is resolved. |
-| `whoami` | any | The controller in use, and who the controller takes the credential to be. |
+| `history [--user] [--principal-id] [--since] [--until] [--take] [--skip]` | viewer | The roof command history, newest first: your own, or everyone's for an admin (see [History](#history)). |
+| `whoami` | any | The controller in use, and who the controller takes the credential to be: for a person, also their display name, short name and login type (a Linux account's names are the operating system's). |
 | `login`, `logout`, `passwd` | any | Signing in with a password (see [Setup](#setup)). |
+| `pin` | operator, admin (a person's session) | Changes your own kiosk PIN: the current one, then the new one (see [Setup](#setup)). |
 | `config show\|get\|set\|set-secret\|diff\|apply\|discard` | operator (UI group), admin | The controller's settings (see [Settings](#settings)). |
-| `users list\|show\|add\|set\|remove` | admin | The people who sign in. |
-| `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). |
+| `users list\|show\|add\|set\|remove` | admin | The people who sign in: each one's name, display name, short name, role, login type (local, or Linux), password, PIN, sessions and last sign-in. `add` and `set` take `--display-name` and `--short-name`; on `set`, an empty one (`""`) removes it, and a name ends no session. |
+| `pins list\|set\|remove` | admin | The PINs that people use at the [kiosk](kiosk.md). `set` gives or replaces a person's PIN and `remove` takes it (or their temporary commissioning PIN) away; both send only the PIN, so the person keeps the role the controller has for them, and both end the person's PIN sessions at every kiosk, never their password sessions. |
 | `keys list\|add\|set\|rotate\|remove` | admin | API keys. Keys from the controller's configuration are read-only. |
 | `sessions list\|end` | admin | People's sessions. Tokens are never shown. |
-| `info` | admin | `hvo-roof`'s own version, then the controller's version, host and resource use. With `--json`, `client.version` is `hvo-roof`'s full version (with its commit), as `information.applicationVersion` is the controller's. |
+| `info` | any | `hvo-roof`'s own version, then the controller's summary: its version; right after it, `Web UI:`, where people reach the web UI (its URLs, such as `https://192.0.2.10:8088/`, from the host's address, the published port and the scheme the installer or deploy script recorded; `only on the controller's machine` when it is not published to the network; `address not known` when the deployment did not record it, and never a container's own address); then its uptime, and its machine's uptime, CPU use, load and temperature, memory, data disk and host addresses. An admin also gets the host's details (its name, system, runtime and the controller's process) under `Host details (admin):`; for anyone else, standard error says they need the Admin role. With `--json`: `{"client", "summary", "information", "metrics"}`, where `client.version` is `hvo-roof`'s full version (with its commit), as `summary.applicationVersion` is the controller's, and `information` and `metrics` are null without the Admin role. A controller older than the summary (4.2.0 and before) gives only an admin the details. |
 | `restart [--force] [--confirm-safety-critical]` | admin | Restarts the controller, so that settings read at startup take effect. The controller stops the roof and verifies the stop first, and refuses when it cannot. `health --probe ready` says when it is back. |
 | `setup` | none | See [Setup](#setup). |
 | `ui` | any | The terminal interface (see [The terminal interface](#the-terminal-interface)). |
@@ -268,6 +282,56 @@ reading, and with no status at all for 30 s it gives up (exit 4) and says that t
 
 With `--no-wait`, the command returns once the controller accepts the motion. If the controller holds the motion on a
 lease, the command says so, and the roof stops when the lease runs out unless something runs `hvo-roof lease`.
+
+`status` shows the [safety conditions](safety-service.md) (telescope park and weather) as a `Safety:` row and a
+`Safety source:` row for each source, for example:
+
+```text
+Safety:        UNSAFE: Telescope 'Main' is not parked (Open needs a safety override)
+Safety source: Unsafe: Telescope 'Main' is not parked
+Safety source: Safe: Weather monitor 'Cloud sensor' reports safe weather
+```
+
+Each `status --watch` line ends with their state (`safety unsafe`, and `Open blocked` while the interlock blocks Open).
+The terminal interface's roof page shows the same rows under ROOF STATE.
+
+With the safety interlock in Warn mode (the controller's default) and the conditions not Safe (Unknown included),
+`open` is refused (exit 7, `SafetyOverrideRequired`) with the reasons and how to give the override:
+
+```text
+To open anyway: 'hvo-roof open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.
+```
+
+`open --override-safety` sends it. The terminal interface asks instead: **Open** shows a `Safety override` prompt over
+the page with the conditions and **Open anyway** or **Cancel**; nothing is sent until Open anyway, Esc answers Cancel,
+and F9 still sends Stop while it is open.
+
+## History
+
+`hvo-roof history` shows the roof commands the controller recorded (#206), newest first: each Open, Close, Stop and
+Clear fault, accepted or refused, and each refused lease renewal, with when (UTC), who sent it, the result (the
+controller's code for a refusal), the roof afterwards and where it came from. An admin reads everyone's; anyone else
+reads only their own, matched by their identifier rather than their name, and `--user` or `--principal-id` naming
+someone else is refused (exit 6). Anonymous Stops from one source are one row, such as `Stop (12 times, last …)`. An Open sent while the
+[safety conditions](safety-service.md) were not safe says so, such as `Accepted (safety override, conditions unsafe)`,
+and one the safety interlock refused shows its code, such as `Refused [SafetyOverrideRequired]`. With the interlock off
+and no safety source configured, an accepted Open is plain `Accepted`: the conditions are always unknown there.
+
+| Option | What it does |
+|--------|--------------|
+| `--user`, `-u` | Only the commands of the person or key named so now (admin). |
+| `--principal-id` | Only the commands recorded under this identifier, as an entry's `principalId` shows it: someone since removed, or a key since rotated (admin). |
+| `--since`, `--until` | Only commands from, or before, a time: a date or time in ISO 8601 (UTC unless it gives an offset), such as `2026-10-30` or `2026-10-30T18:00Z`, or how long ago, such as `30m`, `12h` or `7d`. |
+| `--take`, `-n` | How many to show, 1 to 500 (default 50). |
+| `--skip` | How many of the newest to skip, to read older ones. |
+
+```bash
+hvo-roof history --since 7d
+hvo-roof history --user ada --since 2026-10-01 --until 2026-11-01 --json
+```
+
+`--json` writes the controller's page: `entries`, `totalCount`, `skip`, `take`, `allUsers`, `retentionDays`,
+`maximumEntries` and `isPersistent`.
 
 ## Settings
 
@@ -368,16 +432,20 @@ and the Settings page's header then says the file was edited by hand.
 
 | Key | Page | What it has |
 |-----|------|-------------|
-| F1 | Roof | The status, with Open, Close, Clear fault and Refresh. Each button that cannot be used says why, for example "the roof is already closed". |
+| F1 | Roof | The status, with Open, Close, Clear fault, Refresh and History. Each button that cannot be used says why, for example "the roof is already closed". History shows your roof commands (everyone's for an admin) in place of the controller's readings; Readings shows them again. |
 | F2 | Settings | The settings by group, built from the controller's catalogue. Change, Clear secret, Reload, and review of a hand edit. A group's secrets are set and cleared together: Change on the camera's user name or password asks for both, each typed twice, and Clear secret clears both. |
-| F3 | People | People, API keys and sessions (admin). |
-| F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's version, host and resource use (admin), and Restart (admin). |
-| F5 | Setup | Connection, a connection check, Sign in, Sign out, and First admin. |
+| F3 | People | People, API keys and sessions (admin). People shows each one's display name, short name, role, login type, password, PIN, sessions and last sign-in; Names sets or clears the display and short name without ending a session; PIN and Remove PIN set or take a person's PIN, keep their role and end their PIN sessions. |
+| F4 | System | Health, readiness, `hvo-roof`'s own version, the controller's summary (version, uptimes, CPU, temperature, memory, disk, addresses), the host's details (admin), and Restart (admin). |
+| F5 | Setup | Connection, a connection check, Sign in, Sign out and First admin; below them, Names (your own display and short name) and PIN (your own PIN). |
 
-![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault and Refresh buttons](images/terminal/01-roof.svg)
+![hvo-roof ui on the Roof page: the permanent Stop roof (F9) button below the page and identity above it, the roof's status, and the Open, Close, Clear fault, Refresh and History buttons](images/terminal/01-roof.svg)
 
 - **F9 sends Stop from every page, even over an open prompt**, and the result appears next to the button. The Stop
-  button is never disabled.
+  button is never disabled. It is a dim red while there is nothing to stop and bright red while the newest status,
+  live or last known, shows the roof moving.
+- **Open and Close show their state** as the kiosk and the web UI do: green while offered, bright green while the
+  roof moves their way (not pressable), and neutral while not offered, with the reason under the buttons. Without
+  colour (`NO_COLOR`), a running button is in reverse video and a disabled one is faint.
 - **Esc** closes a prompt, and never closes the interface.
 - **F10** quits. A termination signal (the terminal closing, or SIGTERM) closes the interface the same way, and
   `hvo-roof ui` then exits 130.
@@ -471,7 +539,24 @@ and description below. A setting that cannot be changed here says why (for examp
 
 ![The People page: users, API keys and sessions](images/terminal/03-people.svg)
 
-![The System page: health, readiness and version](images/terminal/04-system.svg)
+![The System page: the controller's summary, the host's details (admin), health and readiness](images/terminal/04-system.svg)
+
+The System page's summary reads every role; the host's details and Restart stay an admin's. Right after the
+controller's version it says where people reach the web UI (`Web UI:`), from the host's address as the deployment
+recorded it, or that it is only on the controller's machine; a container's own bridge address is never given as where
+to reach it. The captures here show fixed figures and a documentation address (192.0.2.10), never the machine's own.
+
+On Setup, **Names** changes your own display and short name, signed in with your password: a name left empty is
+removed, and nothing ends. A Linux account's names come from the operating system (its full name and its user name), so
+Names only shows them, and with an API key alone it says to sign in first. An admin changes anyone's names on People
+(F3) or with `hvo-roof users set`; the kiosk does not change names.
+
+On Setup, **PIN** changes your own PIN (#205), as `hvo-roof pin` does: your current PIN, then the new one twice, in
+private fields. A mistyped new PIN is refused before anything is sent. A wrong current PIN is said on the message line,
+and sign-in is not offered, since your session is still open. Once it changes, this session stays open and your PIN
+sessions at every kiosk end. Without a PIN of your own, with a Linux account, or with an API key alone, PIN says why and
+asks for nothing. An admin sets or removes anyone's PIN on People (F3) or with `hvo-roof pins set|remove`; at a kiosk,
+you change yours on its PIN pad ([kiosk.md](kiosk.md)).
 
 ![The Setup page: the controller address, how its certificate is checked, the credential and where it comes from](images/terminal/05-setup.svg)
 
@@ -596,6 +681,6 @@ Detailed health and the interactive System page use the native read operation wi
 
 ### Finding the interactive version
 
-Open **System (F4)** for the running CLI build and commit. The local version remains visible if the health read fails or no controller is configured. Controller information is separately labelled as last read and is hidden when status becomes stale; Refresh clears previous results before rereading.
+Open **System (F4)** for the running CLI build and commit. The local version remains visible if the health read fails or no controller is configured (`Controller not configured yet.`), and an unreachable controller is said so (`Controller unreachable.`). Controller information is separately labelled as last read and is hidden when status becomes stale; Refresh clears previous results before rereading.
 
 ![Local terminal build when the controller health read fails](images/terminal/10-system-offline.svg)

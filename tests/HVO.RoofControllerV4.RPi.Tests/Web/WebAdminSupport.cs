@@ -80,6 +80,12 @@ internal sealed class WebAdminHarness : IDisposable
     /// </summary>
     public Func<HttpRequestMessage, bool>? LoseAnswer { get; set; }
 
+    /// <summary>
+    /// Holds the answer to each of the pages' requests, after the controller has handled it, until the task this returns
+    /// for it completes: a test sees what a page shows while its request is on the way. None by default.
+    /// </summary>
+    public Func<HttpRequestMessage, Task>? HoldAnswer { get; set; }
+
     /// <summary>Adds a person with <paramref name="role"/> and the test password, and signs them in to the web UI.</summary>
     public async Task<WebSession> SignInAsync(string name, string role)
     {
@@ -171,6 +177,11 @@ internal sealed class WebAdminHarness : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var response = await base.SendAsync(request, cancellationToken);
+            if (harness.HoldAnswer is { } hold)
+            {
+                await hold(request).WaitAsync(cancellationToken);
+            }
+
             if (harness.LoseAnswer?.Invoke(request) == true)
             {
                 response.Dispose();

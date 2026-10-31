@@ -63,6 +63,31 @@
 .rc2-row:last-child { border: 0; }
 .rc2-row dt { color: var(--roof-muted); font-weight: 400; }
 .rc2-row dd { margin: 0; }
+/* #207: the safety conditions, below the roof's state. Unknown is worded and coloured as a warning, never as safe. */
+.rc2-safety { padding: 14px 20px; border-top: 1px solid var(--roof-border); border-left: 3px solid var(--roof-warning); font-size: 13px; }
+.rc2-safety--safe { border-left-color: var(--roof-success); }
+.rc2-safety--unsafe { border-left-color: var(--roof-danger); background: var(--roof-danger-background); }
+.rc2-safety--unknown { background: var(--roof-warning-background); }
+.rc2-safety--stale { border-left-color: var(--roof-border); color: var(--roof-muted); }
+.rc2-safety-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.rc2-safety-head > .bi { font-size: 18px; }
+.rc2-safety--safe .rc2-safety-head > .bi { color: var(--roof-success); }
+.rc2-safety--unsafe .rc2-safety-head > .bi, .rc2-safety--unsafe strong { color: var(--roof-danger-text); }
+.rc2-safety--unknown .rc2-safety-head > .bi, .rc2-safety--unknown strong { color: var(--roof-warning-text); }
+.rc2-safety-open { color: var(--roof-muted); font-size: 12px; }
+.rc2-safety-reasons { margin: 8px 0 0; padding-left: 20px; }
+.rc2-safety-note { margin: 6px 0 0; color: var(--roof-muted); font-size: 12px; }
+.rc2-safety-sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.rc2-safety-source { font-size: 11px; padding: 4px 8px; border: 1px solid var(--roof-border); border-radius: 5px; color: var(--roof-muted); }
+.rc2-safety-source--safe { border-color: var(--roof-success); color: var(--roof-success-text); }
+.rc2-safety-source--unsafe { border-color: var(--roof-danger); color: var(--roof-danger-text); }
+.rc2-safety-source--unknown { border-color: var(--roof-warning); color: var(--roof-warning-text); }
+/* #215: the override question, in the controls card above Open and Close. */
+.rc2-safety-question { margin-bottom: 20px; padding: 16px; border: 1px solid var(--roof-warning); border-left-width: 3px; border-radius: 6px; background: var(--roof-warning-background); color: var(--roof-warning-text); font-size: 13px; }
+.rc2-safety-question-title { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.rc2-safety-question p { margin: 0 0 8px; }
+.rc2-safety-question-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.rc2-safety-question-actions .btn { min-height: 44px; }
 @media (max-width: 850px) { .rc2-main { gap: 16px; } .rc2-state { grid-template-columns: 1fr 1fr; } .rc2-state-limits { grid-column: 1 / -1; border-top: 1px solid var(--roof-border); } .rc2-state-item:nth-child(2) { border: 0; } }
 @media (max-width: 680px) { .rc2-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "controls" "camera" "details" "activity"; } .rc2-card-body, .rc2-card-head { padding: 16px; } .rc2-header { margin-bottom: 20px; } .rc2-title { font-size: 26px; } }
 @media (max-width: 360px) { .rc2-action:not(.rc2-action--small) { flex-direction: column; text-align: center; min-height: 108px; } .rc2-row { grid-template-columns: 1fr; gap: 4px; } }
@@ -70,3 +95,12 @@
 .rc-open .bi { color: var(--roof-success); }
 
 .rc-close .bi { color: var(--roof-accent); }
+
+/* #208: Open/Close state colours, RoofUiPalette's Motion* aliases of canonical roles. Offered: the success pair. Running
+   (not pressable while the roof moves): bright success, kept at full opacity. Disabled: neutral, never a faded green. */
+.rc2-action.rc-action--available { --bs-btn-color: var(--roof-success-text); --bs-btn-bg: var(--roof-success-background); --bs-btn-border-color: var(--roof-success); --bs-btn-hover-color: var(--roof-success-text); --bs-btn-hover-bg: var(--roof-success-background); --bs-btn-hover-border-color: var(--roof-success-text); --bs-btn-active-color: var(--roof-success-text); --bs-btn-active-bg: var(--roof-success-background); --bs-btn-active-border-color: var(--roof-success-text); }
+.rc2-action.rc-action--running { --bs-btn-color: var(--roof-background); --bs-btn-bg: var(--roof-success); --bs-btn-border-color: var(--roof-success-text); --bs-btn-disabled-color: var(--roof-background); --bs-btn-disabled-bg: var(--roof-success); --bs-btn-disabled-border-color: var(--roof-success-text); --bs-btn-disabled-opacity: 1; }
+.rc2-action.rc-action--disabled { --bs-btn-disabled-color: var(--roof-muted); --bs-btn-disabled-bg: var(--roof-surface); --bs-btn-disabled-border-color: var(--roof-border); --bs-btn-disabled-opacity: 1; }
+.rc2-action.rc-action--running .bi { color: inherit; }
+.rc2-action.rc-action--disabled .bi { color: var(--roof-muted); }
+.rc2-action.rc-action--disabled strong { font-weight: 400; }

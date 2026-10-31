@@ -1341,7 +1341,7 @@ internal sealed class DonePage : WizardPage
         else
         {
             _outcome.Text = "The install finished.";
-            _outcome.SetScheme(Wizard.Theme.Open);
+            _outcome.SetScheme(Wizard.Theme.Outcome);
             _lines = Session.DoneLines();
         }
 

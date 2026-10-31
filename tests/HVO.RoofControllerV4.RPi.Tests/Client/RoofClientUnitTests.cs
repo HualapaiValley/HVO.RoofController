@@ -330,7 +330,7 @@ public sealed class RoofClientUnitTests
             new RoofSignInRequest { Name = "alice", Password = secret }.ToString(),
             new RoofPinSignInRequest { Name = "olive", Pin = secret }.ToString(),
             new RoofPasswordChangeRequest { CurrentPassword = secret, NewPassword = secret + "-new" }.ToString(),
-            new RoofUserCreateRequest { Name = "bob", Role = RoofControllerApiContract.ViewerRole, Password = secret }.ToString(),
+            new RoofUserCreateRequest { Name = "bob", Role = RoofControllerApiContract.ViewerRole, Password = secret, DisplayName = "Bob Example" }.ToString(),
             new RoofUserUpdateRequest { Pin = secret, RemovePassword = true }.ToString()
         };
         kiosk.UsePinSession(session);
@@ -350,8 +350,8 @@ public sealed class RoofClientUnitTests
             "RoofSignInRequest { Name = alice, Password = (set) }",
             "RoofPinSignInRequest { Name = olive, Pin = (set) }",
             "RoofPasswordChangeRequest { CurrentPassword = (set), NewPassword = (set) }",
-            "RoofUserCreateRequest { Name = bob, Role = RoofViewer, Password = (set), Pin = (none) }",
-            "RoofUserUpdateRequest { Role = , Password = (none), Pin = (set), RemovePassword = True, RemovePin = False }",
+            "RoofUserCreateRequest { Name = bob, Role = RoofViewer, Password = (set), Pin = (none), DisplayName = Bob Example, ShortName =  }",
+            "RoofUserUpdateRequest { Role = , Password = (none), Pin = (set), RemovePassword = True, RemovePin = False, DisplayName = , ShortName =  }",
             "kiosk unlocked by olive");
     }
 

@@ -20,7 +20,7 @@ The installer installs it and makes its device key ([With the installer](#with-t
 
 The window opens at 1280x800 points, and can be made as small as 960x600: Stop, the pages and the status still fit.
 
-- **Navigation** along the bottom: Roof, Readings, Notices, About and Sign in. Password sessions also expose Settings, System and Sign out, with controller role checks intact.
+- **Navigation** along the bottom: Roof, Readings, Notices, About and Sign in. Password sessions also expose Settings, System, History and Sign out, with controller role checks intact.
 - **The header**: the controller's name, and badges for the status (`Status: live`, `connecting`, `reconnecting`,
   `STALE`, `unreachable` or `refused`), the operator lease while the app renews it, and who is signed in
   (`olga (Operator)`), or `Signed out`.
@@ -68,16 +68,19 @@ What the app offers depends on the person's role, as the controller gives it, an
 ([Unlocked](kiosk.md#unlocked)):
 
 - **Roof**: Open, Close and Clear fault for an operator, the operator lease renewed while a motion started here goes
-  on, and the notices.
+  on, and the notices. The [safety conditions](safety-service.md) and the safety override question are the kiosk's
+  ([Unlocked](kiosk.md#unlocked)): while the conditions are not Safe, Open asks first, and **Open anyway** sends it with
+  the override; Escape answers Cancel.
 - **Settings**: the controller's settings by group. **Change** opens a text box for a number, a duration or text,
   typed on the keyboard: Return saves it and Escape cancels. True or false, and a setting's choices, are a button per
   value. The change is shown for review before anything is sent, and a safety-critical change needs
   **Confirm and send**. Secrets are not typed here:
   `Secrets are not typed in this app: set them in the web UI or with hvo-roof.`
-- **System**: the app's own version, the controller's health checks and readiness, and for an admin its version, host
-  and resource use, and **Restart**.
+- **System**: the app's own version, the controller's summary for every role (its version, uptimes, CPU, temperature,
+  memory, disk and addresses), its health checks and readiness, and for an admin the host's details and **Restart**.
 
-People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here.
+People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here; so are display and short names:
+your own in the web UI (your account) or the terminal (Setup), anyone's by an admin (#209).
 
 ![Changing a text setting: the value in a text box, with Save and Cancel](images/mac/settings-edit-1280x800.png)
 
@@ -350,9 +353,26 @@ cp /tmp/mac-icon/icon-256.png ../docs/images/mac/icon-256.png
 
 ### Finding the installed version
 
-Choose **About** for this app's installed build and commit. After an administrator reads **System**, About shows the separately labelled controller build as last read. A stale connection or sign-out removes that value; the local version remains available.
+Choose **About** for this app's installed build and commit. About is labelled cards for this app, the controller and
+the controller's host, as on the kiosk. Each time About opens, the app reads the controller's summary with its device
+key, signed in or not (`GET System/Summary`, any role, #209): the Controller card has the controller's version, right
+after it where the web UI is (its URLs from the host's address, or `only on the controller's machine` when it is not
+published to the network, never a container's own address); the host card the uptimes and the machine's CPU,
+temperature, memory, disk and host addresses. A stale connection or an unreachable controller shows
+`Controller unreachable.` instead, and a sign-in or sign-out drops them until they are read again; the local version
+remains available.
 
-![App and controller build identification](images/mac/mac-about-960x600.png)
+![App and controller build identification in labelled cards](images/mac/mac-about-960x600.png)
+
+### Your roof commands
+
+While someone is signed in, **History** shows them as the controller knows them (`GET Auth/Me`: name, role, login
+type, `Signed in with a password`, short name), read-only, and their own 20 most recent roof commands, newest first,
+as on the [kiosk](kiosk.md#history): an admin's too, since the app asks for the person's own commands only
+(`mine=true`, matched by their identifier, so never a key named like them). The web UI's History page is where an admin
+reads everyone's. A controller too old to list only the person's own is said so, and nothing is shown. Signing out hides History and forgets what it read.
+
+![History in the app's smallest window: the signed-in person, read-only, and their own recent roof commands](images/mac/history-960x600.png)
 
 ## Native redesign validation
 
