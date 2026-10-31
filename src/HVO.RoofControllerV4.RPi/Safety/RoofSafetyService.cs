@@ -17,11 +17,17 @@ public interface IRoofSafetyService
 }
 
 /// <summary>
-/// Reads every <see cref="ITelescopeParkSource"/> and <see cref="IWeatherSafetySource"/> once per
+/// Reads every <see cref="ITelescopeParkSource"/> and <see cref="IWeatherSafetySource"/> (the registered ones, then the
+/// configured ASCOM Alpaca devices, <see cref="RoofSafetyConfiguredSources"/>) once per
 /// <see cref="RoofSafetyOptions.PollInterval"/>, each read bounded by <see cref="RoofSafetyOptions.ReadTimeout"/>, and
 /// combines the readings into Safe, Unsafe or Unknown with reasons. Every change of the state or its reasons is logged.
 /// </summary>
 /// <remarks>
+/// <para>The conditions are Safe only when at least one weather source is required and every source that counts (each
+/// required weather source, each telescope that can block the roof) has a recent reading that says safe: the weather
+/// safe, the telescope clear of the roof (<see cref="TelescopeRoofClearance"/>). A weather source set Ignored, and a
+/// telescope that cannot block the roof, are judged and shown the same way but never decide the conditions. The weather
+/// alone is judged too (<see cref="RoofSafetyStatus.WeatherState"/>), for the controller's Alpaca SafetyMonitor.</para>
 /// <para>A source's reading counts until it is older than its <see cref="IRoofSafetySource.MaxReadingAge"/> (or
 /// <see cref="RoofSafetyOptions.MaxReadingAge"/>); after that the source is Unknown, whatever it said. A failed read
 /// keeps the last reading, which goes stale in its turn. Ages are measured on the monotonic clock, so a wall-clock
@@ -36,6 +42,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
     internal const int MaxDetailLength = 200;
 
     private readonly Source[] _sources;
+    private readonly IReadOnlyList<string> _ownAlpacaUniqueIds;
     private readonly IOptionsMonitor<RoofSafetyOptions> _options;
     private readonly TimeProvider _time;
     private readonly ILogger<RoofSafetyService> _logger;
@@ -46,29 +53,44 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
     private string? _loggedReasons;
     private DateTimeOffset? _stateSince;
 
+    /// <param name="telescopes">The mounts registered as sources (the tests' simulated ones), read first.</param>
+    /// <param name="weather">The weather sources registered, read after the mounts.</param>
+    /// <param name="options">The <c>RoofSafety</c> settings.</param>
+    /// <param name="time">The clock; the system's by default.</param>
+    /// <param name="logger">The log.</param>
+    /// <param name="configured">
+    /// The ASCOM Alpaca devices the settings configure: each mount after the registered ones, each weather source after
+    /// the registered weather sources.
+    /// </param>
     public RoofSafetyService(
         IEnumerable<ITelescopeParkSource> telescopes,
         IEnumerable<IWeatherSafetySource> weather,
         IOptionsMonitor<RoofSafetyOptions> options,
         TimeProvider? time = null,
-        ILogger<RoofSafetyService>? logger = null)
+        ILogger<RoofSafetyService>? logger = null,
+        RoofSafetyConfiguredSources? configured = null)
     {
         ArgumentNullException.ThrowIfNull(telescopes);
         ArgumentNullException.ThrowIfNull(weather);
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _time = time ?? TimeProvider.System;
         _logger = logger ?? NullLogger<RoofSafetyService>.Instance;
+        // The own UniqueIDs the configured weather sources enforce, published as they are (never a later reload's).
+        _ownAlpacaUniqueIds = configured?.OwnAlpacaUniqueIds ?? [];
+        telescopes = configured is null ? telescopes : [.. telescopes, .. configured.Telescopes];
+        weather = configured is null ? weather : [.. weather, .. configured.WeatherSources];
         _sources =
         [
-            .. telescopes.Select(source => new Source(source, RoofSafetySourceKind.TelescopePark, async token =>
+            .. telescopes.Select(source => new Source(source, RoofSafetySourceKind.TelescopePark, source.BlocksRoof, async token =>
             {
                 var reading = await source.ReadParkStateAsync(token).ConfigureAwait(false);
-                return (reading.IsParked, reading.ObservedUtc, reading.Detail);
+                var (clear, evidence) = TelescopeRoofClearance.Judge(reading);
+                return (clear, evidence, reading.ObservedUtc, reading.Detail);
             })),
-            .. weather.Select(source => new Source(source, RoofSafetySourceKind.Weather, async token =>
+            .. weather.Select(source => new Source(source, RoofSafetySourceKind.Weather, source.Requirement == RoofWeatherSourceRequirement.Required, async token =>
             {
                 var reading = await source.ReadWeatherSafetyAsync(token).ConfigureAwait(false);
-                return (reading.IsSafe, reading.ObservedUtc, reading.Detail);
+                return (reading.IsSafe, reading.IsSafe ? "safe" : "unsafe", reading.ObservedUtc, reading.Detail);
             }))
         ];
     }
@@ -83,26 +105,20 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             sources = _sources.Select(source => Judge(source, options)).ToArray();
         }
 
-        var state = sources.Length == 0 || sources.Any(source => source.State == RoofSafetyState.Unknown)
-            ? RoofSafetyState.Unknown
-            : RoofSafetyState.Safe;
-        if (sources.Any(source => source.State == RoofSafetyState.Unsafe))
-        {
-            state = RoofSafetyState.Unsafe;
-        }
-
-        string[] reasons = sources.Length == 0
-            ? [RoofSafetyStatus.NoSourcesReason]
-            :
-            [
-                .. sources.Where(source => source.State == RoofSafetyState.Unsafe).Select(source => source.Reason),
-                .. sources.Where(source => source.State == RoofSafetyState.Unknown).Select(source => source.Reason)
-            ];
+        var counted = sources.Where(source => source.Counts).ToArray();
+        var weather = counted.Where(source => source.Kind == RoofSafetySourceKind.Weather).ToArray();
+        var (state, reasons) = sources.Length == 0
+            ? (RoofSafetyState.Unknown, new[] { RoofSafetyStatus.NoSourcesReason })
+            : Combine(counted, hasRequiredWeather: weather.Length > 0);
+        var (weatherState, weatherReasons) = Combine(weather, hasRequiredWeather: weather.Length > 0);
 
         return new RoofSafetyStatus
         {
             State = state,
             Reasons = reasons,
+            WeatherState = weatherState,
+            WeatherReasons = weatherReasons,
+            OwnAlpacaUniqueIds = _ownAlpacaUniqueIds,
             Sources = sources,
             StateSinceUtc = NoteTransition(state, reasons, options.InterlockMode, sources.Length == 0),
             InterlockMode = options.InterlockMode,
@@ -110,6 +126,29 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
                 ? options.OverrideRole == RoofSafetyOverrideRole.Operator ? RoofControllerApiContract.OperatorRole : RoofControllerApiContract.AdminRole
                 : null
         };
+    }
+
+    /// <summary>
+    /// The state of the sources that count: Unsafe when any says unsafe; otherwise Unknown when none is a required weather
+    /// source or any is unknown; otherwise Safe. The reasons are the unsafe ones', then the unknown ones', then
+    /// <see cref="RoofSafetyStatus.NoRequiredWeatherSourceReason"/> when it applies; none when Safe.
+    /// </summary>
+    private static (RoofSafetyState State, string[] Reasons) Combine(IReadOnlyCollection<RoofSafetySourceStatus> counted, bool hasRequiredWeather)
+    {
+        var state = counted.Any(source => source.State == RoofSafetyState.Unsafe) ? RoofSafetyState.Unsafe
+            : !hasRequiredWeather || counted.Any(source => source.State == RoofSafetyState.Unknown) ? RoofSafetyState.Unknown
+            : RoofSafetyState.Safe;
+        if (state == RoofSafetyState.Safe)
+        {
+            return (state, []);
+        }
+
+        return (state,
+        [
+            .. counted.Where(source => source.State == RoofSafetyState.Unsafe).Select(source => source.Reason),
+            .. counted.Where(source => source.State == RoofSafetyState.Unknown).Select(source => source.Reason),
+            .. hasRequiredWeather ? Array.Empty<string>() : new[] { RoofSafetyStatus.NoRequiredWeatherSourceReason }
+        ]);
     }
 
     /// <summary>Reads every source once (each bounded by the read timeout), then judges and logs the result.</summary>
@@ -129,6 +168,18 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
                 "Safety interlock is {InterlockMode} with no safety sources configured: the conditions stay Unknown, so Open {Effect} until sources are configured.",
                 options.InterlockMode,
                 options.InterlockMode == RoofSafetyInterlockMode.Block ? "is refused" : "needs an override");
+        }
+        else if (_sources.Length > 0 && !_sources.Any(source => source.Counts && source.Kind == RoofSafetySourceKind.Weather))
+        {
+            _logger.LogWarning(
+                "No safety source is a required weather source: the conditions stay Unknown, so Open {Effect} until one is configured (interlock {InterlockMode}).",
+                options.InterlockMode switch
+                {
+                    RoofSafetyInterlockMode.Block => "is refused",
+                    RoofSafetyInterlockMode.Warn => "needs an override",
+                    _ => "is only reported as not safe"
+                },
+                options.InterlockMode);
         }
 
         var longestGap = options.PollInterval + options.ReadTimeout;
@@ -154,7 +205,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         _logger.LogInformation(
             "Reading {Count} safety source(s) every {PollInterval} (read timeout {ReadTimeout}): {Sources}.",
             _sources.Length, options.PollInterval, options.ReadTimeout,
-            string.Join(", ", _sources.Select(source => $"{source.Kind} '{source.Name}'")));
+            string.Join(", ", _sources.Select(source => $"{source.Kind} '{source.Name}'" + (source.Counts ? string.Empty : $" ({DescribeNotCounted(source.Kind)})"))));
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -249,8 +300,8 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
 
         try
         {
-            var (safe, observedUtc, detail) = await read.WaitAsync(linked.Token).ConfigureAwait(false);
-            RecordReading(source, safe, observedUtc, detail);
+            var (safe, said, observedUtc, detail) = await read.WaitAsync(linked.Token).ConfigureAwait(false);
+            RecordReading(source, safe, said, observedUtc, detail);
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {
@@ -298,7 +349,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         }
     }
 
-    private void RecordReading(Source source, bool safe, DateTimeOffset? observedUtc, string? detail)
+    private void RecordReading(Source source, bool safe, string said, DateTimeOffset? observedUtc, string? detail)
     {
         var now = _time.GetUtcNow();
         var timestamp = _time.GetTimestamp();
@@ -309,6 +360,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         {
             failures = source.ConsecutiveFailures;
             source.LastSafe = safe;
+            source.LastSaid = said;
             source.LastReadTimestamp = timestamp;
             source.ObservedLag = lag;
             source.LastReadingUtc = now - lag;
@@ -357,7 +409,8 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             Kind = source.Kind,
             Detail = source.Detail,
             LastReadingUtc = source.LastReadingUtc,
-            MaxReadingAgeSeconds = maxAge.TotalSeconds
+            MaxReadingAgeSeconds = maxAge.TotalSeconds,
+            Counts = source.Counts
         };
 
         // Why the last read failed, when the words are fit to show: "no answer within 5 s", "the device is not connected".
@@ -371,9 +424,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             };
         }
 
-        var said = source.Kind == RoofSafetySourceKind.TelescopePark
-            ? safe ? "parked" : "not parked"
-            : safe ? "safe" : "unsafe";
+        var said = source.LastSaid;
         if (_time.GetElapsedTime(readAt) + source.ObservedLag > maxAge)
         {
             return status with
@@ -437,20 +488,34 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         return since;
     }
 
+    /// <summary>Why a source does not count, as the start log says it.</summary>
+    private static string DescribeNotCounted(RoofSafetySourceKind kind)
+        => kind == RoofSafetySourceKind.TelescopePark ? "does not block the roof" : "ignored";
+
     /// <summary>One source and what the service holds of it. Its mutable fields are guarded by the service's gate.</summary>
-    private sealed class Source(IRoofSafetySource inner, RoofSafetySourceKind kind, Func<CancellationToken, Task<(bool Safe, DateTimeOffset? ObservedUtc, string? Detail)>> read)
+    private sealed class Source(
+        IRoofSafetySource inner,
+        RoofSafetySourceKind kind,
+        bool counts,
+        Func<CancellationToken, Task<(bool Safe, string Said, DateTimeOffset? ObservedUtc, string? Detail)>> read)
     {
         public IRoofSafetySource Inner { get; } = inner;
 
         public RoofSafetySourceKind Kind { get; } = kind;
 
+        /// <summary>True when the source decides the conditions: a required weather source, a telescope that can block the roof.</summary>
+        public bool Counts { get; } = counts;
+
         public string Name { get; } = string.IsNullOrWhiteSpace(inner.Name) ? "unnamed" : inner.Name;
 
-        public Func<CancellationToken, Task<(bool Safe, DateTimeOffset? ObservedUtc, string? Detail)>> Read { get; } = read;
+        public Func<CancellationToken, Task<(bool Safe, string Said, DateTimeOffset? ObservedUtc, string? Detail)>> Read { get; } = read;
 
         public Task? Pending { get; set; }
 
         public bool? LastSafe { get; set; }
+
+        /// <summary>What the last reading said, as the reasons quote it: "parked", "not parked", "safe", "unsafe".</summary>
+        public string LastSaid { get; set; } = string.Empty;
 
         /// <summary>Monotonic timestamp of the last successful read.</summary>
         public long? LastReadTimestamp { get; set; }
@@ -469,5 +534,21 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         public string? ShownFailure { get; set; }
 
         public int ConsecutiveFailures { get; set; }
+    }
+}
+
+/// <summary>
+/// Whether a telescope is clear of the roof's path, from what its source reports: the one place that decides it, so the
+/// rest of the safety service asks "is this scope clear of the roof?", never "is it parked?". Parked is the only proof
+/// today. Later evidence (a camera that sees where the mounts point, a safe zone in right ascension and declination) adds
+/// its own reading and its own words here.
+/// </summary>
+internal static class TelescopeRoofClearance
+{
+    /// <summary>Clear or not, and the evidence in the words the reasons quote ("parked", "not parked").</summary>
+    public static (bool Clear, string Evidence) Judge(TelescopeParkReading reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+        return reading.IsParked ? (true, "parked") : (false, "not parked");
     }
 }

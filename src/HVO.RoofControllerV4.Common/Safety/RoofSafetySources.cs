@@ -19,25 +19,50 @@ public interface IRoofSafetySource
 }
 
 /// <summary>
-/// A telescope mount's park state. No real adapter exists yet: which device to read (an ASCOM Alpaca
-/// <c>Telescope.AtPark</c> is one possibility) awaits the owner's decision. The simulation's
+/// A telescope mount's park state, from which the safety service judges whether the mount is clear of the roof. The
+/// controller's adapter reads an ASCOM Alpaca <c>Telescope.AtPark</c> (<c>RoofSafety:Telescopes</c>); the simulation's
 /// <c>SimulatedTelescopeParkSource</c> stands in for one in the tests.
 /// </summary>
 public interface ITelescopeParkSource : IRoofSafetySource
 {
+    /// <summary>
+    /// True (the default) when this mount can reach the roof's path, so the roof may open only while it is shown clear of
+    /// the roof; false for one that cannot, which is shown but never decides the conditions.
+    /// </summary>
+    bool BlocksRoof => true;
+
     /// <summary>Reads the park state now. Throws, or ends with <paramref name="cancellationToken"/>, when it cannot.</summary>
     Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// Whether the weather is safe. No real adapter exists yet: which device to read (an ASCOM Alpaca
-/// <c>SafetyMonitor.IsSafe</c> is one possibility) awaits the owner's decision. The simulation's
-/// <c>SimulatedWeatherSafetySource</c> stands in for one in the tests.
+/// Whether the weather is safe. The controller's adapter reads an ASCOM Alpaca <c>SafetyMonitor.IsSafe</c>
+/// (<c>RoofSafety:WeatherSources</c>); the simulation's <c>SimulatedWeatherSafetySource</c> stands in for one in the
+/// tests.
 /// </summary>
 public interface IWeatherSafetySource : IRoofSafetySource
 {
+    /// <summary>
+    /// Whether the conditions need this source (<see cref="RoofWeatherSourceRequirement.Required"/>, the default) or only
+    /// show it (<see cref="RoofWeatherSourceRequirement.Ignored"/>).
+    /// </summary>
+    RoofWeatherSourceRequirement Requirement => RoofWeatherSourceRequirement.Required;
+
     /// <summary>Reads the weather's safety now. Throws, or ends with <paramref name="cancellationToken"/>, when it cannot.</summary>
     Task<WeatherSafetyReading> ReadWeatherSafetyAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>What a weather source's reading does to the safety conditions (docs/safety-service.md).</summary>
+public enum RoofWeatherSourceRequirement
+{
+    /// <summary>
+    /// The conditions are Safe only while this source has a recent reading that says safe: unsafe makes them Unsafe, and
+    /// no recent reading makes them Unknown.
+    /// </summary>
+    Required = 0,
+
+    /// <summary>Shown with its state and reason, but it never makes the conditions Safe, Unsafe or Unknown.</summary>
+    Ignored = 1
 }
 
 /// <summary>One reading of a telescope mount.</summary>
@@ -60,7 +85,7 @@ public sealed record WeatherSafetyReading(bool IsSafe, DateTimeOffset? ObservedU
 /// not connected", say. The message never carries an address, a credential or the device's own text; the safety service
 /// quotes it in the source's reason. Any other exception is logged by its type alone.
 /// </summary>
-public sealed class RoofSafetySourceException : Exception
+public class RoofSafetySourceException : Exception
 {
     public RoofSafetySourceException(string message)
         : base(message)

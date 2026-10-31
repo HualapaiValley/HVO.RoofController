@@ -274,6 +274,12 @@ x-emulated-environment: &emulated-environment
   BlueIris__BaseUrl: http://hat-emulator:5290
   BlueIris__UserName: ""
   BlueIris__Password: ""
+  # The safety sources (#220): the emulator's ASCOM Alpaca mount and weather safety monitor on its control port, parked
+  # and safe until its control API says otherwise (docs/alpaca.md).
+  RoofSafety__Telescopes__0__Name: Emulated mount
+  RoofSafety__Telescopes__0__Url: http://hat-emulator:5290
+  RoofSafety__WeatherSources__0__Name: Emulated weather
+  RoofSafety__WeatherSources__0__Url: http://hat-emulator:5290
   AllowedHosts: "*"
   # Its web UI is published on this machine's loopback alone (ports below), as the controller's summary says (#209).
   RoofHost__WebUiUrls: http://localhost:${HVO_EMULATED_WEB_PORT:-5196}/

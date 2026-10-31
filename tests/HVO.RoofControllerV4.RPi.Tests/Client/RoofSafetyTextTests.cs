@@ -107,6 +107,29 @@ public sealed class RoofSafetyTextTests
     }
 
     [TestMethod]
+    public void ASourceThatDoesNotCount_SaysWhy()
+    {
+        RoofSafetyText.DescribeSource(new RoofSafetySourceStatus
+        {
+            Kind = RoofSafetySourceKind.TelescopePark,
+            State = RoofSafetyState.Unsafe,
+            Reason = "Telescope 'Solar' is not parked",
+            Counts = false
+        }).Should().Be("Unsafe: Telescope 'Solar' is not parked [does not block the roof]");
+        RoofSafetyText.DescribeSource(new RoofSafetySourceStatus
+        {
+            Kind = RoofSafetySourceKind.Weather,
+            State = RoofSafetyState.Unknown,
+            Reason = "Weather monitor 'Old sensor' cannot be read",
+            Detail = "spare",
+            Counts = false
+        }).Should().Be("Unknown: Weather monitor 'Old sensor' cannot be read (spare) [ignored]");
+        new RoofSafetySourceStatus().Counts.Should().BeTrue("a source counts unless the controller says otherwise, as every one did before the setting");
+        System.Text.Json.JsonSerializer.Deserialize<RoofSafetySourceStatus>("{\"name\":\"Main\"}", new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!
+            .Counts.Should().BeTrue("an older controller sends no counts");
+    }
+
+    [TestMethod]
     public void TheStatusRows_ListEachSource_AfterTheSafetyRow()
     {
         var rows = RoofStatusText.DescribeRows(Closed with

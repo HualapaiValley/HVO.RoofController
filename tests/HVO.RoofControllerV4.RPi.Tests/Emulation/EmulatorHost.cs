@@ -6,6 +6,7 @@ using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation.Camera;
 using HVO.RoofControllerV4.Simulation.Emulator;
+using HVO.RoofControllerV4.Simulation.Safety;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -24,6 +25,9 @@ internal sealed class EmulatorHost(Dictionary<string, string?>? settings = null)
     public HatEmulatorServer Register => Services.GetRequiredService<HatEmulatorServer>();
 
     public EmulatedCamera Camera => Services.GetRequiredService<EmulatedCamera>();
+
+    /// <summary>The emulator's ASCOM Alpaca devices.</summary>
+    public EmulatedAlpacaServer Alpaca => Services.GetRequiredService<EmulatedAlpacaServer>();
 
     /// <summary>A socket client, as the controller builds it, for the register port.</summary>
     public SocketI2cRegisterClient ConnectRegisterClient()

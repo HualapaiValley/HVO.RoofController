@@ -1,32 +1,38 @@
 namespace HVO.RoofControllerV4.Common.Models;
 
 /// <summary>
-/// Whether the observatory's conditions allow the roof to open: the telescopes parked and the weather safe, as the
-/// controller's safety sources report them. This is not the controller's own safety supervision (limits, fault latch,
-/// watchdog), which applies whatever this says.
+/// Whether the observatory's conditions allow the roof to open: every telescope that can block the roof clear of it, and
+/// the weather safe, as the controller's safety sources report them. This is not the controller's own safety supervision
+/// (limits, fault latch, watchdog), which applies whatever this says.
 /// </summary>
 public enum RoofSafetyState
 {
     /// <summary>
-    /// The conditions cannot be confirmed: no source is configured, a source has not been read yet, cannot be read, or
-    /// its last reading is too old. Never read as safe.
+    /// The conditions cannot be confirmed: no source is configured, no required weather source is, a source that counts
+    /// has not been read yet, cannot be read, or its last reading is too old. Never read as safe.
     /// </summary>
     Unknown = 0,
 
-    /// <summary>Every configured source has a recent reading, and every one says safe (telescope parked, weather safe).</summary>
+    /// <summary>
+    /// At least one required weather source is configured, and every source that counts has a recent reading that says
+    /// safe (the weather safe, each telescope that can block the roof clear of it).
+    /// </summary>
     Safe = 1,
 
-    /// <summary>At least one source's recent reading says unsafe (a telescope not parked, unsafe weather).</summary>
+    /// <summary>At least one counting source's recent reading says unsafe (a telescope not clear of the roof, unsafe weather).</summary>
     Unsafe = 2
 }
 
 /// <summary>What a safety source reports on.</summary>
 public enum RoofSafetySourceKind
 {
-    /// <summary>A telescope mount's park state (for example ASCOM Alpaca <c>Telescope.AtPark</c>).</summary>
+    /// <summary>
+    /// A telescope mount's park state (ASCOM Alpaca <c>Telescope.AtPark</c>), which says whether it is clear of the roof:
+    /// parked is the only proof that it is, for now.
+    /// </summary>
     TelescopePark = 0,
 
-    /// <summary>Whether the weather is safe (for example ASCOM Alpaca <c>SafetyMonitor.IsSafe</c>).</summary>
+    /// <summary>Whether the weather is safe (ASCOM Alpaca <c>SafetyMonitor.IsSafe</c>).</summary>
     Weather = 1
 }
 
@@ -76,6 +82,14 @@ public sealed record RoofSafetySourceStatus
 
     /// <summary>How old a reading may be and still count.</summary>
     public double MaxReadingAgeSeconds { get; init; }
+
+    /// <summary>
+    /// True when this source decides the conditions: a weather source set <c>Required</c>, or a telescope that can block
+    /// the roof. False for a weather source set <c>Ignored</c> or a telescope that cannot block the roof, which is shown
+    /// with its state and reason but never makes the conditions Safe, Unsafe or Unknown. True from a controller that does
+    /// not say, as every source counted before the setting existed.
+    /// </summary>
+    public bool Counts { get; init; } = true;
 }
 
 /// <summary>
@@ -88,16 +102,46 @@ public sealed record RoofSafetyStatus
     public const string NoSourcesReason = "No safety sources configured";
 
     /// <summary>
-    /// <see cref="RoofSafetyState.Unsafe"/> when any source is unsafe; otherwise <see cref="RoofSafetyState.Unknown"/>
-    /// when there is no source or any source is unknown; otherwise <see cref="RoofSafetyState.Safe"/>.
+    /// The reason <see cref="Reasons"/> and <see cref="WeatherReasons"/> hold when no weather source is set
+    /// <c>Required</c>: the roof may open only while at least one recent weather reading says safe.
+    /// </summary>
+    public const string NoRequiredWeatherSourceReason = "No required weather source configured";
+
+    /// <summary>
+    /// <see cref="RoofSafetyState.Unsafe"/> when any source that counts (<see cref="RoofSafetySourceStatus.Counts"/>) is
+    /// unsafe; otherwise <see cref="RoofSafetyState.Unknown"/> when there is no source, no required weather source, or
+    /// any counting source is unknown; otherwise <see cref="RoofSafetyState.Safe"/>.
     /// </summary>
     public RoofSafetyState State { get; init; }
 
     /// <summary>
-    /// Why the state is not <see cref="RoofSafetyState.Safe"/>: the unsafe sources' reasons, then the unknown ones'
-    /// (or <see cref="NoSourcesReason"/>). Empty when safe.
+    /// Why the state is not <see cref="RoofSafetyState.Safe"/>: the unsafe counting sources' reasons, then the unknown
+    /// ones', then <see cref="NoRequiredWeatherSourceReason"/> when it applies (or only <see cref="NoSourcesReason"/>).
+    /// Empty when safe.
     /// </summary>
     public IReadOnlyList<string> Reasons { get; init; } = [];
+
+    /// <summary>
+    /// The weather alone, with no telescope: <see cref="RoofSafetyState.Safe"/> only when at least one weather source is
+    /// required and every required one has a recent reading that says safe; <see cref="RoofSafetyState.Unsafe"/> when a
+    /// required one says unsafe; otherwise <see cref="RoofSafetyState.Unknown"/>. What the controller's Alpaca
+    /// <c>SafetyMonitor</c> device publishes, so an observing program that parks its mount and closes the roof on unsafe
+    /// weather does not do so when a mount unparks. Unknown from a controller that does not say.
+    /// </summary>
+    public RoofSafetyState WeatherState { get; init; }
+
+    /// <summary>
+    /// Why <see cref="WeatherState"/> is not <see cref="RoofSafetyState.Safe"/>: the required weather sources' unsafe
+    /// reasons, then their unknown ones, or <see cref="NoRequiredWeatherSourceReason"/>. Empty when safe.
+    /// </summary>
+    public IReadOnlyList<string> WeatherReasons { get; init; } = [];
+
+    /// <summary>
+    /// The UniqueIDs of this installation's own Alpaca devices that the controller refuses as weather sources
+    /// (<c>RoofSafety:OwnAlpacaUniqueIds</c>), so it never reads its own weather back. The Alpaca server's SafetyMonitor
+    /// says safe only while its UniqueID is here. Empty from a controller that does not say.
+    /// </summary>
+    public IReadOnlyList<string> OwnAlpacaUniqueIds { get; init; } = [];
 
     /// <summary>Every configured source, in the order they were configured.</summary>
     public IReadOnlyList<RoofSafetySourceStatus> Sources { get; init; } = [];

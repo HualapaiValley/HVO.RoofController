@@ -9,8 +9,9 @@ using static System.Net.WebUtility;
 namespace HVO.RoofControllerV4.Alpaca;
 
 /// <summary>
-/// The setup pages (<c>/setup</c> and <c>/setup/v1/dome/0/setup</c>): read-only, in HVO Dark. They say what the server
-/// is and does, the roof's identity and state, and where its settings are changed. They change nothing: there is no
+/// The setup pages (<c>/setup</c>, <c>/setup/v1/dome/0/setup</c> and <c>/setup/v1/safetymonitor/0/setup</c>): one
+/// read-only page, in HVO Dark. It says what the server is and does, the roof's and the weather's identities and state,
+/// and where its settings are changed. They change nothing: there is no
 /// form, and the settings are changed where the server is installed.
 /// </summary>
 internal static class AlpacaSetupPage
@@ -21,18 +22,20 @@ internal static class AlpacaSetupPage
         var options = services.GetRequiredService<AlpacaOptions>();
         var ids = services.GetRequiredService<AlpacaDeviceIds>();
         var dome = services.GetRequiredService<AlpacaDome>();
+        var safetyMonitor = services.GetRequiredService<AlpacaSafetyMonitor>();
         var roof = services.GetRequiredService<AlpacaRoof>();
-        var connections = services.GetRequiredService<AlpacaConnections>();
 
-        string roofNow;
+        string roofNow, weatherNow;
         try
         {
             var status = roof.GetCurrent();
             roofNow = AlpacaDome.DescribeStatus(status);
+            weatherNow = $"{(safetyMonitor.IsSafe(status) ? "IsSafe true" : "IsSafe false")}. {safetyMonitor.DescribeWeather(status)}";
         }
         catch (AlpacaException ex)
         {
             roofNow = $"Unknown ({ex.Message})";
+            weatherNow = $"IsSafe false: unknown ({ex.Message})";
         }
 
         var rows = new List<(string Name, string Value)>
@@ -42,8 +45,13 @@ internal static class AlpacaSetupPage
             ("UniqueID", ids.Dome),
             ("Commands", "Disabled. The server reads the roof and stops it (AbortSlew); it never opens or closes it."),
             ("Roof now", roofNow),
+            ("Connected clients", dome.Connections.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            ("Device", $"{AlpacaSafetyMonitor.DeviceTypeName} 0: {AlpacaSafetyMonitor.DeviceName}"),
+            ("UniqueID", ids.SafetyMonitor),
+            ("Weather now", weatherNow),
+            ("Roof controller settings", $"So that the controller never reads this server's devices back as its weather (IsSafe is false until it lists the SafetyMonitor's): {safetyMonitor.ControllerSettings}"),
+            ("Connected clients", safetyMonitor.Connections.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             ("Controller status", Describe(roof.FeedState)),
-            ("Connected clients", connections.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             ("Alpaca port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             ("Discovery", options.Discovery.Enabled ? $"answered on UDP {options.Discovery.Port}, with port {options.AdvertisedPort}" : "off"),
             ("Driver version", dome.DriverVersion),

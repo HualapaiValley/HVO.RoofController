@@ -2,8 +2,8 @@
 # End-to-end check of the emulator compose profile (src/HVO.RoofControllerV4.RPi/docker-compose.yaml, profile
 # emulator): builds the controller and HAT emulator images for this machine, starts them, and drives the emulated roof
 # through the controller's API: open to the open limit, close to the closed limit, with no plant violations. It also
-# checks that the controller says it is emulated (health and status), that its web UI answers, and that its camera
-# proxy relays the emulator's MJPEG camera.
+# checks that the controller says it is emulated (health and status), that its web UI answers, that its camera
+# proxy relays the emulator's MJPEG camera, and that its safety conditions follow the emulator's ASCOM Alpaca devices.
 #
 # Needs docker with compose v2, curl and jq. It touches no hardware: the controller maps no devices and talks to the
 # emulator over the compose network. Everything it starts is removed on exit.
@@ -151,19 +151,32 @@ if [ -n "${HVO_ROOF_CLI:-}" ]; then
     wait_for "the roof is closed again after the terminal check" 90 roof_is Closed
 fi
 
-# No safety source is configured, so the conditions are Unknown, and the default Warn interlock refuses Open
-# (SafetyOverrideRequired, 409) without the override (#215); with it, the roof opens. Close is never gated.
-safety=$(roof_get Status | jq -c '.safety | {state, interlockMode}')
-[ "${safety}" = '{"state":"Unknown","interlockMode":"Warn"}' ] || fail "the safety conditions are not Unknown under the default Warn interlock: ${safety}"
+# The safety conditions come from the emulator's ASCOM Alpaca mount and weather safety monitor through the controller's
+# Alpaca adapter (#220): Safe while they answer parked and safe. With the weather unsafe, the default Warn interlock
+# refuses Open (SafetyOverrideRequired, 409) without the override (#215) and moves nothing; the weather alone
+# (weatherState) is unsafe too. Safe again, Open goes ahead with no override. Close is never gated.
+safety_is() {
+    curl -fsS --max-time 10 -H "X-Api-Key: ${HVO_EMULATED_ROOF_API_KEY}" "${roof}/api/v4.0/Safety" \
+        | jq -e --arg state "$1" '.state == $state and .weatherState == $state and .interlockMode == "Warn" and (.sources | length) == 2' >/dev/null
+}
+alpaca_post() {
+    curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' -d "$2" "${emulator_api}/alpaca/$1" >/dev/null
+}
+wait_for "the safety conditions are Safe, read from the emulator's Alpaca devices" 60 safety_is Safe
+alpaca_post safetymonitor '{"device":0,"safe":false}'
+wait_for "the safety conditions are Unsafe once the emulated weather is unsafe" 60 safety_is Unsafe
 refused=$(mktemp)
 open_status=$(curl -sS --max-time 10 -o "${refused}" -w '%{http_code}' -X POST -H "X-Api-Key: ${HVO_EMULATED_ROOF_API_KEY}" "${roof_api}/Open")
-[ "${open_status}" = 409 ] || fail "Open without the safety override answered ${open_status}, not 409"
-jq -e '.code == "SafetyOverrideRequired"' "${refused}" >/dev/null || fail "Open was not refused for want of the safety override: $(cat "${refused}")"
+[ "${open_status}" = 409 ] || fail "Open with the weather unsafe answered ${open_status}, not 409"
+jq -e '.code == "SafetyOverrideRequired" and (.detail | contains("reports unsafe weather"))' "${refused}" >/dev/null \
+    || fail "Open with the weather unsafe was not refused for want of the safety override: $(cat "${refused}")"
 rm -f "${refused}"
 roof_is Closed || fail "the roof moved although Open was refused"
-echo "[smoke] Open asks for the safety override under the default Warn interlock, and moves nothing without it"
+alpaca_post safetymonitor '{"device":0,"safe":true}'
+wait_for "the safety conditions are Safe again once the weather is safe" 60 safety_is Safe
+echo "[smoke] The safety conditions follow the emulator's Alpaca devices, and Open asks for the override while they are not Safe"
 
-roof_post "Open?overrideSafety=true"
+roof_post Open
 wait_for "the roof opened to the open limit" 90 roof_is Open
 curl -fsS --max-time 10 "${emulator_api}/status" | jq -e '.plant.openLimitActuated == true' >/dev/null \
     || fail "the controller reports Open but the emulated open limit is not actuated"

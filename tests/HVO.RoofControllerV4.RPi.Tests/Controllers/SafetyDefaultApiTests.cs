@@ -84,7 +84,7 @@ public sealed class SafetyDefaultApiTests
     public async Task ASourceThatCannotBeRead_IsUnknown_WithWhy_AndCountsAsUnsafe()
     {
         var mount = new SimulatedTelescopeParkSource("Main") { Behaviour = SimulatedSourceBehaviour.Hangs };
-        var host = Host(mount, poll: "00:00:01", timeout: "00:00:00.5");
+        var host = Host(mount, new SimulatedWeatherSafetySource("Cloud sensor"), poll: "00:00:01", timeout: "00:00:00.5");
         using var client = host.CreateApiClient(TestApiKeys.Operator);
 
         var safety = await WaitForAsync(client, RoofSafetyState.Unknown, until: current => current.Reasons.Any(reason => reason.Contains("cannot be read", StringComparison.Ordinal)));

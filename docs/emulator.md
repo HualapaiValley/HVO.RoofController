@@ -128,6 +128,8 @@ The emulator's `Emulator` section (environment variables `Emulator__TimeScale` a
 | `TravelMeters` | `2.0` | Distance between the limits' operating points (about 20 s of travel) |
 | `InitialPosition` | just past the closed limit | Where the roof starts, in metres from the closed limit's operating point |
 | `CameraFramesPerSecond` | `5` | The emulated camera's frame rate, from 0.1 to 30 (see [Camera](#camera)) |
+| `AlpacaTelescopes` | `1` | How many ASCOM Alpaca telescope mounts the control port serves, 0 to 8 (see [Alpaca devices](#alpaca-devices)) |
+| `AlpacaSafetyMonitors` | `1` | How many ASCOM Alpaca weather safety monitors the control port serves, 0 to 8 |
 
 The control API listens on `http://127.0.0.1:5290` unless `--urls` or `ASPNETCORE_URLS` says otherwise. Invalid
 settings stop the emulator before it listens.
@@ -149,7 +151,7 @@ how both compose files publish it) or on a private test network.
 | `GET /status` | | The plant (position, velocity, relays, inputs, drive, limits, faults), the link and the camera |
 | `GET /history?limit=200` | | The latest plant events (1 to 5000), with plant time since the last reset |
 | `GET /violations` | | Invariant violations the plant recorded, such as the roof at a hard stop or both directions energized; empty in a correct run |
-| `POST /reset` | `{"positionMeters": 1.0, "wiring": "None"}` | A fresh plant, and a live camera at its frame rate. Both fields are optional, and so is the body. |
+| `POST /reset` | `{"positionMeters": 1.0, "wiring": "None"}` | A fresh plant, a live camera at its frame rate, and every Alpaca device parked or safe, connected and answering. Both fields are optional, and so is the body. |
 | `POST /time-scale` | `{"scale": 4}` | Change the time scale; time stays continuous |
 | `POST /drive/trip` | `{"trip": "External"}` | Trip the drive: `External` (the default), `MotorOverload` or `StartTooSoonAfterPowerUp`. The drive's Clear Fault input (RLY3) resets it. |
 | `POST /drive/power` | `{"powered": false}` | Drive power loss and return |
@@ -194,6 +196,69 @@ the emulator's control URL and `BlueIris__UserName` and `BlueIris__Password` emp
 | `Unauthorized` | Ends the open streams, and answers 401 with `WWW-Authenticate: Basic` | As `Unavailable`: the proxy's 502 tells the web UI nothing about the camera's credentials |
 
 A disconnect, a change of mode and a reset end a stream between parts, never inside one.
+
+## Alpaca devices
+
+The emulator also stands in for the ASCOM Alpaca devices the controller's safety service reads
+([docs/alpaca.md](alpaca.md), #220): telescope mounts (`AtPark`) and weather safety monitors (`IsSafe`), numbered from
+0, each parked or safe and connected at start. They are served on the control port, modelled on the
+[Alpaca Device and Management APIs](https://ascom-standards.org/api/) and the ASCOM interfaces, not on the controller's
+adapter:
+
+- `GET` and `PUT /api/v1/{telescope|safetymonitor}/{n}/{member}`, lower case. A `PUT` carries its parameters
+  form-encoded. Parameter names (`ClientID`, `ClientTransactionID`, `Connected`) are matched whatever their case in a
+  `GET`'s query, and exactly in a `PUT`'s body, as the Alpaca API says.
+- An answer is HTTP 200 with `Value` (a read), `ClientTransactionID` (echoed, 0 when not given),
+  `ServerTransactionID`, `ErrorNumber` and `ErrorMessage`. An error carries no `Value`.
+- A request a device cannot interpret (an unknown type, number or member, a member asked with the wrong method, a
+  parameter missing or not of its type, a transaction number that is not 0 to 4294967295) is HTTP 400 with a text
+  message.
+- Not connected, every member but `Connected`, `Connecting`, `Name`, `Description`, `DriverInfo`, `DriverVersion`,
+  `InterfaceVersion` and `SupportedActions` answers `0x407` (NotConnected).
+- The safety monitor is a whole `ISafetyMonitorV3` (`IsSafe`, the common members, `Connect`, `Disconnect`,
+  `DeviceState`). The mount is a whole `ITelescopeV4` that can only park: it stands still on the meridian at the
+  celestial equator, not tracking, at a made-up site, with every capability false but `CanPark` and `CanUnpark`. What a
+  capability gates, and every optional member, answers `0x400` (NotImplemented); `AbortSlew` while parked answers
+  `0x408`. A mount that cannot park answers `CanPark` false, `AtPark` false and `0x400` to `Park`. For a client that
+  needs a mount that slews, use ASCOM's OmniSim.
+- `GET /management/apiversions`, `/management/v1/description` and `/management/v1/configureddevices` (each device
+  with a stable UniqueID, `hvo-hat-emulator-telescope-0` and so on).
+
+Like the control API they have no authentication, and they answer no Alpaca discovery: keep them on loopback or a
+private test network.
+
+Checked with ASCOM ConformU 4.5.3 (`conformu.4.5.3.linux-x64.tar.gz`, SHA-256
+`47aa2a6da3e25bca77723efcaa5cd619f2b728c8e060bfeb098da6b5d0a64600`) against the emulator on loopback: the safety
+monitor passes `conformance` and `alpacaprotocol` with no errors, issues or information messages, and the mount passes
+`conformance` with none. The mount's `alpacaprotocol` reports one error, ConformU's own: its PulseGuide protocol test
+reads `IsPulseGuiding` whatever `CanPulseGuide` says, and `ITelescopeV4` has a mount that cannot pulse guide answer it
+NotImplemented, as `conformance` requires. To repeat it, with the emulator running:
+
+```bash
+conformu conformance http://127.0.0.1:5290/api/v1/safetymonitor/0
+conformu alpacaprotocol http://127.0.0.1:5290/api/v1/safetymonitor/0
+conformu conformance http://127.0.0.1:5290/api/v1/telescope/0
+```
+
+Both compose files point the controller's `RoofSafety` sources at them
+(`http://hat-emulator:5290`), so an emulated rig's conditions are Safe until the control API says otherwise:
+
+| Request | Body | Effect |
+|---------|------|--------|
+| `GET /alpaca` | | Every device: its number, name, UniqueID, connected or not, parked, can park or safe, how it answers, and its request count |
+| `POST /alpaca/telescope` | `{"device": 0, "parked": false}` | Change a mount: `parked`, `connected`, `canPark` and `behaviour`, each optional; `device` defaults to 0 |
+| `POST /alpaca/safetymonitor` | `{"device": 0, "safe": false}` | Change a safety monitor: `safe`, `connected` and `behaviour`, each optional |
+| `POST /alpaca/reset` | | Every device parked or safe, able to park, connected and answering |
+
+The paths are under `/api/emulator`; each `POST` answers with the new `GET /alpaca`, or with 400 and no change. The
+`behaviour` is how a device answers every request: `Answers`, `DriverError` (`ErrorNumber` `0x500`), `ServerError`
+(HTTP 500 with a text body) or `Hangs` (nothing until the client gives up, a device that stopped responding). For
+example, to make the weather unsafe and watch the controller's conditions follow:
+
+```bash
+curl -s -X POST http://127.0.0.1:5290/api/emulator/alpaca/safetymonitor -H 'Content-Type: application/json' -d '{"safe": false}'
+curl -s -H "X-Api-Key: ${HVO_DEV_ROOF_API_KEY}" http://127.0.0.1:5200/api/v4.0/Safety
+```
 
 ## Containers
 

@@ -16,9 +16,10 @@ namespace HVO.RoofControllerV4.Alpaca;
 
 /// <summary>
 /// The roof's ASCOM Alpaca server (#220): a process of its own, apart from the controller and the web UI, that serves
-/// the roof as an Alpaca Dome and reaches the controller only through the client library (its REST API and status
-/// hub), with its own API key. It is off unless <c>Alpaca:Enabled</c> is true, listens only on the addresses it is
-/// given, and answers only its LAN. This phase reads the roof and stops it; it never opens or closes it.
+/// the roof as an Alpaca Dome and the weather as an Alpaca SafetyMonitor, and reaches the controller only through the
+/// client library (its REST API and status hub), with its own API key. It is off unless <c>Alpaca:Enabled</c> is true,
+/// listens only on the addresses it is given, and answers only its LAN. It reads the roof and the weather and stops the
+/// roof; it never opens or closes it.
 /// </summary>
 /// <remarks>
 /// <c>--discovery-only</c> runs the discovery responder alone, for a computer whose Alpaca server runs in a container
@@ -246,6 +247,7 @@ public class Program
         services.AddHostedService(provider => provider.GetRequiredService<AlpacaRoof>());
         services.AddSingleton<AlpacaConnections>();
         services.AddSingleton<AlpacaDome>();
+        services.AddSingleton<AlpacaSafetyMonitor>();
         services.AddSingleton<AlpacaTransactions>();
         if (options.Discovery.Enabled)
         {
@@ -276,10 +278,15 @@ public class Program
         });
     }
 
-    /// <summary>True for a request the device route takes as AbortSlew: a PUT whose matched member is <c>abortslew</c>.</summary>
+    /// <summary>
+    /// True for a request the device route takes as the Dome's AbortSlew: a PUT whose matched device type is <c>dome</c> and
+    /// member <c>abortslew</c>.
+    /// </summary>
     internal static bool IsAbortSlew(HttpContext context)
         => HttpMethods.IsPut(context.Request.Method)
             && context.GetEndpoint() is not null
+            && context.GetRouteValue(AlpacaEndpoints.DeviceTypeRouteValue) is string deviceType
+            && string.Equals(deviceType, AlpacaDome.DeviceType, StringComparison.Ordinal)
             && context.GetRouteValue(AlpacaEndpoints.MemberRouteValue) is string member
             && string.Equals(member, AlpacaDome.AbortSlewMember, StringComparison.Ordinal);
 

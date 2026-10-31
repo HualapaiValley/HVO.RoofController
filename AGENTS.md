@@ -42,7 +42,7 @@ macOS machine with Docker.
 |---|---|
 | `HVO.RoofControllerV4.RPi` | The controller: ASP.NET Core on the Pi. It drives the Sequent Microsystems HAT over I2C (`HVO.Iot.Devices`) and serves the REST API and the status hub. It serves no pages. Its own rules: [AGENTS.md](src/HVO.RoofControllerV4.RPi/AGENTS.md). |
 | `HVO.RoofControllerV4.Web` | The web UI, Blazor Server: a separate process in the controller's container ([docs/web.md](docs/web.md)). |
-| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome, a separate process, off by default, over the client library with its own key. Phase 1 reads and stops (AbortSlew), never opens or closes ([docs/alpaca.md](docs/alpaca.md)). |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process, off by default, over the client library with its own key. It reads and stops (AbortSlew), never opens or closes ([docs/alpaca.md](docs/alpaca.md)). |
 | `HVO.RoofControllerV4.Client` | The client library every UI uses: the REST API, the status hub, credentials and the CA, Stop, and the shared wording and palette. |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the commands and the Terminal.Gui interface ([docs/cli.md](docs/cli.md)). |
 | `HVO.RoofControllerV4.TerminalUi` | HVO Dark for Terminal.Gui, shared by `hvo-roof` and the installer. |
@@ -110,14 +110,20 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   within 27 s of the signal, also at the container's process limit: the supervisor forks only to start a process, and
   only with room for it, and the stop forks nothing until the controller and the web UI have ended. A whole container
   killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
-- Safety conditions (`RoofSafety:InterlockMode`, default `Warn`): the safety service reports Safe, Unsafe or Unknown
-  (no source, a source not read, failing or older than its `MaxReadingAge`) with reasons from telescope-park and weather
-  sources, on every status and at `GET /api/v4.0/Safety`. `Warn`, the owner's policy, refuses Open
-  (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`, which anyone who may open may send
-  (`OverrideRole`, default `Operator`; audit-logged); every UI asks before it sends it. `Block` refuses Open
-  (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is checked: never Close or Stop,
-  and the service never moves the roof. No real source exists yet: which devices to read (ASCOM Alpaca or another)
-  awaits the owner's decision, so add none without it ([docs/safety-service.md](docs/safety-service.md)).
+- Safety conditions (`RoofSafety:InterlockMode`, default `Warn`): the safety service reads ASCOM Alpaca mounts
+  (`RoofSafety:Telescopes`, `AtPark`) and weather safety monitors (`RoofSafety:WeatherSources`, `IsSafe`), with GET
+  only, and reports Safe, Unsafe or Unknown with reasons, on every status and at `GET /api/v4.0/Safety`. The owner's
+  rule (#220): Safe only when at least one required weather source has a fresh safe reading and every scope that can
+  block the roof (`BlocksRoof`) is clear of it, which today means parked; a source not read, failing or older than its
+  `MaxReadingAge` is Unknown, and a weather source set `Ignored` or a scope that cannot block the roof never decides.
+  The status also carries the weather alone (`weatherState`, never the telescopes), which the Alpaca server's
+  SafetyMonitor publishes only while the controller lists its UniqueID in `RoofSafety:OwnAlpacaUniqueIds`; the
+  controller refuses its own SafetyMonitor as a weather source at every read (a loop).
+  `Warn`, the owner's policy, refuses Open (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`,
+  which anyone who may open may send (`OverrideRole`, default `Operator`; audit-logged); every UI asks before it sends
+  it. `Block` refuses Open (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is
+  checked: never Close or Stop, and the service never moves the roof. A device's address is private: never log, show
+  or commit one ([docs/safety-service.md](docs/safety-service.md), [docs/alpaca.md](docs/alpaca.md)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

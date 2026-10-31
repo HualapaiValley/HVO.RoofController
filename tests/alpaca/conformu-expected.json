@@ -68,5 +68,49 @@
         "Why": "DomeOpenShutter is false: phase 1 is graded on its read-only coverage, and ConformU never opens or closes the roof."
       }
     ]
+  },
+  "safetymonitor-protocol": {
+    "Kind": "protocol-log",
+    "InformationMessages": [
+      {
+        "Member": "GET Description",
+        "Contains": "Bad Alpaca URL base element (api = apx)\" - Received HTTP status 404 (NotFound)",
+        "Why": "ProtocolTestPrimaryUrlStructure: a path outside /api and /management is not found."
+      },
+      {
+        "Member": "GET Description",
+        "Contains": "Bad Alpaca URL version element (capital V) - Received HTTP status 400 (BadRequest)",
+        "Why": "ProtocolTestPrimaryUrlStructure: the server refuses /api/V1 (paths are lower case)."
+      },
+      {
+        "Member": "GET Description",
+        "Contains": "Bad Alpaca URL version element (no number) - Received HTTP status 400 (BadRequest)",
+        "Why": "ProtocolTestPrimaryUrlStructure: refused as malformed."
+      },
+      {
+        "Member": "GET Description",
+        "Contains": "Bad Alpaca URL version element (no v) - Received HTTP status 400 (BadRequest)",
+        "Why": "ProtocolTestPrimaryUrlStructure: refused as malformed."
+      },
+      {
+        "Member": "GET Description",
+        "Contains": "Bad Alpaca URL version element (v2) - Received HTTP status 400 (BadRequest)",
+        "Why": "ProtocolTestPrimaryUrlStructure: the server speaks only Alpaca API version 1."
+      },
+      {
+        "Member": "POST Connected",
+        "Contains": "Received HTTP status 400 (BadRequest)",
+        "Why": "ProtocolTestPrimaryUrlStructure: the device API takes GET and PUT only."
+      },
+      {
+        "Member": "DELETE Connected",
+        "Contains": "Received HTTP status 400 (BadRequest)",
+        "Why": "ProtocolTestPrimaryUrlStructure: the device API takes GET and PUT only."
+      }
+    ]
+  },
+  "safetymonitor-conformance": {
+    "Kind": "results",
+    "ConfigurationAlerts": []
   }
 }

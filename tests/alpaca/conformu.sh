@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# ConformU, ASCOM's conformance checker, in CLI mode against the roof's Alpaca server (#220), with the roof controller
-# and the HAT emulator behind it: all three built from this checkout and run on this machine, on loopback. No hardware
-# is involved. ConformU runs from tests/alpaca/conformu-settings.json, whose DomeOpenShutter is false, and this phase's
-# server refuses OpenShutter and CloseShutter anyway; the script checks that the emulated roof never moved.
+# ConformU, ASCOM's conformance checker, in CLI mode against the roof's Alpaca server (#220), Dome 0 and SafetyMonitor 0,
+# with the roof controller and the HAT emulator behind it: all three built from this checkout and run on this machine, on
+# loopback. No hardware is involved. The controller's weather source is the emulator's Alpaca safety monitor, so the
+# server's SafetyMonitor reads safe weather end to end. ConformU runs from tests/alpaca/conformu-settings.json, whose
+# DomeOpenShutter is false, and the server refuses OpenShutter and CloseShutter anyway; the script checks that the
+# emulated roof never moved.
 #
 # Never point ConformU at an Alpaca server in front of the real roof: `conformu conformance <url>` and
 # `conformu alpacaprotocol <url>` turn DomeOpenShutter on, and a later phase's server would move the roof
 # (docs/alpaca.md).
 #
-# The ConformU release is pinned by version and SHA-256 below. Both checks must report no error and no issue, and only
+# The ConformU release is pinned by version and SHA-256 below. Every check must report no error and no issue, and only
 # the information messages and configuration alerts tests/alpaca/conformu-expected.json lists, each with why
 # (tests/alpaca/check-conformu-results.py). The protocol check sends hundreds of requests a second, so the server's
 # per-address limit (100 a second by default) is raised for it here.
@@ -107,6 +109,13 @@ else
 fi
 [[ -x "${conformu_dir}/conformu" ]] || fail "No conformu program in ${conformu_dir}"
 
+# The Alpaca server's devices' identities, made here so the controller can list them as its own: its SafetyMonitor says
+# safe only while the controller does, which then never reads it back as its weather.
+mkdir -p "${work}/alpaca-data"
+dome_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+safetymonitor_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+printf '{"dome/0":"%s","safetymonitor/0":"%s"}\n' "${dome_id}" "${safetymonitor_id}" > "${work}/alpaca-data/alpaca-devices.json"
+
 # The Alpaca server's Viewer key: made here, in a file only this user can read; the controller is given its hash.
 (umask 077 && python3 -c 'import secrets; print(secrets.token_hex(24))' > "${work}/alpaca-key")
 key_sha256=$(tr -d '\n' < "${work}/alpaca-key" | sha256sum | cut -d' ' -f1)
@@ -127,6 +136,10 @@ echo "Starting the controller (${controller_port}) against it"
   RoofControllerSecurity__ApiKeys__0__Name=alpaca \
   RoofControllerSecurity__ApiKeys__0__Role=RoofViewer \
   RoofControllerSecurity__ApiKeys__0__KeySha256="${key_sha256}" \
+  RoofSafety__WeatherSources__0__Name="Emulated weather" \
+  RoofSafety__WeatherSources__0__Url="http://127.0.0.1:${control_port}" \
+  RoofSafety__OwnAlpacaUniqueIds__0="${dome_id}" \
+  RoofSafety__OwnAlpacaUniqueIds__1="${safetymonitor_id}" \
   dotnet HVO.RoofControllerV4.RPi.dll) > "${work}/controller.log" 2>&1 &
 pids+=("$!")
 wait_for "http://127.0.0.1:${controller_port}/health/live" "The controller"
@@ -152,21 +165,32 @@ until curl -fsS --max-time 2 -X PUT --data 'Connected=true&ClientID=1' "http://1
   ((SECONDS > deadline)) && fail "The Alpaca server did not report the roof's status within 60 s (logs in ${work})"
   sleep 0.5
 done
+# And the weather: the controller has read the emulator's safety monitor, and the server's SafetyMonitor says safe.
+deadline=$((SECONDS + 60))
+until curl -fsS --max-time 2 -X PUT --data 'Connected=true&ClientID=1' "http://127.0.0.1:${alpaca_port}/api/v1/safetymonitor/0/connected" > /dev/null \
+  && curl -fsS --max-time 2 "http://127.0.0.1:${alpaca_port}/api/v1/safetymonitor/0/issafe?ClientID=1" | grep -q '"Value":true,'; do
+  ((SECONDS > deadline)) && fail "The Alpaca server's SafetyMonitor did not read the emulated weather as safe within 60 s (logs in ${work})"
+  sleep 0.5
+done
 before=$(curl -fsS "http://127.0.0.1:${control_port}/api/emulator/status")
 
-python3 - "${repo}/tests/alpaca/conformu-settings.json" "${work}/conformu-settings.json" "${alpaca_port}" <<'EOF'
+# The Dome's settings with this run's port, and the same for SafetyMonitor 0.
+python3 - "${repo}/tests/alpaca/conformu-settings.json" "${work}" "${alpaca_port}" <<'EOF'
 import json, sys
 settings = json.load(open(sys.argv[1]))
 assert settings["DomeOpenShutter"] is False, "DomeOpenShutter must stay false"
 settings["AlpacaDevice"]["IpPort"] = int(sys.argv[3])
-json.dump(settings, open(sys.argv[2], "w"), indent=2)
+json.dump(settings, open(f"{sys.argv[2]}/conformu-settings.json", "w"), indent=2)
+settings["DeviceType"] = "SafetyMonitor"
+settings["AlpacaDevice"].update(AscomDeviceType="SafetyMonitor", AscomDeviceName="HVO observatory weather", AlpacaDeviceNumber=0)
+json.dump(settings, open(f"{sys.argv[2]}/conformu-settings-safetymonitor.json", "w"), indent=2)
 EOF
 
 run_conformu() {
-  local command=$1 name=$2 status=0
-  echo "ConformU ${CONFORMU_VERSION}: ${command}"
+  local command=$1 name=$2 settings=${3:-conformu-settings.json} status=0
+  echo "ConformU ${CONFORMU_VERSION}: ${command} (${settings})"
   HOME="${work}/home" "${conformu_dir}/conformu" "${command}" \
-    --settingsfile "${work}/conformu-settings.json" \
+    --settingsfile "${work}/${settings}" \
     --logfilename "${work}/${name}.log" \
     --resultsfile "${work}/${name}-results.json" > "${work}/${name}-console.txt" 2>&1 || status=$?
   echo "ConformU ${command} exited with ${status}"
@@ -176,6 +200,8 @@ run_conformu() {
 mkdir -p "${work}/home"
 run_conformu alpacaprotocol-settings protocol
 run_conformu conformance-settings conformance
+run_conformu alpacaprotocol-settings safetymonitor-protocol conformu-settings-safetymonitor.json
+run_conformu conformance-settings safetymonitor-conformance conformu-settings-safetymonitor.json
 
 after=$(curl -fsS "http://127.0.0.1:${control_port}/api/emulator/status")
 python3 - "${before}" "${after}" <<'EOF'
@@ -191,4 +217,6 @@ EOF
 python3 "${repo}/tests/alpaca/check-conformu-results.py" \
   --expected "${repo}/tests/alpaca/conformu-expected.json" \
   "protocol=${work}/protocol.log" \
-  "conformance=${work}/conformance-results.json"
+  "conformance=${work}/conformance-results.json" \
+  "safetymonitor-protocol=${work}/safetymonitor-protocol.log" \
+  "safetymonitor-conformance=${work}/safetymonitor-conformance-results.json"

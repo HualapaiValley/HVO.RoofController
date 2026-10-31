@@ -1,5 +1,6 @@
 using HVO.RoofControllerV4.Simulation.Camera;
 using HVO.RoofControllerV4.Simulation.Emulator;
+using HVO.RoofControllerV4.Simulation.Safety;
 using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.Emulator;
@@ -7,7 +8,9 @@ namespace HVO.RoofControllerV4.Emulator;
 /// <summary>
 /// The HAT emulator: the emulated roof plant (SM-I-010 HAT, SMVector drive, ME-8108 limit switches, the documented
 /// wiring) served on a TCP register port for the controller's <c>HatEmulator</c> mode, with an HTTP control API for
-/// injecting faults and reading the plant, and an MJPEG camera of the plant for the controller's camera proxy. For development and tests only; it never touches hardware.
+/// injecting faults and reading the plant, an MJPEG camera of the plant for the controller's camera proxy, and ASCOM
+/// Alpaca telescope and safety monitor devices for the controller's safety sources. For development and tests only; it
+/// never touches hardware.
 /// </summary>
 public class Program
 {
@@ -27,10 +30,12 @@ public class Program
         // settings stop the process before it listens rather than part way through the host start.
         app.Services.GetRequiredService<HatEmulatorServer>();
         app.Services.GetRequiredService<EmulatedCamera>();
+        app.Services.GetRequiredService<EmulatedAlpacaServer>();
 
         app.MapGet("/", () => Results.Redirect(EmulatorApi.Prefix + "/status"));
         EmulatorApi.Map(app);
         EmulatedCameraEndpoint.Map(app);
+        EmulatedAlpacaEndpoint.Map(app);
         app.Run();
     }
 
@@ -54,6 +59,7 @@ public class Program
             var session = sp.GetRequiredService<HatEmulatorSession>();
             return new EmulatedCamera(session.GetStatus, sp.GetRequiredService<IOptions<EmulatorHostOptions>>().Value.CameraFramesPerSecond);
         });
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<EmulatorHostOptions>>().Value.AlpacaServer());
         services.AddHostedService<HatEmulatorHostedService>();
     }
 }

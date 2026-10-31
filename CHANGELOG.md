@@ -22,6 +22,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   read-only setup pages, and a UDP discovery responder that can also run alone on a host's network
   (`--discovery-only`). ConformU 4.5.3, pinned, checks it in CI against the HAT emulator with no errors and no issues.
   Running it, its settings and what later phases add: [docs/alpaca.md](docs/alpaca.md).
+- ASCOM Alpaca safety sources (#220, phase 2): the safety service reads Alpaca mounts' `AtPark`
+  (`RoofSafety:Telescopes`) and weather safety monitors' `IsSafe` (`RoofSafety:WeatherSources`), with `GET` only, never
+  writing `Connected` or parking anything, at pinned addresses. Each has a `Name`, `Url`, `DeviceNumber` and optional
+  `MaxReadingAge`; a mount has `BlocksRoof` (default true), a weather source `Requirement` (`Required`, the default, or
+  `Ignored`). A device that is not connected, answers an Alpaca error or an HTTP error, cannot be reached, answers
+  something that is not the Alpaca JSON or does not answer in time is a failed read with the reason in fixed words
+  (`the device is not connected`, `no answer within 5 s`, …), and goes Unknown once its last reading is too old; a mount
+  that cannot park is a configuration error. Only an unambiguous Alpaca success counts (`ErrorNumber` 0 with an empty
+  `ErrorMessage`, every field once, the request's own `ClientTransactionID`). No log, reason or trace names a device's
+  address. On the Pi the settings go in the secrets directory, one file per setting; a value that is not of its type, or
+  a key under `RoofSafety` that no setting has, stops the controller at start rather than dropping a device
+  ([docs/alpaca.md](docs/alpaca.md)).
+- The weather alone on every status and at `GET /api/v4.0/Safety` (`weatherState`, `weatherReasons`), never including
+  the telescopes; and each source's `counts`.
+- The Alpaca server serves the observatory's weather as **SafetyMonitor 0** (#220, phase 2), beside Dome 0 and with the
+  same settings, protocol and security: `IsSafe` is true only while the controller's `weatherState` is Safe, never
+  counting the telescopes, so an observing program that parks and closes on an unsafe monitor does not do so when a
+  mount unparks. Unsafe or unknown weather, a controller that does not report it, and an error (not connected `0x407`,
+  the controller unreachable or silent for 3 s `0x500`) all read unsafe (`Value` false). Its connection is its own; its
+  `UniqueID` is kept beside the Dome's in `alpaca-devices.json` (a phase 1 file gains it, the Dome's unchanged); the
+  setup page shows it; ConformU checks it in CI with no errors and no issues.
+- `RoofSafety:OwnAlpacaUniqueIds`: this installation's own Alpaca devices' `UniqueID`s (the Alpaca server's setup page
+  and log give the lines). The controller refuses a weather source that is its own SafetyMonitor, checked at every read
+  by the device's `DriverInfo` (also through a hub) and by the `UniqueID` its server lists for it (whatever that server
+  calls itself, from a device list that must be that request's own answer; with own IDs listed, a source whose
+  `UniqueID` cannot be read is refused too), so it never reads its own weather back. The SafetyMonitor says safe only
+  while the controller lists its `UniqueID`, so a forgotten setting reads unsafe, never a loop. The list is read at
+  start, and the status publishes exactly the list enforced.
+- The HAT emulator serves fake ASCOM Alpaca mounts and weather safety monitors on its control port
+  (`Emulator:AlpacaTelescopes`, `Emulator:AlpacaSafetyMonitors`, one of each by default), with park, weather,
+  connection, `CanPark` and failure states set through `/api/emulator/alpaca`; both compose files point the controller
+  at them, so an emulated rig's conditions are Safe until the emulator says otherwise.
+
+### Changed
+
+- The safety conditions follow the owner's readiness rule (#220): Safe only when at least one required weather source
+  has a fresh reading that says safe and every scope that can block the roof is clear of it (parked, for now). A parked
+  telescope alone is now Unknown, "No required weather source configured". A weather source set `Ignored` and a mount
+  with `BlocksRoof: false` are shown, marked `[ignored]` or `[does not block the roof]` on every interface, but never
+  decide.
 
 ## [4.3.0] - 2026-10-30
 

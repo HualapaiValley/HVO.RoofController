@@ -60,15 +60,25 @@ public sealed class SafetyApiTests
     public async Task Status_CarriesTheSafetyConditions()
     {
         var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
-        using var client = Host(telescopes: [mount]).CreateApiClient(TestApiKeys.Viewer);
+        var ignored = new SimulatedWeatherSafetySource("Old sensor", isSafe: false) { Requirement = RoofWeatherSourceRequirement.Ignored };
+        using var client = Host(telescopes: [mount], weather: [new SimulatedWeatherSafetySource("Cloud sensor"), ignored]).CreateApiClient(TestApiKeys.Viewer);
         await WaitForAsync(client, RoofSafetyState.Unsafe);
 
-        var status = await ApiJson.ReadAsync<RoofStatusResponse>(await client.GetAsync($"{RoofPath}/Status"));
+        var response = await client.GetAsync($"{RoofPath}/Status");
+        var status = await ApiJson.ReadAsync<RoofStatusResponse>(response);
 
         status.Safety.Should().NotBeNull();
         status.Safety!.State.Should().Be(RoofSafetyState.Unsafe);
         status.Safety.Reasons.Should().Equal("Telescope 'Main' is not parked");
-        status.Safety.Sources.Single().Should().BeEquivalentTo(new { Name = "Main", Kind = RoofSafetySourceKind.TelescopePark, IsStale = false });
+        status.Safety.WeatherState.Should().Be(RoofSafetyState.Safe, "the weather alone leaves the mount out");
+        status.Safety.WeatherReasons.Should().BeEmpty();
+        status.Safety.Sources.Select(source => (source.Name, source.Kind, source.IsStale, source.Counts)).Should().Equal(
+            ("Main", RoofSafetySourceKind.TelescopePark, false, true),
+            ("Cloud sensor", RoofSafetySourceKind.Weather, false, true),
+            ("Old sensor", RoofSafetySourceKind.Weather, false, false));
+        var safety = (await ApiJson.ReadElementAsync(await client.GetAsync($"{RoofPath}/Status"))).GetProperty("safety");
+        safety.GetProperty("weatherState").GetString().Should().Be("Safe", "the weather alone is on the wire, by name");
+        safety.GetProperty("sources")[2].GetProperty("counts").GetBoolean().Should().BeFalse();
     }
 
     // ---- Off (the test host's; the controller's default is Warn, SafetyDefaultApiTests) ----------------------------
@@ -156,7 +166,7 @@ public sealed class SafetyApiTests
     [TestMethod]
     public async Task Block_TheControllersOwnRefusal_StillComesThrough_WhenSafe()
     {
-        var host = Host(mode: "Block", telescopes: [new SimulatedTelescopeParkSource("Main")]);
+        var host = Host(mode: "Block", telescopes: [new SimulatedTelescopeParkSource("Main")], weather: [new SimulatedWeatherSafetySource("Cloud sensor")]);
         host.RoofService.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Failure(
             new HVO.RoofControllerV4.RPi.Logic.RoofControllerException(RoofControllerErrorCode.FaultLatched, "A fault is latched (test).")));
         using var client = host.CreateApiClient(TestApiKeys.Operator);

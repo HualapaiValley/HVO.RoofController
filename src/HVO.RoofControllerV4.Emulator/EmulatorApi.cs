@@ -4,6 +4,7 @@ using HVO.RoofControllerV4.Simulation.Drive;
 using HVO.RoofControllerV4.Simulation.Emulator;
 using HVO.RoofControllerV4.Simulation.Hat;
 using HVO.RoofControllerV4.Simulation.LimitSwitches;
+using HVO.RoofControllerV4.Simulation.Safety;
 
 namespace HVO.RoofControllerV4.Emulator;
 
@@ -79,12 +80,13 @@ internal static class EmulatorApi
         });
         api.MapGet("/violations", (HatEmulatorSession session) => session.Plant.Violations);
 
-        // Both reset fields are optional, and so is the body.
-        api.MapPost("/reset", (ResetRequest? request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
+        // Both reset fields are optional, and so is the body. The Alpaca devices go back to parked, safe and answering.
+        api.MapPost("/reset", (ResetRequest? request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera, EmulatedAlpacaServer alpaca)
             => Apply(session, server, camera, () =>
             {
                 session.Reset(request?.PositionMeters, request?.Wiring);
                 camera.Reset(camera.FramesPerSecond);
+                alpaca.Reset();
             }));
         api.MapPost("/time-scale", (TimeScaleRequest request, HatEmulatorSession session, HatEmulatorServer server, EmulatedCamera camera)
             => Apply(session, server, camera, () => session.Clock.Scale = Required(request.Scale, "scale")));

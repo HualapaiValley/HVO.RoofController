@@ -383,7 +383,9 @@ public class Program
             .WithTracing(tracerProvider => tracerProvider
                 .AddSource(RoofControllerTelemetry.InstrumentationName)
                 .AddAspNetCoreInstrumentation()
-                .AddHttpClientInstrumentation()
+                // Not the safety service's Alpaca polls: a span every few seconds, each naming a device's address.
+                .AddHttpClientInstrumentation(options => options.FilterHttpRequestMessage =
+                    request => !request.Options.TryGetValue(AlpacaDevice.RequestMarker, out _))
                 .AddOtlpExporter())
             .WithMetrics(meterProvider => meterProvider
                 .AddMeter(RoofControllerTelemetry.InstrumentationName)
