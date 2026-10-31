@@ -98,7 +98,8 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         TimeSpan? watchdog = null,
         bool startSafety = true,
         IReadOnlyList<string>? configuredTelescopes = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        IReadOnlyList<ITelescopeRereadSource>? telescopes = null)
     {
         time ??= TimeProvider.System;
         var hat = new FakeRoofHat();
@@ -112,7 +113,8 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         (await controller.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
 
         var names = new[] { "Main", "Guide", "Third" };
-        var telescopes = Enumerable.Range(0, scopes).Select(index => new ScriptedTelescopeSource(names[index], parked)).ToArray();
+        var scripted = Enumerable.Range(0, telescopes is null ? scopes : 0).Select(index => new ScriptedTelescopeSource(names[index], parked)).ToArray();
+        ITelescopeRereadSource[] sources = telescopes is null ? scripted : [.. telescopes];
         var weather = weatherSafe is { } safe ? new SimulatedWeather(safe) : null;
         var safetyOptions = new TestOptionsMonitor<RoofSafetyOptions>(new RoofSafetyOptions
         {
@@ -122,11 +124,12 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
             MaxReadingAge = TimeSpan.FromSeconds(60),
             Telescopes = [.. (configuredTelescopes ?? []).Select(name => new RoofSafetyTelescopeOptions { Name = name, Url = "http://192.0.2.1:11111", BlocksRoof = true })]
         });
-        var safety = new RoofSafetyService(telescopes, weather is null ? [] : [weather], safetyOptions, time, NullLogger<RoofSafetyService>.Instance);
+        var safety = new RoofSafetyService(sources, weather is null ? [] : [weather], safetyOptions, time, NullLogger<RoofSafetyService>.Instance);
         if (startSafety)
         {
             await safety.StartAsync(CancellationToken.None);
-            await WaitUntilAsync(() => telescopes.All(scope => scope.Reads > 0), "the safety service's first poll");
+            await WaitUntilAsync(() => safety.GetCurrent().Sources.All(source => source.LastReadingUtc is not null || source.Kind != RoofSafetySourceKind.TelescopePark)
+                && scripted.All(scope => scope.Reads > 0), "the safety service's first poll");
         }
 
         var keys = new TestOptionsMonitor<RoofControllerSecurityOptions>(new RoofControllerSecurityOptions
@@ -140,8 +143,8 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         var keyStore = new RoofApiKeyStore(keys, NullLogger<RoofApiKeyStore>.Instance);
         var options = new TestOptionsMonitor<RoofAlpacaCommandOptions>(new RoofAlpacaCommandOptions { AllowCommands = mode, ScopeRereadBudgetMs = budgetMs });
         var lease = new TestOptionsMonitor<RoofOperatorLeaseOptions>(new RoofOperatorLeaseOptions());
-        var commands = new RoofAlpacaCommands(controller, safety, options, lease, safetyOptions, keyStore, telescopes, time, NullLogger<RoofAlpacaCommands>.Instance);
-        return new AlpacaCommandRig(controller, hat, safety, commands, options, lease, safetyOptions, keys, keyStore, telescopes, weather);
+        var commands = new RoofAlpacaCommands(controller, safety, options, lease, safetyOptions, keyStore, sources, time, NullLogger<RoofAlpacaCommands>.Instance);
+        return new AlpacaCommandRig(controller, hat, safety, commands, options, lease, safetyOptions, keys, keyStore, scripted, weather);
     }
 
     /// <summary>A principal for <paramref name="key"/> as the controller authenticates it.</summary>
@@ -247,6 +250,9 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
     /// <summary>When true, each re-read waits for <see cref="ReleaseOne"/> and answers what that gives.</summary>
     public bool HoldRereads { get; set; }
 
+    /// <summary>When true, each background read hangs until it is cancelled (a poll stuck in flight).</summary>
+    public bool HoldPolls { get; set; }
+
     public int Reads => Volatile.Read(ref _reads);
 
     public int Rereads => Volatile.Read(ref _rereads);
@@ -270,10 +276,15 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
         held.TrySetResult(parked);
     }
 
-    public Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken)
+    public async Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _reads);
-        return Fails ? Task.FromException<TelescopeParkReading>(new IOException("Scripted telescope cannot be reached.")) : Task.FromResult(new TelescopeParkReading(Parked));
+        if (HoldPolls)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+
+        return Fails ? throw new IOException("Scripted telescope cannot be reached.") : new TelescopeParkReading(Parked);
     }
 
     public async Task<TelescopeParkReading> RereadAsync(CancellationToken cancellationToken)

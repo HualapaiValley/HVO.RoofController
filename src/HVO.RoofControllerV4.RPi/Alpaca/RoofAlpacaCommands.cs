@@ -75,6 +75,9 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     private RoofStopHoldState _hold;
     private readonly Dictionary<string, OperatorLease> _leases = new(StringComparer.Ordinal);
     private string? _idleLapsedHolder;
+
+    // Sessions whose lease lapsed for want of input: their heartbeats take it again only with input.
+    private readonly HashSet<string> _idleLapsedSessions = new(StringComparer.Ordinal);
     private readonly Dictionary<RoofAlpacaCommandKind, GrantEntry> _grants = [];
     private readonly List<RoofAlpacaAlert> _alerts = [];
     private long _alertSequence;
@@ -309,8 +312,15 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         lock (_gate)
         {
             taken = !_leases.TryGetValue(session, out var lease);
+            if (taken && !input && _idleLapsedSessions.Contains(session))
+            {
+                // Its lease lapsed for want of input: a heartbeat alone does not take it back.
+                return LeaseState_NoLock(now);
+            }
+
             if (taken)
             {
+                _idleLapsedSessions.Remove(session);
                 lease = new OperatorLease(name, RoofPrincipalFactory.DescribeCaller(user), now);
                 _leases[session] = lease;
                 _idleLapsedHolder = null;
@@ -764,6 +774,12 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
 
             _leases.Remove(session);
             _idleLapsedHolder = lease.Name;
+            _idleLapsedSessions.Add(session);
+            if (_idleLapsedSessions.Count > 256)
+            {
+                _idleLapsedSessions.Clear();
+            }
+
             _logger.LogWarning("Operator lease of {Caller} lapsed after {Minutes} min without input: Alpaca commands may now move the roof",
                 lease.Caller, _leaseOptions.CurrentValue.OperatorLeaseIdleMinutes);
             changed = true;

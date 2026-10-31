@@ -1,0 +1,261 @@
+using System.Diagnostics;
+using System.Net;
+using System.Text;
+using System.Web;
+using FluentAssertions;
+using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.Safety;
+using HVO.RoofControllerV4.RPi.Alpaca;
+using HVO.RoofControllerV4.RPi.Safety;
+using HVO.RoofControllerV4.RPi.Tests.Safety;
+
+namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
+
+/// <summary>
+/// The last-moment re-read of the blocking telescopes (#220, §2, §16 Y1/Z1, §18 R8-1/R8-2, §19 L4, §20 N5): issued at the
+/// ticket, at most two in flight and 250 ms apart per telescope, a command using only a read issued after it arrived,
+/// results ordered by issue in the telescope's one reading slot, and the Alpaca mount re-read with connected and atpark
+/// in parallel (and canpark until a clean full read has shown it).
+/// </summary>
+[TestClass]
+public sealed class RoofAlpacaRereadTests
+{
+    private const byte CloseRelay = 2;
+
+    [TestMethod]
+    public async Task ABurstOfTwentyCloses_ReReadsEachTelescopeAtMostTwice_AndParkThenCloseStillCloses()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync(parked: false)).Ready();
+        rig.Scope.Parked = true; // parked after the poll
+        var before = rig.Scope.Rereads;
+
+        var outcomes = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => rig.CloseAsync()));
+
+        (rig.Scope.Rereads - before).Should().BeLessThanOrEqualTo(2);
+        outcomes.Should().OnlyContain(outcome => outcome.Result.IsSuccessful);
+        rig.RelayOnWrites(CloseRelay).Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task TwentyCloseRetriesOverTwoSeconds_ReReadAtMostNineTimes()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync()).Ready();
+        var before = rig.Scope.Rereads;
+        var clock = Stopwatch.StartNew();
+        var closes = new List<Task<RoofAlpacaCommandOutcome>>();
+
+        // A client retrying every 100 ms for two seconds, not waiting for the answers.
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            closes.Add(rig.CloseAsync());
+            var due = TimeSpan.FromMilliseconds(100 * (attempt + 1));
+            if (clock.Elapsed < due)
+            {
+                await Task.Delay(due - clock.Elapsed);
+            }
+        }
+
+        (await Task.WhenAll(closes)).Should().OnlyContain(outcome => outcome.Result.IsSuccessful);
+        (rig.Scope.Rereads - before).Should().BeLessThanOrEqualTo(9, "re-reads of one telescope are issued no closer than 250 ms apart");
+        rig.RelayOnWrites(CloseRelay).Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task ALateClear_NeverOverwritesANewerNotClear_InTheSlot()
+    {
+        var source = new OrderedTelescope("Main");
+        await using var ordered = (await AlpacaCommandRig.StartAsync(budgetMs: 2000, telescopes: [source])).Ready();
+
+        var first = ordered.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => source.Held == 1, "the first re-read");
+        await Task.Delay(RoofSafetyService.RereadSpacing);
+        var second = ordered.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => source.Held == 2, "the second re-read");
+
+        source.Release(index: 1, parked: false); // the newer read ends first: not parked
+        source.Release(index: 0, parked: true);  // then the older one: a late "parked"
+
+        (await first).Rule().Should().Be("NotSafe", "the slot keeps the newer not-clear");
+        (await second).Rule().Should().Be("NotSafe");
+        ordered.Hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task ACloseAfterAPark_NeverJoinsAReReadIssuedBeforeItArrived()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync(parked: false, budgetMs: 2000)).Ready();
+        rig.Scope.HoldRereads = true;
+        var early = rig.CloseAsync(); // a re-read issued now sees the mount unparked
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Held == 1, "the early re-read");
+
+        await Task.Delay(200); // the mount parks; a Close comes 200 ms later
+        var late = rig.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Held == 2, "the late Close's own re-read");
+        rig.Scope.ReleaseOne(false);
+        (await early).Rule().Should().Be("NotSafe");
+        rig.Scope.ReleaseOne(true);
+
+        (await late).Result.IsSuccessful.Should().BeTrue("its own re-read, issued after it arrived, saw the park");
+    }
+
+    [TestMethod]
+    public async Task AMountAnsweringEachGetIn200Ms_ParkThenCloseCloses_WithinTheDeadline()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync(parked: false)).Ready();
+        rig.Scope.Parked = true;
+        rig.Scope.RereadDelay = TimeSpan.FromMilliseconds(200);
+        var clock = Stopwatch.StartNew();
+
+        var outcome = await rig.CloseAsync();
+
+        outcome.Result.IsSuccessful.Should().BeTrue(outcome.Result.Error?.Message);
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(600 + 400), "budget + 400 ms");
+    }
+
+    [TestMethod]
+    public async Task AReReadThatTimesOut_IsUnknown_AndTheRefusalComesWithinTheDeadline()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync(budgetMs: 300)).Ready();
+        rig.Scope.RereadDelay = TimeSpan.FromSeconds(3);
+        var clock = Stopwatch.StartNew();
+
+        var outcome = await rig.CloseAsync();
+
+        outcome.ReasonKeys.Should().Equal("scope-unknown:Main");
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(300 + 400), "budget + 400 ms");
+        rig.RelayOnWrites(CloseRelay).Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task ABackgroundPollStuckInFlight_DoesNotHoldUpParkThenClose()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync(parked: false)).Ready();
+        rig.Scope.HoldPolls = true;
+        _ = rig.Safety.PollAsync(CancellationToken.None); // stuck
+        rig.Scope.Parked = true;
+
+        (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue("a re-read never waits behind a background poll");
+    }
+
+    // ---- The Alpaca mount's re-read ------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task TheAlpacaMountsReRead_SendsConnectedAndAtParkInParallel_AndCanParkUntilAFullReadShowedIt()
+    {
+        var device = new FakeTelescope();
+        var source = new AlpacaTelescopeParkSource(AlpacaSafetySourceTests.Telescope("Main"), new AlpacaSafetySourceTests.Factory(() => device));
+
+        (await source.RereadAsync(CancellationToken.None)).IsParked.Should().BeTrue();
+        device.Members().Should().BeEquivalentTo("connected", "atpark", "canpark");
+
+        device.Clear();
+        await source.ReadParkStateAsync(CancellationToken.None);
+        device.Clear();
+        (await source.RereadAsync(CancellationToken.None)).IsParked.Should().BeTrue();
+        device.Members().Should().BeEquivalentTo("connected", "atpark");
+        source.RecentLatencies.Should().NotBeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TheAlpacaMountsReRead_NeverClearsAMountNotConnected_OrOneThatCannotPark()
+    {
+        var device = new FakeTelescope { Connected = false };
+        var source = new AlpacaTelescopeParkSource(AlpacaSafetySourceTests.Telescope("Main"), new AlpacaSafetySourceTests.Factory(() => device));
+        await FluentActions.Awaiting(() => source.RereadAsync(CancellationToken.None)).Should().ThrowAsync<RoofSafetySourceException>();
+
+        device.Connected = true;
+        device.CanPark = false; // reported parked, but it cannot park: a configuration error, never clear
+        await FluentActions.Awaiting(() => source.RereadAsync(CancellationToken.None)).Should().ThrowAsync<RoofSafetySourceException>()
+            .WithMessage(AlpacaTelescopeParkSource.CannotParkFailure);
+        await FluentActions.Awaiting(() => source.ReadParkStateAsync(CancellationToken.None)).Should().ThrowAsync<RoofSafetySourceException>();
+        await FluentActions.Awaiting(() => source.RereadAsync(CancellationToken.None)).Should().ThrowAsync<RoofSafetySourceException>(
+            "a full read that found CanPark false keeps the re-read asking");
+    }
+
+    /// <summary>A telescope whose re-reads each wait for the test, released in any order.</summary>
+    internal sealed class OrderedTelescope(string name) : ITelescopeRereadSource
+    {
+        private readonly List<TaskCompletionSource<bool>> _held = [];
+
+        public string Name { get; } = name;
+
+        public TimeSpan? MaxReadingAge => null;
+
+        public bool BlocksRoof => true;
+
+        public IReadOnlyList<TimeSpan> RecentLatencies => [];
+
+        public int Held
+        {
+            get { lock (_held) { return _held.Count; } }
+        }
+
+        public void Release(int index, bool parked)
+        {
+            lock (_held)
+            {
+                _held[index].TrySetResult(parked);
+            }
+        }
+
+        public Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken) => Task.FromResult(new TelescopeParkReading(false));
+
+        public async Task<TelescopeParkReading> RereadAsync(CancellationToken cancellationToken)
+        {
+            var held = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_held)
+            {
+                _held.Add(held);
+            }
+
+            return new TelescopeParkReading(await held.Task.WaitAsync(cancellationToken));
+        }
+    }
+
+    /// <summary>An Alpaca telescope answering connected, canpark and atpark as set, recording what it was asked.</summary>
+    private sealed class FakeTelescope : HttpMessageHandler
+    {
+        private readonly List<string> _members = [];
+
+        public bool Connected { get; set; } = true;
+
+        public bool CanPark { get; set; } = true;
+
+        public bool AtPark { get; set; } = true;
+
+        public IReadOnlyList<string> Members()
+        {
+            lock (_members)
+            {
+                return [.. _members];
+            }
+        }
+
+        public void Clear()
+        {
+            lock (_members)
+            {
+                _members.Clear();
+            }
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var member = request.RequestUri!.AbsolutePath.Split('/')[^1];
+            lock (_members)
+            {
+                _members.Add(member);
+            }
+
+            var transaction = HttpUtility.ParseQueryString(request.RequestUri.Query)["ClientTransactionID"] ?? "0";
+            var value = member switch
+            {
+                "connected" => Connected,
+                "canpark" => CanPark,
+                _ => AtPark
+            };
+            var body = "{\"Value\":" + (value ? "true" : "false") + ",\"ClientTransactionID\":" + transaction + ",\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+        }
+    }
+}
