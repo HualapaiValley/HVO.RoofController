@@ -113,6 +113,12 @@ namespace HVO.RoofControllerV4.Common.Models
         public string? LastError { get; init; }
 
         /// <summary>
+        /// The Alpaca command state (#220): which commands are on, the human Stop hold, a person's operator lease, override
+        /// grants, alerts and warnings. Null from controllers that do not report it.
+        /// </summary>
+        public RoofAlpacaStatus? Alpaca { get; init; }
+
+        /// <summary>
         /// The observatory's safety conditions (telescope park, weather) as the controller's safety service judges them
         /// when the snapshot is sent, and how Open treats them. Null from controllers that do not report it.
         /// </summary>

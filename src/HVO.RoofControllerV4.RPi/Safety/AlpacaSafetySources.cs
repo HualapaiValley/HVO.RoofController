@@ -382,7 +382,12 @@ public sealed class AlpacaErrorException : RoofSafetySourceException
 /// "parked". A mount that cannot park can never show it is clear of the roof, so it is a configuration error, a failed
 /// read that says so, not "not parked".
 /// </summary>
-public sealed class AlpacaTelescopeParkSource : ITelescopeParkSource
+/// <remarks>
+/// For an Alpaca command it also re-reads at the last moment (<see cref="RereadAsync"/>, #220): <c>connected</c> and
+/// <c>atpark</c> in parallel, and <c>canpark</c> with them until a clean full read since the start has shown the mount can
+/// park. It times every GET (<see cref="RecentLatencies"/>), for the re-read budget.
+/// </remarks>
+public sealed class AlpacaTelescopeParkSource : ITelescopeRereadSource
 {
     /// <summary>The failure's words when the mount says it cannot park.</summary>
     public const string CannotParkFailure = "configuration error: the mount reports it cannot park (CanPark is false)";
@@ -390,7 +395,15 @@ public sealed class AlpacaTelescopeParkSource : ITelescopeParkSource
     /// <summary>The failure's words when the mount does not implement AtPark.</summary>
     public const string NoAtParkFailure = "configuration error: the mount does not implement AtPark";
 
+    /// <summary>How many GET timings are kept.</summary>
+    internal const int LatencySamples = 200;
+
     private readonly AlpacaDevice _device;
+    private readonly object _gate = new();
+    private readonly Queue<TimeSpan> _latencies = new();
+
+    // True once a clean full read since the start showed CanPark true; a full read showing otherwise turns it off.
+    private volatile bool _canParkConfirmed;
 
     public AlpacaTelescopeParkSource(RoofSafetyTelescopeOptions options, IHttpClientFactory clients)
     {
@@ -407,25 +420,93 @@ public sealed class AlpacaTelescopeParkSource : ITelescopeParkSource
 
     public bool BlocksRoof { get; }
 
+    /// <inheritdoc />
+    public IReadOnlyList<TimeSpan> RecentLatencies
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _latencies.ToArray();
+            }
+        }
+    }
+
     public async Task<TelescopeParkReading> ReadParkStateAsync(CancellationToken cancellationToken)
     {
-        if (!await _device.ReadBooleanAsync("connected", cancellationToken).ConfigureAwait(false))
+        if (!await TimedAsync("connected", cancellationToken).ConfigureAwait(false))
         {
             throw new RoofSafetySourceException("the device is not connected");
         }
 
         try
         {
-            if (!await _device.ReadBooleanAsync("canpark", cancellationToken).ConfigureAwait(false))
+            if (!await TimedAsync("canpark", cancellationToken).ConfigureAwait(false))
             {
+                _canParkConfirmed = false;
                 throw new RoofSafetySourceException(CannotParkFailure);
             }
 
-            return new TelescopeParkReading(await _device.ReadBooleanAsync("atpark", cancellationToken).ConfigureAwait(false));
+            var parked = await TimedAsync("atpark", cancellationToken).ConfigureAwait(false);
+            _canParkConfirmed = true;
+            return new TelescopeParkReading(parked);
+        }
+        catch (AlpacaErrorException ex) when (ex.ErrorNumber == AlpacaDevice.NotImplementedError)
+        {
+            _canParkConfirmed = false;
+            throw new RoofSafetySourceException(NoAtParkFailure);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<TelescopeParkReading> RereadAsync(CancellationToken cancellationToken)
+    {
+        var connected = TimedAsync("connected", cancellationToken);
+        var atPark = TimedAsync("atpark", cancellationToken);
+        var canPark = _canParkConfirmed ? null : TimedAsync("canpark", cancellationToken);
+        try
+        {
+            await Task.WhenAll(canPark is null ? [connected, atPark] : [connected, atPark, canPark]).ConfigureAwait(false);
         }
         catch (AlpacaErrorException ex) when (ex.ErrorNumber == AlpacaDevice.NotImplementedError)
         {
             throw new RoofSafetySourceException(NoAtParkFailure);
+        }
+
+        if (!connected.Result)
+        {
+            throw new RoofSafetySourceException("the device is not connected");
+        }
+
+        if (canPark is not null && !canPark.Result)
+        {
+            throw new RoofSafetySourceException(CannotParkFailure);
+        }
+
+        return new TelescopeParkReading(atPark.Result);
+    }
+
+    private async Task<bool> TimedAsync(string member, CancellationToken cancellationToken)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            return await _device.ReadBooleanAsync(member, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+                lock (_gate)
+                {
+                    _latencies.Enqueue(elapsed);
+                    while (_latencies.Count > LatencySamples)
+                    {
+                        _latencies.Dequeue();
+                    }
+                }
+            }
         }
     }
 }

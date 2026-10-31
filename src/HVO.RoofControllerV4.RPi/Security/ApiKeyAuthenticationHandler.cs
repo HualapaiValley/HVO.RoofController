@@ -24,6 +24,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
     private readonly RoofApiKeyStore _keyStore;
     private readonly Identity.RoofIdentityStore? _identity;
     private readonly Identity.RoofProviderAuthService? _providers;
+    private readonly IOptionsMonitor<Alpaca.RoofAlpacaCommandOptions>? _alpaca;
 
     public ApiKeyAuthenticationHandler(
         IOptionsMonitor<ApiKeyAuthenticationOptions> options,
@@ -31,11 +32,13 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
         UrlEncoder encoder,
         RoofApiKeyStore keyStore,
         Identity.RoofIdentityStore? identity = null,
-        Identity.RoofProviderAuthService? providers = null)
+        Identity.RoofProviderAuthService? providers = null,
+        IOptionsMonitor<Alpaca.RoofAlpacaCommandOptions>? alpaca = null)
         : base(options, logger, encoder)
     {
         _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
         _identity = identity; _providers = providers;
+        _alpaca = alpaca;
     }
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -62,6 +65,15 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
         {
             LogRejected(_keyStore.HasKeys ? "unknown key" : "no API keys are configured");
             return Task.FromResult(AuthenticateResult.Fail("Invalid API key."));
+        }
+
+        // The Alpaca accounts' keys (#220) are accepted only from a trusted Alpaca server address, judged on the TCP peer
+        // before anything a proxy header says: loopback, or RoofController:Alpaca:ServerAddresses.
+        if (RoofPrincipalFactory.IsAlpacaAccountRole(identity.Role)
+            && !(_alpaca?.CurrentValue ?? new Alpaca.RoofAlpacaCommandOptions()).IsTrustedPeer(Context.Connection.RemoteIpAddress))
+        {
+            LogRejected($"an Alpaca account's key ({identity.Role}) from an address that is not a trusted Alpaca server");
+            return Task.FromResult(AuthenticateResult.Fail("This key is accepted only from a trusted Alpaca server address."));
         }
 
         // The person the key's holder acts for (the web UI names who is signed in); for the audit log only.

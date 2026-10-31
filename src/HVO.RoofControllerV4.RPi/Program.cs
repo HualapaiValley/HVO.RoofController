@@ -25,6 +25,7 @@ using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.RPi.Services;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Controllers.Camera;
+using HVO.RoofControllerV4.RPi.Alpaca;
 using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Settings;
@@ -252,6 +253,7 @@ public class Program
 
         // Safety conditions (telescope park, weather) on every status and in the Open interlock (docs/safety-service.md)
         services.AddRoofSafety(Configuration);
+        services.AddRoofAlpacaCommands(Configuration);
 
         // Live status hub (/hubs/roof) for the separate clients: JSON with string enums, as the REST API writes them.
         services.AddSignalR()
@@ -450,6 +452,9 @@ public class Program
         app.UseRouting();
 
         app.UseAuthentication();
+
+        // Deny by default for the External Alpaca account (#220): only its own routes and the status.
+        app.UseMiddleware<RoofAlpacaCommanderFilter>();
         app.UseAuthorization();
 
         // Sign-in attempts per caller (Auth/Session, Auth/Pin, Auth/Password), before any secret is checked. After

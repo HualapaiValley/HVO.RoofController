@@ -214,10 +214,10 @@ public sealed class RoofApiKeyStore : IDisposable
                 continue;
             }
 
-            var role = RoofPrincipalFactory.NormalizeRole(key.Role?.Trim());
+            var role = RoofPrincipalFactory.NormalizeKeyRole(key.Role?.Trim());
             if (role is null)
             {
-                problems.Add($"{label}: Role must be RoofViewer, RoofOperator or RoofAdmin; entry ignored.");
+                problems.Add($"{label}: Role must be RoofViewer, RoofOperator, RoofAdmin, RoofAlpacaCommander or RoofAlpacaServer; entry ignored.");
                 continue;
             }
 
@@ -290,7 +290,7 @@ public sealed class RoofApiKeyStore : IDisposable
 
             var hash = Convert.FromHexString(key.KeySha256);
             entries.Add(new Entry(
-                new RoofApiKeyIdentity(key.Name, key.Role, ComputeKeyId(hash), key.Kiosk, RoofApiKeySource.Managed),
+                new RoofApiKeyIdentity(key.Name, key.EffectiveRole, ComputeKeyId(hash), key.Kiosk, RoofApiKeySource.Managed),
                 hash));
         }
 

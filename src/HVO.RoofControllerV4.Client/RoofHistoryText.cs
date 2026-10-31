@@ -23,6 +23,10 @@ public static class RoofHistoryText
         RoofHistoryCommand.Stop => "Stop",
         RoofHistoryCommand.ClearFault => "Clear fault",
         RoofHistoryCommand.Lease => "Lease renewal",
+        RoofHistoryCommand.OverrideGrant => "Override grant",
+        RoofHistoryCommand.OverrideRevoke => "Override revoked",
+        RoofHistoryCommand.StopHoldClear => "Stop hold cleared",
+        RoofHistoryCommand.AlertAcknowledge => "Alert acknowledged",
         _ => command.ToString()
     };
 
@@ -34,6 +38,11 @@ public static class RoofHistoryText
     {
         ArgumentNullException.ThrowIfNull(entry);
         var command = DescribeCommand(entry.Command);
+        if (entry.Source is { Length: > 0 } source)
+        {
+            command = $"{command} ({source})";
+        }
+
         return entry.Count > 1
             ? $"{command} ({entry.Count.ToString(CultureInfo.InvariantCulture)} times, last {RoofStatusText.Time(entry.LastTimestampUtc ?? entry.TimestampUtc)})"
             : command;
@@ -67,7 +76,13 @@ public static class RoofHistoryText
         ArgumentNullException.ThrowIfNull(entry);
         if (!entry.Accepted)
         {
-            return entry.Code is { Length: > 0 } code ? $"Refused [{code}]" : "Refused";
+            var rule = entry.AlpacaRefusal is { Length: > 0 } refusal ? $", {refusal}" : string.Empty;
+            return entry.Code is { Length: > 0 } code ? $"Refused [{code}{rule}]" : "Refused";
+        }
+
+        if (entry.GrantId is { Length: > 0 } && entry.Command is RoofHistoryCommand.Open or RoofHistoryCommand.Close)
+        {
+            return "Accepted (override grant)";
         }
 
         var conditions = entry.SafetyState is { Length: > 0 } state ? $"conditions {state.ToLowerInvariant()}" : null;
@@ -101,6 +116,13 @@ public static class RoofHistoryText
     {
         ArgumentNullException.ThrowIfNull(entry);
         var client = DescribeClient(entry.Client);
+        if (entry.Source is { Length: > 0 } && entry.AlpacaClientAddress is { Length: > 0 } alpacaClient)
+        {
+            // An Alpaca command: the client's ID and address as the Alpaca server reported them, then the server.
+            var id = entry.AlpacaClientId is { } clientId ? $"ClientID {clientId.ToString(CultureInfo.InvariantCulture)} @ " : string.Empty;
+            return $"{id}{alpacaClient} (reported), via {entry.RemoteAddress ?? "the Alpaca server"}";
+        }
+
         return (client, entry.RemoteAddress) switch
         {
             (null, null) => "unknown",

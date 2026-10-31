@@ -56,6 +56,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
 
     private readonly IRoofControllerServiceV4 _controller;
     private readonly IRoofSafetyService? _safety;
+    private readonly Alpaca.RoofAlpacaCommands? _alpaca;
     private readonly IRoofStatusSender _sender;
     private readonly RoofCredentialValidator _credentials;
     private readonly TimeProvider _time;
@@ -79,8 +80,9 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         RoofCredentialValidator credentials,
         TimeProvider time,
         ILogger<RoofStatusBroadcaster> logger,
-        IRoofSafetyService? safety = null)
-        : this(controller, sender, credentials, time, logger, RoofStatusHubContract.HeartbeatInterval, DefaultMaxConnections, DefaultMaxConnectionsPerKey, safety)
+        IRoofSafetyService? safety = null,
+        Alpaca.RoofAlpacaCommands? alpaca = null)
+        : this(controller, sender, credentials, time, logger, RoofStatusHubContract.HeartbeatInterval, DefaultMaxConnections, DefaultMaxConnectionsPerKey, safety, alpaca)
     {
     }
 
@@ -93,7 +95,8 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         TimeSpan heartbeatInterval,
         int maxConnections,
         int maxConnectionsPerKey = DefaultMaxConnectionsPerKey,
-        IRoofSafetyService? safety = null)
+        IRoofSafetyService? safety = null,
+        Alpaca.RoofAlpacaCommands? alpaca = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
@@ -107,6 +110,7 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         _maxConnections = maxConnections;
         _maxConnectionsPerKey = maxConnectionsPerKey;
         _safety = safety;
+        _alpaca = alpaca;
     }
 
     /// <summary>Identifies this process's message stream (<see cref="RoofStatusHubMessage.InstanceId"/>).</summary>
@@ -151,6 +155,11 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         }
 
         _controller.StatusChanged += OnStatusChanged;
+        if (_alpaca is not null)
+        {
+            _alpaca.Changed += OnAlpacaChanged;
+        }
+
         _heartbeat = Task.Run(() => HeartbeatAsync(_stopping.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
@@ -158,6 +167,11 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _controller.StatusChanged -= OnStatusChanged;
+        if (_alpaca is not null)
+        {
+            _alpaca.Changed -= OnAlpacaChanged;
+        }
+
         List<Subscriber> subscribers;
         lock (_gate)
         {
@@ -325,8 +339,28 @@ public sealed class RoofStatusBroadcaster : IHostedService, IDisposable
         }
     }
 
-    /// <summary>The snapshot with the safety conditions now; read outside the gate, as the controller's snapshot is.</summary>
-    private RoofStatusResponse WithSafety(RoofStatusResponse status) => _safety is null ? status : _safety.WithSafety(status);
+    /// <summary>
+    /// The snapshot with the safety conditions and the Alpaca command state now; read outside the gate, as the
+    /// controller's snapshot is.
+    /// </summary>
+    private RoofStatusResponse WithSafety(RoofStatusResponse status)
+    {
+        var decorated = _safety is null ? status : _safety.WithSafety(status);
+        return _alpaca is null ? decorated : _alpaca.WithAlpaca(decorated);
+    }
+
+    /// <summary>The Alpaca command state changed (a hold, a lease, a grant, an alert): the clients hear of it at once.</summary>
+    private void OnAlpacaChanged()
+    {
+        try
+        {
+            SendHeartbeat();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Publishing the Alpaca command state failed; the next heartbeat carries it");
+        }
+    }
 
     /// <param name="fromChange">
     /// True for a change event, which must be strictly newer than the last message: every change has its own version,

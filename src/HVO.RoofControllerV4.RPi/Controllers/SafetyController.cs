@@ -31,6 +31,7 @@ public sealed class SafetyController : ControllerBase
     /// </summary>
     /// <response code="200">The safety conditions.</response>
     [HttpGet(Name = nameof(GetSafety))]
+    [AlpacaCommanderAllowed]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
     [ProducesResponseType(typeof(RoofSafetyStatus), StatusCodes.Status200OK)]
     public ActionResult<RoofSafetyStatus> GetSafety() => Ok(_safety.GetCurrent());

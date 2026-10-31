@@ -260,6 +260,12 @@ internal static class RoofServiceMock
         mock.Setup(s => s.GetConfigurationState()).Returns(new RoofControllerConfigurationState(new RoofControllerOptionsV4(), 7));
         mock.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
         mock.Setup(s => s.Close()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Closing));
+        // The API starts motion through StartMotionAsync; it answers as the Open and Close set up (or verified) here.
+        mock.Setup(s => s.StartMotionAsync(It.IsAny<RoofMotionRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((RoofMotionRequest request, CancellationToken _) =>
+                Task.FromResult(request.Direction == RoofMotionDirection.Opening ? mock.Object.Open() : mock.Object.Close()));
+        mock.SetupGet(s => s.InstanceId).Returns("test-instance");
+        mock.SetupGet(s => s.CommandGeneration).Returns(1);
         mock.Setup(s => s.Stop(It.IsAny<RoofControllerStopReason>())).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped));
         mock.Setup(s => s.RenewLease()).Returns(() => Result<RoofStatusResponse>.Success(Snapshot()));
         mock.Setup(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Result<bool>.Success(true));

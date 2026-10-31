@@ -80,6 +80,9 @@ public sealed class RoofCommandHistory : BackgroundService
 
     // The safety interlock's decision for an Open, noted on the request (NoteSafety).
     private static readonly object SafetyItem = new();
+
+    // The HttpContext item carrying what an Alpaca command or grant adds to its entry (RoofHistoryAlpacaNote).
+    private static readonly object AlpacaItem = new();
     private const int MaximumClientLength = 100;
 
     private readonly object _gate = new();
@@ -471,6 +474,7 @@ public sealed class RoofCommandHistory : BackgroundService
         }
 
         var safety = context.Items.TryGetValue(SafetyItem, out var noted) ? noted as RoofHistorySafetyNote : null;
+        var alpaca = context.Items.TryGetValue(AlpacaItem, out var alpacaNoted) ? alpacaNoted as RoofHistoryAlpacaNote : null;
         var connection = Normalize(context.Connection.RemoteIpAddress);
         var forwarded = connection is not null && IsTrustedProxy(connection)
             ? SingleForwardedAddress(context.Request.Headers[RoofCommandHistoryContract.ForwardedForHeaderName])
@@ -495,8 +499,27 @@ public sealed class RoofCommandHistory : BackgroundService
             StopReason = status?.LastStopReason,
             IsFaultLatched = status?.IsFaultLatched,
             SafetyState = Printable(safety?.NotSafeState, 32),
-            SafetyOverride = safety is { Overridden: true } && refusal is null ? true : null
+            SafetyOverride = safety is { Overridden: true } && refusal is null ? true : null,
+            Source = alpaca?.Source,
+            AlpacaClientId = alpaca?.ClientId,
+            AlpacaClientTransactionId = alpaca?.ClientTransactionId,
+            AlpacaClientAddress = Printable(alpaca?.ClientAddress, 64),
+            AuthMethod = Printable(alpaca?.AuthMethod, 16),
+            AlpacaRefusal = refusal?.Extensions.TryGetValue(RoofAlpacaContract.RefusalExtension, out var rule) == true ? Printable(rule as string, 48) : null,
+            ReasonKeys = alpaca?.ReasonKeys is { Count: > 0 } keys ? keys.Select(key => Printable(key, 128)).OfType<string>().Take(32).ToArray() : null,
+            GrantId = Printable(alpaca?.GrantId, 64)
         };
+    }
+
+    /// <summary>
+    /// Notes on <paramref name="context"/> what <see cref="Describe"/> records for an Alpaca command, an override grant or
+    /// the Stop hold (#220): the source, the client's metadata as the Alpaca server reported it, the reasons and the grant.
+    /// </summary>
+    public static void NoteAlpaca(HttpContext context, RoofHistoryAlpacaNote note)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(note);
+        context.Items[AlpacaItem] = note;
     }
 
     /// <summary>
@@ -520,6 +543,10 @@ public sealed class RoofCommandHistory : BackgroundService
         "stop" => RoofHistoryCommand.Stop,
         "clear_fault" => RoofHistoryCommand.ClearFault,
         "lease" => RoofHistoryCommand.Lease,
+        "override_grant" => RoofHistoryCommand.OverrideGrant,
+        "override_revoke" => RoofHistoryCommand.OverrideRevoke,
+        "hold_clear" => RoofHistoryCommand.StopHoldClear,
+        "alert_ack" => RoofHistoryCommand.AlertAcknowledge,
         _ => null
     };
 
@@ -725,6 +752,23 @@ public sealed class RoofCommandHistory : BackgroundService
 
 /// <summary>What the safety interlock decided for an Open (<see cref="RoofCommandHistory.NoteSafety"/>).</summary>
 internal sealed record RoofHistorySafetyNote(string? NotSafeState, bool Overridden);
+
+/// <summary>What the command history records of an Alpaca command, an override grant or the Stop hold (#220).</summary>
+/// <param name="Source">"Alpaca" for an Alpaca client's command; null for a person's grant or hold action.</param>
+/// <param name="ClientId">The Alpaca client's ClientID, as the Alpaca server reported it.</param>
+/// <param name="ClientTransactionId">The Alpaca client's ClientTransactionID, as reported.</param>
+/// <param name="ClientAddress">The Alpaca client's address, as reported.</param>
+/// <param name="AuthMethod">How the client sent its key (header or basic), as reported.</param>
+/// <param name="ReasonKeys">The reasons' keys (lifted by a grant; not safe when a command was judged).</param>
+/// <param name="GrantId">The grant made or used.</param>
+public sealed record RoofHistoryAlpacaNote(
+    string? Source = null,
+    uint? ClientId = null,
+    uint? ClientTransactionId = null,
+    string? ClientAddress = null,
+    string? AuthMethod = null,
+    IReadOnlyList<string>? ReasonKeys = null,
+    string? GrantId = null);
 
 /// <summary>Registers the roof command history, the identifiers it records, and its background writer.</summary>
 public static class RoofCommandHistoryServiceCollectionExtensions

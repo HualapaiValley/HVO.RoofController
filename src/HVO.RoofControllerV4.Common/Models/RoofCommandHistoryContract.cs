@@ -43,7 +43,19 @@ public enum RoofHistoryCommand
     ClearFault = 3,
 
     /// <summary>An operator lease renewal. Only refused renewals are recorded: an accepted one only keeps a recorded motion going.</summary>
-    Lease = 4
+    Lease = 4,
+
+    /// <summary>A person's override grant for one Alpaca command (#220), with the reasons it lifts.</summary>
+    OverrideGrant = 5,
+
+    /// <summary>A person revoking an override grant.</summary>
+    OverrideRevoke = 6,
+
+    /// <summary>A person clearing the human Stop hold, so Alpaca commands may run again.</summary>
+    StopHoldClear = 7,
+
+    /// <summary>A person acknowledging an Alpaca alert.</summary>
+    AlertAcknowledge = 8
 }
 
 /// <summary>Who sent a recorded command.</summary>
@@ -142,6 +154,37 @@ public sealed record RoofCommandHistoryEntry
 
     /// <summary>When the last of <see cref="Count"/> commands came, when there was more than one.</summary>
     public DateTimeOffset? LastTimestampUtc { get; init; }
+
+    /// <summary>
+    /// Where the command came from when it was not this controller's own API: <c>Alpaca</c> for an Alpaca client's command
+    /// through the Alpaca server (#220); null otherwise. <see cref="RemoteAddress"/> is then the Alpaca server's address,
+    /// the controller's own peer.
+    /// </summary>
+    public string? Source { get; init; }
+
+    /// <summary>The Alpaca client's <c>ClientID</c>, as the Alpaca server reported it (client-reported, never trusted).</summary>
+    public uint? AlpacaClientId { get; init; }
+
+    /// <summary>The Alpaca client's <c>ClientTransactionID</c>, as the Alpaca server reported it.</summary>
+    public uint? AlpacaClientTransactionId { get; init; }
+
+    /// <summary>The Alpaca client's address, as the Alpaca server reported it.</summary>
+    public string? AlpacaClientAddress { get; init; }
+
+    /// <summary>How the Alpaca client sent its key (<c>header</c> or <c>basic</c>), as the Alpaca server reported it.</summary>
+    public string? AuthMethod { get; init; }
+
+    /// <summary>For an Alpaca refusal, the rule that refused it (<c>NotSafe</c>, <c>StopHold</c>, ...).</summary>
+    public string? AlpacaRefusal { get; init; }
+
+    /// <summary>
+    /// The safety reasons' keys: for a grant, the ones it lifts; for an Alpaca command, the reasons that were not safe when
+    /// it was judged (the grant it used covers them, or it was refused for them).
+    /// </summary>
+    public IReadOnlyList<string>? ReasonKeys { get; init; }
+
+    /// <summary>The override grant a grant entry made, or an Alpaca command used, linking the two.</summary>
+    public string? GrantId { get; init; }
 }
 
 /// <summary>A page of the command history, newest first.</summary>

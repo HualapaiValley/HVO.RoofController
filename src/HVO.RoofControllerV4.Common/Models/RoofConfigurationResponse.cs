@@ -54,6 +54,12 @@ public sealed record class RoofConfigurationResponse
     public double? DepartureReleaseTimeoutSeconds { get; init; }
 
     /// <summary>
+    /// The direction-change delay every start waits after the last stop, in seconds (0: none). Local-only: reported here,
+    /// changed only through the settings API with a local credential.
+    /// </summary>
+    public double DirectionChangeDelaySeconds { get; init; }
+
+    /// <summary>
     /// Local-only safeguard; reported for visibility. This endpoint never changes it; <c>POST Settings/roof</c> does, with a
     /// local credential.
     /// </summary>

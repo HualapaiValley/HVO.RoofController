@@ -89,7 +89,14 @@ public static class RoofSecurityServiceCollectionExtensions
                 .RequireAuthenticatedUser()
                 .RequireRole(RoofControllerApiContract.AdminRole).AddRequirements(new RoofScopeRequirement("configure")))
             .AddPolicy(RoofControllerSecurityDefaults.StopPolicy, policy => policy
-                .AddRequirements(new RoofStopRequirement()));
+                .AddRequirements(new RoofStopRequirement()))
+            // The Alpaca accounts' keys authenticate only from a trusted Alpaca server address (ApiKeyAuthenticationHandler).
+            .AddPolicy(RoofControllerSecurityDefaults.AlpacaCommanderPolicy, policy => policy
+                .RequireAuthenticatedUser()
+                .RequireRole(RoofAlpacaContract.CommanderRole))
+            .AddPolicy(RoofControllerSecurityDefaults.AlpacaServerPolicy, policy => policy
+                .RequireAuthenticatedUser()
+                .RequireRole(RoofAlpacaContract.ServerRole));
 
         return services;
     }

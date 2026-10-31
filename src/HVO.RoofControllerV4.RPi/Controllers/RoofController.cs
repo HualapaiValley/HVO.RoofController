@@ -41,6 +41,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         private readonly IRoofSafetyService _safety;
         private readonly RoofSafetyInterlock _safetyInterlock;
         private readonly RoofCommandHistory _history;
+        private readonly Alpaca.RoofAlpacaCommands? _alpaca;
+        private readonly IOptionsMonitor<Alpaca.RoofAlpacaCommandOptions>? _alpacaOptions;
 
         public RoofController(
             ILogger<RoofController> logger,
@@ -50,7 +52,9 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             RoofSettingsStore settings,
             IRoofSafetyService safety,
             RoofSafetyInterlock safetyInterlock,
-            RoofCommandHistory history)
+            RoofCommandHistory history,
+            Alpaca.RoofAlpacaCommands? alpaca = null,
+            IOptionsMonitor<Alpaca.RoofAlpacaCommandOptions>? alpacaOptions = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _roofController = roofController ?? throw new ArgumentNullException(nameof(roofController));
@@ -60,6 +64,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             _safety = safety ?? throw new ArgumentNullException(nameof(safety));
             _safetyInterlock = safetyInterlock ?? throw new ArgumentNullException(nameof(safetyInterlock));
             _history = history ?? throw new ArgumentNullException(nameof(history));
+            _alpaca = alpaca;
+            _alpacaOptions = alpacaOptions;
         }
 
         /// <summary>
@@ -68,12 +74,38 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         /// <response code="200">Coherent status snapshot.</response>
         [HttpGet("Status", Name = nameof(GetRoofStatus))]
         [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.ViewerPolicy)]
+        [AlpacaCommanderAllowed]
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         public ActionResult<RoofStatusResponse> GetRoofStatus()
         {
             // Re-read the inputs so the snapshot reflects current hardware when input events are not flowing.
             _roofController.RefreshStatus(forceHardwareRead: true);
-            return Ok(_safety.WithSafety(_roofController.GetCurrentStatusSnapshot()));
+            return Ok(Decorate(_roofController.GetCurrentStatusSnapshot()));
+        }
+
+        /// <summary>The snapshot with the safety conditions and the Alpaca command state now.</summary>
+        private RoofStatusResponse Decorate(RoofStatusResponse status)
+        {
+            var withSafety = _safety.WithSafety(status);
+            return _alpaca is null ? withSafety : _alpaca.WithAlpaca(withSafety);
+        }
+
+        /// <summary>
+        /// Whose an Open or Close is: a person's (a session, a PIN, a person's own key, or a key that names the person it
+        /// acts for), or nobody's in particular (any other key). Either counts as a person's for the Alpaca server, which
+        /// never reverses it.
+        /// </summary>
+        private RoofMotionOwner Owner()
+        {
+            var name = User.Identity?.Name;
+            if (RoofPrincipalFactory.IsPersonSession(User) || User.HasClaim(RoofPrincipalFactory.OwnedKeyClaimType, "true"))
+            {
+                return new RoofMotionOwner(RoofMotionOwnerKind.Person, name);
+            }
+
+            return User.FindFirst(RoofPrincipalFactory.OnBehalfOfClaimType)?.Value is { Length: > 0 } person
+                ? new RoofMotionOwner(RoofMotionOwnerKind.Person, person)
+                : new RoofMotionOwner(RoofMotionOwnerKind.Unleased, name);
         }
 
         /// <summary>
@@ -109,7 +141,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         public async Task<ActionResult<RoofStatusResponse>> DoRoofOpen([FromQuery] bool overrideSafety = false)
         {
             var safety = await _safetyInterlock.CheckOpenAsync(User, HttpContext, overrideSafety).ConfigureAwait(false);
-            return RunCommand("open", () =>
+            return await RunCommandAsync("open", async () =>
             {
                 Result<RoofControllerStatus> result;
                 if (safety.Refusal is { } refusal)
@@ -119,7 +151,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 else
                 {
                     // An override is audited only once the controller's own checks have accepted Open.
-                    result = _roofController.Open();
+                    result = await _roofController.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening) { Owner = Owner() }).ConfigureAwait(false);
                     _safetyInterlock.ReportOutcome(safety, result.IsSuccessful ? null : result.Error);
                 }
 
@@ -127,7 +159,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 // (#206); not the Unknown of an Open accepted while nothing watches the conditions (#216).
                 RoofCommandHistory.NoteSafety(HttpContext, safety.HistorySafetyState(result.IsSuccessful), safety.Overridden);
                 return result;
-            });
+            }).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -141,8 +173,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
-        public ActionResult<RoofStatusResponse> DoRoofClose()
-            => RunCommand("close", () => _roofController.Close());
+        public Task<ActionResult<RoofStatusResponse>> DoRoofClose()
+            => RunCommandAsync("close", () => _roofController.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing) { Owner = Owner() }));
 
         /// <summary>
         /// Stops the roof (any authenticated key; anonymous only when RoofControllerSecurity:AllowAnonymousStop is true).
@@ -154,7 +186,12 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
         public ActionResult<RoofStatusResponse> DoRoofStop()
-            => RunCommand("stop", () => _roofController.Stop());
+        {
+            // Every Stop sets the human Stop hold (Alpaca commands wait for a person to clear it) and drops every override
+            // grant, except the Alpaca server's own AbortSlew (#220, §14.1).
+            _alpaca?.NoteStop(User, _alpacaOptions?.CurrentValue.IsTrustedPeer(HttpContext.Connection.RemoteIpAddress) == true);
+            return RunCommand("stop", () => _roofController.Stop());
+        }
 
         /// <summary>
         /// Renews the operator lease while the roof is moving (Operator). Never starts motion.
@@ -320,6 +357,17 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             return Ok(CreateConfigurationResponse(_roofController.GetConfigurationSnapshot(), result.Version));
         }
 
+        private async Task<ActionResult<RoofStatusResponse>> RunCommandAsync<T>(string command, Func<Task<Result<T>>> execute)
+        {
+            LogCommand(command);
+            var startTimestamp = Stopwatch.GetTimestamp();
+            using var activity = RoofControllerTelemetry.StartCommand(command);
+            var result = await execute().ConfigureAwait(false);
+            RoofControllerTelemetry.CompleteCommand(activity, command, result.IsSuccessful, startTimestamp);
+
+            return Answer(command, result.IsSuccessful, result.Error);
+        }
+
         private ActionResult<RoofStatusResponse> RunCommand<T>(string command, Func<Result<T>> execute)
         {
             LogCommand(command);
@@ -336,7 +384,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         {
             if (succeeded)
             {
-                var status = _safety.WithSafety(_roofController.GetCurrentStatusSnapshot());
+                var status = Decorate(_roofController.GetCurrentStatusSnapshot());
                 Record(command, status, refusal: null);
                 return Ok(status);
             }
@@ -408,7 +456,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 details.Extensions[RoofControllerApiContract.ProblemCodeExtension] = code.ToString();
                 if (snapshot is not null)
                 {
-                    details.Extensions[RoofControllerApiContract.ProblemStatusExtension] = _safety.WithSafety(snapshot);
+                    details.Extensions[RoofControllerApiContract.ProblemStatusExtension] = Decorate(snapshot);
                 }
             }
 
@@ -478,6 +526,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers
                 AtSpeedConfirmationTimeoutSeconds = options.AtSpeedConfirmationTimeout?.TotalSeconds,
                 DriveStopConfirmationTimeoutSeconds = options.DriveStopConfirmationTimeout?.TotalSeconds,
                 DepartureReleaseTimeoutSeconds = options.DepartureReleaseTimeout?.TotalSeconds,
+                DirectionChangeDelaySeconds = options.DirectionChangeDelay.TotalSeconds,
                 AllowIgnoringLimitSwitchesOnPhysicalHardware = options.AllowIgnoringLimitSwitchesOnPhysicalHardware,
                 RestartOnFailureWaitTimeSeconds = host.RestartOnFailureWaitTime
             };

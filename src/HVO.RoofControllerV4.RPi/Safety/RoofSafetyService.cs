@@ -36,7 +36,7 @@ public interface IRoofSafetyService
 /// not ended is not read again until it does. Nothing here reaches the roof: the interlock
 /// (<see cref="RoofSafetyInterlock"/>) reads <see cref="GetCurrent"/> when Open is requested.</para>
 /// </remarks>
-public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
+public sealed partial class RoofSafetyService : BackgroundService, IRoofSafetyService
 {
     /// <summary>Longest detail kept from a reading, so a source cannot fill the status snapshot.</summary>
     internal const int MaxDetailLength = 200;
@@ -161,6 +161,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _running = true;
         var options = Options();
         if (_sources.Length == 0 && options.InterlockMode != RoofSafetyInterlockMode.Off)
         {
@@ -276,7 +277,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             if (stillReading)
             {
                 // The last read has not ended, though its timeout cancelled it: another would only pile up behind it.
-                RecordFailure_NoLock(source, "the last read has not finished", shown: true, out firstFailure);
+                RecordFailure_NoLock(source, Issue_NoLock(source), "the last read has not finished", shown: true, out firstFailure);
             }
         }
 
@@ -293,15 +294,17 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         var timeoutSource = new CancellationTokenSource(timeout, _time);
         var linked = CancellationTokenSource.CreateLinkedTokenSource(stopping, timeoutSource.Token);
         var read = Task.Run(() => source.Read(linked.Token), CancellationToken.None);
+        long sequence;
         lock (_gate)
         {
             source.Pending = read;
+            sequence = Issue_NoLock(source);
         }
 
         try
         {
             var (safe, said, observedUtc, detail) = await read.WaitAsync(linked.Token).ConfigureAwait(false);
-            RecordReading(source, safe, said, observedUtc, detail);
+            RecordReading(source, sequence, safe, said, observedUtc, detail);
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {
@@ -318,7 +321,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             bool first;
             lock (_gate)
             {
-                RecordFailure_NoLock(source, failure, shown: timedOut || ex is RoofSafetySourceException, out first);
+                RecordFailure_NoLock(source, sequence, failure, shown: timedOut || ex is RoofSafetySourceException, out first);
             }
 
             if (first)
@@ -349,7 +352,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         }
     }
 
-    private void RecordReading(Source source, bool safe, string said, DateTimeOffset? observedUtc, string? detail)
+    private void RecordReading(Source source, long sequence, bool safe, string said, DateTimeOffset? observedUtc, string? detail)
     {
         var now = _time.GetUtcNow();
         var timestamp = _time.GetTimestamp();
@@ -358,6 +361,18 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         int failures;
         lock (_gate)
         {
+            // Background polls and re-reads share the source's one reading slot, ordered by when each read was issued: a
+            // result older than the slot's newest is discarded, so a late "clear" never overwrites a newer "not clear".
+            if (sequence <= source.CompletedSequence)
+            {
+                _logger.LogDebug("Safety source {Kind} '{Source}': a reading issued before the newest one ended later and was discarded.", source.Kind, source.Name);
+                return;
+            }
+
+            source.CompletedSequence = sequence;
+            source.LastAttemptFailed = false;
+            source.ReadingIssuedTimestamp = source.IssuedTimestamps.TryGetValue(sequence, out var issued) ? issued : timestamp;
+            source.IssuedTimestamps.Remove(sequence);
             failures = source.ConsecutiveFailures;
             source.LastSafe = safe;
             source.LastSaid = said;
@@ -379,8 +394,18 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
     /// <summary><paramref name="text"/> cut to <see cref="MaxDetailLength"/>, so a source cannot fill the status snapshot.</summary>
     private static string Bounded(string text) => text.Length <= MaxDetailLength ? text : text[..MaxDetailLength];
 
-    private static void RecordFailure_NoLock(Source source, string failure, bool shown, out bool first)
+    private static void RecordFailure_NoLock(Source source, long sequence, string failure, bool shown, out bool first)
     {
+        source.IssuedTimestamps.Remove(sequence);
+        if (sequence <= source.CompletedSequence)
+        {
+            // A failure older than the slot's newest result says nothing about the source now.
+            first = false;
+            return;
+        }
+
+        source.CompletedSequence = sequence;
+        source.LastAttemptFailed = true;
         source.ConsecutiveFailures++;
         source.Failure = failure;
         source.ShownFailure = shown ? failure : null;
@@ -534,6 +559,24 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         public string? ShownFailure { get; set; }
 
         public int ConsecutiveFailures { get; set; }
+
+        /// <summary>The request sequence of the newest read that has ended (a reading or a failure).</summary>
+        public long CompletedSequence { get; set; }
+
+        /// <summary>True when the newest read that ended failed.</summary>
+        public bool LastAttemptFailed { get; set; }
+
+        /// <summary>When (monotonic) the read that gave the current reading was issued.</summary>
+        public long? ReadingIssuedTimestamp { get; set; }
+
+        /// <summary>When (monotonic) the newest read, background or re-read, was issued; null before the first.</summary>
+        public long? LatestIssuedTimestamp { get; set; }
+
+        /// <summary>When each read still in flight was issued, by its request sequence.</summary>
+        public Dictionary<long, long> IssuedTimestamps { get; } = [];
+
+        /// <summary>The last-moment re-reads of a blocking telescope (#220).</summary>
+        public RereadState Rereads { get; } = new();
     }
 }
 
