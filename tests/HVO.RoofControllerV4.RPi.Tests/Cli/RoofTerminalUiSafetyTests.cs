@@ -75,6 +75,82 @@ public sealed class RoofTerminalUiSafetyTests
     }
 
     [TestMethod]
+    public void F9_WithdrawsTheQuestion_AndItsOpenAnywayThenSendsNothing()
+    {
+        // Review F1: Stop wins over a question it crossed, even one still on screen.
+        var roof = OpeningRoof();
+        using var host = RoofClientApiTests.CreateHost(roof, settings: Warn);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.WaitIdle("the question", () => tui.Ui.Panel is not null);
+        var question = tui.Ui.Panel!.Prompt;
+
+        tui.Press(Terminal.Gui.Input.Key.F9);
+        tui.WaitIdle("Stop", () => tui.Ui.StopResult != RoofStopText.Sending);
+
+        tui.Ui.Panel.Should().BeNull("Stop withdraws the question");
+        question.Actions.Single().Run([]).Should().BeNull();
+        Settle(tui);
+        roof.Verify(service => service.Open(), Times.Never(), "an Open anyway from before the Stop sends nothing");
+    }
+
+    [TestMethod]
+    public void ARefusalThatArrivesAfterF9_AsksNothing()
+    {
+        // Review F3: the refusal belongs to an Open that Stop withdrew.
+        var roof = OpeningRoof();
+        using var host = RoofClientApiTests.CreateHost(roof, settings: Warn);
+        using var rig = new CliRig(host);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.WrapHandler = inner => new HoldingHandler(inner, held, release);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        // The status says nothing of the conditions (an older controller's): Open is sent, and refused.
+        tui.Ui.Apply(tui.Ui.Status! with { Safety = null, StatusVersion = tui.Ui.Status.StatusVersion + 100 });
+
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.WaitFor("the Open to be on its way", () => held.Task.IsCompleted);
+        tui.Press(Terminal.Gui.Input.Key.F9);
+        tui.WaitFor("Stop", () => tui.Ui.StopResult != RoofStopText.Sending);
+        release.SetResult();
+        tui.WaitIdle("the refusal", () => tui.Ui.Message.StartsWith("The conditions are not confirmed safe.", StringComparison.Ordinal));
+
+        tui.Ui.Panel.Should().BeNull("Stop withdrew the Open this refusal answers");
+        roof.Verify(service => service.Open(), Times.Never());
+    }
+
+    [TestMethod]
+    public void ARefusalThatReportsAFault_AsksNothing()
+    {
+        // Review F4: the refusal's status says Open is blocked for another reason.
+        var faulted = false;
+        var roof = OpeningRoof();
+        roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => Volatile.Read(ref faulted)
+            ? RoofServiceMock.Snapshot(faultLatched: true) with { StatusVersion = 500 }
+            : RoofServiceMock.Snapshot());
+        using var host = RoofClientApiTests.CreateHost(roof, settings: Warn);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+        using var tui = Started(rig);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        tui.Ui.Apply(tui.Ui.Status! with { Safety = null, StatusVersion = tui.Ui.Status.StatusVersion + 100 });
+        Volatile.Write(ref faulted, true);
+
+        page.OpenButton.InvokeCommand(Command.Accept);
+        tui.WaitIdle("the refusal", () => tui.Ui.Status?.IsFaultLatched == true && tui.Ui.Message.Length > 0 && !tui.Ui.Message.StartsWith("Sending", StringComparison.Ordinal));
+        Settle(tui);
+
+        tui.Ui.Panel.Should().BeNull("Open is blocked by the fault, whatever the conditions");
+        page.BlockReason(RoofMotionDirection.Opening).Should().Be(RoofCommandRules.FaultLatched);
+        roof.Verify(service => service.Open(), Times.Never());
+    }
+
+    [TestMethod]
     public void ARefusalForWantOfTheOverride_AsksThen()
     {
         // The status the interface shows says nothing of the conditions (an older controller's), so it asks only once the
@@ -135,6 +211,32 @@ public sealed class RoofTerminalUiSafetyTests
             return Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped);
         });
         return roof;
+    }
+
+    /// <summary>Runs the loop for long enough that a request sent now would have reached the controller.</summary>
+    private static void Settle(TuiDriver tui)
+    {
+        var until = DateTime.UtcNow + TimeSpan.FromMilliseconds(300);
+        while (DateTime.UtcNow < until)
+        {
+            tui.Pump();
+            Thread.Sleep(10);
+        }
+    }
+
+    /// <summary>Holds each Open on its way to the controller until the test releases it.</summary>
+    private sealed class HoldingHandler(HttpMessageHandler inner, TaskCompletionSource held, TaskCompletionSource release) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/Open", StringComparison.Ordinal))
+            {
+                held.TrySetResult();
+                await release.Task.WaitAsync(cancellationToken);
+            }
+
+            return await base.SendAsync(request, cancellationToken);
+        }
     }
 
     private static TuiDriver Started(CliRig rig)

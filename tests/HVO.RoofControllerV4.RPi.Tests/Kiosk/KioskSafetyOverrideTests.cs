@@ -3,7 +3,10 @@ using Avalonia.VisualTree;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.Safety;
 using HVO.RoofControllerV4.Screens;
+using HVO.RoofControllerV4.Simulation.Safety;
+using Microsoft.Extensions.DependencyInjection;
 using static HVO.RoofControllerV4.RPi.Tests.Kiosk.KioskAvalonia;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
@@ -65,6 +68,59 @@ public sealed class KioskSafetyOverrideTests
         await harness.Console.LockAsync();
         harness.Console.View.SafetyQuestion.Should().BeNull("a question asked of one person is never answered by the next");
 
+        harness.Calls("Open").Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task ARefusalThatArrivesAfterAStop_AsksNothing()
+    {
+        // Review F3: the refusal belongs to an Open that Stop withdrew.
+        var mount = new SimulatedTelescopeParkSource("Main");
+        await using var harness = await KioskHarness.CreateAsync(settings: Warn, services: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
+        await UnparkUnseenAsync(harness, mount);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.DelayAnswer = async (request, _) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/Open", StringComparison.Ordinal))
+            {
+                held.TrySetResult();
+                await release.Task;
+            }
+        };
+
+        var open = harness.Console.OpenAsync();
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await harness.Console.StopAsync();
+        release.SetResult();
+        await open;
+
+        harness.Console.View.SafetyQuestion.Should().BeNull("Stop withdrew the Open this refusal answers");
+        harness.Console.View.Notices.First().Level.Should().Be(KioskNoticeLevel.Danger);
+        harness.Calls("Open").Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task ARefusalThatReportsAFault_SaysSo_AndAsksNothing()
+    {
+        // Review F4: the refusal's status says Open is blocked for another reason.
+        var mount = new SimulatedTelescopeParkSource("Main");
+        await using var harness = await KioskHarness.CreateAsync(settings: Warn, services: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
+        await UnparkUnseenAsync(harness, mount);
+        harness.Report(KioskHarness.Snapshot(faultLatched: true));
+
+        await harness.Console.OpenAsync();
+
+        var view = harness.Console.View;
+        view.SafetyQuestion.Should().BeNull("Open is blocked by the fault, whatever the conditions");
+        view.OpenBlock.Should().Be(RoofCommandRules.FaultLatched);
+        view.Notices.First().Level.Should().Be(KioskNoticeLevel.Danger);
         harness.Calls("Open").Should().Be(0);
     }
 
@@ -195,5 +251,14 @@ public sealed class KioskSafetyOverrideTests
             screen.Visible("safety-reasons").Should().BeFalse();
             screen.Visible("safety-open").Should().BeFalse();
         });
+    }
+
+    // The mount is unparked after the kiosk's last status: the controller's next read finds it, the kiosk does not know.
+    private static async Task UnparkUnseenAsync(KioskHarness harness, SimulatedTelescopeParkSource mount)
+    {
+        mount.IsParked = false;
+        harness.ServerClock.Advance(TimeSpan.FromSeconds(10));
+        using var viewer = HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(HVO.RoofControllerV4.RPi.Tests.Controllers.TestApiKeys.Viewer));
+        await HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.WaitUntilAsync(() => viewer.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the controller to read the mount");
     }
 }

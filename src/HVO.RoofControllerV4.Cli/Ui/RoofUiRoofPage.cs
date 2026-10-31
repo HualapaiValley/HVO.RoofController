@@ -25,6 +25,10 @@ internal sealed class RoofUiRoofPage : RoofUiPage
     private bool _commandInFlight;
     private string[]? _history;
 
+    // The safety override question on screen, and the count of Stops it was asked under: a Stop since withdraws it.
+    private RoofUiPrompt? _safetyPrompt;
+    private int _safetyStops;
+
     public RoofUiRoofPage(RoofTerminalUi ui)
         : base(ui, "Roof")
     {
@@ -47,6 +51,7 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         ClearFaultButton = AddButton("Clear fault", CloseButton, ClearFault);
         var refresh = AddButton("Refresh", ClearFaultButton, Refresh);
         HistoryButton = AddButton("History", refresh, ToggleHistory);
+        Ui.StopSent += WithdrawSafetyQuestion;
     }
 
     public Button OpenButton { get; }
@@ -144,9 +149,10 @@ internal sealed class RoofUiRoofPage : RoofUiPage
     // The role is known once the controller has said who the credential is.
     private RoofCommandState CommandState => new(Ui.Status, Ui.IsStale, Ui.Caller is null ? null : IsOperator, _commandInFlight, Ui.Caller is null ? null : IsAdmin);
 
-    private void Move(RoofMotionDirection direction) => Move(direction, overrideSafety: false);
+    private void Move(RoofMotionDirection direction) => Move(direction, overrideSafety: false, Ui.StopsSent);
 
-    private void Move(RoofMotionDirection direction, bool overrideSafety)
+    // stopsSent: the count of Stops the command belongs to; for a confirmed override, the one its question was asked under.
+    private void Move(RoofMotionDirection direction, bool overrideSafety, int stopsSent)
     {
         if (BlockReason(direction) is { } reason)
         {
@@ -163,7 +169,6 @@ internal sealed class RoofUiRoofPage : RoofUiPage
         }
 
         var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
-        var stopsSent = Ui.StopsSent;
         Command($"Sending {verb}…", async (client, cancellationToken) =>
         {
             RoofStatusResponse status;
@@ -175,12 +180,21 @@ internal sealed class RoofUiRoofPage : RoofUiPage
             }
             catch (RoofApiException refusal) when (!overrideSafety && RoofCommandRules.IsSafetyOverrideRequest(refusal))
             {
-                // The conditions were not safe when the controller checked, though this interface did not know: it asks now.
+                // The conditions were not safe when the controller checked, though this interface did not know: it asks now,
+                // unless Stop withdrew this Open since, or the newest status blocks Open for another reason, which the
+                // refusal and the Open button then say.
                 return () =>
                 {
                     if (refusal.RoofStatus is { } refused)
                     {
                         Ui.Apply(refused);
+                    }
+
+                    var detail = refusal.Detail is { Length: > 0 } text ? $" {text}" : string.Empty;
+                    if (Ui.StopsSent != stopsSent || OpenBlockedForAnotherReason() is not null)
+                    {
+                        Ui.Say(RoofText.DescribeFailure(refusal) + detail, error: true);
+                        return;
                     }
 
                     Ui.Say(RoofText.DescribeFailure(refusal), error: true);
@@ -228,17 +242,47 @@ internal sealed class RoofUiRoofPage : RoofUiPage
     internal void AskSafetyOverride(RoofSafetyStatus? safety)
     {
         var question = new RoofSafetyOverrideQuestion(safety);
-        Ui.Ask(new RoofUiPrompt(
+        RoofUiPrompt? prompt = null;
+        prompt = new RoofUiPrompt(
             question.Title,
             string.Join('\n', question.Lines),
             [],
             [new RoofUiAction(RoofSafetyText.OverrideConfirm, _ =>
             {
-                Move(RoofMotionDirection.Opening, overrideSafety: true);
+                // Only the question on screen, under the Stops it was asked under: one withdrawn by Stop sends nothing.
+                if (!ReferenceEquals(_safetyPrompt, prompt) || Ui.StopsSent != _safetyStops)
+                {
+                    return null;
+                }
+
+                _safetyPrompt = null;
+                Move(RoofMotionDirection.Opening, overrideSafety: true, _safetyStops);
                 return null;
             })],
-            CloseLabel: RoofSafetyText.OverrideCancel));
+            CloseLabel: RoofSafetyText.OverrideCancel);
+        _safetyPrompt = prompt;
+        _safetyStops = Ui.StopsSent;
+        Ui.Ask(prompt);
     }
+
+    // Stop withdraws the safety override question: it is closed, and its Open anyway sends nothing.
+    private void WithdrawSafetyQuestion()
+    {
+        if (_safetyPrompt is not { } prompt)
+        {
+            return;
+        }
+
+        _safetyPrompt = null;
+        if (ReferenceEquals(Ui.Panel?.Prompt, prompt))
+        {
+            Ui.ClosePanel();
+        }
+    }
+
+    // Why Open is not offered now, leaving out the command this interface has on its way (whose answer is being handled).
+    private string? OpenBlockedForAnotherReason()
+        => Ui.Connection is null ? NotConfigured : RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Opening, CommandState with { CommandInFlight = false });
 
     private void ClearFault()
     {

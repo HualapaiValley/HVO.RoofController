@@ -126,13 +126,7 @@ public sealed class WebSafetyOverrideTests
         await harness.StartLiveAsync();
         await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
 
-        // The mount is unparked after the page's last status: the controller's next read finds it, the page does not know.
-        mount.IsParked = false;
-        harness.ServerClock.Advance(TimeSpan.FromSeconds(10));
-        using (var viewer = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(TestApiKeys.Viewer)))
-        {
-            await ClientTestSupport.WaitUntilAsync(() => viewer.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the controller to read the mount");
-        }
+        await UnparkUnseenAsync(harness, mount);
 
         await harness.Console.OpenAsync();
 
@@ -158,6 +152,78 @@ public sealed class WebSafetyOverrideTests
         harness.Console.View.OpenBlock.Should().Be(RoofCommandRules.SafetyOverrideNeedsAdmin);
         harness.Console.View.SafetyQuestion.Should().BeNull();
         harness.Console.View.Notices.First().Text.Should().Be($"Not sent: {RoofCommandRules.SafetyOverrideNeedsAdmin}.");
+    }
+
+    [TestMethod]
+    public async Task AConfirmationThatCrossesAStop_SendsNothing_EvenBeforeThePageHearsOfTheStop()
+    {
+        // Review F2: the question, and the command it reserves, belong to the Stops counted when it was asked.
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn);
+        harness.OpensTheRoof();
+        Task? confirmed = null;
+        // Subscribed before the page: it runs on each Stop before the page withdraws the question.
+        harness.Session!.StopSent += (_, _) => confirmed ??= harness.Console.OpenWithSafetyOverrideAsync();
+        await harness.StartLiveAsync();
+        await harness.Console.OpenAsync();
+        harness.Console.View.SafetyQuestion.Should().NotBeNull();
+
+        await harness.Session.StopAsync(CancellationToken.None);
+        await confirmed!;
+
+        harness.Calls("Open").Should().Be(0, "Stop wins over a confirmation it crossed");
+        harness.Console.View.SafetyQuestion.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task ARefusalThatArrivesAfterAStop_AsksNothing()
+    {
+        // Review F3: the refusal belongs to an Open that Stop withdrew.
+        var mount = new SimulatedTelescopeParkSource("Main");
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        await harness.StartLiveAsync();
+        await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
+        await UnparkUnseenAsync(harness, mount);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.HoldAnswer = async request =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.EndsWith("/Open", StringComparison.Ordinal))
+            {
+                held.TrySetResult();
+                await release.Task;
+            }
+        };
+
+        var open = harness.Console.OpenAsync();
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await harness.Session!.StopAsync(CancellationToken.None);
+        release.SetResult();
+        await open;
+
+        harness.Console.View.SafetyQuestion.Should().BeNull("Stop withdrew the Open this refusal answers");
+        harness.Console.View.Notices.First().Level.Should().Be(WebRoofNoticeLevel.Danger);
+        harness.Calls("Open").Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task ARefusalThatReportsAFault_SaysSo_AndAsksNothing()
+    {
+        // Review F4: the refusal's status says Open is blocked for another reason.
+        var mount = new SimulatedTelescopeParkSource("Main");
+        using var harness = await WebRoofHarness.CreateAsync(settings: Warn, configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount));
+        await harness.StartLiveAsync();
+        await harness.WaitForAsync(view => view.Status?.Safety?.State == RoofSafetyState.Safe, "the parked mount");
+        await UnparkUnseenAsync(harness, mount);
+        harness.Report(RoofServiceMock.Snapshot(faultLatched: true));
+
+        await harness.Console.OpenAsync();
+
+        var view = harness.Console.View;
+        view.SafetyQuestion.Should().BeNull("Open is blocked by the fault, whatever the conditions");
+        view.Status!.IsFaultLatched.Should().BeTrue();
+        view.OpenBlock.Should().Be(RoofCommandRules.FaultLatched);
+        view.Notices.First().Level.Should().Be(WebRoofNoticeLevel.Danger);
+        harness.Calls("Open").Should().Be(0);
     }
 
     // ---- The roof page ---------------------------------------------------------------------------------------------
@@ -220,6 +286,15 @@ public sealed class WebSafetyOverrideTests
                 "Safe: Weather monitor 'Cloud sensor' reports safe weather (clear)");
             cut.FindAll("[data-testid=status-rows] .rc2-row").Select(row => Text(row.QuerySelector("dt")!)).Should().Contain(RoofStatusText.SafetySourceLabel);
         });
+    }
+
+    // The mount is unparked after the page's last status: the controller's next read finds it, the page does not know.
+    private static async Task UnparkUnseenAsync(WebRoofHarness harness, SimulatedTelescopeParkSource mount)
+    {
+        mount.IsParked = false;
+        harness.ServerClock.Advance(TimeSpan.FromSeconds(10));
+        using var viewer = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(TestApiKeys.Viewer));
+        await ClientTestSupport.WaitUntilAsync(() => viewer.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the controller to read the mount");
     }
 
     private static async Task<BunitContext> RenderContextAsync(WebRoofHarness harness)

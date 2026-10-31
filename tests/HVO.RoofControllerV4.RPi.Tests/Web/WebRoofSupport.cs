@@ -74,6 +74,12 @@ internal sealed class WebRoofHarness : IDisposable
     /// </summary>
     public Func<HttpRequestMessage, bool>? CutAnswer { get; set; }
 
+    /// <summary>
+    /// Awaited after the controller handled each request and before its answer reaches the page: with a task the test
+    /// completes, an answer held on its way.
+    /// </summary>
+    public Func<HttpRequestMessage, Task>? HoldAnswer { get; set; }
+
     public ILoggerFactory LoggerFactory { get; }
 
     public WebSessionStore Store { get; }
@@ -182,6 +188,11 @@ internal sealed class WebRoofHarness : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var response = await base.SendAsync(request, cancellationToken);
+            if (harness.HoldAnswer is { } hold)
+            {
+                await hold(request);
+            }
+
             if (harness.CutAnswer?.Invoke(request) == true)
             {
                 response.Dispose();

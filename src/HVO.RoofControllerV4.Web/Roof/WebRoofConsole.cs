@@ -146,7 +146,7 @@ public sealed class WebRoofConsole : IDisposable
     private bool _renewing;
     private DateTimeOffset? _leaseDue;
     private bool _leaseDroppedOnDisconnect;
-    private RoofSafetyOverrideQuestion? _safetyQuestion;
+    private PendingQuestion? _safetyQuestion;
     private bool _disposed;
     private WebRoofView _view = WebRoofView.NotStarted;
 
@@ -194,7 +194,7 @@ public sealed class WebRoofConsole : IDisposable
                 && RoofCommandRules.NeedsSafetyOverride(_status);
             if (ask)
             {
-                _safetyQuestion = new RoofSafetyOverrideQuestion(_status!.Safety);
+                _safetyQuestion = new PendingQuestion(new RoofSafetyOverrideQuestion(_status!.Safety), _session!, _session!.StopsSent);
             }
         }
 
@@ -213,18 +213,38 @@ public sealed class WebRoofConsole : IDisposable
     /// </summary>
     public Task OpenWithSafetyOverrideAsync()
     {
+        Command? command = null;
         lock (_gate)
         {
-            if (_safetyQuestion is null)
+            if (_disposed || _safetyQuestion is not { } asked)
             {
                 return Task.CompletedTask;
             }
 
+            // The answer is consumed and its Open reserved at once, for the session and the Stops the question was asked
+            // under: a Stop counted since (even one the page has not heard of yet), or another session, withdraws it.
             _safetyQuestion = null;
+            if (!ReferenceEquals(_session, asked.Session) || asked.Session.StopsSent != asked.StopsSent)
+            {
+                AddNoticeLocked(StopWithdrewQuestion, WebRoofNoticeLevel.Info);
+            }
+            else if ((NotOfferedLocked() ?? RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Opening, CommandStateLocked())) is { } reason)
+            {
+                AddNoticeLocked($"Not sent: {reason}.", WebRoofNoticeLevel.Warning);
+            }
+            else
+            {
+                _busy = "Sending Open…";
+                command = new Command(asked.Session, asked.StopsSent, _closing.Token);
+            }
         }
 
-        return MoveAsync(RoofMotionDirection.Opening, overrideSafety: true);
+        Publish();
+        return command is null ? Task.CompletedTask : SendMoveAsync(RoofMotionDirection.Opening, overrideSafety: true, command);
     }
+
+    /// <summary>Said when an answer to the safety override question came after a Stop that withdrew it.</summary>
+    public const string StopWithdrewQuestion = "Open not sent: Stop withdrew the safety override question.";
 
     /// <summary>The person answered the safety override question with Cancel: nothing is sent.</summary>
     public void CancelSafetyOverride()
@@ -425,6 +445,13 @@ public sealed class WebRoofConsole : IDisposable
             return;
         }
 
+        await SendMoveAsync(direction, overrideSafety, command).ConfigureAwait(false);
+    }
+
+    // Sends a motion command already reserved (Begin, or a confirmed safety question), and ends it.
+    private async Task SendMoveAsync(RoofMotionDirection direction, bool overrideSafety, Command command)
+    {
+        var verb = direction == RoofMotionDirection.Opening ? "Open" : "Close";
         var session = command.Session;
         try
         {
@@ -437,8 +464,10 @@ public sealed class WebRoofConsole : IDisposable
             }
             catch (RoofApiException refusal) when (!overrideSafety && RoofCommandRules.IsSafetyOverrideRequest(refusal) && !command.Closing.IsCancellationRequested)
             {
-                // The conditions were not Safe when the controller checked, though this page did not know: it asks now.
-                _logger.LogInformation("Open from {Name} needs a safety override; asking", session.Name);
+                // The conditions were not Safe when the controller checked, though this page did not know: it asks now,
+                // unless Stop withdrew this Open since, or the newest status blocks Open for another reason, which the
+                // refusal's notice and the Open button then say.
+                bool asked;
                 lock (_gate)
                 {
                     if (refusal.RoofStatus is { } refused)
@@ -446,8 +475,23 @@ public sealed class WebRoofConsole : IDisposable
                         ApplyLocked(refused);
                     }
 
-                    _safetyQuestion = new RoofSafetyOverrideQuestion(refusal.RoofStatus?.Safety ?? _status?.Safety);
-                    AddNoticeLocked(RoofText.DescribeFailure(refusal), WebRoofNoticeLevel.Warning);
+                    asked = !_disposed && ReferenceEquals(_session, session) && session.StopsSent == command.StopsSent
+                        && NotOfferedLocked() is null
+                        && RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Opening, CommandStateLocked() with { CommandInFlight = false }) is null;
+                    if (asked)
+                    {
+                        _safetyQuestion = new PendingQuestion(new RoofSafetyOverrideQuestion(refusal.RoofStatus?.Safety ?? _status?.Safety), session, command.StopsSent);
+                        AddNoticeLocked(RoofText.DescribeFailure(refusal), WebRoofNoticeLevel.Warning);
+                    }
+                }
+
+                if (asked)
+                {
+                    _logger.LogInformation("Open from {Name} needs a safety override; asking", session.Name);
+                }
+                else
+                {
+                    Refused(refusal, verb, session);
                 }
 
                 return;
@@ -924,10 +968,13 @@ public sealed class WebRoofConsole : IDisposable
             CloseBlock = notOffered ?? RoofCommandRules.GetMotionBlockReason(RoofMotionDirection.Closing, command),
             ClearFaultBlock = notOffered ?? RoofCommandRules.GetClearFaultBlockReason(command),
             HoldsLease = _holdsLease,
-            SafetyQuestion = _safetyQuestion,
+            SafetyQuestion = _safetyQuestion?.Question,
             Notices = _notices.ToArray()
         };
     }
 
     private sealed record Command(WebSession Session, long StopsSent, CancellationToken Closing);
+
+    /// <summary>A safety override question, with the session and the count of its Stops it was asked under.</summary>
+    private sealed record PendingQuestion(RoofSafetyOverrideQuestion Question, WebSession Session, long StopsSent);
 }

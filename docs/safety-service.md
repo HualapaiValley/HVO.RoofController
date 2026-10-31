@@ -194,9 +194,13 @@ sends nothing.
 
 - The question is asked only of an Open that would be sent (not of one blocked for another reason, which says why).
 - Stop, Close, the end of the person's session, and the kiosk locking withdraw it: a question asked of one person is
-  never answered by the next, and an Open withdrawn by Stop is never sent.
+  never answered by the next, and an Open withdrawn by Stop is never sent. The answer and the Open it sends belong to
+  the session and the Stops the question was asked under, checked as the Open is reserved: an **Open anyway** that
+  crosses a Stop, even one the interface has not heard of yet, sends nothing.
 - When the conditions change between the status and the Open (the interface showed Safe), the controller refuses with
-  `SafetyOverrideRequired`, and the interface asks then, with the conditions the controller sent.
+  `SafetyOverrideRequired`, and the interface asks then, with the conditions the controller sent; unless Stop was sent
+  after that Open, or the controller's status now blocks Open for another reason (a latched fault, say), when the
+  refusal is shown and nothing is asked.
 - With `OverrideRole: Admin`, Open is not offered to someone the interface knows is not an admin, with the reason "the
   safety conditions are not confirmed safe, and only an admin may override them".
 - With the interlock Off, nothing is asked; in Block mode, Open is not offered while the conditions are not Safe, with the

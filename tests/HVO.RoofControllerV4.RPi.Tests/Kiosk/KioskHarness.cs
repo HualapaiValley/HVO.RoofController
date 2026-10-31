@@ -40,7 +40,7 @@ internal sealed class KioskHarness : IAsyncDisposable
     private long _version = 11;
     private volatile bool _reachable = true;
 
-    private KioskHarness(bool localKey, IDictionary<string, string?>? settings, KioskConsoleOptions? options, TimeSpan? requestTimeout)
+    private KioskHarness(bool localKey, IDictionary<string, string?>? settings, KioskConsoleOptions? options, TimeSpan? requestTimeout, Action<IServiceCollection>? services)
     {
         Directory = new WebTestSupport.TempDirectory();
         Roof = new SettingsApiTests.RoofDouble();
@@ -73,11 +73,12 @@ internal sealed class KioskHarness : IAsyncDisposable
         Host = new RoofApiTestHost(
             Roof.Mock,
             all,
-            configureServices: services =>
+            configureServices: controller =>
             {
                 // A cheap hash so the tests run quickly; production uses the ASP.NET Core default.
-                services.Configure<PasswordHasherOptions>(hasher => hasher.IterationCount = 1_000);
-                services.AddSingleton<TimeProvider>(ServerClock);
+                controller.Configure<PasswordHasherOptions>(hasher => hasher.IterationCount = 1_000);
+                controller.AddSingleton<TimeProvider>(ServerClock);
+                services?.Invoke(controller);
             },
             settingsFilePath: SettingsPath,
             secretsFilePath: Path.Combine(Directory.Path, "secrets", "managed-secrets.json"));
@@ -204,9 +205,9 @@ internal sealed class KioskHarness : IAsyncDisposable
         bool localKey = false,
         IDictionary<string, string?>? settings = null,
         KioskConsoleOptions? options = null,
-        TimeSpan? requestTimeout = null, bool populateUsers = true)
+        TimeSpan? requestTimeout = null, bool populateUsers = true, Action<IServiceCollection>? services = null)
     {
-        var harness = new KioskHarness(localKey, settings, options, requestTimeout);
+        var harness = new KioskHarness(localKey, settings, options, requestTimeout, services);
         if (populateUsers)
         {
             await RoofClientApiTests.AddUserAsync(harness.Host, Operator, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
