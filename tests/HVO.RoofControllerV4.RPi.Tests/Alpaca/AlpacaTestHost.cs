@@ -53,8 +53,9 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
         IReadOnlyDictionary<string, string?>? settings = null,
         IPAddress? remote = null,
         string apiKey = TestApiKeys.Viewer,
-        bool waitForStatus = true)
-        => StartAsync(controller is null ? null : () => controller.Server, controller, settings, remote, apiKey, waitForStatus);
+        bool waitForStatus = true,
+        IReadOnlyDictionary<string, string>? deviceIds = null)
+        => StartAsync(controller is null ? null : () => controller.Server, controller, settings, remote, apiKey, waitForStatus, deviceIds: deviceIds);
 
     /// <summary>
     /// Starts the server in front of a controller whose every REST request <paramref name="answer"/> answers, and whose
@@ -74,9 +75,17 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
         IPAddress? remote,
         string apiKey,
         bool waitForStatus,
-        Func<HttpRequestMessage, HttpResponseMessage>? answer = null)
+        Func<HttpRequestMessage, HttpResponseMessage>? answer = null,
+        IReadOnlyDictionary<string, string>? deviceIds = null)
     {
         var directory = Directory.CreateTempSubdirectory("hvo-alpaca-tests-").FullName;
+        if (deviceIds is not null)
+        {
+            // The devices' identities as a server that ran before kept them (alpaca-devices.json), so a test controller can list them.
+            Directory.CreateDirectory(Path.Combine(directory, "data"));
+            File.WriteAllText(Path.Combine(directory, "data", "alpaca-devices.json"), JsonSerializer.Serialize(deviceIds));
+        }
+
         var keyFile = Path.Combine(directory, "key");
         File.WriteAllText(keyFile, apiKey + "\n");
         if (!OperatingSystem.IsWindows())

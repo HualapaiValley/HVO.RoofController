@@ -65,6 +65,13 @@ public sealed class RoofSafetyOptions
     /// Read at start: a change takes effect when the controller starts again.
     /// </summary>
     public List<RoofSafetyWeatherSourceOptions> WeatherSources { get; set; } = [];
+
+    /// <summary>
+    /// The UniqueIDs of this installation's own Alpaca devices (the Alpaca server's Dome and SafetyMonitor, as its setup
+    /// page lists them): a weather source whose server lists one of them for it is refused, so the controller never reads
+    /// its own weather back (#220). The Alpaca server's SafetyMonitor says safe only while this lists its UniqueID.
+    /// </summary>
+    public List<string> OwnAlpacaUniqueIds { get; set; } = [];
 }
 
 /// <summary>
@@ -146,6 +153,20 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
             failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.MaxReadingAge)} must be longer than {nameof(RoofSafetyOptions.PollInterval)} plus {nameof(RoofSafetyOptions.ReadTimeout)} and at most 1 h, or a reading goes stale before the next one.");
         }
 
+        for (var i = 0; i < (options.OwnAlpacaUniqueIds?.Count ?? 0); i++)
+        {
+            var id = options.OwnAlpacaUniqueIds![i];
+            if (string.IsNullOrWhiteSpace(id) || id.Length > MaxUniqueIdLength || id.Any(char.IsControl))
+            {
+                failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.OwnAlpacaUniqueIds)}:{i} must be a UniqueID of 1 to {MaxUniqueIdLength} characters, with no control characters.");
+            }
+        }
+
+        if (options.OwnAlpacaUniqueIds?.Count > MaxDevicesPerKind)
+        {
+            failures.Add($"{RoofSafetyOptions.SectionName}:{nameof(RoofSafetyOptions.OwnAlpacaUniqueIds)} lists {options.OwnAlpacaUniqueIds.Count} UniqueIDs; at most {MaxDevicesPerKind}.");
+        }
+
         ValidateDevices(options, nameof(RoofSafetyOptions.Telescopes), options.Telescopes, failures);
         ValidateDevices(options, nameof(RoofSafetyOptions.WeatherSources), options.WeatherSources, failures);
         for (var i = 0; i < (options.WeatherSources?.Count ?? 0); i++)
@@ -161,6 +182,9 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
 
     /// <summary>The most devices of one kind the service reads.</summary>
     public const int MaxDevicesPerKind = 16;
+
+    /// <summary>The longest UniqueID <see cref="RoofSafetyOptions.OwnAlpacaUniqueIds"/> takes.</summary>
+    public const int MaxUniqueIdLength = 128;
 
     /// <summary>
     /// The <c>RoofSafety</c> keys that cannot be bound, read from the raw configuration before binding: a key no setting
@@ -192,6 +216,19 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
                     break;
                 case "WEATHERSOURCES":
                     FindUnreadableDevices(child, "weather source", "REQUIREMENT", Converts<RoofWeatherSourceRequirement>, "must be Required or Ignored", failures);
+                    break;
+                case "OWNALPACAUNIQUEIDS":
+                    if (child.Value is { Length: > 0 })
+                    {
+                        failures.Add($"{child.Path} must be a list of UniqueIDs, not a value.");
+                        break;
+                    }
+
+                    foreach (var id in child.GetChildren())
+                    {
+                        Check(id, _ => true, "must be a UniqueID", failures);
+                    }
+
                     break;
                 default:
                     failures.Add($"{child.Path} is not a {RoofSafetyOptions.SectionName} setting.");

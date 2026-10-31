@@ -419,13 +419,13 @@ public sealed class AlpacaTelescopeParkSource : ITelescopeParkSource
 /// </summary>
 /// <remarks>
 /// The monitor is never this roof controller's own Alpaca SafetyMonitor, which publishes the weather the controller
-/// reads: reading it would loop (#220). At first contact, and again after any failed read, the monitor's identity is
-/// checked before its IsSafe is read: its own DriverInfo (which a hub relays) must not be this controller's Alpaca
-/// server's (<see cref="AlpacaServerIdentity"/>), and when its server's Management API describes this controller's
-/// Alpaca server and lists the monitor, the monitor's UniqueID is one of that server's own. Either refuses the monitor
-/// (<see cref="OwnDeviceFailure"/>), a failed read every time. A server that serves no Management API is judged by the
-/// monitor's DriverInfo alone. A hub that hides both fails safe: the monitor then reads its own unsafe answer, never
-/// safe weather.
+/// reads: reading it would loop (#220). Every read checks the monitor's identity first, before <c>Connected</c> and
+/// <c>IsSafe</c>, so a device that changes behind the address between two good reads is caught at the next: its own
+/// DriverInfo (which a hub relays) must not be this controller's Alpaca server's (<see cref="AlpacaServerIdentity"/>),
+/// and, when <see cref="RoofSafetyOptions.OwnAlpacaUniqueIds"/> lists this installation's own Alpaca devices, the
+/// UniqueID its server's Management API lists for it must not be one of them, whatever that server calls itself. With
+/// own UniqueIDs listed, a monitor whose UniqueID cannot be read is refused too (<see cref="UnverifiedFailure"/>): it
+/// cannot be told from ours. Each refusal is a failed read, so it neither makes nor refreshes a reading.
 /// </remarks>
 public sealed class AlpacaSafetyMonitorSource : IWeatherSafetySource
 {
@@ -433,18 +433,24 @@ public sealed class AlpacaSafetyMonitorSource : IWeatherSafetySource
     public const string OwnDeviceFailure =
         "configuration error: the device is this roof controller's own Alpaca SafetyMonitor, which publishes the weather the controller reads (a loop)";
 
+    /// <summary>The failure's words for a monitor whose UniqueID its server does not give.</summary>
+    public const string UnverifiedFailure =
+        "the Alpaca server does not list this device's UniqueID, so it cannot be told from this roof controller's own SafetyMonitor";
+
     private readonly AlpacaDevice _device;
+    private readonly HashSet<string> _ownUniqueIds;
 
-    // True once this connection's monitor was checked not to be ours; false again after any failed read.
-    private volatile bool _checked;
-
-    public AlpacaSafetyMonitorSource(RoofSafetyWeatherSourceOptions options, IHttpClientFactory clients)
+    /// <param name="options">The source's settings.</param>
+    /// <param name="clients">Makes the HTTP client.</param>
+    /// <param name="ownUniqueIds">This installation's own Alpaca devices' UniqueIDs (<see cref="RoofSafetyOptions.OwnAlpacaUniqueIds"/>).</param>
+    public AlpacaSafetyMonitorSource(RoofSafetyWeatherSourceOptions options, IHttpClientFactory clients, IEnumerable<string>? ownUniqueIds = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         Name = options.Name.Trim();
         MaxReadingAge = options.MaxReadingAge;
         Requirement = options.Requirement;
         _device = new AlpacaDevice(options.Url, "safetymonitor", options.DeviceNumber, clients);
+        _ownUniqueIds = new HashSet<string>((ownUniqueIds ?? []).Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id.Trim()), StringComparer.OrdinalIgnoreCase);
     }
 
     public string Name { get; }
@@ -455,28 +461,14 @@ public sealed class AlpacaSafetyMonitorSource : IWeatherSafetySource
 
     public async Task<WeatherSafetyReading> ReadWeatherSafetyAsync(CancellationToken cancellationToken)
     {
-        try
+        // First, before Connected: the identity is readable unconnected, and a hub relaying our own monitor connects it.
+        await RefuseOwnMonitorAsync(cancellationToken).ConfigureAwait(false);
+        if (!await _device.ReadBooleanAsync("connected", cancellationToken).ConfigureAwait(false))
         {
-            // First, before Connected: the identity is readable unconnected, and a hub relaying our own monitor connects it.
-            if (!_checked)
-            {
-                await RefuseOwnMonitorAsync(cancellationToken).ConfigureAwait(false);
-                _checked = true;
-            }
-
-            if (!await _device.ReadBooleanAsync("connected", cancellationToken).ConfigureAwait(false))
-            {
-                throw new RoofSafetySourceException("the device is not connected");
-            }
-
-            return new WeatherSafetyReading(await _device.ReadBooleanAsync("issafe", cancellationToken).ConfigureAwait(false));
+            throw new RoofSafetySourceException("the device is not connected");
         }
-        catch
-        {
-            // Whatever failed (the device restarted, another took its address), the next contact checks it again.
-            _checked = false;
-            throw;
-        }
+
+        return new WeatherSafetyReading(await _device.ReadBooleanAsync("issafe", cancellationToken).ConfigureAwait(false));
     }
 
     private async Task RefuseOwnMonitorAsync(CancellationToken cancellationToken)
@@ -487,18 +479,27 @@ public sealed class AlpacaSafetyMonitorSource : IWeatherSafetySource
             throw new RoofSafetySourceException(OwnDeviceFailure);
         }
 
-        // Its server: this controller's Alpaca server lists its own devices' UniqueIDs, this monitor's among them.
-        if (await _device.TryReadManagementAsync("v1/description", cancellationToken).ConfigureAwait(false) is not { ValueKind: JsonValueKind.Object } description
-            || !string.Equals(Text(description, "ServerName"), AlpacaServerIdentity.ServerName, StringComparison.Ordinal))
+        if (_ownUniqueIds.Count == 0)
         {
             return;
         }
 
-        if (await _device.TryReadManagementAsync("v1/configureddevices", cancellationToken).ConfigureAwait(false) is { ValueKind: JsonValueKind.Array } devices
-            && devices.EnumerateArray().Any(device => device.ValueKind == JsonValueKind.Object
-                && string.Equals(Text(device, "DeviceType"), "SafetyMonitor", StringComparison.OrdinalIgnoreCase)
-                && Number(device, "DeviceNumber") == _device.DeviceNumber
-                && !string.IsNullOrWhiteSpace(Text(device, "UniqueID"))))
+        // The UniqueID its server lists for it, whatever that server calls itself (a hub may list ours for a device it relays).
+        var devices = await _device.TryReadManagementAsync("v1/configureddevices", cancellationToken).ConfigureAwait(false);
+        var uniqueId = devices is { ValueKind: JsonValueKind.Array } list
+            ? list.EnumerateArray()
+                .Where(device => device.ValueKind == JsonValueKind.Object
+                    && string.Equals(Text(device, "DeviceType"), "SafetyMonitor", StringComparison.OrdinalIgnoreCase)
+                    && Number(device, "DeviceNumber") == _device.DeviceNumber)
+                .Select(device => Text(device, "UniqueID"))
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id))
+            : null;
+        if (uniqueId is null)
+        {
+            throw new RoofSafetySourceException(UnverifiedFailure);
+        }
+
+        if (_ownUniqueIds.Contains(uniqueId.Trim()))
         {
             throw new RoofSafetySourceException(OwnDeviceFailure);
         }

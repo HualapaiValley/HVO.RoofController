@@ -30,7 +30,7 @@ internal static class AlpacaSetupPage
         {
             var status = roof.GetCurrent();
             roofNow = AlpacaDome.DescribeStatus(status);
-            weatherNow = $"{(AlpacaSafetyMonitor.IsSafe(status) ? "IsSafe true" : "IsSafe false")}. {AlpacaSafetyMonitor.DescribeWeather(status)}";
+            weatherNow = $"{(safetyMonitor.IsSafe(status) ? "IsSafe true" : "IsSafe false")}. {safetyMonitor.DescribeWeather(status)}";
         }
         catch (AlpacaException ex)
         {
@@ -49,6 +49,7 @@ internal static class AlpacaSetupPage
             ("Device", $"{AlpacaSafetyMonitor.DeviceTypeName} 0: {AlpacaSafetyMonitor.DeviceName}"),
             ("UniqueID", ids.SafetyMonitor),
             ("Weather now", weatherNow),
+            ("Roof controller settings", $"So that the controller never reads this server's devices back as its weather (IsSafe is false until it lists the SafetyMonitor's): {safetyMonitor.ControllerSettings}"),
             ("Connected clients", safetyMonitor.Connections.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             ("Controller status", Describe(roof.FeedState)),
             ("Alpaca port", options.Port.ToString(System.Globalization.CultureInfo.InvariantCulture)),

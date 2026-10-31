@@ -78,7 +78,7 @@ public sealed class AlpacaSafetySourceTests
         recorder.Requests.Select(request => request.Uri.AbsolutePath).Should().Equal(
             "/api/v1/telescope/0/connected", "/api/v1/telescope/0/canpark", "/api/v1/telescope/0/atpark",
             "/api/v1/telescope/0/connected", "/api/v1/telescope/0/canpark", "/api/v1/telescope/0/atpark",
-            "/api/v1/safetymonitor/0/driverinfo", "/management/v1/description", "/api/v1/safetymonitor/0/connected", "/api/v1/safetymonitor/0/issafe");
+            "/api/v1/safetymonitor/0/driverinfo", "/api/v1/safetymonitor/0/connected", "/api/v1/safetymonitor/0/issafe");
         var queries = recorder.Requests.Select(request => HttpUtility.ParseQueryString(request.Uri.Query)).ToList();
         queries.Select(query => query["ClientID"]).Distinct().Should().ContainSingle()
             .Which.Should().Match(id => uint.Parse(id!, CultureInfo.InvariantCulture) >= 1 && uint.Parse(id!, CultureInfo.InvariantCulture) <= 65535,
@@ -310,11 +310,11 @@ public sealed class AlpacaSafetySourceTests
     }
 
     [TestMethod]
-    public async Task OurOwnAlpacaServer_ByTheUniqueIdItListsForTheDevice_IsRefused()
+    public async Task OurOwnUniqueId_BehindAHubThatNamesItselfOtherwise_IsRefused()
     {
-        // The device's own words are another's, but its server is ours and lists the device's UniqueID as its own.
-        var server = new FakeAlpacaServer { ServerName = AlpacaServerIdentity.ServerName, UniqueId = "0d5f6a1c-2b3e-4c5d-9e8f-102938475610" };
-        var weather = new AlpacaSafetyMonitorSource(Weather("Loop"), new Factory(() => server));
+        // Review F6 (#227): the hub's own words are another's; the UniqueID it lists for the device is one of ours.
+        var server = new FakeAlpacaServer { UniqueId = OwnSafetyMonitorId };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Hub"), new Factory(() => server), [OwnDomeId, OwnSafetyMonitorId]);
 
         var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
 
@@ -323,39 +323,112 @@ public sealed class AlpacaSafetySourceTests
     }
 
     [TestMethod]
-    public async Task AnotherServersDevice_IsChecked_OncePerConnection_AndAgainAfterAFailedRead()
+    public async Task OurDomesUniqueId_ListedAsTheSafetyMonitor_IsRefusedToo()
     {
+        var server = new FakeAlpacaServer { UniqueId = OwnDomeId.ToUpperInvariant() };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Hub"), new Factory(() => server), [OwnDomeId, OwnSafetyMonitorId]);
+
+        var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+
+        (await read.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(AlpacaSafetyMonitorSource.OwnDeviceFailure);
+    }
+
+    [TestMethod]
+    public async Task EveryRead_ChecksTheDevicesIdentity_SoATargetThatChangesBetweenGoodReadsIsRefused()
+    {
+        // Review F7 (#227): no read fails, but between two the device behind the address becomes ours.
         var server = new FakeAlpacaServer();
-        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server));
-
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server), [OwnDomeId, OwnSafetyMonitorId]);
         (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
-        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
-        server.Fail = true;
-        var failed = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
-        await failed.Should().ThrowAsync<RoofSafetySourceException>();
-        server.Fail = false;
         (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
 
-        server.Paths.Count(path => path.EndsWith("/driverinfo", StringComparison.Ordinal)).Should().Be(2, "checked at first contact, and again after the failed read");
-        server.Paths.Count(path => path == "/management/v1/description").Should().Be(2);
-        server.Paths.Count(path => path.EndsWith("/issafe", StringComparison.Ordinal)).Should().Be(3);
+        server.UniqueId = OwnSafetyMonitorId;
+        var byId = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+        (await byId.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(AlpacaSafetyMonitorSource.OwnDeviceFailure);
+        server.UniqueId = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+        server.DriverInfo = AlpacaServerIdentity.ServerName + " 4.4.0: the observatory's weather";
+        var byDriverInfo = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+        (await byDriverInfo.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(AlpacaSafetyMonitorSource.OwnDeviceFailure);
+
+        server.Paths.Count(path => path.EndsWith("/driverinfo", StringComparison.Ordinal)).Should().Be(4, "every read checks the identity");
+        server.Paths.Count(path => path.EndsWith("/issafe", StringComparison.Ordinal)).Should().Be(2, "only the reads of another's device read IsSafe");
         server.Methods.Should().OnlyContain(method => method == HttpMethod.Get);
     }
 
     [TestMethod]
-    public async Task AServerWithoutTheManagementApi_IsStillRead_ByItsDevicesOwnWords()
+    public async Task OurOwnMonitor_ReachedBetweenGoodReads_NeverKeepsTheWeatherSafe()
+    {
+        // Review F6 and F7 (#227): a primed loop. The weather was Safe from another's monitor; then the address relays
+        // ours, advertising our UniqueID and answering IsSafe true. The reading goes stale; it is never refreshed.
+        var server = new FakeAlpacaServer();
+        var time = new ManualTimeProvider();
+        var options = new RoofSafetyOptions
+        {
+            InterlockMode = RoofSafetyInterlockMode.Off,
+            WeatherSources = [Weather("Cloud sensor")],
+            OwnAlpacaUniqueIds = [OwnDomeId, OwnSafetyMonitorId]
+        };
+        var configured = new RoofSafetyConfiguredSources(Options.Create(options), new Factory(() => server));
+        using var service = new RoofSafetyService([], [], new TestOptionsMonitor<RoofSafetyOptions>(options), time, new CapturingLogger(), configured);
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().WeatherState.Should().Be(RoofSafetyState.Safe);
+
+        server.UniqueId = OwnSafetyMonitorId;
+        for (var second = 0; second < 70; second += 10)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+            await service.PollAsync(CancellationToken.None);
+        }
+
+        var safety = service.GetCurrent();
+        safety.WeatherState.Should().Be(RoofSafetyState.Unknown);
+        safety.Sources.Single().Reason.Should().EndWith($"the last read failed ({AlpacaSafetyMonitorSource.OwnDeviceFailure})");
+    }
+
+    [TestMethod]
+    public async Task AnotherServersDevice_IsReadAsUsual_WithItsIdentityCheckedEachTime()
+    {
+        var server = new FakeAlpacaServer();
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server), [OwnDomeId, OwnSafetyMonitorId]);
+
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+        (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+
+        server.Paths.Count(path => path.EndsWith("/driverinfo", StringComparison.Ordinal)).Should().Be(2);
+        server.Paths.Count(path => path == "/management/v1/configureddevices").Should().Be(2);
+        server.Paths.Count(path => path.EndsWith("/issafe", StringComparison.Ordinal)).Should().Be(2);
+        server.Methods.Should().OnlyContain(method => method == HttpMethod.Get);
+    }
+
+    [TestMethod]
+    public async Task WithNoOwnIdsConfigured_AServerWithoutTheManagementApi_IsReadByItsDevicesOwnWords()
     {
         var server = new FakeAlpacaServer { ServesManagement = false };
         var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server));
 
         (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
+        server.Paths.Should().NotContain(path => path.StartsWith("/management/", StringComparison.Ordinal), "with no own UniqueIDs there is nothing to compare");
+    }
+
+    [TestMethod]
+    [DataRow(false, "a server that serves no Management API")]
+    [DataRow(true, "a server that does not list the device")]
+    public async Task WithOwnIdsConfigured_ADeviceWhoseUniqueIdCannotBeRead_IsRefused(bool servesManagement, string why)
+    {
+        var server = new FakeAlpacaServer { ServesManagement = servesManagement, ListsDevice = false };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server), [OwnDomeId, OwnSafetyMonitorId]);
+
+        var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+
+        (await read.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(AlpacaSafetyMonitorSource.UnverifiedFailure, why);
+        server.Paths.Should().NotContain(path => path.EndsWith("/issafe", StringComparison.Ordinal));
     }
 
     [TestMethod]
     public async Task TheEmulatorsSafetyMonitor_IsNotOurs()
     {
         await using var emulator = new EmulatorHost();
-        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Clients(emulator));
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), Clients(emulator), [OwnDomeId, OwnSafetyMonitorId]);
 
         (await weather.ReadWeatherSafetyAsync(CancellationToken.None)).IsSafe.Should().BeTrue();
     }
@@ -485,19 +558,26 @@ public sealed class AlpacaSafetySourceTests
     /// <summary>An Alpaca answer with these fields, the request's ClientTransactionID and a ServerTransactionID.</summary>
     private static string Envelope(string fields) => "{" + fields + ",\"ClientTransactionID\":$TX,\"ServerTransactionID\":1}";
 
+    /// <summary>This installation's own Alpaca devices' UniqueIDs, as <c>RoofSafety:OwnAlpacaUniqueIds</c> lists them.</summary>
+    private const string OwnDomeId = "0d5f6a1c-2b3e-4c5d-9e8f-102938475610";
+
+    private const string OwnSafetyMonitorId = "a3c1e2f4-5b6d-4e7f-8091-a2b3c4d5e6f7";
+
     /// <summary>
     /// An Alpaca server with one safety monitor, answering cleanly by path: its DriverInfo and its management API's
     /// description and configured devices as set, IsSafe true, or (<see cref="Fail"/>) HTTP 500 to every device request.
     /// </summary>
     private sealed class FakeAlpacaServer : HttpMessageHandler
     {
-        public string DriverInfo { get; init; } = "Another vendor's driver 2.1";
+        public string DriverInfo { get; set; } = "Another vendor's driver 2.1";
 
         public string ServerName { get; init; } = "Another Alpaca server";
 
-        public string UniqueId { get; init; } = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+        public string UniqueId { get; set; } = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
 
         public bool ServesManagement { get; init; } = true;
+
+        public bool ListsDevice { get; init; } = true;
 
         public bool Fail { get; set; }
 
@@ -518,7 +598,9 @@ public sealed class AlpacaSafetySourceTests
             string? value = path switch
             {
                 "/management/v1/description" when ServesManagement => "{\"ServerName\":\"" + ServerName + "\",\"Manufacturer\":\"Someone\",\"ManufacturerVersion\":\"1\",\"Location\":\"\"}",
-                "/management/v1/configureddevices" when ServesManagement => "[{\"DeviceName\":\"Weather\",\"DeviceType\":\"SafetyMonitor\",\"DeviceNumber\":0,\"UniqueID\":\"" + UniqueId + "\"}]",
+                "/management/v1/configureddevices" when ServesManagement => ListsDevice
+                    ? "[{\"DeviceName\":\"Weather\",\"DeviceType\":\"SafetyMonitor\",\"DeviceNumber\":0,\"UniqueID\":\"" + UniqueId + "\"}]"
+                    : "[{\"DeviceName\":\"Other\",\"DeviceType\":\"Telescope\",\"DeviceNumber\":0,\"UniqueID\":\"" + UniqueId + "\"}]",
                 "/api/v1/safetymonitor/0/driverinfo" when !Fail => "\"" + DriverInfo + "\"",
                 "/api/v1/safetymonitor/0/connected" or "/api/v1/safetymonitor/0/issafe" when !Fail => "true",
                 _ => null

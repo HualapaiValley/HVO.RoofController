@@ -109,6 +109,13 @@ else
 fi
 [[ -x "${conformu_dir}/conformu" ]] || fail "No conformu program in ${conformu_dir}"
 
+# The Alpaca server's devices' identities, made here so the controller can list them as its own: its SafetyMonitor says
+# safe only while the controller does, which then never reads it back as its weather.
+mkdir -p "${work}/alpaca-data"
+dome_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+safetymonitor_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+printf '{"dome/0":"%s","safetymonitor/0":"%s"}\n' "${dome_id}" "${safetymonitor_id}" > "${work}/alpaca-data/alpaca-devices.json"
+
 # The Alpaca server's Viewer key: made here, in a file only this user can read; the controller is given its hash.
 (umask 077 && python3 -c 'import secrets; print(secrets.token_hex(24))' > "${work}/alpaca-key")
 key_sha256=$(tr -d '\n' < "${work}/alpaca-key" | sha256sum | cut -d' ' -f1)
@@ -131,6 +138,8 @@ echo "Starting the controller (${controller_port}) against it"
   RoofControllerSecurity__ApiKeys__0__KeySha256="${key_sha256}" \
   RoofSafety__WeatherSources__0__Name="Emulated weather" \
   RoofSafety__WeatherSources__0__Url="http://127.0.0.1:${control_port}" \
+  RoofSafety__OwnAlpacaUniqueIds__0="${dome_id}" \
+  RoofSafety__OwnAlpacaUniqueIds__1="${safetymonitor_id}" \
   dotnet HVO.RoofControllerV4.RPi.dll) > "${work}/controller.log" 2>&1 &
 pids+=("$!")
 wait_for "http://127.0.0.1:${controller_port}/health/live" "The controller"

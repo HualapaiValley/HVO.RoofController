@@ -136,6 +136,13 @@ public sealed record RoofSafetyStatus
     /// </summary>
     public IReadOnlyList<string> WeatherReasons { get; init; } = [];
 
+    /// <summary>
+    /// The UniqueIDs of this installation's own Alpaca devices that the controller refuses as weather sources
+    /// (<c>RoofSafety:OwnAlpacaUniqueIds</c>), so it never reads its own weather back. The Alpaca server's SafetyMonitor
+    /// says safe only while its UniqueID is here. Empty from a controller that does not say.
+    /// </summary>
+    public IReadOnlyList<string> OwnAlpacaUniqueIds { get; init; } = [];
+
     /// <summary>Every configured source, in the order they were configured.</summary>
     public IReadOnlyList<RoofSafetySourceStatus> Sources { get; init; } = [];
 

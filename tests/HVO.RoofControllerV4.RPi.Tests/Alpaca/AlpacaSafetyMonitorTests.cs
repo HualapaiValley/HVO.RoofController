@@ -31,7 +31,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task TheCommonMembers_AnswerBeforeConnecting()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
 
         (await alpaca.GetDeviceAsync(Monitor, "connected")).GetProperty("Value").GetBoolean().Should().BeFalse();
         (await alpaca.GetDeviceAsync(Monitor, "connecting")).GetProperty("Value").GetBoolean().Should().BeFalse();
@@ -55,7 +55,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task IsSafe_NeedsTheClientConnected_AndReadsUnsafeUntilThen()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
 
         var answer = await alpaca.GetDeviceAsync(Monitor, "issafe");
 
@@ -67,7 +67,7 @@ public sealed class AlpacaSafetyMonitorTests
     public async Task IsSafe_IsTheWeatherAlone_NeverTheTelescopes()
     {
         var mount = new SimulatedTelescopeParkSource("Main", isParked: false);
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller(mount: mount));
+        await using var alpaca = await StartAsync(Controller(mount: mount));
         await ConnectAsync(alpaca);
 
         var isSafe = await WaitForIsSafeAsync(alpaca, true);
@@ -90,7 +90,7 @@ public sealed class AlpacaSafetyMonitorTests
             "no required weather source" => Controller(weather: new SimulatedWeatherSafetySource("Cloud sensor") { Requirement = RoofWeatherSourceRequirement.Ignored }),
             _ => Controller(defaultWeather: false)
         };
-        await using var alpaca = await AlpacaTestHost.StartAsync(host);
+        await using var alpaca = await StartAsync(host);
         await ConnectAsync(alpaca);
 
         // Give the controller's sources a poll to have been read.
@@ -102,10 +102,31 @@ public sealed class AlpacaSafetyMonitorTests
     }
 
     [TestMethod]
+    public async Task IsSafe_StaysFalse_UntilTheControllerListsThisMonitorsUniqueId_SoItCanNeverBeReadBack()
+    {
+        // Safe weather, but a controller that does not list this monitor among its own Alpaca devices could read it back
+        // as a weather source (a loop): the monitor says unsafe until it does, and says why.
+        await using var alpaca = await StartAsync(Controller(ownIds: false));
+        await ConnectAsync(alpaca);
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+
+        var isSafe = await alpaca.GetDeviceAsync(Monitor, "issafe", "ClientID=1");
+        var status = await alpaca.PutDeviceAsync(Monitor, "action", "Action=status&Parameters=&ClientID=1");
+        using var page = await alpaca.Http.GetAsync("/setup");
+        var html = await page.Content.ReadAsStringAsync();
+
+        isSafe.GetProperty("ErrorNumber").GetInt32().Should().Be(0);
+        isSafe.GetProperty("Value").GetBoolean().Should().BeFalse("the controller does not list this monitor's UniqueID");
+        status.GetProperty("Value").GetString().Should().Be(
+            $"Weather: Safe. IsSafe is false: the roof controller does not list this monitor's UniqueID {SafetyMonitorId} in RoofSafety:OwnAlpacaUniqueIds, so it could read this monitor back as its own weather.");
+        html.Should().Contain($"RoofSafety__OwnAlpacaUniqueIds__0={DomeId}").And.Contain($"RoofSafety__OwnAlpacaUniqueIds__1={SafetyMonitorId}");
+    }
+
+    [TestMethod]
     public async Task IsSafe_FollowsTheWeather_BothWays()
     {
         var weather = new SimulatedWeatherSafetySource("Cloud sensor");
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller(weather: weather));
+        await using var alpaca = await StartAsync(Controller(weather: weather));
         await ConnectAsync(alpaca);
         (await WaitForIsSafeAsync(alpaca, true)).Should().BeTrue();
 
@@ -130,7 +151,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task TheSafetyMonitorsConnection_IsItsOwn()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
 
         await alpaca.ConnectAsync();
         var afterDome = await alpaca.GetDeviceAsync(Monitor, "connected", "ClientID=1");
@@ -145,7 +166,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task TheStatusAction_DescribesTheWeather_AndNothingElseIsAnAction()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller(weather: new SimulatedWeatherSafetySource("Cloud sensor", isSafe: false)));
+        await using var alpaca = await StartAsync(Controller(weather: new SimulatedWeatherSafetySource("Cloud sensor", isSafe: false)));
         await ConnectAsync(alpaca);
         await WaitForIsSafeAsync(alpaca, false);
 
@@ -162,7 +183,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task APutsParameterNames_AreCaseSensitive()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
 
         using var lowerCase = await alpaca.PutDeviceRawAsync(Monitor, "connected", "connected=true&ClientID=1");
 
@@ -176,7 +197,7 @@ public sealed class AlpacaSafetyMonitorTests
     [DataRow("park")]
     public async Task ADomesMember_IsNotASafetyMonitorsMember(string member)
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
 
         using var get = await alpaca.Http.GetAsync($"/api/v1/{Monitor}/{member}?ClientID=1");
         using var put = await alpaca.PutDeviceRawAsync(Monitor, member, "ClientID=1");
@@ -206,7 +227,7 @@ public sealed class AlpacaSafetyMonitorTests
     public async Task ReadingIt_NeverMovesOrStopsTheRoof()
     {
         var roof = RoofServiceMock.Create();
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller(roof: roof, weather: new SimulatedWeatherSafetySource("Cloud sensor", isSafe: false)));
+        await using var alpaca = await StartAsync(Controller(roof: roof, weather: new SimulatedWeatherSafetySource("Cloud sensor", isSafe: false)));
         await ConnectAsync(alpaca);
 
         for (var i = 0; i < 5; i++)
@@ -224,7 +245,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task TheConfiguredDevices_AreTheDomeAndTheSafetyMonitor_EachWithItsOwnUniqueId()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
         var ids = alpaca.Services.GetRequiredService<AlpacaDeviceIds>();
 
         using var response = await alpaca.Http.GetAsync("/management/v1/configureddevices?ClientTransactionID=4");
@@ -290,7 +311,7 @@ public sealed class AlpacaSafetyMonitorTests
     [TestMethod]
     public async Task TheSetupPages_ShowTheSafetyMonitor()
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
         var ids = alpaca.Services.GetRequiredService<AlpacaDeviceIds>();
 
         using var page = await alpaca.Http.GetAsync("/setup/v1/safetymonitor/0/setup");
@@ -309,7 +330,7 @@ public sealed class AlpacaSafetyMonitorTests
     [DataRow("/api/v1/safetymonitor/0/IsSafe")]
     public async Task ADeviceOrMemberThisServerDoesNotHave_IsMalformed(string path)
     {
-        await using var alpaca = await AlpacaTestHost.StartAsync(Controller());
+        await using var alpaca = await StartAsync(Controller());
 
         using var response = await alpaca.Http.GetAsync(path + "?ClientID=1");
 
@@ -318,17 +339,44 @@ public sealed class AlpacaSafetyMonitorTests
 
     // ---- Support ---------------------------------------------------------------------------------------------------
 
+    /// <summary>The server's devices' identities in these tests, kept as a server that ran before would have kept them.</summary>
+    internal const string DomeId = "5b1f0c2a-3d4e-4f60-8a7b-9c0d1e2f3a4b";
+
+    internal const string SafetyMonitorId = "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f";
+
+    /// <summary>The server in front of <paramref name="controller"/>, with <see cref="DomeId"/> and <see cref="SafetyMonitorId"/>.</summary>
+    internal static Task<AlpacaTestHost> StartAsync(RoofApiTestHost controller)
+        => AlpacaTestHost.StartAsync(controller, deviceIds: new Dictionary<string, string>
+        {
+            [AlpacaDeviceIds.DomeKey] = DomeId,
+            [AlpacaDeviceIds.SafetyMonitorKey] = SafetyMonitorId
+        });
+
     /// <summary>
     /// A controller with the safety service reading the simulated sources given every second: by default a required
-    /// weather source that reads safe and no mount.
+    /// weather source that reads safe and no mount, and the server's devices' UniqueIDs listed as its own
+    /// (<c>RoofSafety:OwnAlpacaUniqueIds</c>).
     /// </summary>
     internal static RoofApiTestHost Controller(
         Mock<IRoofControllerServiceV4>? roof = null,
         SimulatedTelescopeParkSource? mount = null,
         SimulatedWeatherSafetySource? weather = null,
-        bool defaultWeather = true)
+        bool defaultWeather = true,
+        bool ownIds = true)
     {
         weather ??= defaultWeather ? new SimulatedWeatherSafetySource("Cloud sensor") : null;
+        var settings = new Dictionary<string, string?>
+        {
+            ["RoofSafety:PollInterval"] = "00:00:01",
+            ["RoofSafety:ReadTimeout"] = "00:00:00.5",
+            ["RoofSafety:MaxReadingAge"] = "00:00:05"
+        };
+        if (ownIds)
+        {
+            settings["RoofSafety:OwnAlpacaUniqueIds:0"] = DomeId;
+            settings["RoofSafety:OwnAlpacaUniqueIds:1"] = SafetyMonitorId;
+        }
+
         return RoofClientApiTests.CreateHost(
             roof,
             configureServices: services =>
@@ -343,12 +391,7 @@ public sealed class AlpacaSafetyMonitorTests
                     services.AddSingleton<IWeatherSafetySource>(weather);
                 }
             },
-            settings: new Dictionary<string, string?>
-            {
-                ["RoofSafety:PollInterval"] = "00:00:01",
-                ["RoofSafety:ReadTimeout"] = "00:00:00.5",
-                ["RoofSafety:MaxReadingAge"] = "00:00:05"
-            });
+            settings: settings);
     }
 
     private static async Task ConnectAsync(AlpacaTestHost alpaca, uint clientId = 1)

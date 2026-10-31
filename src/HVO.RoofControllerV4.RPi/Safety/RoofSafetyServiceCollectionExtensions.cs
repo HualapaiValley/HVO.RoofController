@@ -107,7 +107,7 @@ public sealed class RoofSafetyConfiguredSources
         ArgumentNullException.ThrowIfNull(clients);
         var value = options.Value;
         Telescopes = [.. (value.Telescopes ?? []).Select(device => new AlpacaTelescopeParkSource(device, clients))];
-        WeatherSources = [.. (value.WeatherSources ?? []).Select(device => new AlpacaSafetyMonitorSource(device, clients))];
+        WeatherSources = [.. (value.WeatherSources ?? []).Select(device => new AlpacaSafetyMonitorSource(device, clients, value.OwnAlpacaUniqueIds))];
     }
 
     /// <summary>The configured mounts.</summary>

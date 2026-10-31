@@ -115,6 +115,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             Reasons = reasons,
             WeatherState = weatherState,
             WeatherReasons = weatherReasons,
+            OwnAlpacaUniqueIds = [.. options.OwnAlpacaUniqueIds ?? []],
             Sources = sources,
             StateSinceUtc = NoteTransition(state, reasons, options.InterlockMode, sources.Length == 0),
             InterlockMode = options.InterlockMode,

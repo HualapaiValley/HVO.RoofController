@@ -14,6 +14,12 @@ namespace HVO.RoofControllerV4.Alpaca.Devices;
 /// controller that does not report it, and an error (not connected, the controller unreachable or silent for 3 s), whose
 /// Value is false too. Reading it never reaches the roof. It has its own connections, apart from the Dome's.
 /// </summary>
+/// <remarks>
+/// It says safe only while the controller lists its UniqueID among its own Alpaca devices
+/// (<see cref="RoofSafetyStatus.OwnAlpacaUniqueIds"/>, <c>RoofSafety:OwnAlpacaUniqueIds</c>): a controller that lists it
+/// refuses it as a weather source, so the monitor is never read back into the weather it publishes (#220). A controller
+/// that does not list it gets false, with why in the status action, the setup page and the log.
+/// </remarks>
 public sealed class AlpacaSafetyMonitor : AlpacaDevice
 {
     /// <summary>The device type in URLs and the management API.</summary>
@@ -32,12 +38,23 @@ public sealed class AlpacaSafetyMonitor : AlpacaDevice
     public const string DeviceDescription = "Hualapai Valley Observatory weather, from the roof controller";
 
     private readonly AlpacaRoof _roof;
+    private readonly ILogger<AlpacaSafetyMonitor> _logger;
+    private int _listed = -1;
 
-    public AlpacaSafetyMonitor(AlpacaRoof roof, AlpacaOptions options, TimeProvider time)
+    public AlpacaSafetyMonitor(AlpacaRoof roof, AlpacaDeviceIds ids, AlpacaOptions options, TimeProvider time, ILogger<AlpacaSafetyMonitor> logger)
         : base(new AlpacaConnections(options, time), time, "the observatory's weather from the roof controller's weather sources, never its telescopes")
     {
         _roof = roof;
+        Ids = ids;
+        _logger = logger;
     }
+
+    /// <summary>The server's devices' identities: this monitor's is <see cref="AlpacaDeviceIds.SafetyMonitor"/>.</summary>
+    public AlpacaDeviceIds Ids { get; }
+
+    /// <summary>The controller settings that list this server's devices as the controller's own, for the setup page and the log.</summary>
+    public string ControllerSettings
+        => $"RoofSafety__OwnAlpacaUniqueIds__0={Ids.Dome}, RoofSafety__OwnAlpacaUniqueIds__1={Ids.SafetyMonitor}";
 
     public override string UrlType => DeviceType;
 
@@ -49,15 +66,40 @@ public sealed class AlpacaSafetyMonitor : AlpacaDevice
 
     public override int AlpacaInterfaceVersion => InterfaceVersion;
 
-    /// <summary>True only when <paramref name="status"/> reports the weather alone Safe.</summary>
-    public static bool IsSafe(RoofStatusResponse status)
+    /// <summary>
+    /// True only when <paramref name="status"/> reports the weather alone Safe and lists this monitor's UniqueID among the
+    /// controller's own Alpaca devices.
+    /// </summary>
+    public bool IsSafe(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
-        return status.Safety is { WeatherState: RoofSafetyState.Safe };
+        return status.Safety is { WeatherState: RoofSafetyState.Safe } && IsListed(status);
+    }
+
+    /// <summary>True when the controller lists this monitor's UniqueID among its own (so it refuses to read it back).</summary>
+    public bool IsListed(RoofStatusResponse status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        var listed = status.Safety?.OwnAlpacaUniqueIds.Any(id => string.Equals(id?.Trim(), Ids.SafetyMonitor, StringComparison.OrdinalIgnoreCase)) == true;
+        if (Interlocked.Exchange(ref _listed, listed ? 1 : 0) != (listed ? 1 : 0))
+        {
+            if (listed)
+            {
+                _logger.LogInformation("The roof controller lists this server's SafetyMonitor ({UniqueId}) as its own, so it never reads it back: IsSafe follows the weather", Ids.SafetyMonitor);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "The roof controller does not list this server's SafetyMonitor ({UniqueId}) as its own, so it could read it back as its weather: IsSafe stays false until it does. Give the controller: {Settings}",
+                    Ids.SafetyMonitor, ControllerSettings);
+            }
+        }
+
+        return listed;
     }
 
     /// <summary>The <c>status</c> action's text: the weather and why it is not safe, as the controller words it.</summary>
-    public static string DescribeWeather(RoofStatusResponse status)
+    public string DescribeWeather(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
         if (status.Safety is not { } safety)
@@ -68,7 +110,10 @@ public sealed class AlpacaSafetyMonitor : AlpacaDevice
         var reasons = safety.WeatherState != RoofSafetyState.Safe && safety.WeatherReasons.Count > 0
             ? $": {string.Join("; ", safety.WeatherReasons)}"
             : string.Empty;
-        return $"Weather: {RoofStatusText.DescribeSafetyState(safety.WeatherState)}{reasons}.";
+        var weather = $"Weather: {RoofStatusText.DescribeSafetyState(safety.WeatherState)}{reasons}.";
+        return IsListed(status)
+            ? weather
+            : $"{weather} IsSafe is false: the roof controller does not list this monitor's UniqueID {Ids.SafetyMonitor} in RoofSafety:OwnAlpacaUniqueIds, so it could read this monitor back as its own weather.";
     }
 
     protected override void AddMembers(IDictionary<string, Member> members)

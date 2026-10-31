@@ -117,7 +117,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   block the roof (`BlocksRoof`) is clear of it, which today means parked; a source not read, failing or older than its
   `MaxReadingAge` is Unknown, and a weather source set `Ignored` or a scope that cannot block the roof never decides.
   The status also carries the weather alone (`weatherState`, never the telescopes), which the Alpaca server's
-  SafetyMonitor publishes; the controller refuses its own SafetyMonitor as a weather source (a loop).
+  SafetyMonitor publishes only while the controller lists its UniqueID in `RoofSafety:OwnAlpacaUniqueIds`; the
+  controller refuses its own SafetyMonitor as a weather source at every read (a loop).
   `Warn`, the owner's policy, refuses Open (`SafetyOverrideRequired`) unless the request carries `overrideSafety=true`,
   which anyone who may open may send (`OverrideRole`, default `Operator`; audit-logged); every UI asks before it sends
   it. `Block` refuses Open (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is

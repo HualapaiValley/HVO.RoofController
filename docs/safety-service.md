@@ -98,12 +98,12 @@ The source interfaces are in `HVO.RoofControllerV4.Common.Safety`, so the simula
 
 Both extend `IRoofSafetySource`: a `Name` that the reasons quote, and an optional `MaxReadingAge` of the source's own.
 An adapter reads its device when asked and throws when it cannot (a `RoofSafetySourceException` when it can say why in
-words fit to show); it polls nothing and caches no reading, since the service does both (the
-SafetyMonitor adapter remembers only that its device was checked not to be the controller's own, until a read fails).
+words fit to show); it polls nothing and caches nothing, since the service does both.
 
 The controller's adapters read ASCOM Alpaca devices: `AlpacaTelescopeParkSource` for each of `RoofSafety:Telescopes`
 and `AlpacaSafetyMonitorSource` for each of `RoofSafety:WeatherSources`, in the order configured; a weather source
-that is the Alpaca server's own SafetyMonitor is refused, so the controller never reads its weather back
+that is the Alpaca server's own SafetyMonitor (by its `DriverInfo`, or a `UniqueID` in `RoofSafety:OwnAlpacaUniqueIds`)
+is refused at every read, so the controller never reads its weather back
 ([docs/alpaca.md](alpaca.md#never-our-own-safetymonitor)). Any other `ITelescopeParkSource` or `IWeatherSafetySource` singleton (the tests'
 simulated ones, [Testing](#testing)) is read too, before the configured ones.
 
@@ -176,6 +176,7 @@ no setting has (a misspelt one).
 | `MaxReadingAge` | `00:01:00` | more than `PollInterval` plus `ReadTimeout`, at most 1 h | How old a reading may be and still count, for a source without its own. |
 | `Telescopes` | none | at most 16 | The ASCOM Alpaca mounts read: `Name`, `Url`, `DeviceNumber`, `MaxReadingAge`, `BlocksRoof` ([docs/alpaca.md](alpaca.md#source-settings)). |
 | `WeatherSources` | none | at most 16 | The ASCOM Alpaca safety monitors read: `Name`, `Url`, `DeviceNumber`, `MaxReadingAge`, `Requirement`. |
+| `OwnAlpacaUniqueIds` | none | at most 16 | This installation's own Alpaca devices' `UniqueID`s: a weather source with one is refused, and the Alpaca server's SafetyMonitor says safe only while its own is listed ([docs/alpaca.md](alpaca.md#never-our-own-safetymonitor)). |
 
 To keep Open as it was before the interlock (the conditions only reported and logged), set `InterlockMode` to `Off`.
 
