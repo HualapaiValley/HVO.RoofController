@@ -144,4 +144,64 @@ public sealed class RoofOperatorLeaseTests
         rig.Controller.IsMoving.Should().BeTrue("taking the lease never stops a motion");
         (await rig.CloseAsync()).Rule().Should().Be("LeaseHeld");
     }
+
+    [TestMethod]
+    public async Task APersonWhoGrants_StepsAway_InEverySessionOfTheirs_AndTheGrantedCloseGoes()
+    {
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        rig.Scope.Parked = false;
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        var tui = AlpacaCommandRig.Person("ada", sessionId: "ada-tui");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Heartbeat(tui, input: true);
+        (await rig.CloseAsync()).Rule().Should().Be("LeaseHeld", "a person at a UI holds Alpaca off");
+
+        var grant = rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"])).Grant!;
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("a grant never lifts a person's lease, so theirs ends with it");
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(web, input: false);
+        rig.Commands.Heartbeat(tui, input: false);
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("heartbeats alone do not take it back");
+        rig.Commands.Grants().Should().ContainSingle();
+
+        var outcome = await rig.CloseAsync();
+        outcome.Result.IsSuccessful.Should().BeTrue(outcome.Result.Error?.Message);
+        outcome.GrantId.Should().Be(grant.Id);
+    }
+
+    [TestMethod]
+    public async Task APersonComingBackAfterGranting_TakesTheLease_AndTheGrantIsDropped()
+    {
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        rig.Scope.Parked = false;
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(web, input: true);
+
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("ada");
+        rig.Commands.Grants().Should().BeEmpty("a person taking the lease drops every grant");
+        (await rig.CloseAsync()).Rule().Should().Be("LeaseHeld");
+        rig.RelayOnWrites(2).Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task AGrant_LeavesAnotherPersonsLease_WhichStillRefusesTheClose_WithoutUsingTheGrant()
+    {
+        var (rig, _) = await StartAsync();
+        await using var __ = rig;
+        rig.Scope.Parked = false;
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("grace"), input: true);
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: true);
+
+        rig.Commands.Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("grace");
+        (await rig.CloseAsync()).Rule().Should().Be("LeaseHeld");
+        rig.Commands.Grants().Should().ContainSingle("a person's lease refuses before any grant is used");
+    }
 }

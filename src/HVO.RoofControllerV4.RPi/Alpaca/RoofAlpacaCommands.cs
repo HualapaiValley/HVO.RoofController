@@ -76,7 +76,8 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     private readonly Dictionary<string, OperatorLease> _leases = new(StringComparer.Ordinal);
     private string? _idleLapsedHolder;
 
-    // Sessions whose lease lapsed for want of input: their heartbeats take it again only with input.
+    // Sessions whose lease lapsed for want of input, or whose person stepped away by granting: their heartbeats take it
+    // again only with input.
     private readonly HashSet<string> _idleLapsedSessions = new(StringComparer.Ordinal);
     private readonly Dictionary<RoofAlpacaCommandKind, GrantEntry> _grants = [];
     private readonly List<RoofAlpacaAlert> _alerts = [];
@@ -314,7 +315,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             taken = !_leases.TryGetValue(session, out var lease);
             if (taken && !input && _idleLapsedSessions.Contains(session))
             {
-                // Its lease lapsed for want of input: a heartbeat alone does not take it back.
+                // Its lease lapsed for want of input, or its person granted: a heartbeat alone does not take it back.
                 return LeaseState_NoLock(now);
             }
 
@@ -383,7 +384,8 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     /// <summary>
     /// A person grants an override for one command of <paramref name="request"/>'s kind (UI sessions only): it lifts only
     /// the reasons they were shown, lasts the override window, replaces any grant of that kind, and is used up by the next
-    /// command of that kind that gets past the controller's own checks, whatever happens to it. Never through Alpaca.
+    /// command of that kind that gets past the controller's own checks, whatever happens to it. Never through Alpaca. The
+    /// person steps away with it: their operator lease ends, since a grant never lifts a person's lease.
     /// </summary>
     public RoofGrantOutcome Grant(ClaimsPrincipal user, RoofOverrideGrantRequest request)
     {
@@ -417,13 +419,43 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 now + (long)(TimeSpan.FromMinutes(_window).TotalSeconds * _time.TimestampFrequency));
             var replaced = _grants.Remove(request.Kind, out var previous);
             _grants[request.Kind] = grant;
+            var steppedAway = StepAway_NoLock(user);
             _logger.LogWarning(
-                "AUDIT override grant {GrantId} for one Alpaca {Kind} by {Caller} ({Ui}), {Window} min, lifting {Reasons}{Replaced}",
-                grant.Id, grant.Kind, who, ui, _window, string.Join(", ", keys), replaced ? $"; it replaces grant {previous!.Id}" : string.Empty);
+                "AUDIT override grant {GrantId} for one Alpaca {Kind} by {Caller} ({Ui}), {Window} min, lifting {Reasons}{Replaced}; {Leases} operator lease(s) of theirs ended with it",
+                grant.Id, grant.Kind, who, ui, _window, string.Join(", ", keys), replaced ? $"; it replaces grant {previous!.Id}" : string.Empty, steppedAway);
         }
 
         NotifyChanged();
         return RoofGrantOutcome.Granted(grant.ToContract(_time, _time.GetTimestamp()));
+    }
+
+    /// <summary>
+    /// The person who grants steps away: a grant never lifts a person's operator lease, so every lease of theirs ends with
+    /// it (each of their sessions), and each of those sessions, and the one granting, takes it again only with input,
+    /// which drops the grant as any person taking the lease does. Another person's lease is untouched and still refuses.
+    /// </summary>
+    private int StepAway_NoLock(ClaimsPrincipal user)
+    {
+        var name = user.Identity?.Name;
+        var sessions = _leases.Where(entry => string.Equals(entry.Value.Name, name, StringComparison.Ordinal)).Select(entry => entry.Key).ToArray();
+        foreach (var session in sessions)
+        {
+            _leases.Remove(session);
+            NoteAway_NoLock(session);
+        }
+
+        NoteAway_NoLock(SessionId(user));
+        return sessions.Length;
+    }
+
+    private void NoteAway_NoLock(string session)
+    {
+        if (_idleLapsedSessions.Count >= 256)
+        {
+            _idleLapsedSessions.Clear();
+        }
+
+        _idleLapsedSessions.Add(session);
     }
 
     /// <summary>A person revokes the grant of <paramref name="kind"/> (UI sessions only; audit-logged). False when there was none.</summary>
@@ -774,11 +806,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
 
             _leases.Remove(session);
             _idleLapsedHolder = lease.Name;
-            _idleLapsedSessions.Add(session);
-            if (_idleLapsedSessions.Count > 256)
-            {
-                _idleLapsedSessions.Clear();
-            }
+            NoteAway_NoLock(session);
 
             _logger.LogWarning("Operator lease of {Caller} lapsed after {Minutes} min without input: Alpaca commands may now move the roof",
                 lease.Caller, _leaseOptions.CurrentValue.OperatorLeaseIdleMinutes);

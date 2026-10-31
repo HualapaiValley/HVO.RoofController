@@ -24,7 +24,8 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
     private bool _input = true;
     private bool _held;
     private bool _refused;
-    private int _sending;
+    // One heartbeat at a time, and none while a grant is answered (StepAwayAsync).
+    private readonly SemaphoreSlim _sending = new(1, 1);
     private RoofOperatorLeaseState? _state;
 
     public RoofOperatorLeaseKeeper(RoofControllerClient client, TimeProvider? time = null, ILogger? logger = null)
@@ -88,7 +89,7 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
         }
 
         // One heartbeat at a time: a slow controller does not pile them up.
-        if (Interlocked.Exchange(ref _sending, 1) == 1)
+        if (!_sending.Wait(0))
         {
             if (input)
             {
@@ -131,7 +132,32 @@ public sealed class RoofOperatorLeaseKeeper : IAsyncDisposable
         }
         finally
         {
-            Volatile.Write(ref _sending, 0);
+            _sending.Release();
+        }
+    }
+
+    /// <summary>
+    /// Sends a grant as the person stepping away (#220): the controller ends their operator lease with the grant, since a
+    /// grant never lifts a person's lease, and only input after it takes the lease back, which drops the grant. So no
+    /// heartbeat crosses the grant, and once it is granted, input noted before (the click that asked for it) is forgotten.
+    /// </summary>
+    public async Task<T> StepAwayAsync<T>(Func<CancellationToken, Task<T>> grant, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        await _sending.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var granted = await grant(cancellationToken).ConfigureAwait(false);
+            lock (_gate)
+            {
+                _input = false;
+            }
+
+            return granted;
+        }
+        finally
+        {
+            _sending.Release();
         }
     }
 
