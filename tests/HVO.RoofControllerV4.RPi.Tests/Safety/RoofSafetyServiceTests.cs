@@ -4,6 +4,7 @@ using HVO.RoofControllerV4.Common.Safety;
 using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Simulation.Safety;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -452,7 +453,8 @@ public sealed class RoofSafetyServiceTests
         using var service = Create([mount], [SteadyWeather()]);
 
         var poll = service.PollAsync(CancellationToken.None);
-        await WaitUntilAsync(() => mount.Reads == 1);
+        // The weather's read too must have ended, or the clock's step would time it out as well.
+        await WaitUntilAsync(() => mount.Reads == 1 && WeatherRead(service));
         poll.IsCompleted.Should().BeFalse();
         _time.Advance(TimeSpan.FromSeconds(5));
         await poll.WaitAsync(TimeSpan.FromSeconds(10));
@@ -467,7 +469,7 @@ public sealed class RoofSafetyServiceTests
         var mount = new SimulatedTelescopeParkSource("Main") { Behaviour = SimulatedSourceBehaviour.IgnoresCancellation };
         using var service = Create([mount], [SteadyWeather()]);
         var poll = service.PollAsync(CancellationToken.None);
-        await WaitUntilAsync(() => mount.Reads == 1);
+        await WaitUntilAsync(() => mount.Reads == 1 && WeatherRead(service));
         _time.Advance(TimeSpan.FromSeconds(5));
         await poll.WaitAsync(TimeSpan.FromSeconds(10));
 
@@ -707,6 +709,12 @@ public sealed class RoofSafetyServiceTests
         result.FailureMessage.Should().Contain($"RoofSafety:{setting}");
     }
 
+    private static IConfigurationSection Section(Dictionary<string, string?> values)
+        => new ConfigurationBuilder().AddInMemoryCollection(values).Build().GetSection(RoofSafetyOptions.SectionName);
+
+    /// <summary>True once the service holds a reading of the weather source (the second source in these tests).</summary>
+    private static bool WeatherRead(RoofSafetyService service) => service.GetCurrent().Sources[1].LastReadingUtc is not null;
+
     /// <summary>A required weather source that stays safe, with a maximum age (5 min) longer than any test's wait.</summary>
     private static SimulatedWeatherSafetySource SteadyWeather() => new("Cloud sensor", maxReadingAge: TimeSpan.FromMinutes(5));
 
@@ -763,6 +771,70 @@ public sealed class RoofSafetyServiceTests
         result.Failed.Should().BeTrue();
         result.FailureMessage.Should().Contain($"RoofSafety:{key}");
         result.FailureMessage.Should().NotContain("secret").And.NotContain("198.51.100", "a failure names the setting, never the address it holds");
+    }
+
+    [TestMethod]
+    public void EveryLegitimateSetting_BindsStrictly_WhateverItsKeysCase()
+    {
+        var section = Section(new Dictionary<string, string?>
+        {
+            ["RoofSafety:interlockmode"] = "block",
+            ["RoofSafety:OverrideRole"] = "Admin",
+            ["RoofSafety:PollInterval"] = "00:00:05",
+            ["RoofSafety:ReadTimeout"] = "00:00:02",
+            ["RoofSafety:MaxReadingAge"] = "00:02:00",
+            ["RoofSafety:Telescopes:0:Name"] = "Main",
+            ["RoofSafety:Telescopes:0:Url"] = "http://198.51.100.10:11111",
+            ["RoofSafety:Telescopes:0:DeviceNumber"] = "1",
+            ["RoofSafety:Telescopes:0:MaxReadingAge"] = "00:03:00",
+            ["RoofSafety:Telescopes:0:blocksroof"] = "False",
+            ["RoofSafety:WeatherSources:0:Name"] = "Cloud sensor",
+            ["RoofSafety:WeatherSources:0:Url"] = "http://198.51.100.11:11111",
+            ["RoofSafety:WeatherSources:0:requirement"] = "ignored"
+        });
+        var options = new RoofSafetyOptions();
+
+        RoofSafetyOptionsValidator.FindUnreadable(section).Should().BeEmpty();
+        RoofSafetyServiceCollectionExtensions.BindStrictly(section, options);
+
+        options.Should().BeEquivalentTo(new
+        {
+            InterlockMode = RoofSafetyInterlockMode.Block,
+            OverrideRole = RoofSafetyOverrideRole.Admin,
+            Telescopes = new[] { new { Name = "Main", DeviceNumber = 1, MaxReadingAge = (TimeSpan?)TimeSpan.FromMinutes(3), BlocksRoof = false } },
+            WeatherSources = new[] { new { Name = "Cloud sensor", DeviceNumber = 0, Requirement = RoofWeatherSourceRequirement.Ignored } }
+        }, o => o.ExcludingMissingMembers());
+    }
+
+    [TestMethod]
+    public void WhatCannotBeBound_IsNamedByKey_NeverByValue()
+    {
+        const string misplaced = "http://198.51.100.99:11111";
+        var section = Section(new Dictionary<string, string?>
+        {
+            ["RoofSafety:Telescopes:0:Name"] = "Main",
+            ["RoofSafety:Telescopes:0:Url"] = "http://198.51.100.10:11111",
+            ["RoofSafety:Telescopes:0:DeviceNumber"] = misplaced,
+            ["RoofSafety:Telescopes:0:Requirement"] = "Required",
+            ["RoofSafety:Telescopes:1"] = misplaced,
+            ["RoofSafety:WeatherSources:0:MaxReadingAge:Minutes"] = "5",
+            ["RoofSafety:WeatherSources:0:BlocksRoof"] = "true",
+            ["RoofSafety:PollIntervall"] = "00:00:10"
+        });
+
+        var failures = RoofSafetyOptionsValidator.FindUnreadable(section);
+        var bind = () => RoofSafetyServiceCollectionExtensions.BindStrictly(section, new RoofSafetyOptions());
+
+        failures.Should().BeEquivalentTo(
+            "RoofSafety:Telescopes:0:DeviceNumber must be a whole number.",
+            "RoofSafety:Telescopes:0:Requirement is not a setting of a telescope.",
+            "RoofSafety:Telescopes:1 must be a telescope: give its Name, Url and DeviceNumber.",
+            "RoofSafety:WeatherSources:0:MaxReadingAge must be a duration such as 00:05:00, not a section.",
+            "RoofSafety:WeatherSources:0:BlocksRoof is not a setting of a weather source.",
+            "RoofSafety:PollIntervall is not a RoofSafety setting.");
+        var refused = bind.Should().Throw<OptionsValidationException>().Which;
+        refused.InnerException.Should().BeNull();
+        refused.ToString().Should().NotContain("198.51.100.99");
     }
 
     [TestMethod]

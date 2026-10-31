@@ -20,11 +20,11 @@ public static class RoofSafetyServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        // A value that does not convert, or a key no setting has, stops the start: by default the binder drops a whole
-        // device from a list for one bad value, which could remove a blocking mount or a required weather source unseen.
+        var section = configuration.GetSection(RoofSafetyOptions.SectionName);
         services.AddOptions<RoofSafetyOptions>()
-            .Bind(configuration.GetSection(RoofSafetyOptions.SectionName), binder => binder.ErrorOnUnknownConfiguration = true)
+            .Configure(options => BindStrictly(section, options))
             .ValidateOnStart();
+        services.AddSingleton<IOptionsChangeTokenSource<RoofSafetyOptions>>(new ConfigurationChangeTokenSource<RoofSafetyOptions>(section));
         services.AddSingleton<IValidateOptions<RoofSafetyOptions>, RoofSafetyOptionsValidator>();
         services.TryAddSingleton(TimeProvider.System);
         AddAlpacaClient(services);
@@ -42,6 +42,36 @@ public static class RoofSafetyServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(safety);
         ArgumentNullException.ThrowIfNull(status);
         return status with { Safety = safety.GetCurrent() };
+    }
+
+    /// <summary>
+    /// Binds the <c>RoofSafety</c> section, refusing what cannot be bound: a value that does not convert, or a key no setting
+    /// has. By default the binder drops a whole device from its list for one bad value, which could remove a blocking mount
+    /// or a required weather source unseen. The refusal names each key and never its value, which could be a device's
+    /// address put in the wrong setting: <see cref="RoofSafetyOptionsValidator.FindUnreadable"/> finds the keys first, and
+    /// the binder's own exception, which repeats the value, is never passed on.
+    /// </summary>
+    internal static void BindStrictly(IConfigurationSection section, RoofSafetyOptions options)
+    {
+        var unreadable = RoofSafetyOptionsValidator.FindUnreadable(section);
+        if (unreadable.Count > 0)
+        {
+            throw new OptionsValidationException(RoofSafetyOptions.SectionName, typeof(RoofSafetyOptions), unreadable);
+        }
+
+        try
+        {
+            section.Bind(options, binder => binder.ErrorOnUnknownConfiguration = true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Not expected once the keys above are checked. Its message and inner exceptions repeat the value: not passed on.
+            throw new OptionsValidationException(RoofSafetyOptions.SectionName, typeof(RoofSafetyOptions),
+            [
+                $"The {RoofSafetyOptions.SectionName} settings cannot be bound: a value is not of its setting's type, or a key is not a setting. "
+                + "The value is not repeated, since it could be a device's address."
+            ]);
+        }
     }
 
     private static void AddAlpacaClient(IServiceCollection services)

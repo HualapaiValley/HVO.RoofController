@@ -1,3 +1,4 @@
+using System.Globalization;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Common.Safety;
 using Microsoft.Extensions.Options;
@@ -160,6 +161,108 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
 
     /// <summary>The most devices of one kind the service reads.</summary>
     public const int MaxDevicesPerKind = 16;
+
+    /// <summary>
+    /// The <c>RoofSafety</c> keys that cannot be bound, read from the raw configuration before binding: a key no setting
+    /// has, and a value that is not of its setting's type. Each failure names the key and never the value, which could be
+    /// a device's address put in the wrong setting. The binder would otherwise drop a whole device from its list for one
+    /// such value, or repeat the value in its exception.
+    /// </summary>
+    public static IReadOnlyList<string> FindUnreadable(IConfigurationSection section)
+    {
+        ArgumentNullException.ThrowIfNull(section);
+        var failures = new List<string>();
+        foreach (var child in section.GetChildren())
+        {
+            switch (child.Key.ToUpperInvariant())
+            {
+                case "INTERLOCKMODE":
+                    Check(child, value => Enum.TryParse<RoofSafetyInterlockMode>(value, ignoreCase: true, out _), "must be Off, Warn or Block", failures);
+                    break;
+                case "OVERRIDEROLE":
+                    Check(child, value => Enum.TryParse<RoofSafetyOverrideRole>(value, ignoreCase: true, out _), "must be Operator or Admin", failures);
+                    break;
+                case "POLLINTERVAL" or "READTIMEOUT" or "MAXREADINGAGE":
+                    Check(child, IsDuration, "must be a duration such as 00:00:10", failures);
+                    break;
+                case "TELESCOPES":
+                    FindUnreadableDevices(child, "telescope", "BLOCKSROOF", value => bool.TryParse(value, out _), "must be true or false", failures);
+                    break;
+                case "WEATHERSOURCES":
+                    FindUnreadableDevices(child, "weather source", "REQUIREMENT", value => Enum.TryParse<RoofWeatherSourceRequirement>(value, ignoreCase: true, out _), "must be Required or Ignored", failures);
+                    break;
+                default:
+                    failures.Add($"{child.Path} is not a {RoofSafetyOptions.SectionName} setting.");
+                    break;
+            }
+        }
+
+        return failures;
+    }
+
+    private static void FindUnreadableDevices(
+        IConfigurationSection list,
+        string kind,
+        string ownKey,
+        Func<string, bool> ownIsValid,
+        string ownMeaning,
+        List<string> failures)
+    {
+        if (list.Value is { Length: > 0 })
+        {
+            failures.Add($"{list.Path} must be a list of devices, not a value.");
+            return;
+        }
+
+        foreach (var device in list.GetChildren())
+        {
+            if (device.Value is { Length: > 0 })
+            {
+                failures.Add($"{device.Path} must be a {kind}: give its Name, Url and DeviceNumber.");
+                continue;
+            }
+
+            foreach (var field in device.GetChildren())
+            {
+                var key = field.Key.ToUpperInvariant();
+                if (key is "NAME" or "URL")
+                {
+                    Check(field, _ => true, "must be text", failures);
+                }
+                else if (key == "DEVICENUMBER")
+                {
+                    Check(field, value => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _), "must be a whole number", failures);
+                }
+                else if (key == "MAXREADINGAGE")
+                {
+                    Check(field, IsDuration, "must be a duration such as 00:05:00", failures);
+                }
+                else if (key == ownKey)
+                {
+                    Check(field, ownIsValid, ownMeaning, failures);
+                }
+                else
+                {
+                    failures.Add($"{field.Path} is not a setting of a {kind}.");
+                }
+            }
+        }
+    }
+
+    // A value must be a value (not a section of its own) of its type; one not given (null or empty) is left to the binder.
+    private static void Check(IConfigurationSection setting, Func<string, bool> isValid, string meaning, List<string> failures)
+    {
+        if (setting.Value is null && setting.GetChildren().Any())
+        {
+            failures.Add($"{setting.Path} {meaning}, not a section.");
+        }
+        else if (!string.IsNullOrEmpty(setting.Value) && !isValid(setting.Value))
+        {
+            failures.Add($"{setting.Path} {meaning}.");
+        }
+    }
+
+    private static bool IsDuration(string value) => TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out _);
 
     /// <summary>An absolute http or https address with a host, and no credentials, query or fragment.</summary>
     internal static bool IsUsableUrl(string? url)

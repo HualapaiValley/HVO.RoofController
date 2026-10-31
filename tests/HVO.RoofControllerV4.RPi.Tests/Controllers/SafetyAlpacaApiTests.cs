@@ -173,10 +173,19 @@ public sealed class SafetyAlpacaApiTests
     [DataRow("RoofSafety:Telescopes:0:DeviceNumer", "1")]
     [DataRow("RoofSafety:WeatherSources:0:Requirement", "Requred")]
     [DataRow("RoofSafety:WeatherSources:1:Requirement", "Requred")]
+    // Review F4 (#227): the failure names the key, never the value, which could be a device's address put in the wrong
+    // setting.
+    [DataRow("RoofSafety:Telescopes:0:DeviceNumber", Address)]
+    [DataRow("RoofSafety:Telescopes:0:BlocksRoof", Address)]
+    [DataRow("RoofSafety:Telescopes:0:MaxReadingAge", Address)]
+    [DataRow("RoofSafety:WeatherSources:1:Requirement", Address)]
+    [DataRow("RoofSafety:PollInterval", Address)]
+    [DataRow("RoofSafety:InterlockMode", Address)]
     public void ADeviceSettingThatCannotBeRead_StopsTheStart_NeverDropsTheDevice(string key, string value)
     {
         // Review F1 (#227): the configuration binder skips a whole list entry whose value does not convert, so a typo
         // could remove a blocking mount or a required weather source and leave the rest Safe.
+        var logs = new RecordingLoggerProvider();
         var extra = new Dictionary<string, string?> { [key] = value };
         if (key.StartsWith("RoofSafety:WeatherSources:1:", StringComparison.Ordinal))
         {
@@ -184,13 +193,16 @@ public sealed class SafetyAlpacaApiTests
             extra["RoofSafety:WeatherSources:1:Url"] = Address;
         }
 
-        var host = Host(extra: extra);
+        var host = Host(extra: extra, logs: logs);
 
         var start = () => host.CreateApiClient(TestApiKeys.Viewer);
 
-        var text = start.Should().Throw<Exception>().Which.ToString();
+        var failure = start.Should().Throw<Exception>().Which;
+        var text = failure.ToString();
         text.Should().Contain(key.EndsWith("DeviceNumer", StringComparison.Ordinal) ? "DeviceNumer" : key);
-        text.Should().NotContain("alpaca.example.test");
+        text.Should().NotContain("alpaca.example.test", "neither the failure nor any exception inside it repeats the value");
+        logs.Entries.Should().NotContain(entry => entry.Message.Contains("alpaca.example.test", StringComparison.Ordinal)
+            || (entry.Exception != null && entry.Exception.ToString().Contains("alpaca.example.test", StringComparison.Ordinal)));
     }
 
     [TestMethod]
