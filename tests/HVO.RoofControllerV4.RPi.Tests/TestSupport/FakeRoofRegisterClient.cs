@@ -116,6 +116,12 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     /// <summary>Invoked (outside the client lock) after each relay-register write with the register, value and resulting mask.</summary>
     public Action<byte, byte, byte>? RelayWriteObserver { get; set; }
 
+    /// <summary>
+    /// Invoked (outside the client lock) before each byte write to a relay register with the register and value, before the
+    /// write lands: a test blocks here to model a relay write that hangs in the transfer.
+    /// </summary>
+    public Action<byte, byte>? BeforeRelayWrite { get; set; }
+
     /// <summary>Number of digital input register reads attempted.</summary>
     public int InputReadCount
     {
@@ -225,6 +231,11 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override void WriteByte(byte register, byte value)
     {
+        if (IsRelayRegister(register))
+        {
+            BeforeRelayWrite?.Invoke(register, value);
+        }
+
         byte? mask = null;
         Action<byte, byte, byte>? observer;
         lock (_gate)
