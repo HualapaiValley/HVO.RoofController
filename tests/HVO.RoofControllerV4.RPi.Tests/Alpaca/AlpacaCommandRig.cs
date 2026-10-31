@@ -97,11 +97,13 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         TimeSpan? operatorLeaseTimeout = null,
         TimeSpan? watchdog = null,
         bool startSafety = true,
-        IReadOnlyList<string>? configuredTelescopes = null)
+        IReadOnlyList<string>? configuredTelescopes = null,
+        TimeProvider? time = null)
     {
+        time ??= TimeProvider.System;
         var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false); // mid-travel, healthy (NC limits: HIGH = not active)
-        var controller = SimulatedRoofControllerService.Create(hat, TimeProvider.System, options =>
+        var controller = SimulatedRoofControllerService.Create(hat, time, options =>
         {
             options.DirectionChangeDelay = directionChangeDelay ?? TimeSpan.Zero;
             options.OperatorLeaseTimeout = operatorLeaseTimeout;
@@ -120,7 +122,7 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
             MaxReadingAge = TimeSpan.FromSeconds(60),
             Telescopes = [.. (configuredTelescopes ?? []).Select(name => new RoofSafetyTelescopeOptions { Name = name, Url = "http://192.0.2.1:11111", BlocksRoof = true })]
         });
-        var safety = new RoofSafetyService(telescopes, weather is null ? [] : [weather], safetyOptions, TimeProvider.System, NullLogger<RoofSafetyService>.Instance);
+        var safety = new RoofSafetyService(telescopes, weather is null ? [] : [weather], safetyOptions, time, NullLogger<RoofSafetyService>.Instance);
         if (startSafety)
         {
             await safety.StartAsync(CancellationToken.None);
@@ -138,7 +140,7 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         var keyStore = new RoofApiKeyStore(keys, NullLogger<RoofApiKeyStore>.Instance);
         var options = new TestOptionsMonitor<RoofAlpacaCommandOptions>(new RoofAlpacaCommandOptions { AllowCommands = mode, ScopeRereadBudgetMs = budgetMs });
         var lease = new TestOptionsMonitor<RoofOperatorLeaseOptions>(new RoofOperatorLeaseOptions());
-        var commands = new RoofAlpacaCommands(controller, safety, options, lease, safetyOptions, keyStore, telescopes, TimeProvider.System, NullLogger<RoofAlpacaCommands>.Instance);
+        var commands = new RoofAlpacaCommands(controller, safety, options, lease, safetyOptions, keyStore, telescopes, time, NullLogger<RoofAlpacaCommands>.Instance);
         return new AlpacaCommandRig(controller, hat, safety, commands, options, lease, safetyOptions, keys, keyStore, telescopes, weather);
     }
 
