@@ -47,6 +47,12 @@ internal sealed record EmulatedRoofRigOptions
     /// <summary>Settings for the controller host, applied last.</summary>
     public IReadOnlyDictionary<string, string?>? Settings { get; init; }
 
+    /// <summary>
+    /// The address every request to the in-memory controller comes from (the TCP peer it judges trusted Alpaca servers
+    /// by); null leaves the test server's (none, which is never trusted).
+    /// </summary>
+    public System.Net.IPAddress? RemoteAddress { get; init; }
+
     /// <summary>The register port is in an outage when the controller starts, and the rig does not wait for it to initialize.</summary>
     public bool StartWithTheLinkDown { get; init; }
 
@@ -237,7 +243,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
     private EmulatedRoofApp CreateApp(RecordingLoggerProvider logs)
     {
-        var app = new EmulatedRoofApp(_settings, Options.Environment, logs, Options.ConsoleLog);
+        var app = new EmulatedRoofApp(_settings, Options.Environment, logs, Options.ConsoleLog) { RemoteAddress = Options.RemoteAddress };
         if (Options.Kestrel)
         {
             app.UseKestrel(0);
@@ -348,6 +354,9 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
 {
     private IServer? _server;
 
+    /// <summary>The address every in-memory request comes from; null leaves the test server's.</summary>
+    public System.Net.IPAddress? RemoteAddress { get; init; }
+
     public override async ValueTask DisposeAsync()
     {
         // Found before the host is disposed; disposed once it has stopped serving. The server is taken when the host
@@ -398,6 +407,10 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
 
         builder.UseEnvironment(environment);
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(values));
+        if (RemoteAddress is { } remote)
+        {
+            builder.ConfigureServices(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(new RemoteAddressFilter(remote)));
+        }
 
         // Program reads the exporter endpoint while it adds services, before the configuration above applies.
         if (values.TryGetValue("OTEL_EXPORTER_OTLP_ENDPOINT", out var otlpEndpoint))
@@ -419,4 +432,18 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
             logging.AddProvider(logs);
         });
     }
+}
+
+/// <summary>Gives every in-memory request the peer address a test chooses, before anything else sees it.</summary>
+internal sealed class RemoteAddressFilter(System.Net.IPAddress address) : Microsoft.AspNetCore.Hosting.IStartupFilter
+{
+    public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+    {
+        app.Use((context, nextMiddleware) =>
+        {
+            context.Connection.RemoteIpAddress = address;
+            return nextMiddleware(context);
+        });
+        next(app);
+    };
 }

@@ -189,6 +189,12 @@ public sealed partial class RoofSafetyService
     {
         var state = source.Rereads;
 
+        // A read issued after this command arrived has already ended (the one its ticket started, say): it is the answer.
+        if (source.CompletedIssuedTimestamp is { } completed && completed >= arrival)
+        {
+            return Task.CompletedTask;
+        }
+
         // Join a re-read issued after this command arrived, or the one queued to be issued (which will be).
         var joined = state.InFlight.LastOrDefault(reread => reread.IssuedTimestamp >= arrival) ?? state.Queued;
         if (joined is not null)
