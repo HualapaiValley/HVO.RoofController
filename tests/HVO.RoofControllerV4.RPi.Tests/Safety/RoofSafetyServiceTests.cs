@@ -807,6 +807,45 @@ public sealed class RoofSafetyServiceTests
     }
 
     [TestMethod]
+    [DataRow("Telescopes:0:DeviceNumber", new[] { "1", "0x1", "&h1", "#1", "-1", " 1", "+1", "1.0", "one", "0x", "99999999999", "http://198.51.100.9:11111" })]
+    [DataRow("WeatherSources:0:DeviceNumber", new[] { "1", "0x1", "&h1", "#1", "one", "http://198.51.100.9:11111" })]
+    [DataRow("Telescopes:0:BlocksRoof", new[] { "true", "False", "TRUE", " true", "yes", "1", "tru", "http://198.51.100.9:11111" })]
+    [DataRow("Telescopes:0:MaxReadingAge", new[] { "00:05:00", "5", "1.00:00:00", "00:05", "5m", "soon", "http://198.51.100.9:11111" })]
+    [DataRow("WeatherSources:0:Requirement", new[] { "Required", "ignored", "1", "7", "Required, Ignored", "Requred", "http://198.51.100.9:11111" })]
+    [DataRow("InterlockMode", new[] { "Warn", "block", "0", "Warn, Block", "Blok", "http://198.51.100.9:11111" })]
+    [DataRow("OverrideRole", new[] { "Operator", "admin", "1", "Admins" })]
+    [DataRow("PollInterval", new[] { "00:00:10", "10", "00:00:10.5", "ten", "http://198.51.100.9:11111" })]
+    public void WhatTheScanRefuses_IsExactlyWhatStrictBindingCannotBind(string key, string[] values)
+    {
+        // Review F5 (#227): the scan names what the binder cannot bind; it adds no rule of its own (a device number of 0x1
+        // binds as 1, so it must not be refused).
+        foreach (var value in values)
+        {
+            var settings = new Dictionary<string, string?>
+            {
+                ["RoofSafety:Telescopes:0:Name"] = "Main",
+                ["RoofSafety:Telescopes:0:Url"] = "http://198.51.100.10:11111",
+                ["RoofSafety:WeatherSources:0:Name"] = "Cloud sensor",
+                ["RoofSafety:WeatherSources:0:Url"] = "http://198.51.100.11:11111",
+                [$"RoofSafety:{key}"] = value
+            };
+            var section = Section(settings);
+            var bindable = true;
+            try
+            {
+                section.Bind(new RoofSafetyOptions(), binder => binder.ErrorOnUnknownConfiguration = true);
+            }
+            catch (InvalidOperationException)
+            {
+                bindable = false;
+            }
+
+            RoofSafetyOptionsValidator.FindUnreadable(section).Should().HaveCount(bindable ? 0 : 1,
+                "'{0}' for {1} {2} by the binder", value, key, bindable ? "is bound" : "cannot be bound");
+        }
+    }
+
+    [TestMethod]
     public void WhatCannotBeBound_IsNamedByKey_NeverByValue()
     {
         const string misplaced = "http://198.51.100.99:11111";

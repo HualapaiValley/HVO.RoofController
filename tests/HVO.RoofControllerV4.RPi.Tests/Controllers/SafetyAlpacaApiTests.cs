@@ -206,6 +206,26 @@ public sealed class SafetyAlpacaApiTests
     }
 
     [TestMethod]
+    [DataRow("0x0")]
+    [DataRow("&h0")]
+    [DataRow("#0")]
+    public async Task ADeviceNumberTheBinderReads_StartsTheController_AndReadsThatDevice(string deviceNumber)
+    {
+        // Review F5 (#227): the start's check refuses only what the configuration binder cannot read; a hexadecimal
+        // device number binds as its value.
+        var host = Host(extra: new Dictionary<string, string?>
+        {
+            ["RoofSafety:Telescopes:0:DeviceNumber"] = deviceNumber,
+            ["RoofSafety:WeatherSources:0:DeviceNumber"] = deviceNumber
+        });
+        using var client = host.CreateApiClient(TestApiKeys.Operator);
+
+        var safety = await WaitForAsync(client, RoofSafetyState.Safe);
+
+        safety.Sources.Select(source => (source.Name, source.State)).Should().Equal(("Main", RoofSafetyState.Safe), ("Cloud sensor", RoofSafetyState.Safe));
+    }
+
+    [TestMethod]
     public async Task NothingTheControllerLogs_NamesADevicesAddress_EvenAtDebug()
     {
         var logs = new RecordingLoggerProvider();

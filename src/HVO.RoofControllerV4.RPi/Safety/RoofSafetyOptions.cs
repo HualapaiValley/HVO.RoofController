@@ -1,4 +1,4 @@
-using System.Globalization;
+using System.ComponentModel;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Common.Safety;
 using Microsoft.Extensions.Options;
@@ -166,7 +166,9 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
     /// The <c>RoofSafety</c> keys that cannot be bound, read from the raw configuration before binding: a key no setting
     /// has, and a value that is not of its setting's type. Each failure names the key and never the value, which could be
     /// a device's address put in the wrong setting. The binder would otherwise drop a whole device from its list for one
-    /// such value, or repeat the value in its exception.
+    /// such value, or repeat the value in its exception. A value is of its type when the binder's own conversion (the
+    /// type's <see cref="TypeConverter"/>, invariant culture) reads it, so nothing the binder accepts is refused here (a
+    /// device number of <c>0x1</c> is 1).
     /// </summary>
     public static IReadOnlyList<string> FindUnreadable(IConfigurationSection section)
     {
@@ -177,19 +179,19 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
             switch (child.Key.ToUpperInvariant())
             {
                 case "INTERLOCKMODE":
-                    Check(child, value => Enum.TryParse<RoofSafetyInterlockMode>(value, ignoreCase: true, out _), "must be Off, Warn or Block", failures);
+                    Check(child, Converts<RoofSafetyInterlockMode>, "must be Off, Warn or Block", failures);
                     break;
                 case "OVERRIDEROLE":
-                    Check(child, value => Enum.TryParse<RoofSafetyOverrideRole>(value, ignoreCase: true, out _), "must be Operator or Admin", failures);
+                    Check(child, Converts<RoofSafetyOverrideRole>, "must be Operator or Admin", failures);
                     break;
                 case "POLLINTERVAL" or "READTIMEOUT" or "MAXREADINGAGE":
-                    Check(child, IsDuration, "must be a duration such as 00:00:10", failures);
+                    Check(child, Converts<TimeSpan>, "must be a duration such as 00:00:10", failures);
                     break;
                 case "TELESCOPES":
-                    FindUnreadableDevices(child, "telescope", "BLOCKSROOF", value => bool.TryParse(value, out _), "must be true or false", failures);
+                    FindUnreadableDevices(child, "telescope", "BLOCKSROOF", Converts<bool>, "must be true or false", failures);
                     break;
                 case "WEATHERSOURCES":
-                    FindUnreadableDevices(child, "weather source", "REQUIREMENT", value => Enum.TryParse<RoofWeatherSourceRequirement>(value, ignoreCase: true, out _), "must be Required or Ignored", failures);
+                    FindUnreadableDevices(child, "weather source", "REQUIREMENT", Converts<RoofWeatherSourceRequirement>, "must be Required or Ignored", failures);
                     break;
                 default:
                     failures.Add($"{child.Path} is not a {RoofSafetyOptions.SectionName} setting.");
@@ -231,11 +233,11 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
                 }
                 else if (key == "DEVICENUMBER")
                 {
-                    Check(field, value => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _), "must be a whole number", failures);
+                    Check(field, Converts<int>, "must be a whole number", failures);
                 }
                 else if (key == "MAXREADINGAGE")
                 {
-                    Check(field, IsDuration, "must be a duration such as 00:05:00", failures);
+                    Check(field, Converts<TimeSpan>, "must be a duration such as 00:05:00", failures);
                 }
                 else if (key == ownKey)
                 {
@@ -262,7 +264,22 @@ public sealed class RoofSafetyOptionsValidator : IValidateOptions<RoofSafetyOpti
         }
     }
 
-    private static bool IsDuration(string value) => TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out _);
+    /// <summary>
+    /// True when the configuration binder can read <paramref name="value"/> as a <typeparamref name="T"/>: it converts with
+    /// the type's converter in the invariant culture. The converter's exception, which repeats the value, is dropped.
+    /// </summary>
+    private static bool Converts<T>(string value)
+    {
+        try
+        {
+            TypeDescriptor.GetConverter(typeof(T)).ConvertFromInvariantString(value);
+            return true;
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException or NotSupportedException or OverflowException or InvalidCastException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>An absolute http or https address with a host, and no credentials, query or fragment.</summary>
     internal static bool IsUsableUrl(string? url)
