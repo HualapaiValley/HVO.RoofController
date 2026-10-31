@@ -77,6 +77,13 @@ public sealed record KioskView
     /// <summary>True while the kiosk renews the operator lease of a motion it started.</summary>
     public bool HoldsLease { get; init; }
 
+    /// <summary>
+    /// The safety override question the kiosk asks before it sends Open, while the conditions are not Safe and the
+    /// controller's interlock asks for an override (Warn mode); null when it asks nothing. Open is sent with the override
+    /// only once the person confirms (<see cref="KioskConsole.OpenWithSafetyOverrideAsync"/>).
+    /// </summary>
+    public RoofSafetyOverrideQuestion? SafetyQuestion { get; init; }
+
     /// <summary>The answer to the newest Stop, or <see cref="RoofStopText.AlwaysAvailable"/> before the first.</summary>
     public string StopMessage { get; init; } = RoofStopText.AlwaysAvailable;
 

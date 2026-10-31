@@ -40,7 +40,7 @@ internal sealed class KioskHarness : IAsyncDisposable
     private long _version = 11;
     private volatile bool _reachable = true;
 
-    private KioskHarness(bool localKey, IDictionary<string, string?>? settings, KioskConsoleOptions? options, TimeSpan? requestTimeout)
+    private KioskHarness(bool localKey, IDictionary<string, string?>? settings, KioskConsoleOptions? options, TimeSpan? requestTimeout, Action<IServiceCollection>? services)
     {
         Directory = new WebTestSupport.TempDirectory();
         Roof = new SettingsApiTests.RoofDouble();
@@ -73,11 +73,12 @@ internal sealed class KioskHarness : IAsyncDisposable
         Host = new RoofApiTestHost(
             Roof.Mock,
             all,
-            configureServices: services =>
+            configureServices: controller =>
             {
                 // A cheap hash so the tests run quickly; production uses the ASP.NET Core default.
-                services.Configure<PasswordHasherOptions>(hasher => hasher.IterationCount = 1_000);
-                services.AddSingleton<TimeProvider>(ServerClock);
+                controller.Configure<PasswordHasherOptions>(hasher => hasher.IterationCount = 1_000);
+                controller.AddSingleton<TimeProvider>(ServerClock);
+                services?.Invoke(controller);
             },
             settingsFilePath: SettingsPath,
             secretsFilePath: Path.Combine(Directory.Path, "secrets", "managed-secrets.json"));
@@ -95,7 +96,12 @@ internal sealed class KioskHarness : IAsyncDisposable
             TimeProvider = Clock,
             StopTimeout = TimeSpan.FromSeconds(10),
             RequestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30),
-            LoggerFactory = LoggerFactory
+            LoggerFactory = LoggerFactory,
+            // The program's name and version, as the installed kiosk or Mac app sends them, so the command history says
+            // "kiosk" or "Mac app".
+            ProgramAssembly = options?.Wording.Device == KioskWording.Desktop.Device
+                ? typeof(HVO.RoofControllerV4.Mac.Program).Assembly
+                : typeof(HVO.RoofControllerV4.Kiosk.Program).Assembly
         });
         Console = new KioskConsole(Client, options, LoggerFactory.CreateLogger<KioskConsole>());
     }
@@ -142,8 +148,38 @@ internal sealed class KioskHarness : IAsyncDisposable
     /// </summary>
     public Func<HttpRequestMessage, bool>? CutAnswer { get; set; }
 
+    /// <summary>Changes a request before the controller has it, as an older controller would read it (a query it ignores).</summary>
+    public Action<HttpRequestMessage>? AlterRequest { get; set; }
+
     /// <summary>Optional controller build metadata override for cross-version UI tests, after normal authorization.</summary>
     public string? ControllerVersion { get; set; }
+
+    /// <summary>
+    /// The figures every summary the controller answers carries (#209), in place of this machine's: a render is the same
+    /// on every machine, and never shows its addresses. Where the web UI is reached is as the installer writes it for a Pi
+    /// open to the network, with a documentation address (RFC 5737); the container's own address is never shown.
+    /// The version is the controller's, or <see cref="ControllerVersion"/>.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, System.Text.Json.Nodes.JsonNode?> SummaryFigures = new Dictionary<string, System.Text.Json.Nodes.JsonNode?>
+    {
+        ["uptimeSeconds"] = 7_380,
+        ["hostUptimeSeconds"] = 356_460,
+        ["processorCount"] = 4,
+        ["cpuUsagePercent"] = 12.5,
+        ["loadAverage1Minute"] = 0.42,
+        ["loadAverage5Minutes"] = 0.35,
+        ["loadAverage15Minutes"] = 0.3,
+        ["cpuTemperatureCelsius"] = 47.2,
+        ["memoryTotalBytes"] = 4L << 30,
+        ["memoryAvailableBytes"] = 3_113_851_289L,
+        ["diskTotalBytes"] = 31_268_536_320L,
+        ["diskFreeBytes"] = 18L << 30,
+        ["webUiUrls"] = new System.Text.Json.Nodes.JsonArray("https://192.0.2.10:8088/"),
+        ["webUiAccess"] = "Network",
+        ["hostAddresses"] = new System.Text.Json.Nodes.JsonArray("192.0.2.10"),
+        ["ipAddresses"] = new System.Text.Json.Nodes.JsonArray("172.17.0.2"),
+        ["runningInContainer"] = true
+    };
 
     /// <summary>
     /// Awaited after the controller handled each request and before its answer reaches the kiosk: a slow network, or
@@ -169,9 +205,9 @@ internal sealed class KioskHarness : IAsyncDisposable
         bool localKey = false,
         IDictionary<string, string?>? settings = null,
         KioskConsoleOptions? options = null,
-        TimeSpan? requestTimeout = null, bool populateUsers = true)
+        TimeSpan? requestTimeout = null, bool populateUsers = true, Action<IServiceCollection>? services = null)
     {
-        var harness = new KioskHarness(localKey, settings, options, requestTimeout);
+        var harness = new KioskHarness(localKey, settings, options, requestTimeout, services);
         if (populateUsers)
         {
             await RoofClientApiTests.AddUserAsync(harness.Host, Operator, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
@@ -291,6 +327,7 @@ internal sealed class KioskHarness : IAsyncDisposable
                     throw new HttpRequestException("Connection refused (test).");
                 }
 
+                harness.AlterRequest?.Invoke(request);
                 var response = await base.SendAsync(request, cancellationToken);
                 if (harness.CutAnswer?.Invoke(request) == true)
                 {
@@ -311,11 +348,28 @@ internal sealed class KioskHarness : IAsyncDisposable
                     }
                 }
 
-                if (response.IsSuccessStatusCode && harness.ControllerVersion is { } version
-                    && request.RequestUri.AbsolutePath.TrimStart('/') == RoofApiRoutes.SystemInformation)
+                var path = request.RequestUri.AbsolutePath.TrimStart('/');
+                if (response.IsSuccessStatusCode && harness.ControllerVersion is { } version && path == RoofApiRoutes.SystemInformation)
                 {
                     var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken))!;
                     json["applicationVersion"] = version;
+                    response.Content.Dispose();
+                    response.Content = new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+                }
+
+                if (response.IsSuccessStatusCode && path == RoofApiRoutes.SystemSummary)
+                {
+                    var json = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken))!;
+                    foreach (var (name, value) in SummaryFigures)
+                    {
+                        json[name] = value?.DeepClone();
+                    }
+
+                    if (harness.ControllerVersion is { } summaryVersion)
+                    {
+                        json["applicationVersion"] = summaryVersion;
+                    }
+
                     response.Content.Dispose();
                     response.Content = new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
                 }

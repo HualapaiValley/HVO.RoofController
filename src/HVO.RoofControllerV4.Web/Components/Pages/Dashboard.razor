@@ -7,9 +7,12 @@
 @{
     var status = View.Status;
     var stale = View.IsStale;
+    // #208: the state colours every client shares; app.css brightens the Stop bar from data-roof-motion.
+    var openState = State(RoofActionStates.ForMotion(RoofMotionDirection.Opening, status, stale, View.OpenBlock));
+    var closeState = State(RoofActionStates.ForMotion(RoofMotionDirection.Closing, status, stale, View.CloseBlock));
 }
 
-<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel">
+<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel" data-roof-motion="@(RoofActionStates.IsStopActive(status) ? "moving" : "idle")">
     <header class="rc2-header">
         <div class="rc2-header-text">
             <p class="web-eyebrow">Hualapai Valley Observatory</p>
@@ -23,6 +26,13 @@
             <span class="badge rc2-badge @FeedBadgeClass" data-testid="feed-state" title="Where the status on this page comes from">
                 <i class="bi bi-broadcast" aria-hidden="true"></i>Status: @View.FeedLabel
             </span>
+            @if (status?.Safety is { } safety)
+            {
+                <span class="badge rc2-badge @SafetyBadgeClass(safety.State)" data-testid="safety" data-state="@safety.State"
+                      title="@RoofStatusText.DescribeSafety(safety)">
+                    <i class="bi @SafetyIcon(safety.State)" aria-hidden="true"></i>Safety: @RoofStatusText.DescribeSafetyState(safety.State)@(stale ? " (last known)" : string.Empty)
+                </span>
+            }
             @if (View.HoldsLease)
             {
                 <span class="badge rc2-badge bg-info text-dark" data-testid="lease" title="This page renews the operator lease while the roof moves">
@@ -120,6 +130,40 @@
                     }
                 </div>
 
+                @if (status?.Safety is { } conditions)
+                {
+                    // #207: the safety conditions with their reasons, each source's state, and what Open does with them.
+                    <div class="rc2-safety rc2-safety--@(stale ? "stale" : conditions.State.ToString().ToLowerInvariant())" data-testid="safety-panel" data-state="@conditions.State" role="status" aria-label="Safety conditions">
+                        <div class="rc2-safety-head">
+                            <i class="bi @SafetyIcon(conditions.State)" aria-hidden="true"></i>
+                            <strong data-testid="safety-state">Safety: @RoofStatusText.DescribeSafetyState(conditions.State)@(stale ? " (last known)" : string.Empty)</strong>
+                            <span class="rc2-safety-open" data-testid="safety-open">@RoofSafetyText.DescribeOpen(conditions)</span>
+                        </div>
+                        @if (conditions.State != RoofSafetyState.Safe && conditions.Reasons.Count > 0)
+                        {
+                            <ul class="rc2-safety-reasons" data-testid="safety-reasons">
+                                @foreach (var reason in conditions.Reasons)
+                                {
+                                    <li>@reason</li>
+                                }
+                            </ul>
+                        }
+                        @if (conditions.State == RoofSafetyState.Unknown)
+                        {
+                            <p class="rc2-safety-note">@RoofSafetyText.UnknownCountsAsUnsafe</p>
+                        }
+                        @if (conditions.Sources.Count > 0)
+                        {
+                            <ul class="rc2-safety-sources" data-testid="safety-sources">
+                                @foreach (var source in conditions.Sources)
+                                {
+                                    <li class="rc2-safety-source rc2-safety-source--@source.State.ToString().ToLowerInvariant()" data-state="@source.State">@RoofSafetyText.DescribeSource(source)</li>
+                                }
+                            </ul>
+                        }
+                    </div>
+                }
+
     </section>
 
     <div class="rc2-main">
@@ -128,17 +172,34 @@
                 <h2 class="rc2-card-title" id="rc2-controls-title"><i class="bi bi-controller me-2" aria-hidden="true"></i>Controls</h2>
             </div>
             <div class="rc2-card-body">
+                @if (View.SafetyQuestion is { } question)
+                {
+                    // #215: Open is sent with the safety override only once the person confirms. Stop stays below.
+                    <div class="rc2-safety-question" role="alertdialog" aria-labelledby="safety-question-title" data-testid="safety-override">
+                        <h3 class="rc2-safety-question-title" id="safety-question-title"><i class="bi bi-shield-exclamation me-2" aria-hidden="true"></i>@question.Title</h3>
+                        @foreach (var line in question.Lines)
+                        {
+                            <p>@line</p>
+                        }
+                        <div class="rc2-safety-question-actions">
+                            <button class="btn btn-warning" type="button" data-testid="safety-override-confirm" @onclick="Roof.OpenWithSafetyOverrideAsync">
+                                <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i>@RoofSafetyText.OverrideConfirm
+                            </button>
+                            <button class="btn btn-outline-light" type="button" data-testid="safety-override-cancel" @onclick="Roof.CancelSafetyOverride">@RoofSafetyText.OverrideCancel</button>
+                        </div>
+                    </div>
+                }
                 <div class="rc-position-line"><i class="bi bi-house" aria-hidden="true"></i><div><strong>@(status is null ? "Position unknown" : RoofText.DescribePosition(status.Status))@(stale && status is not null ? " (last known)" : string.Empty)</strong><span>One direction at a time. The controller enforces its safety settings.</span></div></div>
                 <div class="rc2-action-grid">
-                    <button class="btn btn-outline-light btn-lg rc2-action rc-open" type="button" data-testid="open"
+                    <button class="btn btn-outline-light btn-lg rc2-action rc-open rc-action--@openState" type="button" data-testid="open" data-state="@openState"
                             disabled="@(View.OpenBlock is not null)" title="@(View.OpenBlock is { } open ? RoofCommandRules.Capitalize(open) : "Open the roof")"
                             @onclick="Roof.OpenAsync">
-                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i><span><strong>Open roof</strong><small>@(View.OpenBlock ?? "Begin opening")</small></span>
+                        <i class="bi bi-arrow-up-circle me-2" aria-hidden="true"></i><span><strong>@(openState == "running" ? "Opening…" : "Open roof")</strong><small>@(View.OpenBlock ?? "Begin opening")</small></span>
                     </button>
-                    <button class="btn btn-outline-light btn-lg rc2-action rc-close" type="button" data-testid="close"
+                    <button class="btn btn-outline-light btn-lg rc2-action rc-close rc-action--@closeState" type="button" data-testid="close" data-state="@closeState"
                             disabled="@(View.CloseBlock is not null)" title="@(View.CloseBlock is { } close ? RoofCommandRules.Capitalize(close) : "Close the roof")"
                             @onclick="Roof.CloseAsync">
-                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i><span><strong>Close roof</strong><small>@(View.CloseBlock ?? "Begin closing")</small></span>
+                        <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i><span><strong>@(closeState == "running" ? "Closing…" : "Close roof")</strong><small>@(View.CloseBlock ?? "Begin closing")</small></span>
                     </button>
                     <button class="btn btn-outline-light rc2-action rc2-action--small" type="button" data-testid="clear-fault"
                             disabled="@(View.ClearFaultBlock is not null)" title="@(View.ClearFaultBlock is { } clear ? RoofCommandRules.Capitalize(clear) : "Clear the latched fault")"
@@ -262,6 +323,20 @@
         _ => "bg-warning text-dark"
     };
 
+    private static string SafetyBadgeClass(RoofSafetyState state) => state switch
+    {
+        RoofSafetyState.Safe => "bg-success",
+        RoofSafetyState.Unsafe => "bg-danger",
+        _ => "bg-warning text-dark"
+    };
+
+    private static string SafetyIcon(RoofSafetyState state) => state switch
+    {
+        RoofSafetyState.Safe => "bi-shield-check",
+        RoofSafetyState.Unsafe => "bi-shield-exclamation",
+        _ => "bi-shield"
+    };
+
     private static string DescribeMotion(RoofStatusResponse? status) => status?.CommandedMotion switch
     {
         RoofMotionDirection.Opening => "Opening",
@@ -277,6 +352,9 @@
         null => "bi-question-circle",
         _ => "bi-pause-circle"
     };
+
+    // The state's class and data-state word: available, running or disabled.
+    private static string State(RoofActionState state) => state.ToString().ToLowerInvariant();
 
     private static string LimitChipClass(bool? active) => active switch
     {

@@ -60,7 +60,10 @@ public static class WebAccountEndpoints
 
         var path = candidate.Split('?', '#')[0];
         return path.Equals("/account", StringComparison.OrdinalIgnoreCase)
-            || (path.StartsWith("/account/", StringComparison.OrdinalIgnoreCase) && !path.Equals(ChangePasswordPath, StringComparison.OrdinalIgnoreCase))
+            || (path.StartsWith("/account/", StringComparison.OrdinalIgnoreCase)
+                && !path.Equals(ChangePasswordPath, StringComparison.OrdinalIgnoreCase)
+                && !path.Equals(NamesPath, StringComparison.OrdinalIgnoreCase)
+                && !path.Equals(PinPath, StringComparison.OrdinalIgnoreCase))
             || path.Equals(WebAuthentication.SignInPath, StringComparison.OrdinalIgnoreCase)
             || path.StartsWith(WebAuthentication.SignInPath + "/", StringComparison.OrdinalIgnoreCase)
             || path.Equals(WebCameraEndpoint.PathPrefix, StringComparison.OrdinalIgnoreCase)
@@ -69,8 +72,14 @@ public static class WebAccountEndpoints
             : candidate;
     }
 
-    /// <summary>The page where a signed-in person changes their password (the one account page that is a page).</summary>
+    /// <summary>The page where a signed-in person changes their password (an account page to go back to after sign-in).</summary>
     public const string ChangePasswordPath = "/account/password";
+
+    /// <summary>The page where a signed-in person changes their own display and short name (#209); one to go back to too.</summary>
+    public const string NamesPath = "/account/names";
+
+    /// <summary>The page where a signed-in person changes their own PIN (#205); one to go back to too.</summary>
+    public const string PinPath = "/account/pin";
 
     /// <summary>The sign-in page with a message, keeping the page to go back to.</summary>
     public static string BuildSignInUrl(string? message, string safeReturnUrl)
@@ -164,6 +173,7 @@ public static class WebAccountEndpoints
         try
         {
             session = store.Open(credential);
+            session.ForwardFor(remote);
         }
         catch (ArgumentException)
         {

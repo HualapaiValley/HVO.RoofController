@@ -164,6 +164,17 @@ public sealed class RoofAuthApi
         }
     }
 
+    /// <summary>
+    /// Changes the signed-in person's own display and short name (#209): null leaves one as it is, empty removes it.
+    /// Only with a password session: a PIN session is refused (CredentialNotAllowed), and so is a Linux account, whose
+    /// names come from the operating system (IdentityReadOnly). Returns the caller with the new names.
+    /// </summary>
+    public Task<RoofCallerResponse> ChangeNamesAsync(RoofNamesChangeRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return _http.SendAsync<RoofCallerResponse>(HttpMethod.Post, RoofApiRoutes.Names, request, cancellationToken);
+    }
+
     /// <summary>Changes the signed-in person's password. The controller ends their other sessions.</summary>
     public Task ChangePasswordAsync(string currentPassword, string newPassword, CancellationToken cancellationToken = default)
     {
@@ -173,6 +184,22 @@ public sealed class RoofAuthApi
             HttpMethod.Post,
             RoofApiRoutes.Password,
             new RoofPasswordChangeRequest { CurrentPassword = currentPassword, NewPassword = newPassword },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Changes the signed-in person's own PIN (#205), with a kiosk's PIN session or a password session. The current PIN
+    /// is checked: a wrong one is refused with SignInFailed and leaves the session open. This session stays open; the
+    /// controller ends the person's other PIN sessions.
+    /// </summary>
+    public Task ChangePinAsync(string currentPin, string newPin, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(currentPin);
+        ArgumentException.ThrowIfNullOrEmpty(newPin);
+        return _http.SendAsync(
+            HttpMethod.Post,
+            RoofApiRoutes.PinChange,
+            new RoofPinChangeRequest { CurrentPin = currentPin, NewPin = newPin },
             cancellationToken);
     }
 

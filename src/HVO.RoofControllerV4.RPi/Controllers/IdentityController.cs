@@ -110,8 +110,11 @@ public sealed class IdentityController : ControllerBase
             return Invalid(RoleRule);
         }
 
+        var displayName = RoofIdentityContract.NormalizeLabel(request.DisplayName);
+        var shortName = RoofIdentityContract.NormalizeLabel(request.ShortName);
         var invalid = SecretFormatProblem(request.Password, request.Pin)
-            ?? RoofIdentityStore.CheckUserSecrets(role, request.Password, request.Pin);
+            ?? RoofIdentityStore.CheckUserSecrets(role, request.Password, request.Pin)
+            ?? NamesProblem(displayName, shortName);
         if (invalid is not null)
         {
             return Invalid(invalid);
@@ -136,7 +139,7 @@ public sealed class IdentityController : ControllerBase
         }
 
         return Change(
-            () => _identity.AddUser(request.Name!, role, passwordHash, pinHash, request.TemporaryPin),
+            () => _identity.AddUser(request.Name!, role, passwordHash, pinHash, request.TemporaryPin, displayName, shortName),
             user =>
             {
                 _logger.LogWarning(
@@ -147,11 +150,12 @@ public sealed class IdentityController : ControllerBase
     }
 
     /// <summary>
-    /// Changes a person's role, password or PIN. A new role or password ends all their sessions; a new or removed PIN
-    /// ends their PIN sessions.
+    /// Changes a person's role, password, PIN, display name or short name. A new role or password ends all their
+    /// sessions; a new or removed PIN ends their PIN sessions; a name ends none. A null name is left as it is, an empty
+    /// one removed.
     /// </summary>
     /// <response code="200">The person, without their secrets.</response>
-    /// <response code="400">An invalid role, password or PIN, or the person would have neither.</response>
+    /// <response code="400">An invalid role, password, PIN, display name or short name, or the person would have neither secret.</response>
     /// <response code="404">No person has that name.</response>
     /// <response code="409">The change would leave no admin credential (<c>LastAdministrator</c>).</response>
     /// <response code="429">Too many passwords are being hashed at once; retry shortly.</response>
@@ -174,9 +178,14 @@ public sealed class IdentityController : ControllerBase
             return Invalid("Send a new secret or remove it, not both.");
         }
 
+        // Null leaves a name as it is; empty (or only spaces) removes it.
+        var displayName = request.DisplayName is null ? null : RoofIdentityContract.NormalizeLabel(request.DisplayName) ?? string.Empty;
+        var shortName = request.ShortName is null ? null : RoofIdentityContract.NormalizeLabel(request.ShortName) ?? string.Empty;
+
         // A new PIN for a viewer is refused before hashing; the store checks the secrets the person ends up with.
         var invalid = SecretFormatProblem(request.Password, request.Pin)
-            ?? (request.Pin is null ? null : RoofIdentityStore.CheckUserSecrets(role, request.Password ?? "unchanged", request.Pin));
+            ?? (request.Pin is null ? null : RoofIdentityStore.CheckUserSecrets(role, request.Password ?? "unchanged", request.Pin))
+            ?? NamesProblem(displayName is { Length: 0 } ? null : displayName, shortName is { Length: 0 } ? null : shortName);
         if (invalid is not null)
         {
             return Invalid(invalid);
@@ -200,11 +209,11 @@ public sealed class IdentityController : ControllerBase
         }
 
         return Change(
-            () => _identity.UpdateUser(name, role, passwordHash, pinHash, request.RemovePassword, request.RemovePin),
+            () => _identity.UpdateUser(name, role, passwordHash, pinHash, request.RemovePassword, request.RemovePin, displayName, shortName),
             change =>
             {
                 _logger.LogWarning(
-                    "AUDIT {Caller} changed {Name} (role {Role}; new password: {NewPassword}, new PIN: {NewPin}, password removed: {RemovedPassword}, PIN removed: {RemovedPin}) from {Remote}; {Ended} session(s) ended.",
+                    "AUDIT {Caller} changed {Name} (role {Role}; new password: {NewPassword}, new PIN: {NewPin}, password removed: {RemovedPassword}, PIN removed: {RemovedPin}, names changed: {NamesChanged}) from {Remote}; {Ended} session(s) ended.",
                     Caller,
                     change.User.Name,
                     change.User.Role,
@@ -212,8 +221,97 @@ public sealed class IdentityController : ControllerBase
                     pinHash is not null,
                     request.RemovePassword,
                     request.RemovePin,
+                    displayName is not null || shortName is not null,
                     Remote,
                     change.SessionsEnded);
+                return Ok(ToResponse(change.User, _identity.ActiveSessions));
+            });
+    }
+
+    /// <summary>
+    /// Sets or replaces a person's PIN (#205), whatever their role is now: operators and admins only. Their PIN sessions
+    /// end, at every kiosk; their password sessions, and the admin's own session, do not.
+    /// </summary>
+    /// <response code="200">The person, without their secrets.</response>
+    /// <response code="400">The PIN is not four digits or is the reserved temporary PIN, or the person is a viewer.</response>
+    /// <response code="404">No person has that name.</response>
+    /// <response code="429">Too many PINs are being hashed at once; retry shortly.</response>
+    [HttpPut("Users/{name}/Pin", Name = nameof(SetUserPin))]
+    [ProducesResponseType(typeof(RoofUserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]
+    public async Task<ActionResult<RoofUserResponse>> SetUserPin(string name, [FromBody] RoofPinSetRequest request, CancellationToken cancellationToken)
+    {
+        if (SecretFormatProblem(null, request.Pin) is { } invalid)
+        {
+            return Invalid(invalid);
+        }
+
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        if (!_identity.TryGetUser(name, out var person))
+        {
+            return NoSuchUser();
+        }
+
+        if (RoofIdentityStore.CheckUserSecrets(person.Role, person.PasswordHash, "unchanged") is { } refused)
+        {
+            // Refused before hashing; the store checks again with the role the person has when the PIN is saved.
+            return Invalid(refused);
+        }
+
+        var pinHash = await HashAsync(request.Pin, cancellationToken).ConfigureAwait(false);
+        if (pinHash is null)
+        {
+            return HasherBusy();
+        }
+
+        return Change(
+            () => _identity.SetPin(name, pinHash),
+            change =>
+            {
+                _logger.LogWarning(
+                    "AUDIT {Caller} set {Name}'s PIN from {Remote}; {Ended} PIN session(s) ended.",
+                    Caller, change.User.Name, Remote, change.SessionsEnded);
+                return Ok(ToResponse(change.User, _identity.ActiveSessions));
+            });
+    }
+
+    /// <summary>
+    /// Removes a person's PIN (#205), or their temporary commissioning PIN: they can no longer unlock a kiosk until an
+    /// admin gives them a new one. Their PIN sessions end; their password sessions do not. A person without a PIN is left
+    /// as they are.
+    /// </summary>
+    /// <response code="200">The person, without their secrets.</response>
+    /// <response code="400">The person has no password, so without a PIN they could not sign in.</response>
+    /// <response code="404">No person has that name.</response>
+    [HttpDelete("Users/{name}/Pin", Name = nameof(RemoveUserPin))]
+    [ProducesResponseType(typeof(RoofUserResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public ActionResult<RoofUserResponse> RemoveUserPin(string name)
+    {
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        if (!_identity.TryGetUser(name, out _))
+        {
+            return NoSuchUser();
+        }
+
+        return Change(
+            () => _identity.SetPin(name, null),
+            change =>
+            {
+                _logger.LogWarning(
+                    "AUDIT {Caller} removed {Name}'s PIN from {Remote}; {Ended} PIN session(s) ended.",
+                    Caller, change.User.Name, Remote, change.SessionsEnded);
                 return Ok(ToResponse(change.User, _identity.ActiveSessions));
             });
     }
@@ -472,6 +570,14 @@ public sealed class IdentityController : ControllerBase
 
     internal const string RoleRule = "The role must be RoofViewer, RoofOperator or RoofAdmin.";
 
+    internal static readonly string DisplayNameRule = string.Create(
+        System.Globalization.CultureInfo.InvariantCulture,
+        $"A display name has 1 to {RoofIdentityContract.MaximumDisplayNameLength} characters, without control or formatting characters.");
+
+    internal static readonly string ShortNameRule = string.Create(
+        System.Globalization.CultureInfo.InvariantCulture,
+        $"A short name has 1 to {RoofIdentityContract.MaximumShortNameLength} characters, without control or formatting characters.");
+
     private string Remote => HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
     /// <summary>Why a password or PIN that was sent has the wrong form, or null.</summary>
@@ -491,6 +597,12 @@ public sealed class IdentityController : ControllerBase
 
         return null;
     }
+
+    /// <summary>Why a normalized display or short name that was sent is not allowed, or null.</summary>
+    private static string? NamesProblem(string? displayName, string? shortName)
+        => displayName is not null && !RoofIdentityContract.IsValidDisplayName(displayName) ? DisplayNameRule
+            : shortName is not null && !RoofIdentityContract.IsValidShortName(shortName) ? ShortNameRule
+            : null;
 
     private async Task<string?> HashAsync(string? secret, CancellationToken cancellationToken)
         => secret is null ? null : await _hasher.HashAsync(secret, cancellationToken).ConfigureAwait(false);
@@ -529,7 +641,14 @@ public sealed class IdentityController : ControllerBase
             user.PinHash is not null,
             user.CreatedUtc,
             user.UpdatedUtc,
-            sessions.Count(session => string.Equals(session.UserName, user.Name, StringComparison.OrdinalIgnoreCase))) { HasTemporaryPin = user.TemporaryPin };
+            sessions.Count(session => string.Equals(session.UserName, user.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            HasTemporaryPin = user.TemporaryPin,
+            DisplayName = user.DisplayName,
+            ShortName = user.ShortName,
+            LastLoginUtc = user.LastLoginUtc,
+            LoginType = RoofLoginTypes.Local
+        };
 
     private static RoofApiKeyResponse ToResponse(StoredApiKey key)
         => new(key.Name, key.Role, key.Kiosk, RoofApiKeySource.Managed, key.CreatedUtc, key.UpdatedUtc);

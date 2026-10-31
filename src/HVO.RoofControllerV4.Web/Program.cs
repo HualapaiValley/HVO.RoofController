@@ -140,6 +140,7 @@ public class Program
         app.UseMiddleware<OriginCheck>();
         app.UseAuthentication();
         app.UseAuthorization();
+        app.UseMiddleware<WebForwardedFor>();
         app.UseMiddleware<LiveConnectionGate>();
         app.UseAntiforgery();
 

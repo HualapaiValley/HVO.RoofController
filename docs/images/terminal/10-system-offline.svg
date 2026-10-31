@@ -149,12 +149,13 @@
 <text x="45.60" y="127.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs" font-weight="bold">CLIENT</text>
 <text x="432.00" y="127.50" fill="#3a4a60" textLength="159.60" lengthAdjust="spacingAndGlyphs">CONTROLLER / HEALTH</text>
 <text x="37.20" y="145.50" fill="#f7f9fc" font-weight="bold" text-decoration="underline">h</text>
-<text x="45.60" y="145.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">vo-roof version: 4.1.1-dev (commit</text>
-<text x="423.60" y="145.50" fill="#f7f9fc" textLength="411.60" lengthAdjust="spacingAndGlyphs">hvo-roof version: 4.1.1-dev (commit 981f2ea9dd11)</text>
-<text x="37.20" y="163.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">981f2ea9dd11)</text>
-<text x="423.60" y="163.50" fill="#f7f9fc" textLength="361.20" lengthAdjust="spacingAndGlyphs">Controller version: unavailable (not read).</text>
+<text x="45.60" y="145.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">vo-roof version: 4.2.0-dev (commit</text>
+<text x="423.60" y="145.50" fill="#f7f9fc" textLength="411.60" lengthAdjust="spacingAndGlyphs">hvo-roof version: 4.2.0-dev (commit bd04e017a62a)</text>
+<text x="37.20" y="163.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">bd04e017a62a)</text>
+<text x="423.60" y="163.50" fill="#f7f9fc" textLength="268.80" lengthAdjust="spacingAndGlyphs">Controller version: unavailable.</text>
 <text x="37.20" y="181.50" fill="#f7f9fc" textLength="235.20" lengthAdjust="spacingAndGlyphs">Transport: REST + status hub</text>
-<text x="37.20" y="199.50" fill="#f7f9fc" textLength="319.20" lengthAdjust="spacingAndGlyphs">Controller information requires Admin.</text>
+<text x="423.60" y="181.50" fill="#f7f9fc" textLength="193.20" lengthAdjust="spacingAndGlyphs">Controller unreachable.</text>
+<text x="37.20" y="199.50" fill="#f7f9fc" textLength="327.60" lengthAdjust="spacingAndGlyphs">Host details and restart require Admin.</text>
 <text x="37.20" y="217.50" fill="#f7f9fc" textLength="310.80" lengthAdjust="spacingAndGlyphs">Readings are last read; stale data is</text>
 <text x="37.20" y="235.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">hidden.</text>
 <text x="28.80" y="577.50" fill="#f7f9fc" textLength="310.80" lengthAdjust="spacingAndGlyphs">[ Refresh ] [ Readiness ] [ Restart ]</text>

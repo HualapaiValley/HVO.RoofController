@@ -67,7 +67,9 @@ def main():
     for index, suffix in enumerate(['admin', 'limited', 'plain', 'controller', 'expired', 'locked']):
         name = 'fixture-' + suffix
         uid = 27001 + index
-        call('useradd', '-U', '-M', '-u', str(uid), '-s', '/usr/sbin/nologin', name)
+        # Only the admin has a full name (GECOS), for /v1/profile (#209).
+        comment = ['-c', 'Fixture Admin,Room 1,,'] if suffix == 'admin' else []
+        call('useradd', '-U', '-M', '-u', str(uid), '-s', '/usr/sbin/nologin', *comment, name)
         passwords[name] = secrets.token_urlsafe(32)
         call('chpasswd', input=name + ':' + passwords[name] + '\n')
         entries.append(dict(uid=uid, userName=name, subject=str(uuid.uuid4()), enrollmentStamp=str(uuid.uuid4()), enabled=True))
@@ -149,9 +151,13 @@ def main():
               dict(subject=locked['subject'], enrollmentStamp=locked['enrollmentStamp'], purpose='local-admin'))[0] == 200)
         proof_request = {k: entries[0][k] for k in ['subject', 'enrollmentStamp']}
         check('current enrollment revalidates', request('revalidate', proof_request)[0] == 200)
+        check('profile gives the GECOS full name only', request('profile', proof_request) == (200, {'fullName': 'Fixture Admin'}))
+        plain = next(e for e in entries if e['userName'] == 'fixture-plain')
+        check('profile without a full name is null', request('profile', {k: plain[k] for k in ['subject', 'enrollmentStamp']}) == (200, {'fullName': None}))
         entries[0]['enabled'] = False
         (ROOT / 'enrollment.json').write_text(json.dumps(entries))
         check('native enrollment disable immediately revokes', request('revalidate', proof_request)[0] == 401)
+        check('disabled enrollment has no profile', request('profile', proof_request)[0] == 401)
         check('disabled enrollment blocks local helper', helper('fixture-admin', {'operation': 'read'}).returncode != 0)
         entries[0]['enabled'] = True
         entries[0]['enrollmentStamp'] = str(uuid.uuid4())

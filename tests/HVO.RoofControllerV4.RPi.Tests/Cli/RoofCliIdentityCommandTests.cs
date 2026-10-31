@@ -108,9 +108,9 @@ public sealed class RoofCliIdentityCommandTests
         var json = await rig.RunAsync("users", "list", "--json");
 
         text.Code.Should().Be(RoofExitCode.Success, text.ToString());
-        text.Out.Should().MatchRegex(@"(?m)^NAME\s+ROLE\s+PASSWORD\s+PIN\s+SESSIONS\s+UPDATED\s*$")
-            .And.MatchRegex(@"(?m)^alice\s+operator\s+yes\s+no\s+0\s+\S")
-            .And.MatchRegex(@"(?m)^olive\s+admin\s+yes\s+yes\s+0\s+\S");
+        text.Out.Should().MatchRegex(@"(?m)^NAME\s+DISPLAY NAME\s+SHORT NAME\s+ROLE\s+LOGIN\s+PASSWORD\s+PIN\s+SESSIONS\s+LAST SIGN-IN\s+UPDATED\s*$")
+            .And.MatchRegex(@"(?m)^alice\s+operator\s+local\s+yes\s+no\s+0\s+none recorded\s+\S")
+            .And.MatchRegex(@"(?m)^olive\s+admin\s+local\s+yes\s+yes\s+0\s+none recorded\s+\S");
         json.Code.Should().Be(RoofExitCode.Success, json.ToString());
         var olive = json.Json.EnumerateArray().Single(user => user.GetProperty("name").GetString() == "olive");
         olive.GetProperty("role").GetString().Should().Be(RoofControllerApiContract.AdminRole);
@@ -305,7 +305,90 @@ public sealed class RoofCliIdentityCommandTests
             .And.Contain("A person named 'alice' already exists.");
     }
 
+    [TestMethod]
+    public async Task UsersAdd_WithNames_GivesThemToThePerson_AndTheListShowsThem()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(TestSecrets.Password);
+
+        var result = await rig.RunAsync("users", "add", "alice", "--role", "operator", "--display-name", " Alice Example ", "--short-name", "Ali");
+        var list = await rig.RunAsync("users", "list");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().MatchRegex(Row("Display name", "Alice Example"))
+            .And.MatchRegex(Row("Short name", "Ali"))
+            .And.MatchRegex(Row("Login", "local"))
+            .And.MatchRegex(Row("Last sign-in", RoofIdentityText.NoSignInRecorded));
+        list.Out.Should().MatchRegex(@"(?m)^alice\s+Alice Example\s+Ali\s+operator\s+local\s+yes\s+no\s+0\s+none recorded\s+\S");
+        (await UsersAsync(host)).Single().DisplayName.Should().Be("Alice Example", "the name is trimmed");
+    }
+
+    [TestMethod]
+    [DataRow("--display-name", "Alice\u0007", "A display name is optional: up to 64 characters, without control characters.")]
+    [DataRow("--short-name", "A short name too long", "A short name is optional: up to 16 characters, for narrow places such as the kiosk.")]
+    public async Task UsersAdd_WithAnInvalidName_IsRefusedBeforeAskingForASecret(string option, string value, string expected)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+
+        var result = await rig.RunAsync("users", "add", "alice", "--role", "operator", option, value);
+
+        result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
+        result.Error.Should().Contain(expected);
+        rig.Prompts.Should().BeEmpty("nothing is asked for, or sent, with a name the controller would refuse");
+        (await UsersAsync(host)).Should().BeEmpty();
+    }
+
     // ---- users set ----------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task UsersSet_Names_ChangeOnlyWhatIsGiven_AnEmptyOneRemovesIt_AndNoSessionEnds()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "alice", RoofControllerApiContract.OperatorRole);
+        using (var signIn = ClientTestSupport.CreateClient(host))
+        {
+            await signIn.Auth.SignInAsync("alice", TestSecrets.Password);
+        }
+
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+
+        var named = await rig.RunAsync("users", "set", "alice", "--display-name", "Alice Example", "--short-name", "Ali");
+        var renamed = await rig.RunAsync("users", "set", "alice", "--display-name", "Alice B. Example");
+        var cleared = await rig.RunAsync("users", "set", "alice", "--short-name", "", "--json");
+
+        named.Code.Should().Be(RoofExitCode.Success, named.ToString());
+        named.Out.Should().MatchRegex(Row("Display name", "Alice Example")).And.MatchRegex(Row("Short name", "Ali"))
+            .And.MatchRegex(Row("Sessions", "1"));
+        named.Out.Should().NotMatchRegex(Row("Last sign-in", RoofIdentityText.NoSignInRecorded), "alice signed in");
+        renamed.Out.Should().MatchRegex(Row("Display name", "Alice B. Example")).And.MatchRegex(Row("Short name", "Ali"));
+        cleared.Code.Should().Be(RoofExitCode.Success, cleared.ToString());
+        cleared.Json.GetProperty("displayName").GetString().Should().Be("Alice B. Example");
+        cleared.Json.GetProperty("shortName").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+        cleared.Json.GetProperty("activeSessions").GetInt32().Should().Be(1, "a name ends no session");
+        cleared.Json.GetProperty("loginType").GetString().Should().Be(RoofLoginTypes.Local);
+        rig.Prompts.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task UsersSet_AnInvalidName_IsRefusedBeforeAnythingIsSent()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "alice", RoofControllerApiContract.OperatorRole);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+
+        var result = await rig.RunAsync("users", "set", "alice", "--password", "--display-name", "Alice\u202Eelpmaxe");
+
+        result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
+        result.Error.Should().Contain(RoofIdentityText.DisplayNameRule);
+        rig.Prompts.Should().BeEmpty();
+        (await UsersAsync(host)).Single().DisplayName.Should().BeNull();
+    }
 
     [TestMethod]
     public async Task UsersSet_Role_ChangesIt_AndJson()
@@ -367,7 +450,7 @@ public sealed class RoofCliIdentityCommandTests
     [TestMethod]
     [DataRow(new[] { "--password", "--remove-password" }, "--password and --remove-password cannot be used together.")]
     [DataRow(new[] { "--pin", "--remove-pin" }, "--pin and --remove-pin cannot be used together.")]
-    [DataRow(new string[0], "Say what to change: --role, --password, --pin, --remove-password or --remove-pin.")]
+    [DataRow(new string[0], "Say what to change: --role, --password, --pin, --remove-password, --remove-pin, --display-name or --short-name.")]
     public async Task UsersSet_WithConflictingOrNoChanges_IsAUsageError(string[] options, string expected)
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -561,6 +644,50 @@ public sealed class RoofCliIdentityCommandTests
     }
 
     [TestMethod]
+    public async Task PinsSetAndRemove_SendOnlyThePin_KeepARoleChangedElsewhere_AndEndOnlyPinSessions()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "olive", RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+        using var kiosk = ClientTestSupport.CreateClient(host, new RoofKioskCredential(RoofClientApiTests.KioskKey));
+        using var anonymous = ClientTestSupport.CreateClient(host);
+        await kiosk.Auth.SignInWithPinAsync("olive", TestSecrets.Pin);
+        await anonymous.Auth.SignInAsync("olive", TestSecrets.Password);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(TestSecrets.OtherPin);
+
+        var set = await rig.RunAsync("pins", "set", "olive", "--json");
+
+        set.Code.Should().Be(RoofExitCode.Success, set.ToString());
+        set.Json.GetProperty("activeSessions").GetInt32().Should().Be(1, "the PIN session ended; the password session did not");
+        set.Out.Should().NotContain(TestSecrets.OtherPin);
+        var refused = await RoofClientApiTests.RefusedAsync(() => kiosk.Auth.SignInWithPinAsync("olive", TestSecrets.Pin));
+        refused.Code.Should().Be(RoofControllerErrorCode.SignInFailed, "the old PIN no longer unlocks a kiosk");
+        (await kiosk.Auth.SignInWithPinAsync("olive", TestSecrets.OtherPin)).Name.Should().Be("olive");
+
+        var removed = await rig.RunAsync("pins", "remove", "olive");
+
+        removed.Code.Should().Be(RoofExitCode.Success, removed.ToString());
+        (await UsersAsync(host)).Single().Should().Match<RoofUserResponse>(user => !user.HasPin && user.ActiveSessions == 1
+            && user.Role == RoofControllerApiContract.OperatorRole);
+    }
+
+    [TestMethod]
+    public async Task PinsSet_ForAViewer_IsRefusedByTheController()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        await RoofClientApiTests.AddUserAsync(host, "vera", RoofControllerApiContract.ViewerRole);
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Admin);
+        rig.Input.Enqueue(TestSecrets.Pin);
+
+        var result = await rig.RunAsync("pins", "set", "vera");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Error.Should().Contain("[InvalidRequest]").And.Contain("Only operators and admins can have a PIN");
+    }
+
+    [TestMethod]
     public async Task PinsSet_WithABadPin_IsAUsageError()
     {
         using var host = RoofClientApiTests.CreateHost();
@@ -603,7 +730,7 @@ public sealed class RoofCliIdentityCommandTests
         var json = await rig.RunAsync("pins", "remove", "oscar", "--json");
 
         text.Code.Should().Be(RoofExitCode.Success, text.ToString());
-        text.Out.Should().Be("PIN removed for olive." + Environment.NewLine);
+        text.Out.Should().Be("PIN removed for olive. Their PIN sessions were ended." + Environment.NewLine);
         json.Code.Should().Be(RoofExitCode.Success, json.ToString());
         json.Json.GetProperty("hasPin").GetBoolean().Should().BeFalse();
         (await UsersAsync(host)).Should().OnlyContain(user => !user.HasPin && user.HasPassword);

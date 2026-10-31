@@ -1359,7 +1359,7 @@ shutdown() {
   log "Stopped, $(( (NOW_US - STOP_AT_US) / 1000 )) ms after the stop request"
 }
 
-# shellcheck disable=SC2317 # called by the trap
+# shellcheck disable=SC2317,SC2329 # called by the trap
 on_signal() {
   SIGNALS=$((SIGNALS + 1))
   STOP_REQUESTED=1
@@ -1371,7 +1371,7 @@ on_signal() {
 # container, the controller without its shutdown and the relays as they were, so it stops as on docker stop first. A
 # signal can end it in the middle of a command whose output is redirected (wait ... 2>/dev/null), and the trap runs with
 # that redirection in place, so the container's log is put back first.
-# shellcheck disable=SC2317 # called by the trap
+# shellcheck disable=SC2317,SC2329 # called by the trap
 on_exit() {
   (( SHUTDOWN_DONE )) && return
   exec 1>&"${LOG_OUT}" 2>&"${LOG_ERR}"

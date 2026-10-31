@@ -217,7 +217,8 @@ public sealed partial class RoofIdentityStore
 
     /// <summary>
     /// Opens a session for <paramref name="userName"/>, unless the person's password or role changed since
-    /// <paramref name="expectedStamp"/> was read (the credential that was checked is then out of date).
+    /// <paramref name="expectedStamp"/> was read (the credential that was checked is then out of date). Records the
+    /// sign-in as the person's last (#209), in the same save.
     /// </summary>
     public RoofIdentityResult<RoofIssuedSession> CreateSession(
         string userName,
@@ -234,7 +235,8 @@ public sealed partial class RoofIdentityStore
         var token = TokenPrefix + Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         return Mutate<RoofIssuedSession>((document, now) =>
         {
-            var user = document.Users.Find(candidate => Same(candidate.Name, userName));
+            var index = document.Users.FindIndex(candidate => Same(candidate.Name, userName));
+            var user = index < 0 ? null : document.Users[index];
             if (user is null || !string.Equals(user.Stamp, expectedStamp, StringComparison.Ordinal))
             {
                 return RoofIdentityResult<RoofIssuedSession>.Failure(
@@ -263,6 +265,7 @@ public sealed partial class RoofIdentityStore
                 Provider = ProviderEnabled && kind == RoofCredentialKind.Session ? "virtual" : null
             };
             document.Sessions.Add(session);
+            document.Users[index] = user with { LastLoginUtc = now };
             _lastActivity[session.Id] = now.UtcTicks;
             return RoofIdentityResult<RoofIssuedSession>.Success(new RoofIssuedSession(token, session));
         });
@@ -288,7 +291,18 @@ public sealed partial class RoofIdentityStore
     public bool CanUseTemporaryPin(StoredUser user)
         => TemporaryPinEnabled && user.TemporaryPin && user.PinHash is null && user.Role != RoofControllerApiContract.ViewerRole;
 
-    public RoofIdentityResult<StoredUser> AddUser(string name, string role, string? passwordHash, string? pinHash, bool temporaryPin = false)
+    /// <summary>
+    /// Adds a person. <paramref name="displayName"/> and <paramref name="shortName"/> are optional and already
+    /// normalized (<see cref="RoofIdentityContract.NormalizeLabel"/>) and checked.
+    /// </summary>
+    public RoofIdentityResult<StoredUser> AddUser(
+        string name,
+        string role,
+        string? passwordHash,
+        string? pinHash,
+        bool temporaryPin = false,
+        string? displayName = null,
+        string? shortName = null)
         => Mutate<StoredUser>((document, now) =>
         {
             if (document.Users.Exists(user => Same(user.Name, name)))
@@ -302,6 +316,8 @@ public sealed partial class RoofIdentityStore
             var user = new StoredUser(name, role, passwordHash, pinHash, stamp, now, now)
             {
                 TemporaryPin = temporaryPin,
+                DisplayName = displayName,
+                ShortName = shortName,
                 PrincipalId = document.SchemaVersion >= 2 ? Guid.NewGuid().ToString("N") : null,
                 AuthenticationEpoch = document.SchemaVersion >= 2 ? stamp : null
             };
@@ -311,7 +327,9 @@ public sealed partial class RoofIdentityStore
 
     /// <summary>
     /// Changes a person. A null hash leaves that secret as it is. A new role or password ends all their sessions; a new
-    /// or removed PIN ends their PIN sessions.
+    /// or removed PIN ends their PIN sessions. A null <paramref name="displayName"/> or <paramref name="shortName"/>
+    /// leaves it as it is, an empty one removes it, and any other (normalized and checked) replaces it; a name changes
+    /// no stamp and ends no session.
     /// </summary>
     public RoofIdentityResult<RoofUserChange> UpdateUser(
         string name,
@@ -319,7 +337,9 @@ public sealed partial class RoofIdentityStore
         string? newPasswordHash,
         string? newPinHash,
         bool removePassword,
-        bool removePin)
+        bool removePin,
+        string? displayName = null,
+        string? shortName = null)
         => Mutate<RoofUserChange>((document, now) =>
         {
             var index = document.Users.FindIndex(user => Same(user.Name, name));
@@ -346,6 +366,8 @@ public sealed partial class RoofIdentityStore
                 PasswordHash = passwordHash,
                 PinHash = pinHash,
                 TemporaryPin = pinChanged ? false : before.TemporaryPin,
+                DisplayName = displayName is null ? before.DisplayName : displayName.Length == 0 ? null : displayName,
+                ShortName = shortName is null ? before.ShortName : shortName.Length == 0 ? null : shortName,
                 Stamp = roleChanged || passwordChanged || pinChanged ? NewStamp() : before.Stamp,
                 AuthenticationEpoch = document.SchemaVersion >= 2 && (roleChanged || passwordChanged) ? NewStamp() : before.AuthenticationEpoch,
                 UpdatedUtc = now
@@ -380,6 +402,91 @@ public sealed partial class RoofIdentityStore
             var ended = document.Sessions.RemoveAll(session =>
                 session.Provider != "linux" && Same(session.UserName, name) && !string.Equals(session.Id, keepSessionId, StringComparison.Ordinal));
             return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
+        });
+
+    /// <summary>
+    /// A signed-in person changes their own PIN (#205): the new one replaces their PIN, or the emulator's temporary one.
+    /// Their other PIN sessions end; <paramref name="keepSessionId"/> stays open, and so do their password sessions.
+    /// Refused when the PIN, password or role changed since <paramref name="expectedStamp"/> was read.
+    /// </summary>
+    public RoofIdentityResult<RoofUserChange> ChangeOwnPin(string name, string expectedStamp, string newPinHash, string keepSessionId)
+        => Mutate<RoofUserChange>((document, now) =>
+        {
+            var index = document.Users.FindIndex(user => Same(user.Name, name));
+            if (index < 0 || !string.Equals(document.Users[index].Stamp, expectedStamp, StringComparison.Ordinal))
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.SignInFailed, "The current PIN is not correct.");
+            }
+
+            var before = document.Users[index];
+            var failure = CheckUserSecrets(before.Role, before.PasswordHash, newPinHash);
+            if (failure is not null)
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.InvalidRequest, failure);
+            }
+
+            var after = before with { PinHash = newPinHash, TemporaryPin = false, Stamp = NewStamp(), UpdatedUtc = now };
+            document.Users[index] = after;
+            var ended = document.Sessions.RemoveAll(session =>
+                session.Provider != "linux" && Same(session.UserName, before.Name) && session.Kind == RoofCredentialKind.Pin
+                && !string.Equals(session.Id, keepSessionId, StringComparison.Ordinal));
+            return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
+        });
+
+    /// <summary>
+    /// An admin sets (<paramref name="newPinHash"/>) or removes (null) a person's PIN (#205), whatever their role is now.
+    /// Their PIN sessions end; their password sessions stay. Removing a PIN the person does not have changes nothing.
+    /// </summary>
+    public RoofIdentityResult<RoofUserChange> SetPin(string name, string? newPinHash)
+        => Mutate<RoofUserChange>((document, now) =>
+        {
+            var index = document.Users.FindIndex(user => Same(user.Name, name));
+            if (index < 0)
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.IdentityNotFound, $"No person is named '{name}'.");
+            }
+
+            var before = document.Users[index];
+            if (newPinHash is null && before.PinHash is null && !before.TemporaryPin)
+            {
+                return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(before, 0));
+            }
+
+            var failure = CheckUserSecrets(before.Role, before.PasswordHash, newPinHash);
+            if (failure is not null)
+            {
+                return RoofIdentityResult<RoofUserChange>.Failure(RoofControllerErrorCode.InvalidRequest, failure);
+            }
+
+            var after = before with { PinHash = newPinHash, TemporaryPin = false, Stamp = NewStamp(), UpdatedUtc = now };
+            document.Users[index] = after;
+            var ended = document.Sessions.RemoveAll(session =>
+                session.Provider != "linux" && Same(session.UserName, before.Name) && session.Kind == RoofCredentialKind.Pin);
+            return RoofIdentityResult<RoofUserChange>.Success(new RoofUserChange(after, ended));
+        });
+
+    /// <summary>
+    /// A signed-in person changes their own display and short name (#209). A null name is left as it is, an empty one is
+    /// removed, and any other (normalized and checked) replaces it. Changes no stamp and ends no session.
+    /// </summary>
+    public RoofIdentityResult<StoredUser> ChangeOwnNames(string name, string? displayName, string? shortName)
+        => Mutate<StoredUser>((document, now) =>
+        {
+            var index = document.Users.FindIndex(user => Same(user.Name, name));
+            if (index < 0)
+            {
+                return RoofIdentityResult<StoredUser>.Failure(RoofControllerErrorCode.IdentityNotFound, "No person has that name.");
+            }
+
+            var before = document.Users[index];
+            var after = before with
+            {
+                DisplayName = displayName is null ? before.DisplayName : displayName.Length == 0 ? null : displayName,
+                ShortName = shortName is null ? before.ShortName : shortName.Length == 0 ? null : shortName,
+                UpdatedUtc = now
+            };
+            document.Users[index] = after;
+            return RoofIdentityResult<StoredUser>.Success(after);
         });
 
     /// <summary>

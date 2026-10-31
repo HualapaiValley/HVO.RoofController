@@ -903,6 +903,15 @@ never changes what the installer deploys. The installer also sets `REQUIRE_IDLE_
 it replaces the controller when it cannot read the roof's status, as well as when the roof moves
 ([Deploying](deployment.md#deploying-with-the-script)).
 
+The installer gives the script `HOST_ADDRESSES`: this machine's private LAN addresses, the ones the controller's names
+hold (never a container's, a virtual network's, a link-local or a loopback one). From them, with the web UI's port and
+scheme, the script tells the controller [where people reach the web UI](deployment.md#where-people-reach-the-web-ui),
+and every role sees it in the controller's summary (the kiosk's About page, the web UI's System page,
+`hvo-roof info`): `https://192.0.2.10:8088/`, say. A rig not open to the network says its web UI is on the machine
+alone. They are recorded at each install, upgrade and `cert` redeploy. When this machine's address changes, its names
+change too, so `sudo hvo-roof-install` (or `cert`) redeploys the controller and refreshes them; until then the
+controller shows the address it had.
+
 ### Temporary files
 
 The [owner's 2026-10-17 decision for #147](https://github.com/HualapaiValley/HVO.RoofController/issues/147)
@@ -1523,7 +1532,9 @@ says so, puts nothing back, and the rollback is a swap.
 before it changes anything: [State contracts](#state-contracts)):
 
 - `/etc/hvo-roof`: the settings, the secrets, the certificate, the CA with its key, and the install record;
-- `/var/lib/hvo-roof`: the people, the API keys and the settings set through the API;
+- `/var/lib/hvo-roof`: the people, the API keys, the settings set through the API, and the roof command history
+  (`identity/command-history.jsonl`, about 4 MB at its default 10,000 commands and at most about 30 MB, so a backup
+  stays well inside the 64 MB it takes in all: [The command history](security.md#the-command-history));
 - `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
 
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,

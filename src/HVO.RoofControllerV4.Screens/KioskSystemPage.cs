@@ -5,8 +5,8 @@ using HVO.RoofControllerV4.Client;
 namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
-/// The kiosk's system page: the controller's health checks and readiness, and for an admin its version, host and
-/// resource use, and Restart. Rebuilt when the panel changes, which only a touch here or its answer does.
+/// The kiosk's system page: the controller's health checks and readiness, its summary for every role (#209), and for an
+/// admin the host's details and Restart. Rebuilt when the panel changes, which only a touch here or its answer does.
 /// </summary>
 public sealed class KioskSystemPage : UserControl
 {
@@ -58,13 +58,26 @@ public sealed class KioskSystemPage : UserControl
         page.Children.Add(KioskPageParts.Row(_metrics, [.. actions]));
 
         var information = new StackPanel { Spacing = _metrics.Gap };
-        information.Children.Add(Rows([_panel.Self, .. _panel.Information]));
+        information.Children.Add(Rows([_panel.Self, .. _panel.Summary]));
+        if (_panel.SummaryProblem is { } problem)
+        {
+            information.Children.Add(KioskTheme.Label($"Controller version: unavailable. {problem}", _metrics.Font, KioskTheme.MutedWeak));
+        }
+
         if (_panel.Information.Count == 0 && _panel.Health is not null && !_console.View.IsAdmin)
         {
             information.Children.Add(KioskTheme.Label(KioskSystemPanel.InformationNeedsAdmin, _metrics.Font, KioskTheme.MutedWeak));
         }
 
         page.Children.Add(KioskTheme.Card(information, _metrics));
+
+        if (_panel.Information.Count > 0)
+        {
+            var details = new StackPanel { Spacing = _metrics.Gap };
+            details.Children.Add(KioskTheme.Label("Host details", _metrics.Font, weight: FontWeight.SemiBold));
+            details.Children.Add(Rows(_panel.Information));
+            page.Children.Add(KioskTheme.Card(details, _metrics));
+        }
 
         if (_panel.Health is { } health)
         {

@@ -383,8 +383,16 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
     {
         var values = RoofApiTestHost.DefaultKeySettings();
         values["BlueIris:BaseUrl"] = string.Empty;
+        // As RoofApiTestHost: the emulated plant's tests open as before the safety interlock, unless they set its mode.
+        values[RoofApiTestHost.SafetyInterlockModeKey] = "Off";
         foreach (var (key, value) in settings)
         {
+            if (key == RoofApiTestHost.SafetyInterlockModeKey && value is null)
+            {
+                values.Remove(key);
+                continue;
+            }
+
             values[key] = value;
         }
 

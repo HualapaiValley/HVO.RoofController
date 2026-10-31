@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace HVO.RoofControllerV4.Client;
 
 /// <summary>Relative paths of the controller's endpoints, as the client calls them.</summary>
@@ -14,6 +16,8 @@ internal static class RoofApiRoutes
     public const string Lease = V4 + "RoofControl/Lease";
     public const string ClearFault = V4 + "RoofControl/ClearFault";
     public const string Configuration = V4 + "RoofControl/Configuration";
+    public const string History = V4 + "RoofControl/" + Common.Models.RoofCommandHistoryContract.Route;
+    public const string Safety = V4 + "Safety";
 
     public const string Session = V4 + "Auth/Session";
     public const string Providers = V4 + "Auth/Providers";
@@ -24,8 +28,10 @@ internal static class RoofApiRoutes
     public const string KioskPin = V4 + "Auth/KioskPin";
     public const string CompleteKioskPin = V4 + "Auth/KioskPin/Complete";
     public const string PinUsers = V4 + "Auth/Pin/Users";
+    public const string PinChange = V4 + "Auth/Pin/Change";
     public const string Me = V4 + "Auth/Me";
     public const string Password = V4 + "Auth/Password";
+    public const string Names = V4 + "Auth/Names";
 
     public const string Principals = V4 + "Identity/Principals";
     public const string Users = V4 + "Identity/Users";
@@ -38,6 +44,7 @@ internal static class RoofApiRoutes
     public const string SettingsDiscard = V4 + "Settings/Discard";
 
     public const string Restart = V4 + "System/Restart";
+    public const string SystemSummary = V4 + "System/Summary";
     public const string SystemInformation = V1 + "System/info";
     public const string SystemMetrics = V1 + "System/metrics";
 
@@ -50,6 +57,8 @@ internal static class RoofApiRoutes
 
     public static string User(string name) => $"{Users}/{Segment(name)}";
 
+    public static string UserPin(string name) => $"{User(name)}/Pin";
+
     public static string ApiKey(string name) => $"{ApiKeys}/{Segment(name)}";
 
     public static string RotateApiKey(string name) => $"{ApiKeys}/{Segment(name)}/Rotate";
@@ -59,6 +68,45 @@ internal static class RoofApiRoutes
     public static string SettingsGroup(string group) => $"{Settings}/{Segment(group)}";
 
     public static string Camera(int cameraId) => $"{V1}Camera/{cameraId}/mjpeg";
+
+    /// <summary>The command history with <paramref name="query"/>'s filters as the query string.</summary>
+    public static string HistoryPage(RoofHistoryQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var parameters = new List<string>();
+        if (!string.IsNullOrWhiteSpace(query.User))
+        {
+            parameters.Add("user=" + Uri.EscapeDataString(query.User.Trim()));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.PrincipalId))
+        {
+            parameters.Add("principalId=" + Uri.EscapeDataString(query.PrincipalId.Trim()));
+        }
+
+        if (query.Mine)
+        {
+            parameters.Add("mine=true");
+        }
+
+        if (query.From is { } from)
+        {
+            parameters.Add("from=" + Uri.EscapeDataString(from.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+        }
+
+        if (query.To is { } to)
+        {
+            parameters.Add("to=" + Uri.EscapeDataString(to.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+        }
+
+        if (query.Skip != 0)
+        {
+            parameters.Add("skip=" + query.Skip.ToString(CultureInfo.InvariantCulture));
+        }
+
+        parameters.Add("take=" + query.Take.ToString(CultureInfo.InvariantCulture));
+        return History + "?" + string.Join('&', parameters);
+    }
 
     /// <summary>Escapes a name for one path segment, so a name can never reach another route.</summary>
     private static string Segment(string value)

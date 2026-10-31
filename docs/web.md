@@ -69,11 +69,15 @@ pages, and when the check itself fails the page says nothing rather than somethi
 | Roof (`/`) | everyone | The position, what was commanded, Open, Close and Clear fault (Operator and Admin), the operator lease while a move started here runs, the roof camera, and the status in detail. |
 | Health (`/health`) | everyone | Whether the controller is running and ready, the container's supervisor, and the controller's health checks, the worst first. Checked again every `StatusRefreshSeconds`. |
 | Settings (`/settings`) | everyone | The settings by group, from the controller's catalogue: those the person's role may read, and the controller says which of them they may change. |
-| People (`/people`) | Admin | People (add, role, password, kiosk PIN, remove), API keys (add, rotate, change, remove) and sessions (end). |
-| System (`/system`) | Admin | The web UI's version, the controller's version, host and resource use, readiness, Restart, and Forced restart. |
+| History (`/history`) | everyone | The roof commands the controller was sent, accepted or refused, newest first: the person's own, or everyone's for an admin, who may pick one person or key. |
+| People (`/people`) | Admin | People (add, display and short names, role, password, kiosk PIN, remove, with each one's login type and last sign-in), API keys (add, rotate, change, remove) and sessions (end). |
+| System (`/system`) | everyone | The web UI's version, the controller's summary (version, uptime, CPU, temperature, memory, disk and addresses) and readiness; for an admin, the host's details, Restart and Forced restart. |
 | Change password (`/account/password`) | everyone | The person's own password. |
+| Your names (`/account/names`) | everyone | The person's own display and short name; for a Linux account, its names from the operating system, read-only. **Your names** in the header opens it. |
+| Your PIN (`/account/pin`) | everyone; linked for Operator and Admin | The person's own kiosk PIN: the current one, then the new one twice. **Your PIN** in the header opens it. |
 
-A Viewer and an Operator see Roof, Health and Settings in the navigation. Opening an admin page without the Admin role
+A Viewer and an Operator see Roof, Health, Settings, History and System in the navigation; System shows them the
+controller's summary, without the host's details or the restarts. Opening an admin page (People) without the Admin role
 says so, and shows nothing of it. On every page, the sign-in page too, the **mode banner** says when the controller is
 not driving the observatory roof as in normal use (for example an emulated HAT), so an emulator or a simulation is never
 mistaken for the roof. Before sign-in the banner comes from the controller's anonymous `GET .../RoofControl/Mode`,
@@ -94,6 +98,9 @@ The page follows the controller's live status: the hub sends a full status at ea
 - **Open, Close and Clear fault** need the Operator role. A Viewer sees them disabled, with
   `Open, Close and Clear fault need the Operator role. Stop is always available.` A button that cannot be used says
   why, for example that the roof is already closed.
+- **Open and Close show their state** as the kiosk and the terminal UI do: green while offered, bright green while the
+  roof moves their way (`Opening…`, `Closing…`; not pressable), and a neutral grey, never a faded green, while not
+  offered (`data-state` is `available`, `running` or `disabled`).
 - **The operator lease.** When the controller has a lease (`OperatorLeaseTimeout`), a move started from the page holds
   it, and the page renews it while the roof moves (`Renewing lease (12 s left)`). The page renews it only while its
   live connection is up. When the page closes, or its connection is lost, it stops renewing, and the roof stops when the
@@ -106,6 +113,18 @@ The page follows the controller's live status: the hub sends a full status at ea
   from the start. Stop still works.
 - **Nothing is claimed that the controller has not said.** Before the first status the page says it is connecting
   (`No status yet.`), rather than showing a position.
+- **The safety conditions** (telescope park and weather, [docs/safety-service.md](safety-service.md)): a badge in the
+  header, `Safety: Safe`, `Unsafe` or `Unknown` (green, red, amber), with the reasons and what the interlock does with
+  Open in its tooltip; a safety panel under the roof's state with the reasons, what Unknown means, each source's state
+  (`Unsafe: Telescope 'Main' is not parked`) and what Open does; and a Safety row and a row per source in the status
+  card. While the interlock blocks Open, Open is not offered and says why.
+- **The safety override.** With the interlock in Warn mode (the default) and the conditions not Safe (Unknown
+  included), Open asks first, in a panel above Open and Close: the conditions with their reasons, and **Open anyway**
+  or **Cancel**. Nothing is sent until Open anyway, which sends Open with the override; the controller logs it with your
+  name. Stop, Close and the end of your session withdraw the question. When the conditions changed after the page's
+  last status, the controller's refusal asks the same question. Stop stays at the bottom of the page throughout.
+
+![The safety override question on the roof page, with Stop at the bottom](images/web/19-safety-override-desktop.jpg)
 
 <p>
   <img src="images/web/03-roof-opening-phone.jpg" alt="The roof page on a phone while the roof opens: the position Opening and the lease being renewed" width="240">
@@ -171,18 +190,62 @@ A setting that cannot be changed here says why, as the controller gives it.
 2. **Change** `BlueIris:BaseUrl` to the new server.
 3. **Change** the user name or password, and type both for the new server.
 
+### History
+
+![The History page: the roof commands, newest first, with who sent each, the result, the roof afterwards and where it came from](images/web/17-history-desktop.jpg)
+
+The roof command history (#206), as the controller records it: each Open, Close, Stop and Clear fault, accepted or
+refused (with the controller's code), and each refused lease renewal. Each row says when (UTC), who sent it and how
+they signed in, the result, the roof's position afterwards, and the program and address it came from: for a command sent
+from the web UI, the address of the person's browser, which the web UI names to the controller in `X-Forwarded-For`
+([The command history](security.md#the-command-history)). An admin reads everyone's commands and may give a person's or
+key's name (whoever is named so now); anyone else reads only their own, matched by their identifier, never by name. An
+Open sent while the [safety conditions](safety-service.md) were not safe says so, such as
+`Accepted (safety override, conditions unsafe)`, and one the safety interlock refused shows its code, such as
+`Refused [SafetyOverrideRequired]`. With the interlock off and no safety source configured, an accepted Open is plain
+`Accepted`: the conditions are always unknown there, so saying so tells nothing. **From** and **To** pick whole UTC
+days. Newer and Older page through it, 25 at a time. The controller keeps commands for 90 days, up to 10,000, and the
+page says when it keeps them in memory only.
+
 ### People
 
-![The People page: people, with their roles, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
+![The People page: people, with their names, roles, login type and last sign-in, and the API keys and sessions tabs](images/web/06-people-desktop.jpg)
 
 An admin adds people and sets their role, password and [kiosk](kiosk.md) PIN, adds and rotates API keys, and ends sessions
 ([Managing people, keys and sessions](security.md#managing-people-keys-and-sessions)). A new key's secret is shown
 once, as it is created; neither the page nor the controller shows it again.
 
+**PIN** sets or replaces a person's [kiosk](kiosk.md) PIN, and **Remove PIN** removes it (or their temporary
+commissioning PIN), each with the PIN's own endpoint (`PUT` and `DELETE Identity/Users/{name}/Pin`): the page never
+sends the person's role with it, so a role another admin has just changed stands. Either ends the person's PIN
+sessions, at every kiosk; their password sessions stay open, and so does the admin's own. Without a PIN, a person
+cannot unlock a kiosk until an admin gives them a new one.
+
+Each person's row shows their **display name** (a friendly name, up to 64 characters) and **short name** (up to 16, for
+narrow places such as the kiosk), both optional; how they sign in (**Login**: `local` for a person in the controller's
+identity store); and their **last sign-in**, with a password or a PIN (`none recorded` until they sign in after the
+controller began recording it). An admin gives the names when adding a person, or with **Names**; an empty name is
+removed, and a name change ends no session. The **Linux users** tab shows each enrolled account's last sign-in too, and
+its full name from the operating system (its GECOS field, as the controller recorded it at the last sign-in), read-only:
+a Linux account's names are changed on the controller's machine, not here.
+
 ### System
 
-![The System page: the web UI's version, the controller's facts, Restart, and Forced restart](images/web/07-system-desktop.jpg)
+![The System page: the web UI's version, the controller's summary, the host's details, Restart, and Forced restart](images/web/07-system-desktop.jpg)
 
+Every role sees the web UI's own version (**Web UI version**) and the **controller's summary** (`GET System/Summary`):
+its version; **Web UI**, where people reach the web UI; its uptime, the machine's uptime, CPU use, load and
+temperature, memory and the disk it keeps its data on; and the host's addresses. The installer and the deploy script
+record the web UI's URLs at each deploy, from the host's LAN addresses, the web UI's published port and its scheme
+(for example `https://192.0.2.10:8088/`). When the web UI is published only on the controller's machine (a rig not
+open to the network) it says `only on the controller's machine`, and when the deployment did not record them it says
+the address is not known. A container's own address is never given as where to reach the web UI: when only that is
+known, **Addresses** says it is the container's, which the network does not reach. A value the controller could not
+read says `unavailable`; when the controller cannot be reached the page says `Controller unreachable.`, and
+**Refresh** reads it again. An admin also sees:
+
+- **Host details**: the application, host, operating system, runtime, start time and the controller process's memory
+  and CPU (`GET System/info` and `metrics`).
 - **Restart the controller** asks first (`Restart the controller? It stops the roof first, and does not answer until it has started again.`).
   The controller stops the roof, verifies the stop, and exits; the supervisor starts it again. A restart that would
   load a pending hand edit shows it, and needs confirming when it is safety-critical.
@@ -194,11 +257,42 @@ once, as it is created; neither the page nor the controller shows it again.
   held). The page says to use the stop control at the roof
   if the roof is moving. To send it, type `restart`.
 
+### Your names
+
+![Your names: the display name and short name, with their rules](images/web/16-names-desktop.jpg)
+
+**Your names** in the header opens the person's own names: a **display name** (a friendly name, up to 64 characters)
+and a **short name** (up to 16, for narrow places such as the kiosk). Leave one empty to remove it; saving ends no
+session (`POST Auth/Names`). Names are changed only where there is a keyboard: here and in the terminal's Setup page;
+the kiosk shows them but does not change them, and a PIN session cannot. An admin changes anyone's on the People page.
+A Linux account's names come from the operating system (its full name and its user name), so the page shows them
+read-only and says to change the full name on the controller's machine.
+
+### Your PIN
+
+![Your PIN: the current PIN, the new PIN and the new PIN again, all empty, with what changing it ends](images/web/18-pin-desktop.jpg)
+
+**Your PIN** in the header (for operators and admins: only they have a PIN) opens the person's own kiosk PIN
+(`POST Auth/Pin/Change`). They type the **current PIN**, then the **new PIN** twice: four digits, not the reserved
+temporary PIN and not the current one. The page checks that before sending anything; the controller always checks the
+current PIN, and a wrong one counts towards the same lockout as unlocking a kiosk with it, so after too many the PIN is
+locked for a while, here and at every kiosk (Stop still works). Every PIN field is emptied after each change, right or
+wrong. A change keeps this session, and the person's other password sessions, open, and ends their PIN sessions at
+every kiosk. When the controller's answer never comes, the page cannot tell whether the PIN changed, and says so:
+unlocking a kiosk with the new one finds out.
+
+A person without a PIN is told that an admin gives the first one (**PIN** on the People page); a viewer, that only
+operators and admins have one; and a Linux account, that it has no PIN of its own here (the kiosk's commissioned PIN
+is changed at a kiosk, after unlocking with it). The kiosk changes a PIN on its PIN pad too ([kiosk](kiosk.md)).
+
 ## Stop
 
 **Stop roof** is on every page, the sign-in page too, in a bar fixed to the bottom of the screen. It is never
 disabled, needs no role and no PIN, and uses the same words as every other client. The page keeps room for the bar at
-its end, so the bar never covers the end of a page.
+its end, so the bar never covers the end of a page. It is a dim red while there is nothing to stop, and bright red
+while the Roof page's newest status, live or last known, shows the roof moving (the page's `data-roof-motion`, read
+by the stylesheet alone, so Stop's own script is unchanged); other pages, which show no roof status, keep the dim red.
+Only the colour changes.
 
 - The Stop bar is outside the live page. `wwwroot/js/stop.js` posts it (`POST /stop`) with `fetch` and shows the
   answer next to the button, so Stop works while the page's live connection is down. Without the script, the browser
@@ -310,7 +404,9 @@ Nothing here needs the Pi, the HAT or the roof.
 
 - **The screenshots** above come from `WebScreenshotTests`, which signs in as an admin against the emulated roof and
   camera and visits every page on a phone, a tablet and a desktop. It checks that no page scrolls sideways and that no
-  page holds a key or a password; the key panel is never opened and the controller's host name is masked. To refresh
+  page holds a key or a password; the key panel is never opened, the controller's host name is masked, and the
+  controller is given a documentation address (`192.0.2.10`) for the web UI and the host, checked before the System
+  page is captured, so no address of the machine the tests run on is published. To refresh
   them, from `src/`:
 
   ```bash
@@ -349,4 +445,4 @@ See [Authentication and interface rights](authentication-interfaces.md) for veri
 
 ### Finding the installed version
 
-The footer shows the running **Web UI version**, including build identification. Administrators can read **System** for separately labelled last-read controller information. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.
+The footer shows the running **Web UI version**, including build identification. Everyone signed in can read **System** for the separately labelled, last-read controller version and summary; administrators see the host's details too. The local web version remains visible if the controller request fails; Refresh discards previous controller information before rereading.

@@ -31,7 +31,7 @@ internal sealed class WebRoofHarness : IDisposable
     private RoofStatusResponse _current = RoofServiceMock.Snapshot();
     private long _version = 11;
 
-    private WebRoofHarness()
+    private WebRoofHarness(IDictionary<string, string?>? settings, Action<IServiceCollection>? configureServices)
     {
         Roof = RoofServiceMock.Create();
         Roof.Setup(service => service.GetCurrentStatusSnapshot()).Returns(() => Current);
@@ -41,7 +41,14 @@ internal sealed class WebRoofHarness : IDisposable
             Report(RoofServiceMock.Snapshot(RoofControllerStatus.Stopped));
             return Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped);
         });
-        Host = RoofClientApiTests.CreateHost(Roof, services => services.AddSingleton<TimeProvider>(ServerClock));
+        Host = RoofClientApiTests.CreateHost(
+            Roof,
+            services =>
+            {
+                services.AddSingleton<TimeProvider>(ServerClock);
+                configureServices?.Invoke(services);
+            },
+            settings);
         Logs = new RecordingLoggerProvider();
         LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => builder.AddProvider(Logs));
         Store = new WebSessionStore(WebStopKey.None, new HostConnector(this), Clock, LoggerFactory.CreateLogger<WebSessionStore>());
@@ -67,6 +74,12 @@ internal sealed class WebRoofHarness : IDisposable
     /// </summary>
     public Func<HttpRequestMessage, bool>? CutAnswer { get; set; }
 
+    /// <summary>
+    /// Awaited after the controller handled each request and before its answer reaches the page: with a task the test
+    /// completes, an answer held on its way.
+    /// </summary>
+    public Func<HttpRequestMessage, Task>? HoldAnswer { get; set; }
+
     public ILoggerFactory LoggerFactory { get; }
 
     public WebSessionStore Store { get; }
@@ -84,9 +97,15 @@ internal sealed class WebRoofHarness : IDisposable
     /// A page of a person with <paramref name="role"/> (none: a signed-out page), not started yet, in a web UI with
     /// <paramref name="stopKey"/> as its Stop key (none: no Stop key).
     /// </summary>
-    public static async Task<WebRoofHarness> CreateAsync(string? role = RoofControllerApiContract.OperatorRole, WebStopKey? stopKey = null)
+    /// <param name="settings">The controller's settings beyond the test host's (the safety interlock's mode, say).</param>
+    /// <param name="configureServices">More of the controller's services (simulated safety sources, say).</param>
+    public static async Task<WebRoofHarness> CreateAsync(
+        string? role = RoofControllerApiContract.OperatorRole,
+        WebStopKey? stopKey = null,
+        IDictionary<string, string?>? settings = null,
+        Action<IServiceCollection>? configureServices = null)
     {
-        var harness = new WebRoofHarness();
+        var harness = new WebRoofHarness(settings, configureServices);
         var user = new ClaimsPrincipal(new ClaimsIdentity());
         if (role is not null)
         {
@@ -169,6 +188,11 @@ internal sealed class WebRoofHarness : IDisposable
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var response = await base.SendAsync(request, cancellationToken);
+            if (harness.HoldAnswer is { } hold)
+            {
+                await hold(request);
+            }
+
             if (harness.CutAnswer?.Invoke(request) == true)
             {
                 response.Dispose();

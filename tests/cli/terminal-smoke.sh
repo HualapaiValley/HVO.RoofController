@@ -219,8 +219,9 @@ done
 t send-keys -t "${session}" F1
 wait_screen "the roof page again" 5 "┤F1 Roof├"
 
-# Another client starts the roof; F9 in the interface stops it.
-run open 0 open --no-wait
+# Another client starts the roof; F9 in the interface stops it. The controller has no safety source, so the default
+# Warn interlock asks every Open for the override (#215), given here.
+run open 0 open --no-wait --override-safety
 wait_screen "the interface shows the roof moving" 15 "Opening"
 save 06-opening
 t send-keys -t "${session}" F9
@@ -240,11 +241,11 @@ save 08-closed
 
 # A command that has the roof moving loses its terminal, or gets SIGTERM from a service manager or 'kill'. Each sends
 # Stop before it ends.
-hangup_during hangup open
+hangup_during hangup open --override-safety
 stopped_short hangup-stopped Open
 # The roof is open only as far as the moments above moved it, which a close can cover before its SIGTERM arrives: open
 # it to the limit first, so the close has the whole travel ahead of it when the signal comes.
-run open-full 0 open
+run open-full 0 open --override-safety
 grep -q "Done. Roof: Open" "${out}/open-full.txt" || fail "'hvo-roof open' did not end at the open limit: $(cat "${out}/open-full.txt")"
 signal_during term TERM close
 stopped_short term-stopped Closed

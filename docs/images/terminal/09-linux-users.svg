@@ -118,11 +118,13 @@
 <text x="406.80" y="199.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">NAME</text>
 <text x="532.80" y="199.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">ROLE</text>
 <text x="600.00" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">ENABLED</text>
-<text x="37.20" y="217.50" fill="#f7f9fc" textLength="268.80" lengthAdjust="spacingAndGlyphs">92c5ba4ebc3043f88cc8c4403d83cda7</text>
+<text x="675.60" y="199.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs" font-weight="bold">LAST SIGN-IN</text>
+<text x="37.20" y="217.50" fill="#f7f9fc" textLength="268.80" lengthAdjust="spacingAndGlyphs">8fed159de0ce49108df0dc7dde7771d3</text>
 <text x="322.80" y="217.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">linux</text>
 <text x="406.80" y="217.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">fixture-linux</text>
 <text x="532.80" y="217.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">viewer</text>
 <text x="600.00" y="217.50" fill="#f7f9fc" textLength="25.20" lengthAdjust="spacingAndGlyphs">yes</text>
+<text x="675.60" y="217.50" fill="#f7f9fc" textLength="109.20" lengthAdjust="spacingAndGlyphs">none recorded</text>
 <text x="28.80" y="577.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">[ Role / access ]</text>
 <text x="20.40" y="613.50" fill="#f7f9fc" textLength="168.00" lengthAdjust="spacingAndGlyphs">Reading Linux users…</text>
 <text x="20.40" y="631.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>

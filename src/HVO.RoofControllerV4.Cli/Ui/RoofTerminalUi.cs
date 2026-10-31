@@ -215,6 +215,9 @@ internal sealed class RoofTerminalUi : IDisposable
     /// <summary>How many Stops were sent from here: a command compares it to see whether Stop was sent meanwhile.</summary>
     public int StopsSent => _stopsSent;
 
+    /// <summary>Raised on the interface's thread as each Stop is sent from here, before its answer.</summary>
+    public event Action? StopSent;
+
     /// <summary>True while a Stop sent from here has not been answered.</summary>
     public bool StopInFlight => _stopsInFlight > 0;
 
@@ -267,6 +270,7 @@ internal sealed class RoofTerminalUi : IDisposable
     {
         Disconnect();
         Status = null;
+        ShowStopState();
         StaleSince = null;
         Caller = null;
         ConnectionProblem = null;
@@ -348,6 +352,7 @@ internal sealed class RoofTerminalUi : IDisposable
         // a status says the roof stopped, so quitting after a Stop that nothing confirmed sends Stop again.
         _leaseTicks = -1;
         var sequence = ++_stopsSent;
+        StopSent?.Invoke();
         ShowStopResult(RoofStopOutcome.Sent, RoofStopText.Sending);
         if (_client is not { } client)
         {
@@ -664,6 +669,9 @@ internal sealed class RoofTerminalUi : IDisposable
         _pages.OfType<RoofUiSetupPage>().Single().SignIn();
     }
 
+    // Stop's colour follows the roof: bright red while the newest status, live or last known, shows motion. Never disabled.
+    private void ShowStopState() => StopButton.SetScheme(Theme.StopButtonFor(RoofActionStates.IsStopActive(Status)));
+
     /// <summary>Takes <paramref name="status"/> when it is newer than the one shown, and tells the page.</summary>
     public void Apply(RoofStatusResponse status)
     {
@@ -673,6 +681,7 @@ internal sealed class RoofTerminalUi : IDisposable
         }
 
         Status = status;
+        ShowStopState();
         _statusTakenAt = _context.Host.Time.GetUtcNow();
         if (!status.IsMoving)
         {

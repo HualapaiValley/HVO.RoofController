@@ -97,6 +97,7 @@ public sealed partial class RoofIdentityStore
                     owner.Value.Role, RoofCredentialKind.Pin, device, deviceId, now, now + _options.CurrentValue.PinSessionLifetime)
                     { PrincipalId = owner.Value.Id, PrincipalStamp = owner.Value.Stamp, Provider = owner.Value.Provider };
                 d.Sessions.Add(session); _lastActivity[session.Id] = now.UtcTicks;
+                RecordSignIn(d, owner.Value.Id, now);
                 return RoofIdentityResult<RoofKioskPinResponse>.Success(new(new RoofSessionResponse(sessionToken, session.Id,
                     session.UserName, RoofControllerApiContract.OperatorRole, RoofCredentialKind.Pin, session.ExpiresUtc,
                     _options.CurrentValue.PinSessionIdleTimeout.TotalSeconds), null, null));
@@ -108,6 +109,33 @@ public sealed partial class RoofIdentityStore
                 _setupGrants[HashHex(token)] = new(expected.PrincipalId, expected.Stamp, deviceId, result.Value.SetupExpiresUtc!.Value);
             }
             return result;
+        }
+    }
+
+    /// <summary>
+    /// The owner changes the commissioned PIN at a kiosk (#205), once <see cref="BeginKioskAttempt"/> reserved the check
+    /// and the current PIN was verified: failures are forgotten, the owner's other PIN sessions end, and
+    /// <paramref name="keepSessionId"/> stays open. Returns how many sessions ended.
+    /// </summary>
+    public RoofIdentityResult<int> ChangeKioskPin(StoredKioskCredential expected, string deviceId, string newHash, string keepSessionId)
+    {
+        lock (_gate)
+        {
+            GetKioskCredential();
+            return Mutate<int>((d, _) =>
+            {
+                var c = d.KioskCredential;
+                if (c is not { State: "complete" } || c.Stamp != expected.Stamp || c.PrincipalId != expected.PrincipalId || !KioskDeviceIsCurrent(d, deviceId))
+                    return RoofIdentityResult<int>.Failure(RoofControllerErrorCode.SignInFailed, "The current PIN is not correct.");
+                d.KioskCredential = c with { PinHash = newHash, Stamp = NewStamp(), Failures = 0, LockedUntilUtc = null };
+                // The owner's other PIN sessions, whichever PIN opened them: a local owner's personal-PIN sessions name the
+                // person, not the principal. A Linux namesake's sessions are another principal's and stay.
+                var owner = Principal(d, c.PrincipalId);
+                var ended = d.Sessions.RemoveAll(s => s.Kind == RoofCredentialKind.Pin && s.Id != keepSessionId
+                    && (s.PrincipalId == c.PrincipalId
+                        || (owner is { Provider: "virtual" } local && s.Provider != "linux" && Same(s.UserName, local.Name))));
+                return RoofIdentityResult<int>.Success(ended);
+            });
         }
     }
 

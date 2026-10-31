@@ -66,6 +66,25 @@ class BootstrapStateTests(unittest.TestCase):
                 self.write_json("/var/lib/hvo-roof/identity/identity.json", changed)
                 self.assertNotEqual(before[key if key == "users" else "nativePrincipals"], snapshot(self.root)[key if key == "users" else "nativePrincipals"])
 
+    def test_a_recorded_sign_in_is_not_a_change_but_every_other_field_is(self):
+        self.identity = {"users": [{"name": "fixture-person", "displayName": "Fixture Person"}],
+                         "linuxPrincipals": [{"id": "fixture-principal", "name": "fixture-linux"}]}
+        self.write_json("/var/lib/hvo-roof/identity/identity.json", self.identity)
+        before = snapshot(self.root)
+        signed_in = copy.deepcopy(self.identity)
+        signed_in["users"][0]["lastLoginUtc"] = "2026-10-30T12:00:00+00:00"
+        signed_in["linuxPrincipals"][0]["lastLoginUtc"] = "2026-10-30T12:00:00+00:00"
+        self.write_json("/var/lib/hvo-roof/identity/identity.json", signed_in)
+        self.assertEqual(before, snapshot(self.root))
+        for key, field, value in [("users", "displayName", "Someone Else"), ("users", "role", "RoofAdmin"),
+                                  ("linuxPrincipals", "name", "changed"), ("linuxPrincipals", "enabled", False)]:
+            with self.subTest(key=key, field=field):
+                changed = copy.deepcopy(signed_in)
+                changed[key][0][field] = value
+                self.write_json("/var/lib/hvo-roof/identity/identity.json", changed)
+                name = "users" if key == "users" else "nativePrincipals"
+                self.assertNotEqual(before[name], snapshot(self.root)[name])
+
     def test_changed_configuration_or_secret_file_bytes_are_detected(self):
         before = snapshot(self.root)
         self.path("/etc/hvo-roof/secrets/fixture").write_text("changed fixture bytes")

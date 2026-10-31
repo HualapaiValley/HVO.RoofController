@@ -62,6 +62,19 @@ public sealed record StoredUser(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PrincipalId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? AuthenticationEpoch { get; init; }
+
+    // Profile fields (#209). Optional and left out when unset, so a store written by an older controller loads as it is,
+    // and an older controller (a rollback) reads this one, ignoring them. None of them changes the stamp: a new name or
+    // a sign-in never ends a session.
+
+    /// <summary>The friendly name, or null.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? DisplayName { get; init; }
+
+    /// <summary>The short name for narrow places such as a kiosk, or null.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ShortName { get; init; }
+
+    /// <summary>The last successful sign-in (password or PIN), or null when there has been none since it was recorded.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public DateTimeOffset? LastLoginUtc { get; init; }
 }
 
 /// <summary>An API key added through the API.</summary>
@@ -98,7 +111,17 @@ public sealed record StoredSession(
     [JsonIgnore] public bool TemporaryPin { get; init; }
 }
 
-public sealed record StoredLinuxPrincipal(string Id, string Subject, string Name, string Role, string EnrollmentStamp, string Stamp, bool Enabled);
+public sealed record StoredLinuxPrincipal(string Id, string Subject, string Name, string Role, string EnrollmentStamp, string Stamp, bool Enabled)
+{
+    /// <summary>The last successful sign-in (#209), or null. Optional, as <see cref="StoredUser.LastLoginUtc"/> is.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public DateTimeOffset? LastLoginUtc { get; init; }
+
+    /// <summary>
+    /// The account's full name from the operating system (its GECOS field, #209), as the native worker gave it at the last
+    /// sign-in, or null. Read-only in the controller: never set through the API.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? DisplayName { get; init; }
+}
 public sealed record StoredOwnedKey(string Id, string Name, string OwnerId, string OwnerStamp, string[] Scopes, string KeySha256, DateTimeOffset ExpiresUtc, bool Revoked);
 public sealed record StoredAssertionNonce(string Nonce, DateTimeOffset ExpiresUtc);
 

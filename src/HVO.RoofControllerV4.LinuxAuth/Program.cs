@@ -160,6 +160,12 @@ public static class Program
             var request = await ReadRequest<RevalidateRequest>(context);
             return request is null ? Denied() : RevalidationResult(worker.Revalidate(request));
         });
+        // The enrolled account's full name for display (#209); nothing secret, and no sign-in.
+        app.MapPost("/v1/profile", async (HttpContext context) =>
+        {
+            var request = await ReadRequest<RevalidateRequest>(context);
+            return request is not null && worker.Profile(request) is { } profile ? Results.Json(new { fullName = profile.FullName }) : Denied();
+        });
         app.MapPost("/v1/local", async (HttpContext context) =>
         {
             if ((uint)context.Items["peerUid"]! != 0 || context.Items["localSocket"] is not true) return Denied();
@@ -282,6 +288,16 @@ internal sealed class Worker(WorkerConfiguration configuration, byte[] key)
             return new(valid, valid == true ? entry.UserName : null);
         }
     }
+    /// <summary>The enabled, enrolled account's full name from the operating system (#209), or null when it is not enrolled.</summary>
+    public AccountProfile? Profile(RevalidateRequest request)
+    {
+        lock (gate)
+        {
+            var entry = Enrollments().SingleOrDefault(e => e.Subject == request.Subject && e.EnrollmentStamp == request.EnrollmentStamp);
+            return entry is null || !entry.Enabled ? null : new(Native.FullName(entry.UserName, entry.Uid));
+        }
+    }
+
     public string? Local(LocalRequest request)
     {
         lock (gate)
@@ -305,3 +321,4 @@ internal sealed class Worker(WorkerConfiguration configuration, byte[] key)
 }
 
 internal sealed record Revalidation(bool? Valid, string? UserName);
+internal sealed record AccountProfile(string? FullName);

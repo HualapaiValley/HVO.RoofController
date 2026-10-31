@@ -49,6 +49,8 @@ public sealed class RoofClientCoverageTests
         ("Roof.ClearFault", client => client.Roof.ClearFaultAsync()),
         ("Roof.GetConfiguration", client => client.Roof.GetConfigurationAsync()),
         ("Roof.UpdateConfiguration", client => client.Roof.UpdateConfigurationAsync(new RoofConfigurationRequest())),
+        ("Roof.GetHistory", client => client.Roof.GetHistoryAsync()),
+        ("Roof.GetSafety", client => client.Roof.GetSafetyAsync()),
         ("Stop", client => client.StopAsync()),
         ("Auth.SignIn", client => client.Auth.SignInAsync("alice", "not-a-password")),
         ("Auth.GetProviders", client => client.Auth.GetProvidersAsync()),
@@ -70,6 +72,8 @@ public sealed class RoofClientCoverageTests
         ("Auth.GetCaller", client => client.Auth.GetCallerAsync()),
         ("Auth.SignOut", client => client.Auth.SignOutAsync()),
         ("Auth.ChangePassword", client => client.Auth.ChangePasswordAsync("not-a-password", "not-a-password-either")),
+        ("Auth.ChangeNames", client => client.Auth.ChangeNamesAsync(new RoofNamesChangeRequest { DisplayName = "Alice Example" })),
+        ("Auth.ChangePin", client => client.Auth.ChangePinAsync("2468", "1357")),
         ("Identity.GetPrincipals", client => client.Identity.GetPrincipalsAsync()),
         ("Identity.EnrollPrincipal", client => client.Identity.EnrollPrincipalAsync(
             new RoofPrincipalEnrollRequest
@@ -89,6 +93,8 @@ public sealed class RoofClientCoverageTests
         ("Identity.UpdateUser", client => client.Identity.UpdateUserAsync(
             "alice", new RoofUserUpdateRequest { Role = RoofControllerApiContract.OperatorRole })),
         ("Identity.RemoveUser", client => client.Identity.RemoveUserAsync("alice")),
+        ("Identity.SetPin", client => client.Identity.SetPinAsync("alice", "2468")),
+        ("Identity.RemovePin", client => client.Identity.RemovePinAsync("alice")),
         ("Identity.GetApiKeys", client => client.Identity.GetApiKeysAsync()),
         ("Identity.AddApiKey", client => client.Identity.AddApiKeyAsync(
             new RoofApiKeyCreateRequest { Name = "ci", Role = RoofControllerApiContract.OperatorRole })),
@@ -105,6 +111,7 @@ public sealed class RoofClientCoverageTests
         ("Settings.ApplyHandEdit", client => client.Settings.ApplyHandEditAsync(new RoofSettingsHandEditRequest { Token = "edit-1" })),
         ("Settings.DiscardHandEdit", client => client.Settings.DiscardHandEditAsync(new RoofSettingsHandEditRequest { Token = "edit-1" })),
         ("System.Restart", client => client.System.RestartAsync()),
+        ("System.GetSummary", client => client.System.GetSummaryAsync()),
         ("System.GetInformation", client => client.System.GetInformationAsync()),
         ("System.GetMetrics", client => client.System.GetMetricsAsync()),
         ("Health.GetReport", client => client.Health.GetReportAsync()),

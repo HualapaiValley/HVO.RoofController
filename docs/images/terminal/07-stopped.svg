@@ -75,8 +75,8 @@
 <rect x="12.00" y="474" width="17.20" height="18.4" fill="#05070d"/>
 <rect x="1003.20" y="474" width="17.20" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="492" width="17.20" height="18.4" fill="#05070d"/>
-<rect x="28.80" y="492" width="67.60" height="18.4" fill="#111c2a"/>
-<rect x="104.40" y="492" width="76.00" height="18.4" fill="#111c2a"/>
+<rect x="28.80" y="492" width="67.60" height="18.4" fill="#0c3721"/>
+<rect x="104.40" y="492" width="76.00" height="18.4" fill="#0c3721"/>
 <rect x="188.40" y="492" width="126.40" height="18.4" fill="#111c2a"/>
 <rect x="1003.20" y="492" width="17.20" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="510" width="1008.40" height="18.4" fill="#05070d"/>
@@ -139,7 +139,7 @@
 <text x="45.60" y="145.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">ROOF STATE</text>
 <text x="532.80" y="145.50" fill="#3a4a60" textLength="159.60" lengthAdjust="spacingAndGlyphs">CONTROLLER READINGS</text>
 <text x="37.20" y="163.50" fill="#f7f9fc" font-weight="bold" text-decoration="underline">S</text>
-<text x="45.60" y="163.50" fill="#f7f9fc" textLength="243.60" lengthAdjust="spacingAndGlyphs">tatus at 2026-10-19 04:00:39Z</text>
+<text x="45.60" y="163.50" fill="#f7f9fc" textLength="243.60" lengthAdjust="spacingAndGlyphs">tatus at 2026-10-31 01:53:19Z</text>
 <text x="524.40" y="163.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Limits:</text>
 <text x="600.00" y="163.50" fill="#f7f9fc" textLength="252.00" lengthAdjust="spacingAndGlyphs">open inactive, closed inactive</text>
 <text x="37.20" y="181.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">Roof:</text>
@@ -147,23 +147,26 @@
 <text x="524.40" y="181.50" fill="#f7f9fc" textLength="100.80" lengthAdjust="spacingAndGlyphs">Drive fault:</text>
 <text x="642.00" y="181.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">inactive</text>
 <text x="37.20" y="199.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">Last stop:</text>
-<text x="138.00" y="199.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Stopped by operator, 2026-10-19 04:00:39Z</text>
+<text x="138.00" y="199.50" fill="#f7f9fc" textLength="344.40" lengthAdjust="spacingAndGlyphs">Stopped by operator, 2026-10-31 01:53:19Z</text>
 <text x="524.40" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Inputs:</text>
 <text x="600.00" y="199.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">read OK</text>
 <text x="37.20" y="217.50" fill="#f7f9fc" textLength="50.40" lengthAdjust="spacingAndGlyphs">Fault:</text>
 <text x="104.40" y="217.50" fill="#f7f9fc" textLength="33.60" lengthAdjust="spacingAndGlyphs">none</text>
 <text x="524.40" y="217.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Relays:</text>
 <text x="600.00" y="217.50" fill="#f7f9fc" textLength="218.40" lengthAdjust="spacingAndGlyphs">register read-back matched</text>
+<text x="37.20" y="235.50" fill="#f7f9fc" textLength="58.80" lengthAdjust="spacingAndGlyphs">Safety:</text>
+<text x="112.80" y="235.50" fill="#f7f9fc" textLength="361.20" lengthAdjust="spacingAndGlyphs">UNKNOWN: No safety sources configured (Open</text>
 <text x="524.40" y="235.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">Controller:</text>
 <text x="633.60" y="235.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">HVO Roof Controller, emulated HAT,</text>
-<text x="633.60" y="253.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">snapshot 6 at 2026-10-19 04:00:39Z</text>
+<text x="112.80" y="253.50" fill="#f7f9fc" textLength="201.60" lengthAdjust="spacingAndGlyphs">needs a safety override)</text>
+<text x="633.60" y="253.50" fill="#f7f9fc" textLength="285.60" lengthAdjust="spacingAndGlyphs">snapshot 6 at 2026-10-31 01:53:19Z</text>
 <text x="524.40" y="271.50" fill="#f7f9fc" textLength="445.20" lengthAdjust="spacingAndGlyphs">EMULATED HAT: the controller drives the HAT emulator,</text>
 <text x="524.40" y="289.50" fill="#f7f9fc" textLength="428.40" lengthAdjust="spacingAndGlyphs">not the physical HAT. The observatory roof does not</text>
 <text x="524.40" y="307.50" fill="#f7f9fc" textLength="42.00" lengthAdjust="spacingAndGlyphs">move.</text>
-<text x="28.80" y="505.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Open ]</text>
-<text x="104.40" y="505.50" fill="#f7f9fc" textLength="75.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Close ]</text>
+<text x="28.80" y="505.50" fill="#bbf7d0" textLength="67.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Open ]</text>
+<text x="104.40" y="505.50" fill="#bbf7d0" textLength="75.60" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Close ]</text>
 <text x="188.40" y="505.50" fill="#98a7bb" textLength="126.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">[ Clear fault ]</text>
-<text x="322.80" y="505.50" fill="#f7f9fc" textLength="92.40" lengthAdjust="spacingAndGlyphs">[ Refresh ]</text>
+<text x="322.80" y="505.50" fill="#f7f9fc" textLength="193.20" lengthAdjust="spacingAndGlyphs">[ Refresh ] [ History ]</text>
 <text x="20.40" y="541.50" fill="#f7f9fc" textLength="142.80" lengthAdjust="spacingAndGlyphs">Health: Degraded.</text>
 <text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
 <text x="188.40" y="559.50" fill="#3fb950" textLength="470.40" lengthAdjust="spacingAndGlyphs">Stop acknowledged. Relay register verified de-energized.</text>

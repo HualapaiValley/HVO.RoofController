@@ -33,7 +33,8 @@ public sealed class RoofClientApiTests
     internal static RoofApiTestHost CreateHost(
         Mock<IRoofControllerServiceV4>? roof = null,
         Action<IServiceCollection>? configureServices = null,
-        IDictionary<string, string?>? settings = null)
+        IDictionary<string, string?>? settings = null,
+        System.Net.IPAddress? remoteIp = null)
     {
         var all = new Dictionary<string, string?>
         {
@@ -50,6 +51,7 @@ public sealed class RoofClientApiTests
         return new RoofApiTestHost(
             roof,
             all,
+            remoteIp: remoteIp,
             configureServices: services =>
             {
                 // A cheap hash so the tests run quickly; production uses the ASP.NET Core default.

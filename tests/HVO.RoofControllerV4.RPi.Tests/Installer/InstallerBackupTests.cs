@@ -253,6 +253,35 @@ public sealed class InstallerBackupTests
         pi.Snapshot(InstallPaths.SystemLog).Should().Equal(files);
     }
 
+    // #206: the roof command history is kept next to the identity store, so a backup holds it and a restore puts it back.
+    [TestMethod]
+    public async Task ABackup_HoldsTheCommandHistory_AndARestorePutsItBack()
+    {
+        using var pi = await InstalledPiAsync();
+        var history = Path.Join(ControllerLayout.System.Identity, HVO.RoofControllerV4.RPi.Storage.RoofCommandHistoryOptions.DefaultFileName);
+        var line = System.Text.Json.JsonSerializer.Serialize(
+            new HVO.RoofControllerV4.Common.Models.RoofCommandHistoryEntry
+            {
+                Id = 1,
+                TimestampUtc = new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero),
+                Command = HVO.RoofControllerV4.Common.Models.RoofHistoryCommand.Open,
+                User = "ada",
+                PrincipalId = "person:ada@1",
+                Accepted = true
+            },
+            HVO.RoofControllerV4.RPi.Storage.RoofCommandHistoryJsonContext.Default.RoofCommandHistoryEntry) + "\n";
+        pi.Write(history, line);
+        File.SetUnixFileMode(pi.OnDisk(history), Modes.PrivateFile);
+
+        await BackUpAndPurgeAsync(pi);
+        Entries(pi, Kept).Select(entry => "/" + entry.Name).Should().Contain(history);
+        var run = await RestoreAsync(pi, Kept);
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Read(history).Should().Be(line);
+        pi.Mode(history).Should().Be(Modes.PrivateFile, "only the controller's user reads who did what");
+    }
+
     // #136 F7: an archive backup writes is on disk (the archive, its folder and each folder made for it) when it says it is
     // done, and before a purge removes anything.
     [TestMethod]

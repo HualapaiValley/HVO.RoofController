@@ -40,6 +40,17 @@ public sealed class RoofIdentityApi
         return _http.SendAsync<RoofUserResponse>(HttpMethod.Put, RoofApiRoutes.User(name), request, cancellationToken);
     }
 
+    /// <summary>Sets or replaces a person's PIN (#205), whatever their role is; their PIN sessions end.</summary>
+    public Task<RoofUserResponse> SetPinAsync(string name, string pin, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(pin);
+        return _http.SendAsync<RoofUserResponse>(HttpMethod.Put, RoofApiRoutes.UserPin(name), new RoofPinSetRequest { Pin = pin }, cancellationToken);
+    }
+
+    /// <summary>Removes a person's PIN (#205), or their temporary commissioning PIN; their PIN sessions end.</summary>
+    public Task<RoofUserResponse> RemovePinAsync(string name, CancellationToken cancellationToken = default)
+        => _http.SendAsync<RoofUserResponse>(HttpMethod.Delete, RoofApiRoutes.UserPin(name), null, cancellationToken);
+
     /// <summary>Removes a person and ends their sessions.</summary>
     public Task RemoveUserAsync(string name, CancellationToken cancellationToken = default)
         => _http.SendAsync(HttpMethod.Delete, RoofApiRoutes.User(name), null, cancellationToken);

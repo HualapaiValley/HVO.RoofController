@@ -1,0 +1,141 @@
+@page "/history"
+@inherits WebClientPage
+
+<PageTitle>History · HVO Roof Controller</PageTitle>
+
+<PageHeading Title="History" Description="The roof commands the controller was sent, accepted or refused: who sent each, from where, and the roof afterwards." />
+
+<PageMessage Message="Message" />
+
+<section class="web-card" aria-labelledby="history-title" data-testid="history">
+    <div class="web-health-head">
+        <h2 id="history-title">Roof commands</h2>
+        <button type="button" class="btn btn-sm btn-outline-light" data-testid="history-reload" disabled="@Busy" @onclick="ReloadAsync">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Reload
+        </button>
+    </div>
+
+    <form class="web-history-filters" data-testid="history-filters" @onsubmit="ApplyAsync" @onsubmit:preventDefault>
+        @if (_admin)
+        {
+            <div>
+                <label for="history-user" class="form-label">Person or key</label>
+                <input id="history-user" class="form-control form-control-sm" autocomplete="off" placeholder="everyone" data-testid="history-user" @bind="_user" />
+            </div>
+        }
+        <div>
+            <label for="history-from" class="form-label">From (UTC)</label>
+            <input id="history-from" type="date" class="form-control form-control-sm" data-testid="history-from" @bind="_from" />
+        </div>
+        <div>
+            <label for="history-to" class="form-label">To (UTC)</label>
+            <input id="history-to" type="date" class="form-control form-control-sm" data-testid="history-to" @bind="_to" />
+        </div>
+        <div class="web-actions">
+            <button type="submit" class="btn btn-sm btn-primary" data-testid="history-apply" disabled="@Busy">Show</button>
+        </div>
+    </form>
+
+    @if (_page is not { } page)
+    {
+        <p class="web-muted" role="status" data-testid="history-loading">@(Busy || Message is null ? "Reading the roof command history…" : "The roof command history is not read.")</p>
+    }
+    else
+    {
+        <p class="web-muted" data-testid="history-scope">@RoofHistoryText.DescribeScope(page) @RoofHistoryText.DescribeRetention(page)</p>
+        @if (page.Entries.Count == 0)
+        {
+            <p class="web-muted" data-testid="history-empty">@(Filtered ? RoofHistoryText.EmptyFiltered : RoofHistoryText.Empty)</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-dark table-sm web-table">
+                    <thead>
+                        <tr>
+                            @foreach (var header in RoofHistoryText.Headers)
+                            {
+                                <th scope="col">@header</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in page.Entries)
+                        {
+                            var cells = RoofHistoryText.DescribeRow(entry);
+                            <tr data-testid="history-entry" data-id="@entry.Id" data-accepted="@(entry.Accepted ? "true" : "false")">
+                                @for (var i = 0; i < cells.Count; i++)
+                                {
+                                    <td data-label="@RoofHistoryText.Headers[i]" class="@(i == 3 && !entry.Accepted ? "web-history-refused" : null)">@cells[i]</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <div class="web-actions web-history-pager">
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="history-newer" disabled="@(Busy || page.Skip == 0)" @onclick="NewerAsync">Newer</button>
+            <span data-testid="history-range">@RoofHistoryText.DescribeRange(page)</span>
+            <button type="button" class="btn btn-sm btn-outline-light" data-testid="history-older" disabled="@(Busy || page.Skip + page.Entries.Count >= page.TotalCount)" @onclick="OlderAsync">Older</button>
+        </div>
+        <p class="web-checked">Read at @RoofStatusText.Time(_readAt). Times are UTC.</p>
+    }
+</section>
+
+@code {
+    /// <summary>Entries on a page.</summary>
+    internal const int PageSize = 25;
+
+    private bool _admin;
+    private string? _user;
+    private DateOnly? _from;
+    private DateOnly? _to;
+    private RoofHistoryQuery _query = new() { Take = PageSize };
+    private RoofCommandHistoryPage? _page;
+    private DateTimeOffset _readAt;
+
+    [Inject] private TimeProvider Time { get; set; } = default!;
+
+    private bool Filtered => _query.User is not null || _query.From is not null || _query.To is not null;
+
+    protected override Task OnInitializedAsync() => ReadAsync(_query);
+
+    private Task ReloadAsync() => ReadAsync(_query);
+
+    private Task ApplyAsync()
+    {
+        if (_from is { } from && _to is { } to && to < from)
+        {
+            Message = Danger("The To date is before the From date.");
+            return Task.CompletedTask;
+        }
+
+        return ReadAsync(new RoofHistoryQuery
+        {
+            User = _admin && !string.IsNullOrWhiteSpace(_user) ? _user.Trim() : null,
+            From = _from is { } start ? new DateTimeOffset(start.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero) : null,
+            // The whole To day: the controller's To is the first moment not included.
+            To = _to is { } end ? new DateTimeOffset(end.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero) : null,
+            Take = PageSize
+        });
+    }
+
+    private Task NewerAsync() => ReadAsync(_query with { Skip = Math.Max(0, _query.Skip - PageSize) });
+
+    private Task OlderAsync() => ReadAsync(_query with { Skip = _query.Skip + PageSize });
+
+    private async Task ReadAsync(RoofHistoryQuery query)
+    {
+        Message = null;
+        await SendAsync("The roof command history could not be read.", async (session, cancellationToken) =>
+        {
+            _page = await session.Client.Roof.GetHistoryAsync(query, cancellationToken);
+            // An admin's session reads everyone's commands, and may pick one person's or key's.
+            _admin = _page.AllUsers;
+            _query = query;
+            _readAt = Time.GetUtcNow();
+        });
+    }
+}

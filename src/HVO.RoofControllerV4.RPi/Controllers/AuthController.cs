@@ -29,6 +29,7 @@ namespace HVO.RoofControllerV4.RPi.Controllers;
 public sealed class AuthController : ControllerBase
 {
     private readonly RoofSignInService _signIn;
+    private readonly RoofKioskSignInService _kioskSignIn;
     private readonly RoofIdentityStore _identity;
     private readonly RoofApiKeyStore _keys;
     private readonly IOptionsMonitor<RoofIdentityOptions> _options;
@@ -36,12 +37,14 @@ public sealed class AuthController : ControllerBase
 
     public AuthController(
         RoofSignInService signIn,
+        RoofKioskSignInService kioskSignIn,
         RoofIdentityStore identity,
         RoofApiKeyStore keys,
         IOptionsMonitor<RoofIdentityOptions> options,
         ILogger<AuthController> logger)
     {
         _signIn = signIn ?? throw new ArgumentNullException(nameof(signIn));
+        _kioskSignIn = kioskSignIn ?? throw new ArgumentNullException(nameof(kioskSignIn));
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _keys = keys ?? throw new ArgumentNullException(nameof(keys));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -111,7 +114,10 @@ public sealed class AuthController : ControllerBase
     }
 
     /// <summary>The people who can sign in with a PIN, for a kiosk's picker (the kiosk's key in <c>X-Api-Key</c>).</summary>
-    /// <response code="200">Names and roles, sorted by name. Nothing secret.</response>
+    /// <response code="200">
+    /// Names and roles, sorted by name, with each person's display and short name, login type and last sign-in (#209).
+    /// Nothing secret.
+    /// </response>
     /// <response code="403">The API key is not a kiosk key (<c>KioskKeyRequired</c>).</response>
     /// <response code="503">The identity store is unavailable.</response>
     [HttpGet("Pin/Users", Name = nameof(GetPinUsers))]
@@ -134,15 +140,30 @@ public sealed class AuthController : ControllerBase
         var credential = _identity.GetKioskCredential();
         var owner = credential is null ? null : _identity.ProviderPrincipals.FirstOrDefault(p => p.Id == credential.PrincipalId && p.Enabled);
         var commissioned = owner is null ? Array.Empty<RoofPinUserResponse>() : new[] { new RoofPinUserResponse(owner.Name, RoofControllerApiContract.OperatorRole)
-            { PrincipalId = owner.Id, Provider = owner.Provider, SetupPending = credential!.State == "pending" } };
+            {
+                PrincipalId = owner.Id,
+                Provider = owner.Provider,
+                SetupPending = credential!.State == "pending",
+                DisplayName = owner.DisplayName,
+                ShortName = owner.ShortName,
+                LastLoginUtc = owner.LastLoginUtc
+            } };
         return _identity.Users
             .Where(user => (user.PinHash is not null || _identity.CanUseTemporaryPin(user)) && user.Role != RoofControllerApiContract.ViewerRole)
             .OrderBy(user => user.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(user => new RoofPinUserResponse(user.Name, user.Role))
+            .Select(user => new RoofPinUserResponse(user.Name, user.Role)
+            {
+                DisplayName = user.DisplayName,
+                ShortName = user.ShortName,
+                LastLoginUtc = user.LastLoginUtc
+            })
             .Concat(commissioned).ToArray();
     }
 
-    /// <summary>Who the caller is: the person or API key, its role and how it signed in (any credential).</summary>
+    /// <summary>
+    /// Who the caller is: the person or API key, its role and how it signed in, and a person's display and short name
+    /// (any credential).
+    /// </summary>
     /// <response code="200">The caller.</response>
     [HttpGet("Me", Name = nameof(GetCaller))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
@@ -158,6 +179,27 @@ public sealed class AuthController : ControllerBase
             _identity.TryGetLiveSession(sessionId, out session);
         }
 
+        // A person: in the identity store, or an enrolled Linux account (its names are the operating system's). An API
+        // key has no names, even one that shares a person's name.
+        string? displayName = null, shortName = null, loginType = null;
+        bool? hasPin = null;
+        if (kind != RoofCredentialKind.ApiKey)
+        {
+            if (User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux"))
+            {
+                var linux = _identity.LinuxForPrincipal(User.FindFirst(RoofPrincipalFactory.PrincipalIdClaimType)?.Value ?? string.Empty);
+                (displayName, shortName, loginType) = (linux?.DisplayName, linux?.Name ?? User.Identity!.Name, RoofLoginTypes.Linux);
+            }
+            else if (_identity.TryGetUser(User.Identity!.Name, out var person))
+            {
+                (displayName, shortName, loginType) = (person.DisplayName, person.ShortName, RoofLoginTypes.Local);
+            }
+
+            // The PIN this person can change themselves (#205): the commissioned PIN a kiosk session was opened with, or
+            // their own.
+            hasPin = IsCommissionedPinSession() || (!IsLinuxOrLocal() && OwnPinUser() is not null);
+        }
+
         return new RoofCallerResponse(
             User.Identity!.Name!,
             RoofPrincipalFactory.GetHighestRole(User)!,
@@ -165,8 +207,89 @@ public sealed class AuthController : ControllerBase
             User.FindFirst(RoofPrincipalFactory.DeviceClaimType)?.Value,
             sessionId,
             session?.ExpiresUtc,
-            User.HasClaim(RoofPrincipalFactory.KioskClaimType, "true"));
+            User.HasClaim(RoofPrincipalFactory.KioskClaimType, "true"))
+        {
+            DisplayName = displayName,
+            ShortName = shortName,
+            LoginType = loginType,
+            HasPin = hasPin
+        };
     }
+
+    /// <summary>
+    /// A person signed in with a password changes their own display and short name (#209). A null name is left as it
+    /// is, an empty one removed. Names are edited where there is a keyboard (the web UI, the terminal): a PIN session at
+    /// a kiosk is refused, and so is a Linux account, whose names come from the operating system.
+    /// </summary>
+    /// <response code="200">The caller, with the new names.</response>
+    /// <response code="400">An invalid name, or the request used an API key.</response>
+    /// <response code="403">A PIN session (<c>CredentialNotAllowed</c>).</response>
+    /// <response code="409">A Linux account: its names are read-only here (<c>IdentityReadOnly</c>).</response>
+    /// <response code="503">The identity store is unavailable.</response>
+    [RoofRefusePinSession]
+    [HttpPost("Names", Name = nameof(ChangeOwnNames))]
+    [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
+    [ProducesResponseType(typeof(RoofCallerResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public ActionResult<RoofCallerResponse> ChangeOwnNames([FromBody] RoofNamesChangeRequest request)
+    {
+        if (User.FindFirst(RoofPrincipalFactory.SessionIdClaimType)?.Value is null)
+        {
+            return RoofProblemResults.Create(
+                this,
+                RoofControllerErrorCode.InvalidRequest,
+                "Only a signed-in person can change their names; this request used an API key.");
+        }
+
+        if (User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux") || User.HasClaim(RoofPrincipalFactory.LocalClaimType, "true"))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.IdentityReadOnly, LinuxNamesAreReadOnly);
+        }
+
+        // Null leaves a name as it is; empty (or only spaces) removes it.
+        var displayName = request.DisplayName is null ? null : RoofIdentityContract.NormalizeLabel(request.DisplayName) ?? string.Empty;
+        var shortName = request.ShortName is null ? null : RoofIdentityContract.NormalizeLabel(request.ShortName) ?? string.Empty;
+        if (displayName is { Length: > 0 } && !RoofIdentityContract.IsValidDisplayName(displayName))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, IdentityController.DisplayNameRule);
+        }
+
+        if (shortName is { Length: > 0 } && !RoofIdentityContract.IsValidShortName(shortName))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, IdentityController.ShortNameRule);
+        }
+
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        RoofIdentityResult<StoredUser> changed;
+        try
+        {
+            changed = _identity.ChangeOwnNames(User.Identity!.Name!, displayName, shortName);
+        }
+        catch (RoofIdentityStoreException ex)
+        {
+            _logger.LogError("Name change for {Name} could not be saved: {Reason}", User.Identity!.Name, ex.Message);
+            return StoreUnavailable();
+        }
+
+        if (!changed.Succeeded)
+        {
+            return RoofProblemResults.Create(this, changed.Error!.Value, changed.Detail!);
+        }
+
+        _logger.LogWarning("AUDIT {Name} changed their own names from {Remote}.", changed.Value!.Name, Remote);
+        return GetCaller();
+    }
+
+    internal const string LinuxNamesAreReadOnly = "A Linux account's names come from the operating system: change the account's full name there.";
 
     /// <summary>Signs out: ends the session whose token was sent (sessions only).</summary>
     /// <response code="204">The session ended.</response>
@@ -251,6 +374,143 @@ public sealed class AuthController : ControllerBase
             .ConfigureAwait(false);
         return result.Succeeded ? NoContent() : SignInProblem(result);
     }
+
+    /// <summary>
+    /// A signed-in person changes their own PIN (#205): with a PIN session at a kiosk, or with a password session (the
+    /// web UI, the terminal, the CLI). The current PIN is always checked, and a wrong one counts towards the same lockouts
+    /// as PIN sign-in (the name's PIN, and at a kiosk the kiosk). This session stays open, and so do the person's password
+    /// sessions; their other PIN sessions, at every kiosk, end. A PIN session may change only its own PIN: a PIN works at
+    /// a kiosk alone, so this creates no credential that works anywhere else. The first PIN is an admin's to give
+    /// (<c>PUT Identity/Users/{name}/Pin</c>). A Linux account has no PIN of its own; the owner of the kiosk's
+    /// commissioned PIN changes it at a kiosk, from a session opened with it.
+    /// </summary>
+    /// <response code="204">The PIN changed.</response>
+    /// <response code="400">The new PIN is not four digits, is the reserved temporary PIN or the current one; the person has no PIN to change; or the request used an API key.</response>
+    /// <response code="401">The current PIN is not correct (<c>SignInFailed</c>).</response>
+    /// <response code="409">A Linux account signed in with its password: it has no PIN here (<c>IdentityReadOnly</c>).</response>
+    /// <response code="429">Locked out after repeated failures, or too many sign-ins at once; see <c>Retry-After</c>.</response>
+    /// <response code="503">The identity store is unavailable.</response>
+    [HttpPost("Pin/Change", Name = nameof(ChangePin))]
+    [EnableRateLimiting(RoofSignInRateLimiting.PolicyName)]
+    [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> ChangePin([FromBody] RoofPinChangeRequest request, CancellationToken cancellationToken)
+    {
+        var sessionId = User.FindFirst(RoofPrincipalFactory.SessionIdClaimType)?.Value;
+        if (sessionId is null)
+        {
+            return RoofProblemResults.Create(
+                this,
+                RoofControllerErrorCode.InvalidRequest,
+                "Only a signed-in person can change their PIN; this request used an API key.");
+        }
+
+        if (!IsCommissionedPinSession() && IsLinuxOrLocal())
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.IdentityReadOnly, LinuxHasNoPin);
+        }
+
+        if (!RoofIdentityContract.IsValidPin(request.NewPin))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, PinRule);
+        }
+
+        if (!RoofIdentityContract.IsAcceptedPin(request.CurrentPin))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.SignInFailed, RoofKioskSignInService.WrongCurrentPin);
+        }
+
+        if (string.Equals(request.CurrentPin, request.NewPin, StringComparison.Ordinal))
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, "Choose a new PIN different from your current one.");
+        }
+
+        if (!_identity.IsAvailable)
+        {
+            return StoreUnavailable();
+        }
+
+        var deviceKeyId = User.FindFirst(RoofPrincipalFactory.DeviceKeyIdClaimType)?.Value;
+        var device = User.FindFirst(RoofPrincipalFactory.DeviceClaimType)?.Value;
+        if (IsCommissionedPinSession())
+        {
+            RoofIdentityResult<int> changed;
+            try
+            {
+                changed = await _kioskSignIn.ChangePinAsync(
+                        User.FindFirst(RoofPrincipalFactory.PrincipalIdClaimType)!.Value,
+                        deviceKeyId ?? string.Empty,
+                        sessionId,
+                        request.CurrentPin!,
+                        request.NewPin!,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (RoofIdentityStoreException ex)
+            {
+                _logger.LogError("Kiosk PIN change for {Name} could not be saved: {Reason}", User.Identity!.Name, ex.Message);
+                return StoreUnavailable();
+            }
+
+            if (!changed.Succeeded)
+            {
+                _logger.LogWarning("SECURITY PIN change at {Device} for {Name} from {Remote} refused: {Reason}", device, User.Identity!.Name, Remote, changed.Detail);
+                return RoofProblemResults.Create(this, changed.Error!.Value, changed.Detail!);
+            }
+
+            _logger.LogWarning(
+                "AUDIT {Name} changed the kiosk's commissioned PIN (PIN session at {Device}) from {Remote}; {Ended} other PIN session(s) ended.",
+                User.Identity!.Name, device, Remote, changed.Value);
+            return NoContent();
+        }
+
+        if (OwnPinUser() is null)
+        {
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, NoPinToChange);
+        }
+
+        var result = await _signIn.ChangePinAsync(
+                User.Identity!.Name!,
+                sessionId,
+                RoofPrincipalFactory.GetCredentialKind(User) == RoofCredentialKind.Pin ? deviceKeyId : null,
+                device,
+                request.CurrentPin!,
+                request.NewPin!,
+                Remote,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return result.Succeeded ? NoContent() : SignInProblem(result);
+    }
+
+    internal const string LinuxHasNoPin =
+        "A Linux account has no PIN of its own here. The kiosk's commissioned PIN is changed at a kiosk, after unlocking with it.";
+
+    internal const string NoPinToChange = "You have no PIN to change. An admin gives you your first PIN.";
+
+    internal static string PinRule => string.Create(
+        System.Globalization.CultureInfo.InvariantCulture,
+        $"A PIN has exactly {RoofIdentityContract.MinimumPinLength} digits, and the temporary commissioning PIN is reserved.");
+
+    /// <summary>A PIN session opened with the kiosk's commissioned PIN (<c>POST Auth/KioskPin</c>): it names a principal.</summary>
+    private bool IsCommissionedPinSession()
+        => RoofPrincipalFactory.GetCredentialKind(User) == RoofCredentialKind.Pin
+            && User.FindFirst(RoofPrincipalFactory.PrincipalIdClaimType) is not null;
+
+    private bool IsLinuxOrLocal()
+        => User.HasClaim(RoofPrincipalFactory.ProviderClaimType, "linux") || User.HasClaim(RoofPrincipalFactory.LocalClaimType, "true");
+
+    /// <summary>The signed-in person when they have a PIN of their own to change (or the emulator's temporary one), else null.</summary>
+    private StoredUser? OwnPinUser()
+        => _identity.TryGetUser(User.Identity?.Name, out var person)
+            && person.Role != RoofControllerApiContract.ViewerRole
+            && (person.PinHash is not null || _identity.CanUseTemporaryPin(person))
+                ? person
+                : null;
 
     internal static string PasswordRule => string.Create(
         System.Globalization.CultureInfo.InvariantCulture,

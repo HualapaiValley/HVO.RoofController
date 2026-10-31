@@ -71,7 +71,6 @@ public sealed class RoofWebHostTests
 
     [TestMethod]
     [DataRow("/people")]
-    [DataRow("/system")]
     public async Task TheAdminPages_AreDeniedToAViewer(string page)
     {
         await using var host = await WebHost.StartAsync();
@@ -87,10 +86,26 @@ public sealed class RoofWebHostTests
     }
 
     [TestMethod]
+    public async Task TheSystemPage_IsOpenToAViewer_WithoutTheAdminSections()
+    {
+        await using var host = await WebHost.StartAsync();
+        using var browser = host.Browser();
+        await browser.SignInAsync("vic", FakeController.AdaPassword);
+
+        using var response = await browser.GetAsync("/system");
+        var html = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "every role reads the controller's summary (#209)");
+        html.Should().Contain("data-testid=\"system-summary\"");
+        html.Should().NotContain("data-testid=\"role-denied\"");
+        html.Should().NotContain("data-testid=\"restart\"").And.NotContain("data-testid=\"forced-restart\"");
+    }
+
+    [TestMethod]
     [DataRow("vic", false)]
     [DataRow("olga", false)]
     [DataRow("ada", true)]
-    public async Task TheMenu_OffersTheAdminPages_OnlyToAnAdmin(string name, bool admin)
+    public async Task TheMenu_OffersTheAdminPages_OnlyToAnAdmin_AndSystemToEveryone(string name, bool admin)
     {
         await using var host = await WebHost.StartAsync();
         using var browser = host.Browser();
@@ -101,8 +116,10 @@ public sealed class RoofWebHostTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, "everyone may read the settings their role allows");
         html.Should().Contain("href=\"settings\"");
+        html.Should().Contain("href=\"history\"", "everyone may read their own roof commands");
         html.Contains("href=\"people\"", StringComparison.Ordinal).Should().Be(admin);
-        html.Contains("href=\"system\"", StringComparison.Ordinal).Should().Be(admin);
+        html.Should().Contain("href=\"system\"", "every role reads the controller's summary");
+        html.Contains("href=\"account/pin\"", StringComparison.Ordinal).Should().Be(name != "vic", "only operators and admins have a PIN (#205)");
     }
 
     [TestMethod]

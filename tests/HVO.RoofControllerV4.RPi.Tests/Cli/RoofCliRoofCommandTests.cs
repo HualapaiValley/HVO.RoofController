@@ -25,7 +25,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 /// <summary>
 /// <c>hvo-roof</c>'s roof and sign-in commands against the in-process controller (#45): status and <c>--watch</c>
 /// (changes, staleness, a refused key), health and its probes, stop and its exit codes, open and close (following the
-/// motion, renewing the lease, Stop on Ctrl+C), lease, clear-fault, whoami, login, logout and passwd.
+/// motion, renewing the lease, Stop on Ctrl+C), lease, clear-fault, whoami, login, logout, passwd and pin.
 /// </summary>
 [TestClass]
 public sealed class RoofCliRoofCommandTests
@@ -272,7 +272,8 @@ public sealed class RoofCliRoofCommandTests
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         var lines = result.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         lines.Should().HaveCount(2, result.ToString());
-        lines[0].Should().EndWith("Closed; last stop: Stopped by operator");
+        // The controller reports the safety conditions (Unknown: it has no safety source), which end the line.
+        lines[0].Should().EndWith("Closed; last stop: Stopped by operator; safety unknown");
         lines[1].Should().Contain("Opening, commanded to open");
     }
 
@@ -1836,6 +1837,156 @@ public sealed class RoofCliRoofCommandTests
         result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
         result.Error.Should().Contain("[InvalidRequest]")
             .And.Contain("Only a signed-in person can change their password; this request used an API key.");
+    }
+
+    // ---- Pin (#205) ------------------------------------------------------------------------------------------------
+
+    private const string NewPin = "8642";
+
+    /// <summary>Adds <see cref="Person"/> (operator, with a PIN) and signs in as them with <c>hvo-roof login</c>.</summary>
+    private static async Task LoginWithPinAsync(RoofApiTestHost host, CliRig rig)
+    {
+        await RoofClientApiTests.AddUserAsync(host, Person, RoofControllerApiContract.OperatorRole, TestSecrets.Pin);
+        rig.Input.Enqueue(TestSecrets.Password);
+        var login = await rig.RunAsync("login", Person);
+        login.Code.Should().Be(RoofExitCode.Success, login.ToString());
+        rig.Prompts.Clear();
+    }
+
+    [TestMethod]
+    public async Task Pin_Interactive_AsksForTheCurrentPinAndTheNewOneTwice_KeepsTheSession_AndEndsTheOtherPinSessions()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(null);
+        await LoginWithPinAsync(host, rig);
+        using var kiosk = CreateClient(host, new RoofKioskCredential(RoofClientApiTests.KioskKey));
+        await kiosk.Auth.SignInWithPinAsync(Person, TestSecrets.Pin);
+        rig.Interactive = true;
+        rig.Input.Enqueue(TestSecrets.Pin);
+        rig.Input.Enqueue(NewPin);
+        rig.Input.Enqueue(NewPin);
+
+        var result = await rig.RunAsync("pin");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().Be(RoofIdentityText.OwnPinChanged + Environment.NewLine);
+        rig.Prompts.Should().Equal([("Current PIN: ", true), ("New PIN: ", true), ("Again: ", true)]);
+        (result.Out + result.Error).Should().NotContainAny(TestSecrets.Pin, NewPin);
+        (await rig.RunAsync("whoami")).Code.Should().Be(RoofExitCode.Success, "changing your PIN keeps this session open");
+        using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
+        (await admin.Identity.GetSessionsAsync()).Should().ContainSingle("the PIN session at the kiosk ended")
+            .Which.Kind.Should().Be(RoofCredentialKind.Session);
+        (await kiosk.Auth.SignInWithPinAsync(Person, NewPin)).Name.Should().Be(Person, "the new PIN unlocks a kiosk");
+    }
+
+    [TestMethod]
+    public async Task Pin_FromRedirectedInput_ReadsEachSecretOnce_Json()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(null);
+        await LoginWithPinAsync(host, rig);
+        rig.Input.Enqueue(TestSecrets.Pin);
+        rig.Input.Enqueue(NewPin);
+
+        var result = await rig.RunAsync("pin", "--json");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Json.GetProperty("changed").GetBoolean().Should().BeTrue();
+        rig.Prompts.Should().Equal([("Current PIN: ", true), ("New PIN: ", true)]);
+    }
+
+    [TestMethod]
+    public async Task Pin_WithAWrongCurrentPin_IsRefused_AndKeepsTheSession()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(null);
+        await LoginWithPinAsync(host, rig);
+        rig.Input.Enqueue(TestSecrets.OtherPin);
+        rig.Input.Enqueue(NewPin);
+
+        var result = await rig.RunAsync("pin");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Error.Should().Be("The current PIN is not correct. The PIN was not changed." + Environment.NewLine);
+        (await rig.RunAsync("whoami")).Code.Should().Be(RoofExitCode.Success, "a wrong current PIN does not end the session");
+        using var kiosk = CreateClient(host, new RoofKioskCredential(RoofClientApiTests.KioskKey));
+        (await kiosk.Auth.SignInWithPinAsync(Person, TestSecrets.Pin)).Name.Should().Be(Person, "the PIN did not change");
+    }
+
+    [TestMethod]
+    public async Task Pin_AfterRepeatedWrongPins_IsLockedOut_AndSaysWhenToTryAgain()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(null);
+        await LoginWithPinAsync(host, rig);
+        CliResult? last = null;
+        for (var i = 0; i < 5; i++)
+        {
+            rig.Input.Enqueue(TestSecrets.OtherPin);
+            rig.Input.Enqueue(NewPin);
+            last = await rig.RunAsync("pin", "--json");
+        }
+
+        last!.Code.Should().Be(RoofExitCode.Refused, last.ToString());
+        var error = last.Json.GetProperty("error");
+        error.GetProperty("code").GetString().Should().Be(nameof(RoofControllerErrorCode.SignInLockedOut));
+        error.GetProperty("retryAfterSeconds").GetDouble().Should().BePositive();
+        (await rig.RunAsync("whoami")).Code.Should().Be(RoofExitCode.Success, "a lockout of the PIN is not the end of the session");
+    }
+
+    [TestMethod]
+    [DataRow("123", "A PIN must be exactly 4 digits")]
+    [DataRow("0000", "A PIN must be exactly 4 digits")]
+    [DataRow(TestSecrets.Pin, "Choose a new PIN different from your current one.")]
+    public async Task Pin_ABadNewPin_IsAUsageError_AndSendsNothing(string newPin, string because)
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(null);
+        await LoginWithPinAsync(host, rig);
+        rig.Input.Enqueue(TestSecrets.Pin);
+        rig.Input.Enqueue(newPin);
+
+        var result = await rig.RunAsync("pin");
+
+        result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
+        result.Error.Should().Contain(because);
+        using var kiosk = CreateClient(host, new RoofKioskCredential(RoofClientApiTests.KioskKey));
+        (await kiosk.Auth.SignInWithPinAsync(Person, TestSecrets.Pin)).Name.Should().Be(Person, "the PIN did not change");
+    }
+
+    [TestMethod]
+    public async Task Pin_WithoutAPin_SaysAnAdminGivesTheFirst_AndAsksForNothing()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(null);
+        await LoginAsync(host, rig);
+
+        var result = await rig.RunAsync("pin");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Error.Should().Be(RoofIdentityText.NoPinYet + Environment.NewLine);
+        rig.Prompts.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task Pin_WithAnApiKey_IsRefused_AndAsksForNothing()
+    {
+        using var host = RoofClientApiTests.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Operator);
+
+        var result = await rig.RunAsync("pin", "--json");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Json.GetProperty("error").GetProperty("message").GetString()
+            .Should().Be("A PIN is a person's, and this credential is an API key. Sign in with 'hvo-roof login' first.");
+        rig.Prompts.Should().BeEmpty();
     }
 }
 

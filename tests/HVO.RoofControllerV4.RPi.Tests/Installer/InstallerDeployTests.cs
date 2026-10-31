@@ -46,6 +46,8 @@ public sealed class InstallerDeployTests
             ["HTTPS_HOST_PORT"] = "8443",
             ["WEB_HOST_PORT"] = "8088",
             ["PUBLISH_ADDRESS"] = string.Empty,
+            // The LAN's address alone: never the link-local one or Docker's bridge (#209).
+            ["HOST_ADDRESSES"] = "192.168.1.50",
             ["EXTRA_DOCKER_ARGS"] = $"--env RoofWeb__StopKeyFile=/run/secrets/RoofControllerSecurity__ApiKeys__2__Key",
             ["HAT_EMULATOR_ENDPOINT"] = string.Empty,
             ["ALLOW_EMULATED_HAT"] = "false",
@@ -113,6 +115,9 @@ public sealed class InstallerDeployTests
             ["PUBLISH_ADDRESS"] = "127.0.0.1",
             ["EXTRA_DOCKER_ARGS"] = "--env RoofWeb__StopKeyFile=/run/secrets/RoofControllerSecurity__ApiKeys__2__Key --network hvo-emulator"
         });
+        // Published on loopback, the script tells the controller its web UI is on this machine alone (LocalOnly, #209);
+        // the host's addresses still go with it.
+        bench.Deploys.Single()["HOST_ADDRESSES"].Should().Be("192.168.1.50");
         bench.Containers[MachineSurveyor.ControllerContainer].Should().Match<FakeContainer>(controller => controller.Emulated && controller.Network == HatEmulatorStep.Network);
         InstallRecord.Parse(bench.Read(InstallPaths.SystemRecord)).Hat.Should().Be(HatMode.Emulated);
         run.Output.Should().Contain("https://localhost:8443/").And.Contain("nothing here moves a roof");
@@ -136,6 +141,7 @@ public sealed class InstallerDeployTests
 
         run.ExitCode.Should().Be(0, run.ToString());
         bench.Deploys.Should().ContainSingle().Which["PUBLISH_ADDRESS"].Should().BeEmpty();
+        bench.Deploys.Single()["HOST_ADDRESSES"].Should().Be("192.168.1.50", "the web UI's URLs are built from the LAN's addresses (#209)");
         bench.Containers[MachineSurveyor.HatEmulatorContainer].PublishAddress.Should().Be("127.0.0.1", "the emulator's control API stays on loopback");
     }
 

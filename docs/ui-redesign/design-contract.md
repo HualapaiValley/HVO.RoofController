@@ -21,8 +21,8 @@ components are not needed. Add bounded palette members/aliases only when a consu
 
 The `roof_palette_member` field maps each canonical role onto its shared member; `surface-raised` maps to
 `SurfaceRaised` after #175. #175 audits legacy `Badge`, `MutedWeak` and `FocusRing`: compatible aliases resolve to
-raised surface, muted and accent. Directional actions use raised surface/text; Stop uses danger-background/danger-text,
-including keyboard focus. Native and the existing terminal RGB adapter consume all migrated values. #174 applies all
+raised surface, muted and accent. Stop uses danger-background/danger-text, including keyboard focus, and the bright
+danger tone while the roof moves; Open/Close use the success roles by state (#208, below). Native and the existing terminal RGB adapter consume all migrated values. #174 applies all
 20 canonical roles independently in Web-owned CSS. #176 implements explicit terminal
 ANSI-16/capability parity. #171 itself changed no runtime palette. [Final acceptance](acceptance.md#shared-contracts)
 records the integrated adapter and shared-contract proof.
@@ -57,9 +57,25 @@ roof TUI's F9 cue. This is Roof's mapping of the approved red action direction o
 use a visible outline/underline and bold as appropriate. Do not copy Sky's generic button scheme, which turns the
 focused button blue, onto Stop. It remains enabled during pending commands, stale feeds, questions and lock screens.
 
-Open/Close use raised controls with labelled directional/status indicators as in the approved prototypes; they do not
-reuse Stop's emergency emphasis. They can be disabled by the existing command-eligibility contract, with the reason
-shown. No new confirmation is imposed on Stop. Ordinary primary actions and selected tabs/items use focus treatment;
+Open/Close keep labelled directional/status indicators as in the approved prototypes and do not reuse Stop's
+emergency emphasis. They can be disabled by the existing command-eligibility contract, with the reason shown.
+
+**Action states (#208).** Every client draws Stop, Open and Close by state, through the shared
+[RoofActionStates](../../src/HVO.RoofControllerV4.Client/RoofActionStates.cs) and `RoofUiPalette`'s state aliases, all
+of them canonical roles (`roof_actions` in the data). Colour never decides eligibility, and each state also has words:
+
+| Action state | Background / text / edge | When |
+| --- | --- | --- |
+| Stop idle (`stop`) | danger-background / danger-text / danger | The newest status shows no motion, or there is none. |
+| Stop moving (`stop-moving`) | danger / background / danger-text | The newest status, live or last known, shows motion or commanded motion. Still never disabled. |
+| Open/Close available (`open`, `close`) | success-background / success-text / success | `RoofCommandRules` offers it. |
+| Open/Close running (`motion-running`) | success / background / success-text | A live status shows the roof moving in its direction; not pressable, drawn at full strength, labelled `Opening…`/`Closing…` where the client has room. |
+| Open/Close disabled (`motion-disabled`) | surface / muted / border | Not offered; neutral, never a faded green, with the reason shown. |
+
+A stale status keeps Stop bright when it last showed motion (the roof may still be moving) but never shows Open or Close
+as running. The terminal uses the same roles in truecolour and ANSI-16; without colour a running button is reverse
+video and a disabled one faint. Web reads the dashboard's `data-roof-motion` in CSS alone, so the static Stop form and
+`stop.js` are unchanged. No new confirmation is imposed on Stop. Ordinary primary actions and selected tabs/items use focus treatment;
 focus and selection also have an outline, marker or current-page text. Web `:focus-visible`, Avalonia keyboard focus,
 and terminal underline/reverse must survive disabled neighbours, overlays and every navigation path.
 

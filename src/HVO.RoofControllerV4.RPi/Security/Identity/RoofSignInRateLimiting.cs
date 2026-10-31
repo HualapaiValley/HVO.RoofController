@@ -26,7 +26,7 @@ namespace HVO.RoofControllerV4.RPi.Security.Identity;
 /// </summary>
 public static class RoofSignInRateLimiting
 {
-    /// <summary>The rate-limiting policy on <c>Auth/Session</c>, <c>Auth/Pin</c> and <c>Auth/Password</c>.</summary>
+    /// <summary>The rate-limiting policy on <c>Auth/Session</c>, <c>Auth/Pin</c>, <c>Auth/Password</c> and <c>Auth/Pin/Change</c>.</summary>
     public const string PolicyName = "RoofSignIn";
 
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);

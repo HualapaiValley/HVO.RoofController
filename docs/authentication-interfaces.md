@@ -8,7 +8,7 @@ someone in RoofController. Linux and virtual users remain separate even when the
 | Local CLI / TUI | Explicit Linux enrollment, verified native sudo helper identity and independent controller role; short-lived operation-scoped assertion | Role-authorized roof operations and administration, including virtual users, passwords, personal PINs, managed API keys, sessions and enrolled Linux users' roles/access. Local authorization is never saved as a reusable login. |
 | Remote CLI / TUI | Explicit remote mode, Linux or virtual password session, or configured API key | The credential's controller role and scope apply. Personal expiring keys require a remote password session. |
 | Web | Select Linux (enrolled account, Linux password checked through PAM) or virtual (controller password) | Viewer reads; Operator operates; Admin manages virtual people/passwords/PINs, managed keys, sessions and enrolled Linux roles/access. Linux passwords are never changed by the site. |
-| Kiosk | Device viewer key for status and Stop; name and personal PIN to unlock | Roof operation only: Open, Close, Stop, lease and Clear fault. Admins' PIN sessions are capped at Operator. Settings writes, identity administration and administrative system actions are refused. The kiosk has no Settings or System navigation. |
+| Kiosk | Device viewer key for status and Stop; name and personal PIN to unlock | Roof operation only: Open, Close, Stop, lease and Clear fault, and changing the unlocking person's own PIN after entering it again. Admins' PIN sessions are capped at Operator. Settings writes, identity administration and administrative system actions are refused. The kiosk has no Settings or System navigation. |
 | Mac app | Password session | Role-authorized desktop administration through the same API; the kiosk PIN restriction does not reduce password-session rights. |
 
 Stop remains available with the kiosk device key while locked. API roles do not bypass the roof's safety interlocks.
@@ -70,7 +70,9 @@ The web/TUI personal-PIN editors reject the reserved code. They do not enable te
   than undoing administrative revocation. Review the explicit host enrollment choices when reconciling changes.
 
 Role/access changes revoke Linux sessions and personal keys. Virtual password/role changes end affected sessions;
-PIN changes end PIN sessions. Managed device keys and personal scoped keys have different lifecycles; use
+PIN changes end PIN sessions. A person changes their own PIN (the kiosk's PIN pad, the web UI's Your PIN, the
+terminal's Setup page, `hvo-roof pin`) only by entering the current one; the session that made the change stays open and
+their other PIN sessions end. An admin sets or removes anyone's PIN without it ([Changing a PIN](security.md#changing-a-pin)). Managed device keys and personal scoped keys have different lifecycles; use
 [Security](security.md) for their details.
 
 ## Implemented and validation boundaries
