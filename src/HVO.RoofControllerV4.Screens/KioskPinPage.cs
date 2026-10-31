@@ -176,7 +176,7 @@ public sealed class KioskPinPage : UserControl
                 };
                 // Two people a row, each a read-only card (#208): their display name (#209), their role and how they sign
                 // in as chips, then their short name and when they last signed in. Choosing one goes to the keypad. A row
-                // too tall for a page (the longest names) shows its two cards one under the other.
+                // too tall for a page (the longest names) shows its cards one under the other, each the page's width.
                 var people = _pad.Users.Select(user =>
                 {
                     var name = KioskPinPad.SelectionKey(user);

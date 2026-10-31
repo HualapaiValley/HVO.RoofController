@@ -291,7 +291,8 @@ public sealed class KioskPersonHistoryTests
     public async Task TheLongestNames_StayClearOfThePageControls_OnThePeopleStepAndHistory(int width, int height, double density)
     {
         await using var harness = await KioskHarness.CreateAsync();
-        var longest = new[] { new string('W', RoofIdentityContract.MaximumNameLength), new string('X', RoofIdentityContract.MaximumNameLength) };
+        // Five people: the two the harness has, then two with the longest names side by side, and one alone in the last row.
+        var longest = new[] { 'W', 'X', 'Y' }.Select(letter => new string(letter, RoofIdentityContract.MaximumNameLength)).ToArray();
         using (var admin = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(TestApiKeys.Admin)))
         {
             foreach (var name in longest)
@@ -309,7 +310,7 @@ public sealed class KioskPersonHistoryTests
         await harness.StartLiveAsync();
         await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Unlock));
-        await UntilAsync(() => screen.Shell.PinPad.Users.Count == 4 && screen.Find($"pin-user-{KioskHarness.Admin}") is not null, "the people with a PIN");
+        await UntilAsync(() => screen.Shell.PinPad.Users.Count == 5 && screen.Find($"pin-user-{KioskHarness.Admin}") is not null, "the people with a PIN");
         var people = await ReadEveryPageAsync(screen, "pin-people", "person-people-longest");
         foreach (var name in longest.Append(KioskHarness.Operator).Append(KioskHarness.Admin))
         {

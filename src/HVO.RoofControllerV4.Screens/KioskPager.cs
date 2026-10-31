@@ -123,9 +123,10 @@ public sealed class KioskPager : UserControl
         foreach (var item in items)
         {
             item.Measure(new Size(width, double.PositiveInfinity));
-            if (item is KioskPagerRow { Cells.Count: > 1 } row && item.DesiredSize.Height > height)
+            if (item is KioskPagerRow { Cells.Count: > 0 } row && item.DesiredSize.Height > height)
             {
-                // Too tall for a page side by side: one under another, each the page's width, measured as drawn.
+                // Too tall for a page in its column: one under another, each the page's width (a lone one in a row of two
+                // columns too), measured as drawn.
                 foreach (var cell in row.Split())
                 {
                     _body.Children.Add(cell);

@@ -5,8 +5,9 @@ namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
 /// Controls side by side, in equal columns, as one item of a bounded page (<see cref="KioskPager"/>). When the row is
-/// taller than a whole page (a person's card with the longest names, two a row), the pager shows its controls one under
-/// another instead, each the page's width, so nothing is drawn over the page controls; at another size it is a row again.
+/// taller than a whole page (a person's card with the longest names, two a row, or alone in the last row), the pager shows
+/// its controls one under another instead, each the page's width, so nothing is drawn over the page controls; at another
+/// size it is a row again.
 /// </summary>
 public sealed class KioskPagerRow : UniformGrid
 {

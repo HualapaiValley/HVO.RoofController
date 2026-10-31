@@ -83,8 +83,8 @@ changed); then their short name when they have one (`Short name: Olga`) and thei
 (`Last sign-in: 2026-10-30 12:00:00Z`, or `none recorded`).
 A card only chooses: names are not changed at the kiosk, which has no keyboard: people change their own in the web UI
 (their account) or the terminal (Setup), an admin anyone's, and a Linux account's come from the operating system
-(#209). People are paginated only when the list overflows the page, and two cards too tall for a page together (the
-longest names) are shown one under the other. Choosing a card opens a separate keypad step: a
+(#209). People are paginated only when the list overflows the page, and a row of cards too tall for a page (the
+longest names) is shown one card under another, each the page's width. Choosing a card opens a separate keypad step: a
 compact, centred keypad of fixed-size keys. **Person** returns to the list, and the list's **Cancel** goes back to the keypad, with the person
 chosen before still chosen; the keypad's **Cancel** leaves Unlock. A person types their PIN on the keypad; the PIN shows as dots and is only held until it is sent.
 A wrong PIN says so, and repeated wrong PINs lock that name out at every kiosk, and this kiosk for every name

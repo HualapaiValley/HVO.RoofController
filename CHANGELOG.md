@@ -84,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shared aliases of the canonical HVO Dark roles (#208).
 - Kiosk Unlock: a compact, centred keypad of fixed-size keys; each person is a read-only card, two a row: their display
   name, their role and login type (and a pending first-time setup) as chips, then their short name and last sign-in;
-  a pair too tall for a page (the longest names) is shown one under the other. Choosing a card only chooses; Cancel on
+  a row too tall for a page (the longest names) is shown one card under another, each the page's width. Choosing a card only chooses; Cancel on
   the people step returns to the keypad (#208).
 - Kiosk pages show Previous, Next and the page count only when their contents overflow (#208).
 - Kiosk and Mac About: labelled cards for the device, the controller (its version, then where the web UI is) and the
