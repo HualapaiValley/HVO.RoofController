@@ -5,6 +5,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.Common.Safety;
+using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.Simulation.Safety;
@@ -288,13 +289,15 @@ public sealed class WebSafetyOverrideTests
         });
     }
 
-    // The mount is unparked after the page's last status: the controller's next read finds it, the page does not know.
+    // The mount is unparked after the page's last status: the controller reads it, and the page does not know. The read is
+    // made directly, not by moving the controller's clock, which would send the hub's heartbeat with the new conditions.
     private static async Task UnparkUnseenAsync(WebRoofHarness harness, SimulatedTelescopeParkSource mount)
     {
         mount.IsParked = false;
-        harness.ServerClock.Advance(TimeSpan.FromSeconds(10));
+        await harness.Host.Services.GetRequiredService<RoofSafetyService>().PollAsync(CancellationToken.None);
         using var viewer = ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(TestApiKeys.Viewer));
-        await ClientTestSupport.WaitUntilAsync(() => viewer.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the controller to read the mount");
+        (await viewer.Roof.GetSafetyAsync()).State.Should().Be(RoofSafetyState.Unsafe);
+        harness.Console.View.Status!.Safety!.State.Should().Be(RoofSafetyState.Safe, "the page has not heard of it");
     }
 
     private static async Task<BunitContext> RenderContextAsync(WebRoofHarness harness)

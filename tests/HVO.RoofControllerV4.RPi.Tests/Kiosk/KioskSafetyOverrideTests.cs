@@ -253,12 +253,14 @@ public sealed class KioskSafetyOverrideTests
         });
     }
 
-    // The mount is unparked after the kiosk's last status: the controller's next read finds it, the kiosk does not know.
+    // The mount is unparked after the kiosk's last status: the controller reads it, and the kiosk does not know. The read is
+    // made directly, not by moving the controller's clock, which would send the hub's heartbeat with the new conditions.
     private static async Task UnparkUnseenAsync(KioskHarness harness, SimulatedTelescopeParkSource mount)
     {
         mount.IsParked = false;
-        harness.ServerClock.Advance(TimeSpan.FromSeconds(10));
+        await harness.Host.Services.GetRequiredService<HVO.RoofControllerV4.RPi.Safety.RoofSafetyService>().PollAsync(CancellationToken.None);
         using var viewer = HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.CreateClient(harness.Host, new RoofApiKeyCredential(HVO.RoofControllerV4.RPi.Tests.Controllers.TestApiKeys.Viewer));
-        await HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.WaitUntilAsync(() => viewer.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the controller to read the mount");
+        (await viewer.Roof.GetSafetyAsync()).State.Should().Be(RoofSafetyState.Unsafe);
+        harness.Console.View.Status!.Safety!.State.Should().Be(RoofSafetyState.Safe, "the kiosk has not heard of it");
     }
 }
