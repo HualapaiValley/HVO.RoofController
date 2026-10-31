@@ -372,6 +372,7 @@ public sealed partial class RoofSafetyService : BackgroundService, IRoofSafetySe
             source.CompletedSequence = sequence;
             source.LastAttemptFailed = false;
             source.ReadingIssuedTimestamp = source.IssuedTimestamps.TryGetValue(sequence, out var issued) ? issued : timestamp;
+            source.CompletedIssuedTimestamp = source.ReadingIssuedTimestamp;
             source.IssuedTimestamps.Remove(sequence);
             failures = source.ConsecutiveFailures;
             source.LastSafe = safe;
@@ -396,7 +397,7 @@ public sealed partial class RoofSafetyService : BackgroundService, IRoofSafetySe
 
     private static void RecordFailure_NoLock(Source source, long sequence, string failure, bool shown, out bool first)
     {
-        source.IssuedTimestamps.Remove(sequence);
+        source.IssuedTimestamps.Remove(sequence, out var issued);
         if (sequence <= source.CompletedSequence)
         {
             // A failure older than the slot's newest result says nothing about the source now.
@@ -405,6 +406,7 @@ public sealed partial class RoofSafetyService : BackgroundService, IRoofSafetySe
         }
 
         source.CompletedSequence = sequence;
+        source.CompletedIssuedTimestamp = issued;
         source.LastAttemptFailed = true;
         source.ConsecutiveFailures++;
         source.Failure = failure;
@@ -565,6 +567,9 @@ public sealed partial class RoofSafetyService : BackgroundService, IRoofSafetySe
 
         /// <summary>True when the newest read that ended failed.</summary>
         public bool LastAttemptFailed { get; set; }
+
+        /// <summary>When (monotonic) the newest read that ended was issued; null before the first, or when unknown.</summary>
+        public long? CompletedIssuedTimestamp { get; set; }
 
         /// <summary>When (monotonic) the read that gave the current reading was issued.</summary>
         public long? ReadingIssuedTimestamp { get; set; }
