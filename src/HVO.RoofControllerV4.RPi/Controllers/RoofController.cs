@@ -448,6 +448,8 @@ namespace HVO.RoofControllerV4.RPi.Controllers
             RoofControllerErrorCode.InvalidRequest => "Invalid request",
             RoofControllerErrorCode.SafetyInterlockActive => "Safety interlock active",
             RoofControllerErrorCode.SafetyOverrideRequired => "Safety override required",
+            RoofControllerErrorCode.Superseded => "Superseded",
+            RoofControllerErrorCode.AlpacaCommandRefused => "Alpaca command refused",
             _ => "Roof controller error"
         };
 

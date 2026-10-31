@@ -68,6 +68,8 @@ public static class RoofControllerApiContract
         RoofControllerErrorCode.SettingNotFound => 404,
         RoofControllerErrorCode.SafetyInterlockActive => 409,
         RoofControllerErrorCode.SafetyOverrideRequired => 409,
+        RoofControllerErrorCode.Superseded => 409,
+        RoofControllerErrorCode.AlpacaCommandRefused => 409,
         _ => 500
     };
 }

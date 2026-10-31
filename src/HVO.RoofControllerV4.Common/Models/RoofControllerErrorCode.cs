@@ -113,5 +113,18 @@ public enum RoofControllerErrorCode
     /// Open was refused because the safety conditions are not confirmed safe; the safety interlock lets a caller with
     /// the override role open anyway by resending it with <c>overrideSafety=true</c>, which is audit-logged. HTTP 409.
     /// </summary>
-    SafetyOverrideRequired = 28
+    SafetyOverrideRequired = 28,
+
+    /// <summary>
+    /// A start or reversal was overtaken before it energized a relay: a Stop, a protective stop or another command came
+    /// first, so nothing moved for it. Send the command again if it is still wanted. HTTP 409.
+    /// </summary>
+    Superseded = 29,
+
+    /// <summary>
+    /// An Alpaca client's Close (or, later, Open) was refused by the Alpaca command rules (#220): commands off, a person
+    /// holding the operator lease, the human Stop hold, a blocking telescope not clear, an invalid or used ticket. The
+    /// <c>alpacaRefusal</c> extension names the rule and <c>reasonKeys</c> the safety reasons. Never queued. HTTP 409.
+    /// </summary>
+    AlpacaCommandRefused = 30
 }

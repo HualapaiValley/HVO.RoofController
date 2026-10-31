@@ -66,7 +66,9 @@ public static class AlpacaErrors
             or RoofControllerErrorCode.OperationInProgress
             or RoofControllerErrorCode.LeaseNotActive
             or RoofControllerErrorCode.SafetyInterlockActive
-            or RoofControllerErrorCode.SafetyOverrideRequired => InvalidOperation,
+            or RoofControllerErrorCode.SafetyOverrideRequired
+            or RoofControllerErrorCode.Superseded
+            or RoofControllerErrorCode.AlpacaCommandRefused => InvalidOperation,
         RoofControllerErrorCode.SignInFailed
             or RoofControllerErrorCode.SignInLockedOut
             or RoofControllerErrorCode.SignInBusy

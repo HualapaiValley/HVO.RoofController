@@ -64,4 +64,7 @@ public static class RoofControllerLimits
 
     /// <summary>Maximum departure-release timeout, in seconds, when enabled.</summary>
     public const double MaxDepartureReleaseSeconds = 60;
+
+    /// <summary>Longest direction-change delay, in seconds (the shortest is 0: no delay).</summary>
+    public const double MaxDirectionChangeDelaySeconds = 10;
 }

@@ -143,4 +143,16 @@ public record class RoofControllerOptionsV4
     /// and the settings API changes it only for a caller with a local credential.
     /// </summary>
     public TimeSpan? DepartureReleaseTimeout { get; set; }
+
+    /// <summary>
+    /// How long every start waits after the last verified relay-off that ended a drive command (a stop, a reversal's stop,
+    /// a failed start) before it energizes a direction relay, so the drive never sees a direction change or a restart
+    /// sooner than this. The wait holds no lock: Stop, a protective stop or a later command still act during it, and the
+    /// start is checked again before the relay (docs/alpaca.md, "Waiting starts"). Zero (the default, and the behaviour
+    /// before this setting existed): no wait; the drive run interlock (IN4) already refuses a start while the drive still
+    /// reports running. At most <see cref="RoofControllerLimits.MaxDirectionChangeDelaySeconds"/>. Local-only: the
+    /// configuration endpoint reports it but never changes it, and the settings API changes it only for a caller with a
+    /// local credential.
+    /// </summary>
+    public TimeSpan DirectionChangeDelay { get; set; } = TimeSpan.Zero;
 }

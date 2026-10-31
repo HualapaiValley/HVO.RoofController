@@ -92,6 +92,23 @@ namespace HVO.RoofControllerV4.Common.Models
         /// </summary>
         public RoofHatMode HatMode { get; init; }
 
+        /// <summary>
+        /// True while an admitted start waits out the direction-change delay
+        /// (<see cref="RoofControllerOptionsV4.DirectionChangeDelay"/>) with every relay off; <see cref="PendingMotion"/> is
+        /// its direction and <see cref="Status"/> reads Opening or Closing meanwhile. It is checked again before the relay,
+        /// and Stop cancels it.
+        /// </summary>
+        public bool IsStartPending { get; init; }
+
+        /// <summary>The direction of the start waiting out the direction-change delay; None when none waits.</summary>
+        public RoofMotionDirection PendingMotion { get; init; }
+
+        /// <summary>
+        /// Whose the commanded or waiting motion is (a person's, the Alpaca account's, or nobody's in particular); null while
+        /// none is commanded or waiting.
+        /// </summary>
+        public RoofMotionOwner? MotionOwner { get; init; }
+
         /// <summary>Most recent safety or hardware error message, if any.</summary>
         public string? LastError { get; init; }
 

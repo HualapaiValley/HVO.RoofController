@@ -485,11 +485,12 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         {
             status = RoofControllerStatus.Error;
         }
-        else if (_commandedMotion == RoofMotionDirection.Opening)
+        else if (_commandedMotion == RoofMotionDirection.Opening || _pendingStart?.Direction == RoofMotionDirection.Opening)
         {
+            // A start waiting out the direction-change delay reads as moving in its direction (#220, N6).
             status = RoofControllerStatus.Opening;
         }
-        else if (_commandedMotion == RoofMotionDirection.Closing)
+        else if (_commandedMotion == RoofMotionDirection.Closing || _pendingStart?.Direction == RoofMotionDirection.Closing)
         {
             status = RoofControllerStatus.Closing;
         }
@@ -582,6 +583,9 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             ControllerName = _controllerName,
             ControllerInstanceId = _controllerInstanceId,
             HatMode = _hatMode,
+            IsStartPending = _pendingStart is not null,
+            PendingMotion = _pendingStart?.Direction ?? RoofMotionDirection.None,
+            MotionOwner = _commandedMotion != RoofMotionDirection.None ? _motionOwner : _pendingStart?.Owner,
             LastError = _lastError
         };
     }
@@ -601,6 +605,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _lastPublishedKey = key;
         _statusVersion++;
         var snapshot = BuildSnapshot_NoLock(now, forKey: false);
+        _lastPublishedSnapshot = snapshot;
         _statusChannel.Writer.TryWrite(snapshot);
     }
 

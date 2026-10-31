@@ -172,7 +172,31 @@ public interface IRoofControllerServiceV4
         /// </remarks>
         /// <param name="reason">The reason for stopping the operation.</param>
         /// <returns>The resulting status when the all-off state was verified.</returns>
+        /// <remarks>
+        /// Stop first moves the command generation and raises the relay fence (no start admitted before it can energize a
+        /// relay after it, and a waiting start is cancelled), then waits at most 2 s for the controller lock. When a HAT
+        /// access blocked in I/O holds the lock longer, Stop answers <see cref="RoofControllerErrorCode.RelayStateUnverified"/>
+        /// at once and its relays-off write runs the moment the lock is free.
+        /// </remarks>
         Result<RoofControllerStatus> Stop(RoofControllerStopReason reason = RoofControllerStopReason.NormalStop);
+
+        /// <summary>
+        /// Starts opening or closing for <paramref name="request"/>'s owner, after every check of <see cref="Open"/>. When
+        /// the direction-change delay (<see cref="RoofControllerOptionsV4.DirectionChangeDelay"/>) still runs, the start is
+        /// admitted, waits without holding the lock (reading as Opening or Closing meanwhile), and is checked again before
+        /// its relay; a command in the same direction meanwhile joins it and gets the same answer. An Alpaca request
+        /// (<see cref="RoofMotionRequest"/> with its admission) also passes the Alpaca command rules (#220).
+        /// </summary>
+        Task<Result<RoofControllerStatus>> StartMotionAsync(RoofMotionRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// The command generation (#220): moves with every admitted start or reversal and every relays-off path, never with
+        /// a refusal, a repeat or a no-op.
+        /// </summary>
+        long CommandGeneration { get; }
+
+        /// <summary>This controller process's random identifier (<see cref="RoofStatusResponse.ControllerInstanceId"/>).</summary>
+        string InstanceId { get; }
 
         /// <summary>
         /// Starts opening. Requires a fresh input read and an unlatched controller; the watchdog, optional operator lease

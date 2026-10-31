@@ -138,6 +138,11 @@ public sealed class RoofControllerOptionsV4Validator : IValidateOptions<RoofCont
             }
         }
 
+        if (!InRange(options.DirectionChangeDelay, 0, RoofControllerLimits.MaxDirectionChangeDelaySeconds * 1000))
+        {
+            AddFailure($"DirectionChangeDelay must be between 0 and {RoofControllerLimits.MaxDirectionChangeDelaySeconds} seconds.");
+        }
+
         // Hardware-mode checks (for example IgnorePhysicalLimitSwitches on real hardware) depend on runtime state
         // and are enforced by the controller service, not here.
 
