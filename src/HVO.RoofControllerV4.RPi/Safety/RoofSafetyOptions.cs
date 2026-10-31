@@ -69,7 +69,8 @@ public sealed class RoofSafetyOptions
     /// <summary>
     /// The UniqueIDs of this installation's own Alpaca devices (the Alpaca server's Dome and SafetyMonitor, as its setup
     /// page lists them): a weather source whose server lists one of them for it is refused, so the controller never reads
-    /// its own weather back (#220). The Alpaca server's SafetyMonitor says safe only while this lists its UniqueID.
+    /// its own weather back (#220). The Alpaca server's SafetyMonitor says safe only while this lists its UniqueID. Read
+    /// at start with the devices: a change takes effect when the controller starts again.
     /// </summary>
     public List<string> OwnAlpacaUniqueIds { get; set; } = [];
 }

@@ -12,6 +12,8 @@ using HVO.RoofControllerV4.RPi.Tests.Emulation;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Simulation.Safety;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using CapturingLogger = HVO.RoofControllerV4.RPi.Tests.TestSupport.CapturingLogger<HVO.RoofControllerV4.RPi.Safety.RoofSafetyService>;
 using ManualTimeProvider = HVO.RoofControllerV4.RPi.Tests.TestSupport.ManualTimeProvider;
@@ -386,6 +388,86 @@ public sealed class AlpacaSafetySourceTests
     }
 
     [TestMethod]
+    [DataRow("replayed", "the Alpaca server's answer is not the answer to this request")]
+    [DataRow("no transaction", "the Alpaca server's answer is not the answer to this request")]
+    [DataRow("no server transaction", "the Alpaca server's answer has no ServerTransactionID")]
+    [DataRow("repeated field", "the Alpaca server's answer repeats a field")]
+    [DataRow("error", "the device reports Alpaca error 0x500 (driver error)")]
+    public async Task AManagementAnswerThatIsNotACleanAnswerToThisRequest_IsRefused(string how, string words)
+    {
+        // Review F9 (#227): the device list is the identity's proof, so it must be this request's own clean answer.
+        var server = new FakeAlpacaServer { ManagementEnvelope = how };
+        var weather = new AlpacaSafetyMonitorSource(Weather("Cloud sensor"), new Factory(() => server), [OwnDomeId, OwnSafetyMonitorId]);
+
+        var read = () => weather.ReadWeatherSafetyAsync(CancellationToken.None);
+
+        (await read.Should().ThrowAsync<RoofSafetySourceException>()).Which.Message.Should().Be(words, how);
+        server.Paths.Should().NotContain(path => path.EndsWith("/issafe", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task AReplayedDeviceList_NeverKeepsAPrimedLoopSafe()
+    {
+        // Review F9 (#227): the device list from the first, honest read is replayed while the device behind it is ours.
+        var server = new FakeAlpacaServer();
+        var time = new ManualTimeProvider();
+        var options = new RoofSafetyOptions
+        {
+            InterlockMode = RoofSafetyInterlockMode.Off,
+            WeatherSources = [Weather("Cloud sensor")],
+            OwnAlpacaUniqueIds = [OwnDomeId, OwnSafetyMonitorId]
+        };
+        var configured = new RoofSafetyConfiguredSources(Options.Create(options), new Factory(() => server));
+        using var service = new RoofSafetyService([], [], new TestOptionsMonitor<RoofSafetyOptions>(options), time, new CapturingLogger(), configured);
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().WeatherState.Should().Be(RoofSafetyState.Safe);
+
+        server.UniqueId = OwnSafetyMonitorId;
+        server.ManagementEnvelope = "replay";
+        for (var second = 0; second < 70; second += 10)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+            await service.PollAsync(CancellationToken.None);
+        }
+
+        service.GetCurrent().WeatherState.Should().Be(RoofSafetyState.Unknown);
+    }
+
+    [TestMethod]
+    public async Task TheOwnIdsPublished_AreTheOwnIdsEnforced_TillARestart()
+    {
+        // Review F8 (#227): a reload must not publish own UniqueIDs (which turn the Alpaca server's SafetyMonitor on) that
+        // the adapters, made at start, do not refuse. Both are the list read at start; a restart takes a new one.
+        var server = new FakeAlpacaServer { UniqueId = OwnSafetyMonitorId };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["RoofSafety:InterlockMode"] = "Off",
+            ["RoofSafety:WeatherSources:0:Name"] = "Hub",
+            ["RoofSafety:WeatherSources:0:Url"] = "http://198.51.100.20:11111",
+            ["RoofSafety:OwnAlpacaUniqueIds:0"] = OwnDomeId
+        }).Build();
+        using var provider = Provider(configuration, server);
+        var service = provider.GetRequiredService<RoofSafetyService>();
+        await service.PollAsync(CancellationToken.None);
+        service.GetCurrent().OwnAlpacaUniqueIds.Should().Equal(OwnDomeId);
+
+        configuration["RoofSafety:OwnAlpacaUniqueIds:1"] = OwnSafetyMonitorId;
+        configuration.Reload();
+        provider.GetRequiredService<IOptionsMonitor<RoofSafetyOptions>>().CurrentValue.OwnAlpacaUniqueIds.Should().HaveCount(2, "the reload was read");
+        await service.PollAsync(CancellationToken.None);
+        var afterReload = service.GetCurrent();
+
+        afterReload.OwnAlpacaUniqueIds.Should().Equal([OwnDomeId], "only the list the adapters enforce is published, so the SafetyMonitor stays unsafe");
+        afterReload.Sources.Single().State.Should().Be(RoofSafetyState.Safe, "the adapter, made at start, does not know the new ID either");
+
+        using var restarted = Provider(configuration, server);
+        var again = restarted.GetRequiredService<RoofSafetyService>();
+        await again.PollAsync(CancellationToken.None);
+        again.GetCurrent().OwnAlpacaUniqueIds.Should().Equal(OwnDomeId, OwnSafetyMonitorId);
+        again.GetCurrent().Sources.Single().Reason.Should().EndWith($"({AlpacaSafetyMonitorSource.OwnDeviceFailure})");
+    }
+
+    [TestMethod]
     public async Task AnotherServersDevice_IsReadAsUsual_WithItsIdentityCheckedEachTime()
     {
         var server = new FakeAlpacaServer();
@@ -555,6 +637,17 @@ public sealed class AlpacaSafetySourceTests
 
     private static IHttpClientFactory Answering(string body, bool sendLength = true) => new Factory(() => new AnsweringHandler(body, sendLength));
 
+    /// <summary>The safety service as the controller registers it, from <paramref name="configuration"/>, its devices on <paramref name="server"/>.</summary>
+    private static ServiceProvider Provider(IConfiguration configuration, HttpMessageHandler server)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationService>(new Moq.Mock<Microsoft.AspNetCore.Authorization.IAuthorizationService>().Object);
+        services.AddRoofSafety(configuration);
+        services.AddHttpClient(AlpacaDevice.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => server);
+        return services.BuildServiceProvider();
+    }
+
     /// <summary>An Alpaca answer with these fields, the request's ClientTransactionID and a ServerTransactionID.</summary>
     private static string Envelope(string fields) => "{" + fields + ",\"ClientTransactionID\":$TX,\"ServerTransactionID\":1}";
 
@@ -578,6 +671,11 @@ public sealed class AlpacaSafetySourceTests
         public bool ServesManagement { get; init; } = true;
 
         public bool ListsDevice { get; init; } = true;
+
+        /// <summary>How the device list's envelope is broken, if it is: replayed (the first answer again), no transaction, ...</summary>
+        public string? ManagementEnvelope { get; set; }
+
+        private string? _firstDeviceList;
 
         public bool Fail { get; set; }
 
@@ -614,6 +712,23 @@ public sealed class AlpacaSafetySourceTests
             }
 
             var body = "{\"Value\":" + value + ",\"ClientTransactionID\":" + transaction + ",\"ServerTransactionID\":1,\"ErrorNumber\":0,\"ErrorMessage\":\"\"}";
+            if (path == "/management/v1/configureddevices")
+            {
+                // As the Management API writes it: no ErrorNumber or ErrorMessage.
+                body = "{\"Value\":" + value + ",\"ClientTransactionID\":" + transaction + ",\"ServerTransactionID\":7}";
+                _firstDeviceList ??= body;
+                body = ManagementEnvelope switch
+                {
+                    "replay" or "replayed" when ManagementEnvelope == "replay" => _firstDeviceList,
+                    "replayed" => "{\"Value\":" + value + ",\"ClientTransactionID\":4000000000,\"ServerTransactionID\":7}",
+                    "no transaction" => "{\"Value\":" + value + ",\"ServerTransactionID\":7}",
+                    "no server transaction" => "{\"Value\":" + value + ",\"ClientTransactionID\":" + transaction + "}",
+                    "repeated field" => "{\"Value\":" + value + ",\"value\":[],\"ClientTransactionID\":" + transaction + ",\"ServerTransactionID\":7}",
+                    "error" => "{\"Value\":" + value + ",\"ClientTransactionID\":" + transaction + ",\"ServerTransactionID\":7,\"ErrorNumber\":1280,\"ErrorMessage\":\"failed\"}",
+                    _ => body
+                };
+            }
+
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
         }
     }

@@ -110,17 +110,21 @@ public sealed class AlpacaDevice
     }
 
     /// <summary>
-    /// The <c>Value</c> of a Management API answer from the device's server (<c>v1/description</c>,
-    /// <c>v1/configureddevices</c>), or null when the server does not give one cleanly: a server need not serve it (one
-    /// behind a proxy, say), so its absence is not a failed read. Ends with <paramref name="cancellationToken"/>.
+    /// The <c>Value</c> of a Management API answer from the device's server (<c>v1/configureddevices</c>), or null when the
+    /// server does not serve it (an HTTP error, or not JSON). An answer it does give must be this request's own clean
+    /// answer: every field once, the request's <c>ClientTransactionID</c> echoed and a <c>ServerTransactionID</c>, and,
+    /// when it carries the device API's <c>ErrorNumber</c> and <c>ErrorMessage</c> (the Management API does not ask for
+    /// them), 0 and empty; otherwise it throws <see cref="RoofSafetySourceException"/>, as a device answer would (a cached or
+    /// replayed answer is not proof of anything). Ends with <paramref name="cancellationToken"/>.
     /// </summary>
     public async Task<JsonElement?> TryReadManagementAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var transaction = NextTransaction();
         JsonDocument answer;
         try
         {
-            answer = await ReadAsync($"management/{path}", NextTransaction(), cancellationToken).ConfigureAwait(false);
+            answer = await ReadAsync($"management/{path}", transaction, cancellationToken).ConfigureAwait(false);
         }
         catch (RoofSafetySourceException)
         {
@@ -129,26 +133,28 @@ public sealed class AlpacaDevice
 
         using (answer)
         {
-            if (answer.RootElement.ValueKind != JsonValueKind.Object)
+            var fields = Fields(answer.RootElement);
+            RequireTransactions(fields, transaction);
+            if (fields.TryGetValue("ErrorNumber", out var errorNumber))
             {
-                return null;
-            }
-
-            JsonElement? value = null;
-            foreach (var property in answer.RootElement.EnumerateObject())
-            {
-                if (string.Equals(property.Name, "Value", StringComparison.OrdinalIgnoreCase))
+                if (errorNumber.ValueKind != JsonValueKind.Number || !errorNumber.TryGetInt32(out var error))
                 {
-                    if (value is not null)
-                    {
-                        return null;
-                    }
+                    throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorNumber");
+                }
 
-                    value = property.Value.Clone();
+                if (error != 0)
+                {
+                    throw new AlpacaErrorException(error);
                 }
             }
 
-            return value;
+            if (fields.TryGetValue("ErrorMessage", out var errorMessage)
+                && (errorMessage.ValueKind != JsonValueKind.String || errorMessage.GetString()!.Length != 0))
+            {
+                throw new RoofSafetySourceException("the Alpaca server's answer reports success with an error message");
+            }
+
+            return fields.TryGetValue("Value", out var value) ? value.Clone() : null;
         }
     }
 
@@ -171,6 +177,34 @@ public sealed class AlpacaDevice
     /// <summary>The <c>Value</c> of an unambiguous success (<see cref="ReadValue"/>), or null when it has none.</summary>
     private static JsonElement? ReadEnvelope(JsonElement answer, uint clientTransaction)
     {
+        var fields = Fields(answer);
+        if (!fields.TryGetValue("ErrorNumber", out var errorNumber) || errorNumber.ValueKind != JsonValueKind.Number || !errorNumber.TryGetInt32(out var error))
+        {
+            throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorNumber");
+        }
+
+        if (!fields.TryGetValue("ErrorMessage", out var errorMessage) || errorMessage.ValueKind != JsonValueKind.String)
+        {
+            throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorMessage");
+        }
+
+        RequireTransactions(fields, clientTransaction);
+        if (error != 0)
+        {
+            throw new AlpacaErrorException(error);
+        }
+
+        if (errorMessage.GetString()!.Length != 0)
+        {
+            throw new RoofSafetySourceException("the Alpaca server's answer reports success with an error message");
+        }
+
+        return fields.TryGetValue("Value", out var value) ? value : null;
+    }
+
+    /// <summary>An answer's fields by name, whatever their case; one given twice makes the answer ambiguous.</summary>
+    private static Dictionary<string, JsonElement> Fields(JsonElement answer)
+    {
         if (answer.ValueKind != JsonValueKind.Object)
         {
             throw new RoofSafetySourceException("the Alpaca server's answer is not an Alpaca answer");
@@ -186,16 +220,12 @@ public sealed class AlpacaDevice
             }
         }
 
-        if (!fields.TryGetValue("ErrorNumber", out var errorNumber) || errorNumber.ValueKind != JsonValueKind.Number || !errorNumber.TryGetInt32(out var error))
-        {
-            throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorNumber");
-        }
+        return fields;
+    }
 
-        if (!fields.TryGetValue("ErrorMessage", out var errorMessage) || errorMessage.ValueKind != JsonValueKind.String)
-        {
-            throw new RoofSafetySourceException("the Alpaca server's answer has no ErrorMessage");
-        }
-
+    /// <summary>The request's own ClientTransactionID echoed, and a ServerTransactionID: the answer is this request's.</summary>
+    private static void RequireTransactions(Dictionary<string, JsonElement> fields, uint clientTransaction)
+    {
         if (!fields.TryGetValue("ClientTransactionID", out var echoed) || echoed.ValueKind != JsonValueKind.Number
             || !echoed.TryGetUInt32(out var echoedTransaction) || echoedTransaction != clientTransaction)
         {
@@ -207,18 +237,6 @@ public sealed class AlpacaDevice
         {
             throw new RoofSafetySourceException("the Alpaca server's answer has no ServerTransactionID");
         }
-
-        if (error != 0)
-        {
-            throw new AlpacaErrorException(error);
-        }
-
-        if (errorMessage.GetString()!.Length != 0)
-        {
-            throw new RoofSafetySourceException("the Alpaca server's answer reports success with an error message");
-        }
-
-        return fields.TryGetValue("Value", out var value) ? value : null;
     }
 
     /// <summary>An Alpaca error number in words: its number and the ASCOM exception it stands for.</summary>

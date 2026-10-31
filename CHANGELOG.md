@@ -46,9 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `RoofSafety:OwnAlpacaUniqueIds`: this installation's own Alpaca devices' `UniqueID`s (the Alpaca server's setup page
   and log give the lines). The controller refuses a weather source that is its own SafetyMonitor, checked at every read
   by the device's `DriverInfo` (also through a hub) and by the `UniqueID` its server lists for it (whatever that server
-  calls itself; with own IDs listed, a source whose `UniqueID` cannot be read is refused too), so it never reads its own
-  weather back. The SafetyMonitor says safe only while the controller lists its `UniqueID`, so a forgotten setting reads
-  unsafe, never a loop.
+  calls itself, from a device list that must be that request's own answer; with own IDs listed, a source whose
+  `UniqueID` cannot be read is refused too), so it never reads its own weather back. The SafetyMonitor says safe only
+  while the controller lists its `UniqueID`, so a forgotten setting reads unsafe, never a loop. The list is read at
+  start, and the status publishes exactly the list enforced.
 - The HAT emulator serves fake ASCOM Alpaca mounts and weather safety monitors on its control port
   (`Emulator:AlpacaTelescopes`, `Emulator:AlpacaSafetyMonitors`, one of each by default), with park, weather,
   connection, `CanPark` and failure states set through `/api/emulator/alpaca`; both compose files point the controller

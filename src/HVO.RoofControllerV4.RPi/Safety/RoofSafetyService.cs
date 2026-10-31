@@ -42,6 +42,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
     internal const int MaxDetailLength = 200;
 
     private readonly Source[] _sources;
+    private readonly IReadOnlyList<string> _ownAlpacaUniqueIds;
     private readonly IOptionsMonitor<RoofSafetyOptions> _options;
     private readonly TimeProvider _time;
     private readonly ILogger<RoofSafetyService> _logger;
@@ -74,6 +75,8 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _time = time ?? TimeProvider.System;
         _logger = logger ?? NullLogger<RoofSafetyService>.Instance;
+        // The own UniqueIDs the configured weather sources enforce, published as they are (never a later reload's).
+        _ownAlpacaUniqueIds = configured?.OwnAlpacaUniqueIds ?? [];
         telescopes = configured is null ? telescopes : [.. telescopes, .. configured.Telescopes];
         weather = configured is null ? weather : [.. weather, .. configured.WeatherSources];
         _sources =
@@ -115,7 +118,7 @@ public sealed class RoofSafetyService : BackgroundService, IRoofSafetyService
             Reasons = reasons,
             WeatherState = weatherState,
             WeatherReasons = weatherReasons,
-            OwnAlpacaUniqueIds = [.. options.OwnAlpacaUniqueIds ?? []],
+            OwnAlpacaUniqueIds = _ownAlpacaUniqueIds,
             Sources = sources,
             StateSinceUtc = NoteTransition(state, reasons, options.InterlockMode, sources.Length == 0),
             InterlockMode = options.InterlockMode,

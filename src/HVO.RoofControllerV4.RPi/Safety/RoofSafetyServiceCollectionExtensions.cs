@@ -96,8 +96,9 @@ public static class RoofSafetyServiceCollectionExtensions
 /// <summary>
 /// The sources the <c>RoofSafety</c> section configures: an <see cref="AlpacaTelescopeParkSource"/> for each of
 /// <see cref="RoofSafetyOptions.Telescopes"/> and an <see cref="AlpacaSafetyMonitorSource"/> for each of
-/// <see cref="RoofSafetyOptions.WeatherSources"/>, in the order configured. Made once, from the validated options
-/// (settings the controller cannot use stop the start, <c>ValidateOnStart</c>): a change to the devices takes a restart.
+/// <see cref="RoofSafetyOptions.WeatherSources"/>, in the order configured, and the own UniqueIDs they refuse. Made once,
+/// from the validated options (settings the controller cannot use stop the start, <c>ValidateOnStart</c>): a change to the
+/// devices or the own UniqueIDs takes a restart.
 /// </summary>
 public sealed class RoofSafetyConfiguredSources
 {
@@ -106,9 +107,16 @@ public sealed class RoofSafetyConfiguredSources
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clients);
         var value = options.Value;
+        OwnAlpacaUniqueIds = [.. (value.OwnAlpacaUniqueIds ?? []).Where(id => !string.IsNullOrWhiteSpace(id)).Select(id => id.Trim())];
         Telescopes = [.. (value.Telescopes ?? []).Select(device => new AlpacaTelescopeParkSource(device, clients))];
-        WeatherSources = [.. (value.WeatherSources ?? []).Select(device => new AlpacaSafetyMonitorSource(device, clients, value.OwnAlpacaUniqueIds))];
+        WeatherSources = [.. (value.WeatherSources ?? []).Select(device => new AlpacaSafetyMonitorSource(device, clients, OwnAlpacaUniqueIds))];
     }
+
+    /// <summary>
+    /// This installation's own Alpaca devices' UniqueIDs as the weather sources enforce them: read at start with the
+    /// devices, so the list the status publishes (and the Alpaca server's SafetyMonitor trusts) is always the one refused.
+    /// </summary>
+    public IReadOnlyList<string> OwnAlpacaUniqueIds { get; }
 
     /// <summary>The configured mounts.</summary>
     public IReadOnlyList<ITelescopeParkSource> Telescopes { get; }

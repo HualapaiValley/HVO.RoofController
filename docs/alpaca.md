@@ -422,7 +422,7 @@ never drop a device and leave the rest to decide.
 | `…:MaxReadingAge` | the service's | How old its reading may be and still count (longer than `PollInterval` plus `ReadTimeout`, at most 1 h). |
 | `Telescopes:N:BlocksRoof` | `true` | Whether the mount can block the roof, and so must be clear of it. |
 | `WeatherSources:N:Requirement` | `Required` | `Required` or `Ignored`. |
-| `OwnAlpacaUniqueIds:N` | none | This installation's own Alpaca devices' `UniqueID`s, from the Alpaca server's setup page: a weather source with one of them is refused ([Never our own SafetyMonitor](#never-our-own-safetymonitor)). At most 16. |
+| `OwnAlpacaUniqueIds:N` | none | This installation's own Alpaca devices' `UniqueID`s, from the Alpaca server's setup page: a weather source with one of them is refused ([Never our own SafetyMonitor](#never-our-own-safetymonitor)). At most 16. Read at start, as the devices are. |
 
 At most 16 devices of each kind. For example, on the Pi (with documentation addresses; the directory is root's, mode
 700, and each file should be mode 600):
@@ -513,7 +513,9 @@ RoofSafety__OwnAlpacaUniqueIds__1=<the SafetyMonitor's UniqueID>
 ```
 
 **Forgetting them cannot make a loop.** The server's SafetyMonitor says safe only while the controller's status lists its
-`UniqueID`; until then `IsSafe` is false, and its `status` action, the setup page and the log say why.
+`UniqueID`; until then `IsSafe` is false, and its `status` action, the setup page and the log say why. The controller
+reads the list at start, with its weather sources, and its status publishes exactly the list those sources refuse: a
+change takes a restart, so the list published is never one not yet enforced.
 
 **Every read** of a weather source checks its identity first, with `GET` requests only, before `Connected` and
 `IsSafe`, so a device that changes behind the address between two good reads (a hub retargeted, a server replaced) is
@@ -523,7 +525,9 @@ caught at the next read:
   hub that relays a device passes its `DriverInfo` on as it is.
 - **The `UniqueID` its server lists for it** (`/management/v1/configureddevices`, the SafetyMonitor with its number),
   whatever that server calls itself, compared with `RoofSafety:OwnAlpacaUniqueIds`: a hub that lists one of ours for the
-  device is refused. With own `UniqueID`s listed, a source whose server does not list it (or serves no Management API,
+  device is refused. That answer must be this request's own, as a device's must: every field once, the request's
+  `ClientTransactionID` echoed and a `ServerTransactionID` (and an `ErrorNumber`, should it carry one, of 0), so a
+  cached or replayed device list proves nothing and the read fails. With own `UniqueID`s listed, a source whose server does not list it (or serves no Management API,
   which the Alpaca API requires) is refused too, with `the Alpaca server does not list this device's UniqueID, so it
   cannot be told from this roof controller's own SafetyMonitor`: it cannot be told from ours.
 
@@ -542,7 +546,7 @@ checks the fakes themselves (the results are in that section).
 
 | Tests | Cover |
 |---|---|
-| `Safety/AlpacaSafetySourceTests` | The adapters against the emulator's devices and against answers no device should give: GET only, the order of the requests, the transaction numbers, every failure's words, a mount that cannot park, a timeout, an unreachable server, no address in a failure or its inner exception, and our own SafetyMonitor refused (by its `DriverInfo`, and by the `UniqueID` its server lists for it, also behind a hub that names itself otherwise), at every read, so a device that changes between good reads, or a primed loop, never keeps the weather Safe. |
+| `Safety/AlpacaSafetySourceTests` | The adapters against the emulator's devices and against answers no device should give: GET only, the order of the requests, the transaction numbers, every failure's words, a mount that cannot park, a timeout, an unreachable server, no address in a failure or its inner exception, and our own SafetyMonitor refused (by its `DriverInfo`, and by the `UniqueID` its server lists for it, also behind a hub that names itself otherwise), at every read, so a device that changes between good reads, a replayed device list, or a primed loop never keeps the weather Safe; the own `UniqueID`s published are the ones enforced, a reload included. |
 | `Safety/RoofSafetyServiceTests` | The readiness rule (a required weather source, every blocking scope clear, `Ignored` and `BlocksRoof: false`), the weather alone, the settings' validation, the start log. |
 | `Emulation/EmulatedAlpacaTests` | The emulator's devices against the Alpaca API: the answer's shape, parameter names (any case in a `GET`, exact in a `PUT`), form-encoded `PUT`s, HTTP 400, `0x407` while not connected, a mount that cannot park, the fault injection, the control API. |
 | `Controllers/SafetyAlpacaApiTests` | The controller with configured devices, through its real pipeline: the conditions on the status, what Open needs, Close and Stop never gated, the conditions never moving the roof, and no address in the log at any level. |
