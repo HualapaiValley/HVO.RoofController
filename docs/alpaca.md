@@ -727,7 +727,7 @@ and each profile goes through a capturing proxy that records what the client sen
 
 | Profile | What it does | Result |
 |---|---|---|
-| **Dynamic Client** (NINA through it): the External key as user name and password | A NINA-like session: connects; finds the shutter in Error and closes first (NINA's Error recovery); opens, and polls until Open; a refusal while the weather is unsafe (the client gets InvalidOperation with the controller's reason, and nothing moves); a person's Open grant through the session API, then the Open goes; parks the mount, then closes (park-then-close); `AbortSlew` during a motion (stops, reads Error part way); disconnects and connects again. | Passes. Every request carried HTTP Basic, the first (`PUT connected`) included, and none was challenged. Open answered in 160 to 204 ms, Close in 145 to 162 ms, `AbortSlew` in 97 ms, a refused Open in 25 ms, against the controller's 1 s deadline, the server's 2 s wait and the library's 10 s. |
+| **Dynamic Client** (NINA through it): the External key as user name and password | A NINA-like session, in the order the program runs it: connects; finds the shutter in Error and closes first (NINA's Error recovery); opens, and polls until Open; parks the mount, then closes (park-then-close); a refusal while the weather is unsafe (the client gets InvalidOperation with the controller's reason, and nothing moves); a person's Open grant through the session API, then the Open goes; `AbortSlew` during a motion (stops, reads Error part way); disconnects and connects again, and recovers from the Error once more. | Passes. Every request carried HTTP Basic, the first (`PUT connected`) included, and none was challenged. Open answered in 160 to 204 ms, Close in 145 to 162 ms, `AbortSlew` in 97 ms, a refused Open in 25 ms, against the controller's 1 s deadline, the server's 2 s wait and the library's 10 s. |
 | **NINA native**: no credential | Reads, `Connected`, `AbortSlew`; then `OpenShutter` and `CloseShutter`. | Passes. No request carried a credential; reads and `AbortSlew` work, and `OpenShutter` and `CloseShutter` answer `0x40B` "Not authorised" with nothing moving. |
 
 No Windows PC, NINA or ASCOM Platform takes part in CI. **Before Alpaca Open is turned on at the observatory**, repeat
@@ -736,13 +736,17 @@ the session with the real NINA and the Dynamic Client on the Windows PC, against
 1. Set up a [rig](emulator.md) on a computer not wired to the roof: its controller with `OpenAndClose`, the emulator's
    Alpaca mount as a blocking telescope and its safety monitor as a required weather source, and an External key; its
    Alpaca server on the rig's LAN address, with `Alpaca:Location` "EMULATOR RIG, not the roof" and `AllowedNetworks`
-   narrowed to the PC. Clear the Stop hold in the rig's web UI.
+   narrowed to the PC. The emulator's control port (its fake mount and weather monitor, and the controls below) listens
+   on loopback only by default, and it has no authentication: either serve it on the rig's address for the test network
+   alone (`--urls http://<rig>:<port>`, [Settings](emulator.md#settings)), or leave NINA's mount out and work the
+   emulator's mount from the rig itself, through its control API. Clear the Stop hold in the rig's web UI.
 2. On the PC, open `http://<rig>:11111/setup`: it must show the HAT emulated and the rig's controller.
-3. In NINA, open the ASCOM Chooser, **Alpaca**, **Create Alpaca Driver (Admin)**, named "HVO roof EMULATOR", with the
-   rig's address, port `11111` and device `0`, and the External key as both user name and password (no discovery).
-4. Run the session on the rig: reset the emulator part way (the shutter reads Error), close, then open; connect NINA's
-   mount to the emulator's Alpaca telescope (its control port has no authentication: a test network only), unpark it,
-   park it from NINA and close; make the weather unsafe and open (NINA shows the controller's reason; nothing moves);
+3. In a NINA profile of its own, never the observatory's, open the ASCOM Chooser, **Alpaca**, **Create Alpaca Driver
+   (Admin)**, named "HVO roof EMULATOR", with the rig's address, port `11111` and device `0`, and the External key as
+   both user name and password (no discovery).
+4. Run the session on the rig: reset the emulator part way (the shutter reads Error), close, then open; unpark the
+   emulator's mount and park it again (from NINA's mount connected to the emulator's Alpaca telescope, when its control
+   port is served on the test network, or through the rig's control API), then close; make the weather unsafe and open (NINA shows the controller's reason; nothing moves);
    grant the Open from the rig's alert and open again (it opens); stop the dome during a motion (the shutter reads
    Error); disconnect, connect again, close.
 5. Check the rig's History: every Open and Close shows the `Alpaca` source, `basic`, the PC's address, and the
