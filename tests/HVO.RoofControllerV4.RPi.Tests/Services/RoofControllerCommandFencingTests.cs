@@ -20,6 +20,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Services;
 public class RoofControllerCommandFencingTests
 {
     private const byte RelaySetRegister = 1;
+    private const byte RelayClearRegister = 2;
 
     private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat)> CreateAsync(Action<RoofControllerOptionsV4>? configure = null)
     {
@@ -152,40 +153,104 @@ public class RoofControllerCommandFencingTests
     }
 
     [TestMethod]
-    public async Task Stop_WhileARelayWriteHangs_AnswersWithinItsBound_AndTheQueuedStopRunsAfter()
+    public void TheHatAccessLimit_IsShorterThanStopsWaitForTheLock()
+        => RoofControllerServiceV4.DefaultHatIoLimit.Should().BeLessThan(RoofControllerServiceV4.StopLockWait,
+            "a Stop waiting behind a hanging access gets the lock once that access has failed at its limit");
+
+    [TestMethod]
+    public async Task AHangingRelayWrite_FailsAtItsLimit_ReleasesTheLock_Latches_AndAStopAndATripActAtOnce()
     {
-        var (service, hat) = await CreateAsync();
-        using var _ = service;
+        var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var time = new ManualTimeProvider();
+        using var service = SimulatedRoofControllerService.Create(hat, time);
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
         using var release = new ManualResetEventSlim(false);
-        using var hanging = new ManualResetEventSlim(false);
         hat.Registers.BeforeRelayWrite = (register, value) =>
         {
             if (register == RelaySetRegister && value == 2)
             {
-                // The close relay's write hangs in the transfer, holding the controller lock.
-                hanging.Set();
+                // The close relay's write hangs in the transfer (§17 AA5).
                 release.Wait(TimeSpan.FromSeconds(30));
             }
         };
 
-        var close = Task.Run(() => service.Close());
-        hanging.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var close = await Task.Run(() => service.Close()).WaitAsync(service.HatIoLimit + TimeSpan.FromSeconds(2));
+            watch.Elapsed.Should().BeLessThan(service.HatIoLimit + TimeSpan.FromSeconds(1), "the write failed at its limit, and the lock with it");
+            close.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+            var status = service.GetCurrentStatusSnapshot();
+            status.IsFaultLatched.Should().BeTrue();
+            status.LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed);
+            status.RelayRegisterState.Should().Be(RoofRelayRegisterState.Unverified, "the write's outcome is unknown until it returns");
 
-        var watch = Stopwatch.StartNew();
-        var stop = service.Stop();
-        watch.Stop();
+            // A following Stop acts at once, and cannot report the relays off while the write is out.
+            watch.Restart();
+            service.Stop().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+            watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500));
 
-        stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified, "Stop cannot verify the relays while the write hangs");
-        watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + TimeSpan.FromSeconds(1));
-        service.DeferredStopCount.Should().Be(1);
+            // So does a drive fault.
+            hat.SetInputs(true, true, true, false);
+            watch.Restart();
+            service.SimFaultRaw(true);
+            watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500));
 
-        hat.Registers.BeforeRelayWrite = null;
-        release.Set();
-        await close;
-        SpinWait.SpinUntil(() => service.DeferredStopCount == 0, TimeSpan.FromSeconds(10)).Should().BeTrue();
+            // The latch cannot be cleared while the write is out.
+            (await service.ClearFault()).ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+        }
+        finally
+        {
+            hat.Registers.BeforeRelayWrite = null;
+            release.Set();
+        }
 
-        hat.RelayMask.Should().Be(0x00, "the queued relays-off ran as soon as the lock was free");
+        // The write lands late: the controller writes every relay off at once and verifies it; the latch stays.
+        SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0x00,
+            TimeSpan.FromSeconds(5)).Should().BeTrue("the relays are written off and verified once the late write has returned");
+        service.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeTrue();
         service.IsMoving.Should().BeFalse();
+
+        hat.SetInputs(true, true, false, false);
+        service.SimFaultRaw(false);
+        var clear = service.ClearFault(100);
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        (await clear.WaitAsync(TimeSpan.FromSeconds(5))).IsSuccessful.Should().BeTrue("with the write returned and the inputs healthy, a person may clear the latch");
+    }
+
+    [TestMethod]
+    public async Task AStopWhoseOwnRelayWriteHangs_AnswersAtTheLimit_AndLatches()
+    {
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        using var release = new ManualResetEventSlim(false);
+        var armed = 1;
+        hat.Registers.BeforeRelayWrite = (register, _) =>
+        {
+            if (register == RelayClearRegister && Interlocked.Exchange(ref armed, 0) == 1)
+            {
+                release.Wait(TimeSpan.FromSeconds(30)); // Stop's first relays-off write hangs
+            }
+        };
+
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var stop = await Task.Run(() => service.Stop()).WaitAsync(service.HatIoLimit + TimeSpan.FromSeconds(2));
+            watch.Elapsed.Should().BeLessThan(service.HatIoLimit + TimeSpan.FromSeconds(1));
+            stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+            service.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed);
+        }
+        finally
+        {
+            hat.Registers.BeforeRelayWrite = null;
+            release.Set();
+        }
+
+        SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0x00,
+            TimeSpan.FromSeconds(5)).Should().BeTrue();
     }
 
     [TestMethod]

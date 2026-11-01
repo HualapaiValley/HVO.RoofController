@@ -170,6 +170,14 @@ public partial class RoofControllerServiceV4
                 return (Reject_NoLock<bool>(RoofControllerErrorCode.OperationInProgress, "ClearFault is refused while the roof is moving; stop first."), "rejected");
             }
 
+            // A HAT access past its time limit may still switch a relay: nothing is cleared until it has returned and the
+            // relays have been written off and verified (#220, §19 M1, §20 N3).
+            if (_hatIo.IsOverrun)
+            {
+                return (Reject_NoLock<bool>(RoofControllerErrorCode.RelayStateUnverified,
+                    "A HAT access is still running past its time limit; the relays cannot be verified until it returns, so the fault is not cleared yet."), "rejected");
+            }
+
             if (cancellationToken.IsCancellationRequested)
             {
                 return (Result<bool>.Failure(new OperationCanceledException(cancellationToken)), "canceled");
@@ -681,6 +689,28 @@ public partial class RoofControllerServiceV4
                 {
                     _logger.LogCritical("Disposal could not acquire the controller lock within {Timeout}: a call is still blocked in HAT I/O. The all-off stop will run when the call returns; until then relay state is unknown, so use the independent hardware stop.",
                         DisposeWaitTimeout);
+                    deferred.Start(TaskScheduler.Default);
+                }
+
+                return false;
+            }
+
+            if (!_disposed && _hatIo.IsOverrun)
+            {
+                // A HAT access past its time limit may still switch a relay when it returns: the all-off stop waits for it.
+                _shuttingDown = true;
+                var deferred = new Task(() =>
+                {
+                    while (_hatIo.IsOverrun)
+                    {
+                        Thread.Sleep(20);
+                    }
+
+                    RunDeferredDisposal();
+                }, TaskCreationOptions.LongRunning);
+                if (Interlocked.CompareExchange(ref _deferredDisposalTask, deferred, null) is null)
+                {
+                    _logger.LogCritical("Disposal found a HAT access still running past its time limit. The all-off stop will run when it returns; until then relay state is unknown, so use the independent hardware stop.");
                     deferred.Start(TaskScheduler.Default);
                 }
 

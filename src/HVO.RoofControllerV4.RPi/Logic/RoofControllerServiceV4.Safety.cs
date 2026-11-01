@@ -532,6 +532,29 @@ public partial class RoofControllerServiceV4
 
     private static int RelayBit(int relayId) => 1 << (relayId - 1);
 
+    /// <summary>
+    /// One HAT access on the HAT's lane, bounded by <see cref="HatIoLimit"/> (#220, §17 AA5): past it, it fails with
+    /// <see cref="HatIoOverrunException"/> as a failed transfer does, and every later access fails at once until it has
+    /// returned (<see cref="OnHatIoRecovered"/>).
+    /// </summary>
+    private T HatCall<T>(Func<T> access) => _hatIo.Run(access, HatIoLimit);
+
+    /// <summary>
+    /// A HAT access that ran past its limit has returned (on the lane's thread). It may have switched a relay late, so
+    /// every relay is written off and verified as soon as the lock is free; the latch its overrun set stays until a
+    /// person clears it.
+    /// </summary>
+    private void OnHatIoRecovered()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _logger.LogCritical("A HAT access that ran past its {Limit} ms limit has returned; every relay is written off and verified now", HatIoLimit.TotalMilliseconds);
+        QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false);
+    }
+
     private static string FormatMask(int? mask) => mask is { } value ? $"0x{value:X2}" : "unreadable";
 
     /// <summary>
@@ -554,7 +577,7 @@ public partial class RoofControllerServiceV4
     {
         try
         {
-            var result = _hat.SetRelay(relayId, on);
+            var result = HatCall(() => _hat.SetRelay(relayId, on));
             if (result.IsSuccessful)
             {
                 return true;
@@ -576,7 +599,7 @@ public partial class RoofControllerServiceV4
         Exception? error = null;
         try
         {
-            var result = _hat.GetRelaysMask();
+            var result = HatCall(_hat.GetRelaysMask);
             if (result.IsSuccessful)
             {
                 _lastSuccessfulRelayReadUtc = Now;
@@ -629,7 +652,7 @@ public partial class RoofControllerServiceV4
                 _logger.LogWarning("All-off read-back was {Mask}; writing the whole relay register to zero", FormatMask(mask));
                 try
                 {
-                    var result = _hat.SetRelaysMask(0);
+                    var result = HatCall(() => _hat.SetRelaysMask(0));
                     if (!result.IsSuccessful)
                     {
                         _logger.LogWarning(result.Error, "Relay register zero write failed");
@@ -812,7 +835,7 @@ public partial class RoofControllerServiceV4
         Exception? error = null;
         try
         {
-            var result = _hat.GetAllDigitalInputs();
+            var result = HatCall(_hat.GetAllDigitalInputs);
             if (result.IsSuccessful)
             {
                 var (in1, in2, in3, in4) = result.Value;
@@ -1207,29 +1230,50 @@ public partial class RoofControllerServiceV4
         {
             TimeSpan delay;
             CancellationTokenSource wake;
-            lock (_syncLock)
+
+            // The loop never waits for the lock without a bound (#220, §17 AA5): when a blocked HAT access holds it, the
+            // next cycle comes after the idle interval and its own bounded wait queues the protective stop.
+            var lockTaken = false;
+            try
             {
-                if (_disposed || _shuttingDown)
+                Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
+                if (lockTaken && (_disposed || _shuttingDown))
                 {
                     return;
                 }
 
-                delay = ComputeSupervisionDelay_NoLock(Now);
-                var previous = _supervisionWakeCts;
+                delay = lockTaken ? ComputeSupervisionDelay_NoLock(Now) : TimeSpan.Zero;
                 wake = CancellationTokenSource.CreateLinkedTokenSource(token);
-                _supervisionWakeCts = wake;
-                previous?.Dispose();
+                if (lockTaken)
+                {
+                    var previous = _supervisionWakeCts;
+                    _supervisionWakeCts = wake;
+                    previous?.Dispose();
+                }
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    Monitor.Exit(_syncLock);
+                }
             }
 
             await Task.Delay(delay, _timeProvider, wake.Token)
                 .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ForceYielding);
+            var wokenEarly = wake.IsCancellationRequested;
+            if (!lockTaken)
+            {
+                // Never handed to the controller (the lock was not taken), so nothing else disposes it.
+                wake.Dispose();
+            }
 
             if (token.IsCancellationRequested)
             {
                 break;
             }
 
-            if (wake.IsCancellationRequested)
+            if (wokenEarly)
             {
                 // Woken early (motion started); recompute the delay without an extra read.
                 continue;

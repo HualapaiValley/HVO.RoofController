@@ -16,6 +16,15 @@ public partial class RoofControllerServiceV4
     /// </summary>
     internal static readonly TimeSpan StopLockWait = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// The longest one HAT access may take (#220, §17 AA5): a relay write, a relay read-back or an input read. Shorter
+    /// than <see cref="StopLockWait"/>, so a Stop waiting behind a hanging access gets the lock once it has failed.
+    /// </summary>
+    internal static readonly TimeSpan DefaultHatIoLimit = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>This controller's HAT access limit (<see cref="DefaultHatIoLimit"/>; tests may shorten it).</summary>
+    internal TimeSpan HatIoLimit { get; set; } = DefaultHatIoLimit;
+
     // The command generation (#220): moves with every admitted start or reversal and every relays-off path (Stop, a
     // protective stop, a limit, a timeout, shutdown), never with a refusal, a repeat or a no-op. An Alpaca ticket records
     // it; a waiting start re-checks it; the relay fence compares against it. Read and written without the lock.
