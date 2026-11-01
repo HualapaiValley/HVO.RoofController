@@ -847,7 +847,8 @@ one Alpaca Open?"), with what the grant lifts and that the roof stays open if th
 - **Dropped** when anything that drops a Close grant happens, and also when `AllowOpenWithoutBlockingScopes` changes.
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands` (`CloseOnly` refuses an Open
   before its grant is used).
-- **The person who grants steps away**, as for a Close grant.
+- **The person who grants steps away**, as for a Close grant. With an Open and a Close grant both in force, the person
+  stays stepped away until both have ended: ending one (used, lapsed, revoked) leaves them away while the other lasts.
 
 ### Known limitations
 
