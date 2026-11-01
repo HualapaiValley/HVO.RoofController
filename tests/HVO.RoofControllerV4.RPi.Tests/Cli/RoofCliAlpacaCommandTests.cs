@@ -7,6 +7,7 @@ using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Alpaca;
+using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Microsoft.Extensions.DependencyInjection;
@@ -104,8 +105,7 @@ public sealed class RoofCliAlpacaCommandTests
     [DataRow("clear-hold")]
     [DataRow("revoke")]
     [DataRow("ack", "1")]
-    [DataRow("grant", "--reason", "scope-unknown:Main", "--yes")]
-    [DataRow("grant", "--alert", "1", "--yes")]
+    [DataRow("grant", "--alert", "1")]
     public async Task APersonsAction_WithAnApiKey_IsRefusedBeforeAnythingIsSent(params string[] args)
     {
         using var host = AlpacaCliSupport.CreateHost();
@@ -180,53 +180,69 @@ public sealed class RoofCliAlpacaCommandTests
         answered.Code.Should().Be(RoofExitCode.ConfirmationRequired, answered.ToString());
         answered.Error.Should().Contain("Not confirmed; nothing was sent.");
         AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+    }
 
-        rig.Interactive = false;
-        var unattended = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
-        unattended.Code.Should().Be(RoofExitCode.ConfirmationRequired, unattended.ToString());
-        unattended.Error.Should().Contain($"{RoofAlpacaText.GrantCloseLabel}? Not confirmed: run the command again with --yes.");
+    [TestMethod]
+    [DataRow(false, DisplayName = "no terminal")]
+    [DataRow(true, DisplayName = "--json")]
+    public async Task Grant_IsAPersonsDecisionAtATerminal_WithoutOne_ItIsRefused_AndNothingIsSent(bool json)
+    {
+        // Roy's decision on PR #230 (Opus F3): an override is a person's, asked and answered at a terminal; no script,
+        // cron job or answers file can grant one.
+        using var host = AlpacaCliSupport.CreateHost();
+        var alert = AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host) { Interactive = json, WrapHandler = inner => new RequestLog(inner, requests) };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        requests.Clear();
 
-        var json = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id, "--json");
-        json.Code.Should().Be(RoofExitCode.ConfirmationRequired, json.ToString());
-        json.Json.GetProperty("sent").GetBoolean().Should().BeFalse();
-        json.Json.GetProperty("confirmationRequired").GetBoolean().Should().BeTrue();
+        var result = json
+            ? await rig.RunAsync("alpaca", "grant", "--alert", alert.Id, "--json")
+            : await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+
+        result.Code.Should().Be(RoofExitCode.ConfirmationRequired, result.ToString());
+        if (json)
+        {
+            result.Json.GetProperty("error").GetProperty("message").GetString().Should().Be(RoofCliAlpaca.GrantNeedsATerminal);
+        }
+        else
+        {
+            result.Error.Should().Contain(RoofCliAlpaca.GrantNeedsATerminal);
+        }
+
+        requests.Should().BeEmpty("nothing is read or sent");
+        rig.Prompts.Should().BeEmpty();
         AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
-    public async Task Grant_ByReason_WithYes_SendsThoseReasons_AndJsonIsTheGrant()
+    [DataRow("--yes")]
+    [DataRow("-y")]
+    [DataRow("--reason", "scope-unknown:Main")]
+    public async Task Grant_HasNoScriptingOptions(params string[] args)
     {
         using var host = AlpacaCliSupport.CreateHost();
-        using var rig = new CliRig(host);
+        var alert = AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
 
-        var result = await rig.RunAsync("alpaca", "grant", "--reason", "scope-not-clear:Main", "--reason", "scope-unknown:Guide", "--yes", "--json");
+        var result = await rig.RunAsync(["alpaca", "grant", "--alert", alert.Id, .. args]);
 
-        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
-        result.Error.Should().Contain("Allow one Alpaca Close despite: Telescope 'Main' not clear of the roof; Telescope 'Guide' state unknown.");
-        rig.Prompts.Should().BeEmpty();
-        result.Json.GetProperty("kind").GetString().Should().Be("Close");
-        result.Json.GetProperty("reasonKeys").EnumerateArray().Select(key => key.GetString()).Should().Equal("scope-not-clear:Main", "scope-unknown:Guide");
-        AlpacaCliSupport.Commands(host).Grants().Single().ReasonKeys.Should().Equal("scope-not-clear:Main", "scope-unknown:Guide");
+        result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
-    [DataRow("stop-hold")]
-    [DataRow("lease-held:ada")]
-    [DataRow("scope-unknown:")]
-    [DataRow("Main")]
-    public async Task Grant_ByAReasonNoGrantCanLift_IsAUsageError_AndSendsNothing(string reason)
+    public async Task Grant_NeedsAnAlert()
     {
         using var host = AlpacaCliSupport.CreateHost();
-        var requests = new ConcurrentQueue<string>();
-        using var rig = new CliRig(host) { WrapHandler = inner => new RequestLog(inner, requests) };
+        using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
 
-        var result = await rig.RunAsync("alpaca", "grant", "--reason", reason, "--yes");
+        var result = await rig.RunAsync("alpaca", "grant");
 
         result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
-        result.Error.Should().Contain($"'{reason}' is not a reason a Close grant can lift.");
-        requests.Should().BeEmpty();
+        result.Error.Should().Contain("--alert");
     }
 
     [TestMethod]
@@ -236,33 +252,18 @@ public sealed class RoofCliAlpacaCommandTests
         var held = AlpacaCliSupport.Commands(host);
         held.RaiseAlert("Refused", RoofAlpacaCommandKind.Close, "An Alpaca Close was refused: the human Stop hold is set (by ada).", ["stop-hold"], null);
         var alert = held.Alerts().Single();
-        using var rig = new CliRig(host);
+        using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
 
-        var refused = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id, "--yes");
+        var refused = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
 
         refused.Code.Should().Be(RoofExitCode.Refused, refused.ToString());
         refused.Error.Should().Contain(RoofCliAlpaca.NotGrantable(alert));
 
-        var missing = await rig.RunAsync("alpaca", "grant", "--alert", "999", "--yes");
+        var missing = await rig.RunAsync("alpaca", "grant", "--alert", "999");
         missing.Code.Should().Be(RoofExitCode.Refused, missing.ToString());
         missing.Error.Should().Contain("There is no Alpaca alert '999'. 'hvo-roof alpaca alerts' lists them.");
         held.Grants().Should().BeEmpty();
-    }
-
-    [TestMethod]
-    [DataRow]
-    [DataRow("--alert", "1", "--reason", "scope-unknown:Main")]
-    public async Task Grant_TakesAnAlertOrReasons_NotBoth(params string[] args)
-    {
-        using var host = AlpacaCliSupport.CreateHost();
-        using var rig = new CliRig(host);
-        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
-
-        var result = await rig.RunAsync(["alpaca", "grant", .. args]);
-
-        result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
-        result.Error.Should().Contain("Give --alert ID (from 'alpaca alerts') or --reason KEY..., not both.");
     }
 
     [TestMethod]
@@ -271,7 +272,8 @@ public sealed class RoofCliAlpacaCommandTests
         using var host = AlpacaCliSupport.CreateHost();
         using var rig = new CliRig(host);
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
-        (await rig.RunAsync("alpaca", "grant", "--reason", "scope-unknown:Main", "--yes")).Code.Should().Be(RoofExitCode.Success);
+        AlpacaCliSupport.Commands(host).Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-unknown:Main"]))
+            .Grant.Should().NotBeNull();
 
         var result = await rig.RunAsync("alpaca", "revoke");
 

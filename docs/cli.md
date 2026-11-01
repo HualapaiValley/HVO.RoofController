@@ -355,15 +355,20 @@ rules that only a person changes (#220):
 |---------|------|--------------|
 | `alpaca status` | viewer | Which Alpaca commands are on, the Stop hold, the operator lease, the warnings, the grants, the alerts (newest first), how many telescopes block the roof and the override window. `--json` writes the status's `alpaca` object (`mode`, `hold`, `operatorLease`, `grants`, `alerts`, `warnings`, `blockingScopes`, `rereadBudgetMilliseconds`, `overrideWindowMinutes`, `scopeLatencies`). A controller without it is exit 1. |
 | `alpaca clear-hold` | operator, a person's session | **Allow Alpaca again**: clears the Stop hold. With `--json`, the hold as the controller then has it. |
-| `alpaca grant --alert ID [--yes]` | operator, a person's session | **Allow this Close once**: writes on standard error what the grant lifts, for which client, for how long and what it never bypasses, then asks. It sends exactly that alert's reasons. An alert a grant cannot lift (acknowledged, not a refused Close, or a reason other than a telescope's) is refused, exit 7, and nothing is sent. |
-| `alpaca grant --reason KEY... [--yes]` | operator, a person's session | The same for scripts, with the reasons as a refusal or alert gave them: `scope-not-clear:<telescope>` or `scope-unknown:<telescope>`. Any other reason is a usage error (exit 2). |
+| `alpaca grant --alert ID` | operator, a person's session, at a terminal | **Allow this Close once**: writes on standard error what the grant lifts, for which client, for how long and what it never bypasses, then asks. It sends exactly that alert's reasons. An alert a grant cannot lift (acknowledged, not a refused Close, or a reason other than a telescope's) is refused, exit 7, and nothing is sent. |
 | `alpaca revoke [--kind Close]` | operator, a person's session | Revokes the grant in force. Exit 7 when there is none. |
 | `alpaca alerts` | viewer | The alerts, newest first, with their ID, whether they are acknowledged, whether a grant can lift their reasons (`GRANT yes`), and the client the Alpaca server reported. `--json` writes the controller's list. |
 | `alpaca ack ID` | a person's session | Acknowledges an alert; the controller records who. |
 
-Without a terminal, or with `--json`, `grant` sends nothing until `--yes` is given (exit 10 and
-`{"sent": false, "confirmationRequired": true, ...}` until then). Where the controller lets only admins override
-(`RoofSafety:OverrideRole`), it refuses anyone else's grant.
+An override is a person's decision, asked and answered at a terminal (the owner's decision on #220): `grant` has no
+`--yes` and no way to name reasons itself, so no script, scheduled job or answers file can grant one. Without a
+terminal, or with `--json`, it refuses before anything is read or sent (exit 10):
+
+```text
+A grant is a person's decision, asked and answered at a terminal: run 'hvo-roof alpaca grant --alert ID' interactively, without --json. It cannot be scripted. Nothing was sent.
+```
+
+Where the controller lets only admins override (`RoofSafety:OverrideRole`), it refuses anyone else's grant.
 
 Clearing the hold, grants, revoking and acknowledging are a person's: a session from `hvo-roof login` (or local mode),
 never an API key, which the controller refuses there. With an API key, these commands send nothing and exit 6:

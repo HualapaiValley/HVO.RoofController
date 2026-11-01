@@ -67,59 +67,40 @@ public static partial class RoofCli
 
         private Command CreateAlpacaGrantCommand()
         {
-            var alert = new Option<string?>("--alert")
+            var alert = new Option<string>("--alert")
             {
-                Description = "The refused Close's alert, from 'alpaca alerts': the grant lifts exactly its reasons."
-            };
-            var reasons = new Option<string[]>("--reason")
-            {
-                Description = "For scripts: a reason the grant lifts, as a refusal or alert gave it (scope-not-clear:<telescope> or scope-unknown:<telescope>). Repeat it for more.",
-                AllowMultipleArgumentsPerToken = true
-            };
-            var yes = new Option<bool>("--yes", "-y")
-            {
-                Description = "Grant without asking: the question is still written on standard error."
+                Description = "The refused Close's alert, from 'alpaca alerts': the grant lifts exactly its reasons.",
+                Required = true
             };
             var command = new Command(
                 "grant",
                 $"{RoofAlpacaText.GrantCloseLabel}: an override grant for one Alpaca Close despite a refused Close's reasons, for the "
-                + "controller's override window (operator; a person's session). It never bypasses the fault latch, the interlocks, "
-                + "the limits, the motor protections, a person's operator lease or the Stop hold.")
+                + "controller's override window (operator; a person's session, at a terminal: it asks first, and cannot be scripted). "
+                + "It never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's operator lease or "
+                + "the Stop hold.")
             {
-                alert, reasons, yes
+                alert
             };
-            command.Validators.Add(result =>
-            {
-                var byAlert = result.GetResult(alert) is not null;
-                var byReason = result.GetResult(reasons) is not null;
-                if (byAlert == byReason)
-                {
-                    result.AddError("Give --alert ID (from 'alpaca alerts') or --reason KEY..., not both.");
-                }
-            });
             SetAction(command, async (context, parseResult, cancellationToken) =>
             {
-                // The reasons given are checked before anything is asked or sent.
-                var given = parseResult.GetValue(reasons) is { Length: > 0 } keys ? RoofCliAlpaca.ParseReasons(keys) : null;
                 using var client = ConnectPerson(context);
+
+                // An override is a person's decision, asked and answered at a terminal (Roy's decision on PR #230): no
+                // script, scheduled job or answers file grants one. Refused before anything is read or sent.
+                if (!context.Host.IsInteractive || context.Json)
+                {
+                    throw new RoofCliRefusedException(RoofCliAlpaca.GrantNeedsATerminal, RoofExitCode.ConfirmationRequired);
+                }
+
                 var status = await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
                 var alpaca = status.Alpaca ?? throw new RoofCliRefusedException(RoofCliAlpaca.NoState, RoofExitCode.Failed);
-
-                RoofAlpacaAlert question;
-                if (given is not null)
+                var id = parseResult.GetRequiredValue(alert).Trim();
+                var alerts = await client.Alpaca.GetAlertsAsync(cancellationToken).ConfigureAwait(false);
+                var question = alerts.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal))
+                    ?? throw new RoofCliRefusedException(RoofCliAlpaca.NoSuchAlert(id));
+                if (!RoofAlpacaText.CanGrantFrom(question))
                 {
-                    question = new RoofAlpacaAlert { Kind = "Refused", Command = RoofAlpacaCommandKind.Close, ReasonKeys = given };
-                }
-                else
-                {
-                    var id = parseResult.GetRequiredValue(alert)!.Trim();
-                    var alerts = await client.Alpaca.GetAlertsAsync(cancellationToken).ConfigureAwait(false);
-                    question = alerts.FirstOrDefault(candidate => string.Equals(candidate.Id, id, StringComparison.Ordinal))
-                        ?? throw new RoofCliRefusedException(RoofCliAlpaca.NoSuchAlert(id));
-                    if (!RoofAlpacaText.CanGrantFrom(question))
-                    {
-                        throw new RoofCliRefusedException(RoofCliAlpaca.NotGrantable(question));
-                    }
+                    throw new RoofCliRefusedException(RoofCliAlpaca.NotGrantable(question));
                 }
 
                 // What the grant lifts, for whom and for how long: the person reads it before confirming.
@@ -128,12 +109,12 @@ public static partial class RoofCli
                     context.Host.Error.WriteLine(line);
                 }
 
-                if (!parseResult.GetValue(yes) && !Confirm(context, $"{RoofAlpacaText.GrantCloseLabel}?", "--yes"))
+                if (!Confirm(context, $"{RoofAlpacaText.GrantCloseLabel}?"))
                 {
                     return (int)RoofExitCode.ConfirmationRequired;
                 }
 
-                // Exactly the reasons shown: the alert's own keys, or the ones given.
+                // Exactly the reasons shown: the alert's own keys.
                 var grant = await PersonOnlyAsync(() => client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, [.. question.ReasonKeys], cancellationToken))
                     .ConfigureAwait(false);
                 return ReportDone(context, grant, $"Granted. {RoofAlpacaText.DescribeGrant(grant)}");
@@ -310,6 +291,11 @@ internal static class RoofCliAlpaca
             ? $"{Math.Ceiling(seconds / 60).ToString(CultureInfo.InvariantCulture)} min"
             : $"{Math.Max(0, Math.Ceiling(seconds)).ToString(CultureInfo.InvariantCulture)} s";
 
+    /// <summary>Why a grant is refused without a terminal (or with --json): it is a person's decision, never scripted.</summary>
+    public const string GrantNeedsATerminal =
+        "A grant is a person's decision, asked and answered at a terminal: run 'hvo-roof alpaca grant --alert ID' "
+        + "interactively, without --json. It cannot be scripted. Nothing was sent.";
+
     /// <summary>Whose lease lapsed for want of input, while nobody holds one.</summary>
     public static string LeaseLapsed(string holder) => $"No operator lease: {holder}'s lapsed after no input, so Alpaca may move the roof.";
 
@@ -377,32 +363,4 @@ internal static class RoofCliAlpaca
         RoofAlpacaText.CanGrantFrom(alert) ? "yes" : "no",
         RoofAlpacaText.DescribeAlert(alert)
     ];
-
-    /// <summary>
-    /// Reasons given with <c>grant --reason</c>: each <c>scope-not-clear:&lt;telescope&gt;</c> or
-    /// <c>scope-unknown:&lt;telescope&gt;</c>, as a refusal or alert gave it. A usage error for anything else.
-    /// </summary>
-    public static IReadOnlyList<string> ParseReasons(IEnumerable<string> given)
-    {
-        var keys = new List<string>();
-        foreach (var text in given)
-        {
-            var key = text.Trim();
-            var colon = key.IndexOf(':', StringComparison.Ordinal);
-            if (colon <= 0 || colon == key.Length - 1
-                || key[..colon] is not (RoofAlpacaContract.ScopeNotClearKind or RoofAlpacaContract.ScopeUnknownKind))
-            {
-                throw new RoofCliUsageException(
-                    $"'{text}' is not a reason a Close grant can lift. Give {RoofAlpacaContract.ScopeNotClearKind}:<telescope> or "
-                    + $"{RoofAlpacaContract.ScopeUnknownKind}:<telescope>, as the refusal or alert gave it.");
-            }
-
-            if (!keys.Contains(key, StringComparer.Ordinal))
-            {
-                keys.Add(key);
-            }
-        }
-
-        return keys;
-    }
 }
