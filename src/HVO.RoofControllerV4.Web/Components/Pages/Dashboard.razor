@@ -288,9 +288,9 @@
                                 <p>@line</p>
                             }
                             <div class="rc2-alpaca-actions">
-                                <button class="btn btn-warning" type="button" data-testid="alpaca-question-confirm" data-alpaca-step-away
-                                        disabled="@(alpaca.Busy is not null)" @onclick="Roof.GrantAlpacaCloseAsync">
-                                    <i class="bi bi-arrow-down-circle me-2" aria-hidden="true"></i>@RoofAlpacaText.GrantConfirmLabel
+                                <button class="btn btn-warning" type="button" data-testid="alpaca-question-confirm" data-alpaca-step-away data-kind="@grantQuestion.Kind"
+                                        disabled="@(alpaca.Busy is not null)" @onclick="Roof.GrantAlpacaAsync">
+                                    <i class="bi @(grantQuestion.Kind == RoofAlpacaCommandKind.Open ? "bi-arrow-up-circle" : "bi-arrow-down-circle") me-2" aria-hidden="true"></i>@grantQuestion.ConfirmLabel
                                 </button>
                                 <button class="btn btn-outline-light" type="button" data-testid="alpaca-question-cancel" @onclick="Roof.CancelAlpacaGrant">@RoofAlpacaText.GrantCancelLabel</button>
                             </div>
@@ -325,14 +325,21 @@
                                         {
                                             <small class="d-block" data-testid="alpaca-alert-acknowledged">@acknowledged</small>
                                         }
+                                        @if (alert.CanGrant && alert.GrantUnavailable is { } unavailable)
+                                        {
+                                            // Why its grant control is disabled (an Open's in Block mode).
+                                            <small class="d-block" id="alpaca-grant-unavailable-@alert.Id" data-testid="alpaca-grant-unavailable">@unavailable</small>
+                                        }
                                     </span>
                                     @if (alert.CanGrant || alert.CanAcknowledge)
                                     {
                                         <span class="rc2-alpaca-actions">
                                             @if (alert.CanGrant)
                                             {
-                                                <button class="btn btn-sm btn-warning" type="button" data-testid="alpaca-grant-ask"
-                                                        disabled="@(alpaca.Busy is not null)" @onclick="() => Roof.AskAlpacaGrant(alert.Id)">@RoofAlpacaText.GrantCloseLabel</button>
+                                                <button class="btn btn-sm btn-warning" type="button" data-testid="alpaca-grant-ask" data-kind="@alert.GrantKind"
+                                                        disabled="@(alpaca.Busy is not null || alert.GrantUnavailable is not null)"
+                                                        aria-describedby="@(alert.GrantUnavailable is null ? null : $"alpaca-grant-unavailable-{alert.Id}")"
+                                                        @onclick="() => Roof.AskAlpacaGrant(alert.Id)">@alert.GrantLabel</button>
                                             }
                                             @if (alert.CanAcknowledge)
                                             {

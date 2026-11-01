@@ -2,6 +2,7 @@ using Bunit;
 using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.Web.Components.Layout;
@@ -197,6 +198,77 @@ public sealed class WebOperatorLeaseTests
         {
             lease.SteppedAway.Should().BeFalse();
             page.FindAll("[data-testid=alpaca-lease-notice], [data-testid=alpaca-grant]").Should().BeEmpty();
+        });
+    }
+
+    [TestMethod]
+    public async Task AnOpenGrant_StepsThePersonAway_SayingAlpacaMayOpenTheRoofOnce_AndTheirNextClickTakesTheLeaseBack()
+    {
+        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
+        using var harness = await WebRoofHarness.CreateAsync(settings: CloseOnly(), configureServices: open.AddTo, operatorLease: true);
+        var requests = harness.RecordLeaseRequests();
+        harness.RaiseRefusedOpen("weather-unsafe:Sky");
+        await using var context = Context(harness);
+        var page = context.Render<Dashboard>();
+        await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-grant-ask]"));
+        await harness.TakeTheLeaseAsync(requests);
+        var lease = harness.Session!.OperatorLease!;
+
+        page.Click("[data-testid=alpaca-grant-ask]");
+        await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-question-confirm]").HasAttribute("data-alpaca-step-away").Should().BeTrue());
+        page.Click("[data-testid=alpaca-question-confirm]");
+
+        await page.WaitForAssertionAsync(() =>
+        {
+            open.OpenGrant(harness.Host.Services).Should().NotBeNull();
+            harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
+            lease.SteppedAway.Should().BeTrue();
+            const string stepped = "You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. "
+                + "Click or type on this page to take control back; that cancels the grant.";
+            RoofAlpacaText.DescribeSteppedAway(harness.Console.View.Status!.Alpaca!.Grants, RoofAlpacaText.ClickToTakeBack).Should().Be(stepped);
+            Text(page.Find("[data-testid=alpaca-lease-notice]")).Should().Be(stepped);
+        });
+
+        page.Click("[data-testid=refresh]");
+
+        await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held, "the next click to take the lease back");
+        open.OpenGrant(harness.Host.Services).Should().BeNull("taking the lease back drops the grant");
+        await page.WaitForAssertionAsync(() => page.FindAll("[data-testid=alpaca-lease-notice], [data-testid=alpaca-grant]").Should().BeEmpty());
+    }
+
+    [TestMethod]
+    public async Task WithAnOpenGrantAndACloseGrantInForce_TheSteppedAwayNotice_SaysAlpacaMayOpenAndCloseOnceEach()
+    {
+        // Another person's Open grant is in force when this person grants a Close.
+        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
+        open.Show(new RoofOverrideGrant
+        {
+            Id = "open-1",
+            Kind = RoofAlpacaCommandKind.Open,
+            ReasonKeys = ["weather-unsafe:Sky"],
+            GrantedBy = "ada (signed in)",
+            Ui = "session",
+            GrantedUtc = WebRoofHarness.Start,
+            SecondsRemaining = 120
+        });
+        using var harness = await WebRoofHarness.CreateAsync(settings: CloseOnly(), configureServices: open.AddTo, operatorLease: true);
+        var requests = harness.RecordLeaseRequests();
+        harness.RaiseRefusedClose("scope-not-clear:Main");
+        await using var context = Context(harness);
+        var page = context.Render<Dashboard>();
+        await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-grant-ask]"));
+        await harness.TakeTheLeaseAsync(requests);
+
+        page.Click("[data-testid=alpaca-grant-ask]");
+        await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-question-confirm]"));
+        page.Click("[data-testid=alpaca-question-confirm]");
+
+        await page.WaitForAssertionAsync(() =>
+        {
+            harness.Console.View.Status!.Alpaca!.Grants.Select(grant => grant.Kind).Should().BeEquivalentTo([RoofAlpacaCommandKind.Close, RoofAlpacaCommandKind.Open]);
+            Text(page.Find("[data-testid=alpaca-lease-notice]")).Should().Be(
+                "You stepped away from the operator lease: Alpaca may open and close the roof once each in the next 5 min. "
+                + "Click or type on this page to take control back; that cancels the grants.");
         });
     }
 

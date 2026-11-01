@@ -158,8 +158,9 @@ The roof page's **Alpaca** panel shows what the controller does with Alpaca comm
 [docs/alpaca.md](alpaca.md)), from the same live status. The controller decides everything; the page offers only what
 the person's role allows.
 
-- **Which commands are on** (`RoofController:Alpaca:AllowCommands`): `Alpaca commands are off`, or
-  `Alpaca may close the roof (never open it)`. With commands off the panel is that line alone, with any grant or alert.
+- **Which commands are on** (`RoofController:Alpaca:AllowCommands`): `Alpaca commands are off`,
+  `Alpaca may close the roof (never open it)` or `Alpaca may open and close the roof`. With commands off the panel is
+  that line alone, with any grant or alert.
   The controller's standing warnings are banners at the top of the page, for example
   `Alpaca Close checks no telescope: no telescope is set to block the roof.`
 - **The Stop hold.** Every Stop, from any client, sets it (so does the controller's start), except the Alpaca server's
@@ -176,23 +177,35 @@ the person's role allows.
   on, but the controller gives the lease back only with input, so the person's next click or key takes it again.
   Closing the person's last page, signing out and the session ending release it. A page whose browser went away
   without closing it holds the lease until the web UI drops its connection (up to 3 minutes), or the lease idles out.
-- **Alerts**, newest first: an Alpaca Close the controller refused, and a client refused as not authorised, each with
-  how often, when, and the client the Alpaca server reported. Anyone signed in may **Acknowledge** one.
-- **Allowing one Close.** On the alert of a Close refused only because a telescope is not clear of the roof, or its
-  state is unknown, an operator sees **Allow this Close once** (an admin only, while `RoofSafety:OverrideRole` is
-  `Admin`). It sends nothing: the panel asks first, `Allow one Alpaca Close?`, with what the grant lifts (exactly the
-  alert's reasons), the client it was refused for, how long it lasts (`RoofController:Alpaca:OverrideWindowMinutes`, 5
-  by default) and that it never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's
-  operator lease or the Stop hold. **Allow one Close** grants it; **Cancel**, and any Stop, withdraw the question
-  without sending anything. The grant is listed with who gave it and the time left, and **Revoke** removes it. The next
-  Alpaca Close from any client uses it, once no person holds the operator lease.
+- **Alerts**, newest first: an Alpaca Close or Open the controller refused, and a client refused as not authorised,
+  each with how often, when, and the client the Alpaca server reported. Anyone signed in may **Acknowledge** one.
+- **Allowing one Close or Open.** On the alert of a refused command whose every reason a grant of its kind can lift, an
+  operator sees **Allow this Close once** or **Allow this Open once** (an admin only, while `RoofSafety:OverrideRole`
+  is `Admin`). A Close's grant lifts a telescope not clear of the roof, or whose state is unknown; an Open's also lifts
+  a required weather monitor reporting unsafe weather or whose state is unknown, no required weather source, and no
+  telescope set to block the roof. It sends nothing: the panel asks first, `Allow one Alpaca Close?` or
+  `Allow one Alpaca Open?`, with what the grant lifts (exactly the alert's reasons), the client it was refused for, how
+  long it lasts (`RoofController:Alpaca:OverrideWindowMinutes`, 5 by default) and that it never bypasses the fault
+  latch, the interlocks, the limits, the motor protections, a person's operator lease or the Stop hold; an Open's
+  question adds that once open, the roof stays open if the weather turns, until a client sends a Close.
+  **Allow one Close** (or **Allow one Open**) grants it; **Cancel**, and any Stop, withdraw the question without
+  sending anything (`No Open was allowed: the question was cancelled.`). The grant is listed with who gave it and the
+  time left, and **Revoke** removes it. The next Alpaca command of its kind from any client uses it, once no person
+  holds the operator lease. An Open grant and a Close grant are separate, one of each at a time.
+- **No Open grant in Block mode.** While the safety interlock is `Block` (`RoofSafety:InterlockMode`), no grant opens
+  the roof: **Allow this Open once** is shown disabled, with the controller's reason under the alert, and nothing is
+  sent; a question already asked sends nothing once the status says so (`Not sent:` and the reason). A Close's grant is
+  unaffected. Should the controller refuse a grant anyway (the interlock changed a moment before), its refusal is said
+  under **Command feedback**, in its words.
 - **Stepping away.** A grant never lifts a person's operator lease, so the person who grants steps away with it: the
   controller ends their lease, in every session of theirs, and every page of the session they granted from says
   `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Click or type on this page to take control back; that cancels the grant.`
+  (`may open the roof once` for an Open grant, and, with both in force, `may open and close the roof once each` and
+  `that cancels the grants`).
   The click (or key) that sent the grant does not count, nor do the page's renders: the heartbeats go on without input
   and the lease stays released. The person's next click or key on any of their pages takes it back, and taking it back
-  drops the grant, as any person taking the lease does. Once the grant is gone (the Close that used it decided, or the
-  grant lapsed, revoked or dropped), the next heartbeat takes the lease back by itself. Another person's lease is
+  drops the grant, as any person taking the lease does. Once the grant is gone (the command that used it decided, or
+  the grant lapsed, revoked or dropped), the next heartbeat takes the lease back by itself. Another person's lease is
   untouched and still refuses.
 - A refusal of any of these, and what each did, is said under **Command feedback**.
 
@@ -435,9 +448,12 @@ Nothing here needs the Pi, the HAT or the roof.
   role is offered, the stale view, the lease, settings changes, secrets and refusals, people and keys, restart and
   forced restart, and the web UI's host (sign-in, the cookie, the origin check, the headers and Stop). The Alpaca panel
   and the operator lease run against the controller's own Alpaca command state in process: the hold, grants (sent only
-  after the question, with exactly the alert's reasons), alerts, the lease taken by the first page and released by the
-  last, input from the person's actions only, an idle lease not taken again without input, and a grant that steps the
-  person away until their next click (`WebAlpacaBrowserTests` checks that last in Chromium too).
+  after the question, with exactly the alert's reasons, and of the refused command's kind), alerts, the lease taken by
+  the first page and released by the last, input from the person's actions only, an idle lease not taken again without
+  input, and a grant that steps the person away until their next click (`WebAlpacaBrowserTests` checks that last in
+  Chromium too). The controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`): the
+  page's tests check what the page does with them (the Open question, the grant sent, the control disabled with the
+  reason in Block mode, a refusal said), and the controller's own tests check its rules.
 - **Browser tests** (`TestCategory=Browser`, `tests/HVO.RoofControllerV4.RPi.Tests/Browser`) run the web UI in
   Chromium against the whole controller and the emulated roof, on phones over HTTPS, and on tablets (upright and
   sideways) and a desktop window over HTTP: sign-in, the session cookie, a session that expires while its page is open,

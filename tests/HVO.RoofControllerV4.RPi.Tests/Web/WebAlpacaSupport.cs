@@ -38,14 +38,21 @@ internal static class WebAlpacaSupport
 
     /// <summary>A refused Alpaca Close's alert, as the controller raises it, from a client at a documentation address.</summary>
     public static RoofAlpacaAlert RaiseRefusedClose(this WebRoofHarness harness, params string[] reasonKeys)
+        => harness.RaiseRefused(RoofAlpacaCommandKind.Close, reasonKeys);
+
+    /// <summary>A refused Alpaca Open's alert (#220, phase 4), as the controller raises it, from a client at a documentation address.</summary>
+    public static RoofAlpacaAlert RaiseRefusedOpen(this WebRoofHarness harness, params string[] reasonKeys)
+        => harness.RaiseRefused(RoofAlpacaCommandKind.Open, reasonKeys);
+
+    private static RoofAlpacaAlert RaiseRefused(this WebRoofHarness harness, RoofAlpacaCommandKind command, string[] reasonKeys)
     {
         harness.Alpaca().RaiseAlert(
             "Refused",
-            RoofAlpacaCommandKind.Close,
-            $"An Alpaca Close was refused: {RoofAlpacaText.DescribeReasons(reasonKeys)}.",
+            command,
+            $"An Alpaca {command} was refused: {RoofAlpacaText.DescribeReasons(reasonKeys)}.",
             reasonKeys,
             new RoofAlpacaClient(7, 3, "192.0.2.50", "header"));
-        return harness.Alpaca().Alerts().First(alert => alert.Kind == "Refused" && alert.ReasonKeys.SequenceEqual(reasonKeys.Order(StringComparer.Ordinal)));
+        return harness.Alpaca().Alerts().First(alert => alert.Kind == "Refused" && alert.Command == command && alert.ReasonKeys.SequenceEqual(reasonKeys.Order(StringComparer.Ordinal)));
     }
 
     /// <summary>The lease heartbeats and releases the page sent, in order: <c>POST input</c>, <c>POST</c>, <c>DELETE</c>.</summary>
