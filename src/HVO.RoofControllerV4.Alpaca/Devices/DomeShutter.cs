@@ -22,6 +22,14 @@ public static class DomeShutter
     public static DomeShutterState StateOf(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
+
+        // A start that waited out the direction-change delay and was refused when its wait ended reads Error until the
+        // next start, Stop or ClearFault (#220, N6), whatever the roof's position: the client sees its command failed.
+        if (status.IsContinuationRefused && !status.IsMoving && !status.IsStartPending)
+        {
+            return DomeShutterState.Error;
+        }
+
         return status.Status switch
         {
             RoofControllerStatus.Open => DomeShutterState.Open,

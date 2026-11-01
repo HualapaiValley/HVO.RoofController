@@ -100,6 +100,13 @@ namespace HVO.RoofControllerV4.Common.Models
         /// </summary>
         public bool IsStartPending { get; init; }
 
+        /// <summary>
+        /// True after a start that waited out the direction-change delay was refused when its wait ended (#220, N6), until
+        /// the next start, Stop or ClearFault; <see cref="LastError"/> says why. The roof's <see cref="Status"/> stays its
+        /// real state; an Alpaca client reads the Dome's shutter as Error meanwhile.
+        /// </summary>
+        public bool IsContinuationRefused { get; init; }
+
         /// <summary>The direction of the start waiting out the direction-change delay; None when none waits.</summary>
         public RoofMotionDirection PendingMotion { get; init; }
 

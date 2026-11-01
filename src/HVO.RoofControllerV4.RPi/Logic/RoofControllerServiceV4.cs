@@ -589,6 +589,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             ControllerInstanceId = _controllerInstanceId,
             HatMode = _hatMode,
             IsStartPending = _pendingStart is not null,
+            IsContinuationRefused = _continuationRefused,
             PendingMotion = _pendingStart?.Direction ?? RoofMotionDirection.None,
             MotionOwner = _commandedMotion != RoofMotionDirection.None ? _motionOwner : _pendingStart?.Owner,
             LastError = _lastError

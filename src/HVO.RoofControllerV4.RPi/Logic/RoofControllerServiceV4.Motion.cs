@@ -40,6 +40,9 @@ public partial class RoofControllerServiceV4
     // The start waiting out the direction-change delay, or null.
     private PendingStart? _pendingStart;
 
+    // A start that waited out the delay was refused when its wait ended (N6): until the next start, Stop or ClearFault.
+    private bool _continuationRefused;
+
     // Who the commanded motion belongs to; null while idle.
     private RoofMotionOwner? _motionOwner;
 
@@ -516,6 +519,7 @@ public partial class RoofControllerServiceV4
     private Result<RoofControllerStatus> StartOrWait_NoLock(RoofMotionRequest request, DateTimeOffset now, out PendingStart? pending)
     {
         pending = null;
+        _continuationRefused = false;
         var generation = BumpGeneration();
         var remaining = RemainingDelay_NoLock(now);
         if (remaining > TimeSpan.Zero)
@@ -591,6 +595,7 @@ public partial class RoofControllerServiceV4
         {
             // The status keeps why (N6): the roof stays stopped, and the Alpaca status action shows the reason.
             _lastError = $"A waiting {pending.Direction.ToString().ToLowerInvariant()} was refused when its direction-change delay ended: {recheck.Message}";
+            _continuationRefused = true;
             FinishMutation_NoLock();
             var refusal = Refuse_NoLock(recheck);
             pending.Admission.ContinuationRefused((RoofControllerException)refusal.Error!);
@@ -745,6 +750,7 @@ public partial class RoofControllerServiceV4
             {
                 // A stop preempts a clear-fault pulse; the all-off sequence below also drops the clear-fault relay.
                 _clearFaultCts?.Cancel();
+                _continuationRefused = false;
                 CancelPendingStart_NoLock("A Stop came while this start waited; nothing moved for it.");
 
                 // A deadline that has already passed stops the motion first, so the recorded stop reason (and any latch)

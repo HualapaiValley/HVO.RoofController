@@ -47,7 +47,7 @@ read is error `0x500` ([Error numbers](#error-numbers)).
 | 1 Closed | `Closed` (at the closed limit) |
 | 2 Opening | `Opening` |
 | 3 Closing | `Closing` |
-| 4 Error | every other state: `Stopped`, `PartiallyOpen`, `PartiallyClose`, `Error`, `NotInitialized`, `Unknown` |
+| 4 Error | every other state: `Stopped`, `PartiallyOpen`, `PartiallyClose`, `Error`, `NotInitialized`, `Unknown`; and, until the next start, Stop or ClearFault, a start refused when its direction-change delay ended ([Waiting out the direction-change delay](#waiting-out-the-direction-change-delay)) |
 
 A roof that is not moving is never reported as moving, with one exception: a start accepted and waiting out the
 direction-change delay reads as moving ([Waiting out the direction-change delay](#waiting-out-the-direction-change-delay)).
@@ -539,7 +539,10 @@ now, the roof stays stopped, the Close is refused and an alert says so. During t
 
 **Status during the wait** (an exception to "a roof not moving is never reported as moving"): the waiting start reads
 `ShutterStatus` Closing and `Slewing` true, since it has been accepted and will start unless something stops it. A
-start refused when the wait ends reads Error, with why in the `status` action.
+start refused when the wait ends reads `ShutterStatus` Error, wherever the roof stands (part way, or at a limit), with
+why in the `status` action, until the next start, Stop or ClearFault, so a client polling the shutter sees its command
+failed. The controller's own status, and so every UI, keeps the roof's real state (Open at the open limit, say), with the
+same reason as its last error and in an alert; its `isContinuationRefused` says a refused continuation is being reported.
 
 ### Alerts
 

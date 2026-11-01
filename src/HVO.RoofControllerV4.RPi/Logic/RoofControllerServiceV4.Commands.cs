@@ -292,6 +292,7 @@ public partial class RoofControllerServiceV4
             _faultLatched = false;
             _latchedFaultReason = null;
             _lastError = null;
+            _continuationRefused = false;
             FinishMutation_NoLock();
             return (Result<bool>.Success(true), "cleared");
         }

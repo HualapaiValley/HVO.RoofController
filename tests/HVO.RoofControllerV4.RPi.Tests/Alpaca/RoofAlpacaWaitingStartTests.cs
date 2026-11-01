@@ -129,6 +129,35 @@ public sealed class RoofAlpacaWaitingStartTests
     }
 
     [TestMethod]
+    public async Task AContinuationRefusedAtALimit_ReadsErrorOnTheDome_TheRoofsRealStateElsewhere_UntilTheNextCommand()
+    {
+        // PR #230 rereview, Opus F13 (N6): at the open limit the roof is Open, but the Dome reads Error after the refused
+        // continuation, with why in the status; the controller's own status (and every UI) keeps the real state.
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: Delay)).Ready();
+        await Task.Delay(Delay);
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening))).IsSuccessful.Should().BeTrue();
+        rig.Hat.SetInputs(false, true, false, false); // the open limit (NC: LOW = active)
+        rig.Controller.ForceStatusRefresh();
+        rig.Controller.GetCurrentStatusSnapshot().Status.Should().Be(RoofControllerStatus.Open);
+
+        var close = rig.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Controller.GetCurrentStatusSnapshot().IsStartPending, "the waiting start");
+        rig.RotateCommanderKey();
+        (await close).Rule().Should().Be("AuthorizationChanged");
+
+        var after = rig.Controller.GetCurrentStatusSnapshot();
+        after.Status.Should().Be(RoofControllerStatus.Open, "the roof's real state");
+        after.IsContinuationRefused.Should().BeTrue();
+        after.LastError.Should().Contain("refused when its direction-change delay ended");
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.StateOf(after).Should().Be(HVO.RoofControllerV4.Alpaca.Devices.DomeShutterState.Error);
+
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue();
+        var stopped = rig.Controller.GetCurrentStatusSnapshot();
+        stopped.IsContinuationRefused.Should().BeFalse("a Stop ends it");
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.StateOf(stopped).Should().Be(HVO.RoofControllerV4.Alpaca.Devices.DomeShutterState.Open);
+    }
+
+    [TestMethod]
     public async Task CommandsTurnedOffDuringTheWait_LeaveTheRoofStopped()
     {
         var (rig, _, writes) = await JustStoppedAsync();
