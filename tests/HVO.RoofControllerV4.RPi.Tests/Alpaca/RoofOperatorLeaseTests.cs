@@ -331,6 +331,80 @@ public sealed class RoofOperatorLeaseTests
     }
 
     [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close, RoofAlpacaCommandKind.Open, RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Close, RoofAlpacaCommandKind.Open, RoofAlpacaCommandKind.Open)]
+    [DataRow(RoofAlpacaCommandKind.Open, RoofAlpacaCommandKind.Close, RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Open, RoofAlpacaCommandKind.Close, RoofAlpacaCommandKind.Open)]
+    public async Task WithAnOpenAndACloseGrant_EndingOne_KeepsThePersonSteppedAwayForTheOther(
+        RoofAlpacaCommandKind first, RoofAlpacaCommandKind second, RoofAlpacaCommandKind ended)
+    {
+        // PR #232 review S2: the step-away belongs to every grant the person made, not only the first; ending one grant
+        // leaves the person away while the other lasts, so a routine heartbeat does not take the lease back and drop it.
+        var (rig, time) = await StartAsync(RoofAlpacaCommandMode.OpenAndClose);
+        await using var _ = rig;
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        var kiosk = AlpacaCommandRig.Person("ada", pin: true, sessionId: "ada-kiosk");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Heartbeat(kiosk, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(first, ["scope-not-clear:Main"])).Grant.Should().NotBeNull();
+        rig.Commands.Grant(kiosk, new RoofOverrideGrantRequest(second, ["scope-not-clear:Main"])).Grant.Should().NotBeNull();
+        rig.Commands.Grants().Should().HaveCount(2);
+
+        rig.Commands.Revoke(ended, AlpacaCommandRig.Person("grace")).Should().BeTrue();
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(web, input: false);
+        rig.Commands.Heartbeat(kiosk, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("the other grant still lasts");
+        var kept = ended == RoofAlpacaCommandKind.Open ? RoofAlpacaCommandKind.Close : RoofAlpacaCommandKind.Open;
+        rig.Commands.Grants().Should().ContainSingle().Which.Kind.Should().Be(kept);
+
+        // Once the other grant ends too, the person's UIs hold the lease again with their next heartbeat.
+        rig.Commands.Revoke(kept, AlpacaCommandRig.Person("grace")).Should().BeTrue();
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(web, input: false);
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("ada");
+    }
+
+    [TestMethod]
+    public async Task WithAnOpenAndACloseGrant_TheCloseUsingItsGrant_KeepsThePersonSteppedAwayForTheOpen()
+    {
+        var (rig, time) = await StartAsync(RoofAlpacaCommandMode.OpenAndClose);
+        await using var _ = rig;
+        rig.Scope.Parked = false;
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["scope-not-clear:Main", RoofAlpacaContract.NoRequiredWeatherKey]));
+
+        (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue();
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(web, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("the Open grant still lasts");
+        rig.Commands.Grants().Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+    }
+
+    [TestMethod]
+    public async Task AnIdleLapse_IsNotUndone_WhenOneOfTheIdlePersonsTwoGrantsEnds()
+    {
+        // An idle lapse stays one (PR #230 review, Opus F4), also with two grants of the same person.
+        var (rig, time) = await StartAsync(RoofAlpacaCommandMode.OpenAndClose);
+        await using var _ = rig;
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: true);
+        KeepBeating(rig, time, TimeSpan.FromMinutes(10) + Beat, "ada");
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("lapsed for want of input");
+
+        rig.Commands.Grant(AlpacaCommandRig.Person("ada", sessionId: "ada-kiosk", pin: true), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+        rig.Commands.Grant(AlpacaCommandRig.Person("ada", sessionId: "ada-kiosk", pin: true), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["scope-not-clear:Main"]));
+        rig.Commands.Revoke(RoofAlpacaCommandKind.Close, AlpacaCommandRig.Person("grace"));
+        rig.Commands.Revoke(RoofAlpacaCommandKind.Open, AlpacaCommandRig.Person("grace"));
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("only input takes back a lease that lapsed for want of it");
+    }
+
+    [TestMethod]
     public async Task AnotherPersonsGrant_ReplacingOne_ReleasesTheFirstGrantersStepAway()
     {
         var (rig, time) = await StartAsync();

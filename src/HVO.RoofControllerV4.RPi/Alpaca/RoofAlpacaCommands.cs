@@ -541,7 +541,11 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             away.Add(SessionId(user));
         }
 
-        _steppedAwayFor[grantId] = (name, [.. carried.Union(away, StringComparer.Ordinal)]);
+        // The sessions the person's grant of the other kind already holds away are this grant's too, so ending either
+        // grant leaves them away while the other lasts (PR #232 review S2). A session away for want of input alone is not
+        // taken over: an idle lapse stays one.
+        var held = _steppedAwayFor.Values.Where(entry => string.Equals(entry.Person, name, StringComparison.Ordinal)).SelectMany(entry => entry.Sessions);
+        _steppedAwayFor[grantId] = (name, [.. carried.Union(away, StringComparer.Ordinal).Union(held, StringComparer.Ordinal)]);
         return sessions.Length;
     }
 
@@ -558,7 +562,8 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
 
     /// <summary>
     /// A grant is gone: the sessions it stepped away hold the lease again with their next heartbeat, input or not (#220,
-    /// PR #230 review Opus F4). A session that lapsed for want of input stays so until it has some.
+    /// PR #230 review Opus F4), unless another grant still holds them away (an Open and a Close grant of the same person,
+    /// PR #232 review S2). A session that lapsed for want of input stays so until it has some.
     /// </summary>
     private void EndStepAway_NoLock(string grantId)
     {
@@ -566,7 +571,10 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         {
             foreach (var session in away.Sessions)
             {
-                _idleLapsedSessions.Remove(session);
+                if (!_steppedAwayFor.Values.Any(other => other.Sessions.Contains(session, StringComparer.Ordinal)))
+                {
+                    _idleLapsedSessions.Remove(session);
+                }
             }
         }
     }
