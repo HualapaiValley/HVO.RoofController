@@ -45,14 +45,19 @@ public sealed class HatIoLaneTests
     [TestMethod]
     public async Task TheLane_StaysClosed_UntilItsRecoveryHasRun()
     {
-        // PR #230 rereview, Opus F17: the recovery raises the controller's fence; no access may reach the HAT before it.
+        // PR #230 rereview Opus F17: the recovery raises the controller's fence; no access may reach the HAT before it.
         var lane = HatIoLane.For(new object());
         using var release = new ManualResetEventSlim(false);
-        var overrunDuringRecovery = (bool?)null;
+        var reachedTheHat = 0L;
+        var reachedDuringRecovery = (bool?)null;
         var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int>? during = null;
         lane.Recovered += () =>
         {
-            overrunDuringRecovery = lane.IsOverrun;
+            // An access made while the recovery runs waits for it, whatever it is.
+            during = Task.Run(() => lane.Run(() => { Interlocked.Exchange(ref reachedTheHat, Stopwatch.GetTimestamp()); return 4; }, TimeSpan.FromSeconds(5)));
+            Thread.Sleep(200);
+            reachedDuringRecovery = Interlocked.Read(ref reachedTheHat) != 0;
             recovered.TrySetResult();
         };
 
@@ -61,6 +66,32 @@ public sealed class HatIoLaneTests
         release.Set();
         await recovered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        overrunDuringRecovery.Should().BeTrue("the lane reopens only after its recovery has run");
+        reachedDuringRecovery.Should().BeFalse("the lane reopens only after its recovery has run");
+        (await during!.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(4);
+    }
+
+    [TestMethod]
+    public async Task TheRecoverysOwnAccesses_WaitForTheLane_RatherThanFailAsStillRunning()
+    {
+        // PR #230 rereview Opus F22 (P4): the all-off the recovery queues must reach the HAT, not fail with "an earlier HAT
+        // access is still running".
+        var lane = HatIoLane.For(new object());
+        using var release = new ManualResetEventSlim(false);
+        Task<int>? allOff = null;
+        var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lane.Recovered += () =>
+        {
+            allOff = Task.Run(() => lane.Run(() => 0, TimeSpan.FromSeconds(5)));
+            allOff.Wait(TimeSpan.FromMilliseconds(200)); // as the controller's queued stop may run before the handler returns
+            recovered.TrySetResult();
+        };
+
+        var hanging = () => lane.Run(() => { release.Wait(TimeSpan.FromSeconds(10)); return 1; }, Limit);
+        hanging.Should().Throw<HatIoOverrunException>();
+        release.Set();
+        await recovered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var run = async () => await allOff!.WaitAsync(TimeSpan.FromSeconds(5));
+        (await run.Should().NotThrowAsync("the recovery's own access waits for the lane")).Subject.Should().Be(0);
     }
 }
