@@ -134,15 +134,53 @@ public sealed class AlpacaOpenScenarios
 
     private static int Error(JsonElement answer) => answer.GetProperty("ErrorNumber").GetInt32();
 
+    /// <summary>
+    /// For a run in which the roof must never have moved (a refused Open): it does not move now, no relay is on, and
+    /// neither direction relay's contact has closed since the rig started, so a start that ran to a limit and stopped
+    /// before this check fails it too (PR #232 rereview S6/F15).
+    /// </summary>
     private static async Task ShouldNotMoveAsync(Setup setup, string because)
     {
-        // A roof that just stopped (at a limit, or after an AbortSlew) coasts to rest after its relays go off: what must
-        // not happen is motion after that, so the check starts once the plant is at rest.
+        setup.Rig.ContactChanges(1).Concat(setup.Rig.ContactChanges(2)).Should().NotContain(change => change.Closed, because);
+        await StaysStillAsync(setup, because);
+        setup.Rig.ContactChanges(1).Concat(setup.Rig.ContactChanges(2)).Should().NotContain(change => change.Closed, because);
+    }
+
+    /// <summary>
+    /// For a run in which the roof moved as it should and stopped (at a limit, or by an AbortSlew): it coasts to rest
+    /// after its relays go off, and from then on nothing moves it.
+    /// </summary>
+    private static async Task ComesToRestAsync(Setup setup, string because)
+    {
         await setup.Rig.WaitForPlantAsync(plant => Math.Abs(plant.VelocityMetersPerSecond) < 1e-6, "the roof to come to rest");
+        await StaysStillAsync(setup, because);
+    }
+
+    private static async Task StaysStillAsync(Setup setup, string because)
+    {
         var position = setup.Rig.Plant.PositionMeters;
         await Task.Delay(TimeSpan.FromSeconds(1));
         setup.Rig.Plant.PositionMeters.Should().BeApproximately(position, 0.001, because);
         setup.Rig.Plant.RelayRegister.Should().Be(0, because);
+    }
+
+    [TestMethod]
+    public async Task TheNoMotionCheck_FailsForARoofThatMoves_OrThatMovedAndStoppedBeforeIt()
+    {
+        // PR #232 rereview S6/F15: the refusal runs' check must fail for a roof moving now, and for one that moved (a start
+        // that ran to the limit and stopped) before the check began.
+        await using var setup = await StartAsync();
+        await setup.ClearHoldAsync();
+        Error(await setup.OpenAsync()).Should().Be(0);
+        await setup.Rig.WaitForPlantAsync(plant => Math.Abs(plant.VelocityMetersPerSecond) > 0.001, "the roof to move");
+
+        await FluentActions.Awaiting(() => ShouldNotMoveAsync(setup, "a moving roof")).Should().ThrowAsync<Exception>("the roof moves");
+
+        await setup.Rig.WaitForControllerAsync(status => status.Status == RoofControllerStatus.Open && !status.IsMoving, TimeSpan.FromSeconds(60), "the roof to open");
+        await setup.Rig.WaitForPlantAsync(plant => Math.Abs(plant.VelocityMetersPerSecond) < 1e-6, "the roof to come to rest");
+        await FluentActions.Awaiting(() => ShouldNotMoveAsync(setup, "a roof that moved")).Should().ThrowAsync<Exception>(
+            "a direction relay closed during the run, though the roof is at rest now");
+        await ComesToRestAsync(setup, "a permitted Open, at rest");
     }
 
     [TestMethod]
@@ -283,7 +321,7 @@ public sealed class AlpacaOpenScenarios
             "the mid-Open alert");
         var status = await setup.Rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Open && !s.IsMoving, TimeSpan.FromSeconds(60), "the roof to finish opening");
         status.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "a soft condition never stops the roof, and nothing moves on its own");
-        await ShouldNotMoveAsync(setup, "nothing closes the roof on its own");
+        await ComesToRestAsync(setup, "nothing closes the roof on its own");
     }
 
     [TestMethod]
@@ -323,7 +361,7 @@ public sealed class AlpacaOpenScenarios
 
         await setup.Rig.WaitForControllerAsync(status => !status.IsMoving && status.RelayRegisterMask == 0, "the stop");
         (await setup.AlpacaStatusAsync()).Hold.Held.Should().BeFalse("Alpaca's own AbortSlew holds nothing off");
-        await ShouldNotMoveAsync(setup, "stopped");
+        await ComesToRestAsync(setup, "stopped");
     }
 
     [TestMethod]
