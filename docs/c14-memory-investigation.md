@@ -153,10 +153,11 @@ C14 failed its managed heap check three times between October 27 and November 1,
 
 **The reading.** The check read `GC.GetTotalMemory(forceFullCollection: true)`, which forces a full collection and
 then returns the runtime's approximation of the bytes in use. `soak-memory.jsonl` also records the GC's own figures
-for that collection: every sample's record is the forced, compacting, generation-2 collection, and its heap size less
-its fragmentation is the bytes it left live. Over 2,266 samples from the 22 soaks with these records (October 19 to
-November 1), the approximation read under the live bytes in 976 samples, by up to 8.2 MB, and never over. Whether the
-first or last five samples land on short readings decides the endpoint. On `08c3121` the live bytes moved +0.6%
+for that collection: every sample's record is a full blocking collection (generation 2, not concurrent; 177 of them
+did not compact), and its heap size less its fragmentation is the bytes it left live. Over 2,266 samples from the 22
+soaks with these records (October 19 to November 1), the approximation read more than 0.1 MB under the live bytes in
+976 samples, by up to 8.2 MB, and never more than 0.1 MB over (at most 77 KB). Whether the first or last five samples
+land on short readings decides the endpoint. On `08c3121` the live bytes moved +0.6%
 while the reading said +31.7%. The controlled experiment above shows the same: identical baselines read −20.67% and
 +0.68%.
 

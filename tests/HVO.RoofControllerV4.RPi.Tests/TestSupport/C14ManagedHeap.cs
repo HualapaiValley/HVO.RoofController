@@ -6,9 +6,9 @@ namespace HVO.RoofControllerV4.RPi.Tests.TestSupport;
 /// </summary>
 /// <remarks>
 /// <see cref="GC.GetTotalMemory(bool)"/> forces the collection, as it always has. Its own figure is only the runtime's
-/// approximation of the bytes in use: in every soak of October and November 2026 it read megabytes under the live
-/// bytes (up to 8.2 MB, never over) in some of the samples, at random. That alone took the check to -21% and to +32% in
-/// runs whose live bytes moved under 1% (#220, PR #232; <c>docs/c14-memory-investigation.md</c>). The approximation is
+/// approximation of the bytes in use: in the soaks of October and November 2026 it read more than 0.1 MB under the
+/// live bytes in 43% of the samples, at random and by up to 8.2 MB, and never more than 0.1 MB over. That alone took
+/// the check to -21% and to +32% in runs whose live bytes moved under 1% (#220, PR #232; <c>docs/c14-memory-investigation.md</c>). The approximation is
 /// kept as <see cref="ManagedHeapReading.TotalMemoryBytes"/>, for the diagnostics only.
 /// </remarks>
 internal static class C14ManagedHeap
