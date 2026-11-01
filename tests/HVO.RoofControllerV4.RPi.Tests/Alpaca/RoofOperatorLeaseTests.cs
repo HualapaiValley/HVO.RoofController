@@ -386,6 +386,46 @@ public sealed class RoofOperatorLeaseTests
     }
 
     [TestMethod]
+    public async Task WithAnOpenAndACloseGrant_TheOpenUsingItsGrant_LeavesTheCloseGrant_AndThePersonAway()
+    {
+        // PR #232 review F1 (Opus's R1): "Alpaca may open and close the roof once each" holds for one person's two grants.
+        await using var rig = (await AlpacaCommandRig.StartAsync(weatherSafe: false, mode: RoofAlpacaCommandMode.OpenAndClose)).Ready();
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["weather-unsafe:Weather"])).Grant.Should().NotBeNull();
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"])).Grant.Should().NotBeNull();
+
+        (await rig.OpenAsync()).Result.IsSuccessful.Should().BeTrue();
+        rig.Commands.Heartbeat(web, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("the Close grant still lasts");
+        rig.Commands.Grants().Should().ContainSingle(grant => grant.Kind == RoofAlpacaCommandKind.Close);
+        rig.Scope.Parked = false;
+        (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue("the Close grant is used as granted");
+    }
+
+    [TestMethod]
+    public async Task AnotherPersonsUi_TakingTheLeaseBackWhenTheirOwnGrantEnds_DropsEveryGrant_AsAnyPersonTakingItDoes()
+    {
+        // PR #232 review F1 (Opus's R1b), documented: ada's own Open grant is used, so her UI holds the lease again with its
+        // next heartbeat; a person taking the lease drops every grant in force (#220, §5 O12), grace's Close grant too. It
+        // fails safe: ada's lease would refuse that Close anyway, and grace grants again once ada has stepped away.
+        await using var rig = (await AlpacaCommandRig.StartAsync(weatherSafe: false, mode: RoofAlpacaCommandMode.OpenAndClose)).Ready();
+        var ada = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        var grace = AlpacaCommandRig.Person("grace", pin: true, sessionId: "grace-kiosk");
+        rig.Commands.Heartbeat(ada, input: true);
+        rig.Commands.Heartbeat(grace, input: true);
+        rig.Commands.Grant(ada, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["weather-unsafe:Weather"]));
+        rig.Commands.Grant(grace, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+
+        (await rig.OpenAsync()).Result.IsSuccessful.Should().BeTrue();
+        rig.Commands.Heartbeat(ada, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("ada");
+        rig.Commands.Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
     public async Task AnIdleLapse_IsNotUndone_WhenOneOfTheIdlePersonsTwoGrantsEnds()
     {
         // An idle lapse stays one (PR #230 review, Opus F4), also with two grants of the same person.
