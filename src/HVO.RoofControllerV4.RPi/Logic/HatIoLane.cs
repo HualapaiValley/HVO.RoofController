@@ -73,9 +73,9 @@ internal sealed class HatIoLane
                 return;
             }
 
-            // The caller gave up on it: it has returned now, late. The lane is free again.
-            _overrun = false;
-            _turn.Release();
+            // The caller gave up on it: it has returned now, late. The recovery runs first (the controller raises its relay
+            // fence and queues its all-off), and only then is the lane free again, so no access reaches the HAT before it
+            // (PR #230 rereview, Opus F17).
             try
             {
                 Recovered?.Invoke();
@@ -84,6 +84,9 @@ internal sealed class HatIoLane
             {
                 // A handler's failure never stops the lane.
             }
+
+            _overrun = false;
+            _turn.Release();
         });
 
         var remaining = limit - Stopwatch.GetElapsedTime(started);
