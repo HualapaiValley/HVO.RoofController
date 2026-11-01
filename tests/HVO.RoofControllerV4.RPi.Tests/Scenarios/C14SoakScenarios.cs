@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Storage;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation.Camera;
@@ -54,10 +55,13 @@ public sealed class C14SoakScenarios
     private const double MemoryGrowthLimit = 0.10;
     private const int ThreadMargin = 10;
     private const int FileDescriptorMargin = 10;
-    private const int EndSamples = 5;
+    internal const int EndSamples = 5;
     private const int MinimumTrendSamples = 10;
     private const int LogCapacity = 1_000;
     private const int MaxNotes = 100;
+
+    /// <summary>The controller's command history in the soak: the least it may keep.</summary>
+    internal const int CommandHistoryEntries = RoofCommandHistoryOptions.MinimumEntries;
 
     // A quarter's 99th percentile is compared only when every quarter has this many Stops (a soak of about half an hour
     // or more); in fewer it is little more than the quarter's slowest Stop.
@@ -91,13 +95,7 @@ public sealed class C14SoakScenarios
 
         using var counters = new RoofMeterCounters();
         await using var collector = OtlpCollectorStub.Start(CollectorBehavior.BlackHole);
-        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(
-            // A short history, so the emulator's event log reaches its size limit during the warm-up; the rig keeps the
-            // latest log entries, and the host writes no console log, which the test framework would keep in memory
-            // for the result. None then grows the heap the soak measures; soak-log.txt has the entries the rig kept.
-            plant: p => p with { MaxHistory = 1_000 },
-            settings: new Dictionary<string, string?>(collector.Settings()),
-            travelMeters: TravelMeters) with { Kestrel = true, Camera = true, LogCapacity = LogCapacity, ConsoleLog = false });
+        await using var rig = await EmulatedRoofRig.StartAsync(RigOptions(collector.Settings()));
         using var operatorClient = rig.CreateApiClient(TestApiKeys.Operator);
         using var viewer = rig.CreateApiClient(TestApiKeys.Viewer);
         using var anonymous = rig.CreateApiClient();
@@ -271,6 +269,27 @@ public sealed class C14SoakScenarios
         }
     }
 
+    /// <summary>
+    /// The soak's rig: the production settings against the emulated plant, exporting as <paramref name="exporter"/>
+    /// says, and with every record that keeps only its latest entries small enough to fill during the warm-up.
+    /// </summary>
+    internal static EmulatedRoofRigOptions RigOptions(IEnumerable<KeyValuePair<string, string?>> exporter)
+        => Scenario.Production(
+            // A short history, so the emulator's event log reaches its size limit during the warm-up; the rig keeps the
+            // latest log entries, and the host writes no console log, which the test framework would keep in memory
+            // for the result. None then grows the heap the soak measures; soak-log.txt has the entries the rig kept.
+            plant: p => p with { MaxHistory = 1_000 },
+            settings: new Dictionary<string, string?>(exporter)
+            {
+                // The controller's command history at its least, for the same reason. A cycle records four commands, so
+                // it is full after 25 cycles. At its default, 10,000 entries, it fills only after about 2,500 cycles (six
+                // hours of soak), and until then it grows the heap 0.4 to 0.5 KB a command, which took the managed heap's
+                // growth after the warm-up from about 0.5% to about 5% when the history came in (#206; #220, PR #232).
+                [$"{RoofCommandHistoryOptions.SectionName}:{nameof(RoofCommandHistoryOptions.MaximumEntries)}"]
+                    = CommandHistoryEntries.ToString(CultureInfo.InvariantCulture)
+            },
+            travelMeters: TravelMeters) with { Kestrel = true, Camera = true, LogCapacity = LogCapacity, ConsoleLog = false };
+
     private static async Task<Sample> SampleAsync(
         EmulatedRoofRig rig, HttpClient viewer, HttpClient anonymous, OtlpCollectorStub collector, SoakRun run, TimeSpan at,
         C14MemoryDiagnostics diagnostics, bool final = false)
@@ -281,12 +300,12 @@ public sealed class C14SoakScenarios
         var status = await ApiJson.ReadAsync<RoofStatusResponse>(response);
         var now = DateTimeOffset.UtcNow;
 
-        var managed = GC.GetTotalMemory(forceFullCollection: true);
+        var heap = C14ManagedHeap.Read();
         using var process = Process.GetCurrentProcess();
         var sample = new Sample(
             At: at,
             Cycles: run.Cycles,
-            ManagedBytes: managed,
+            ManagedBytes: heap.LiveBytes,
             WorkingSetBytes: process.WorkingSet64,
             Threads: process.Threads.Count,
             FileDescriptors: OperatingSystem.IsLinux() ? Directory.GetFiles("/proc/self/fd").Length : process.HandleCount,
@@ -301,7 +320,8 @@ public sealed class C14SoakScenarios
             FaultLatched: status.IsFaultLatched,
             Violations: rig.Plant.Violations,
             LogEntries: rig.Logs.Count,
-            HeldCollectorConnections: collector.Held);
+            HeldCollectorConnections: collector.Held,
+            TotalMemoryBytes: heap.TotalMemoryBytes);
         diagnostics.Append(at, run.WarmUp, sample, final);
         return sample;
     }
@@ -420,9 +440,10 @@ public sealed class C14SoakScenarios
 
     /// <summary>
     /// After the warm-up (a quarter of the run, at most an hour): the memory grows less than 10% (C14), as the working
-    /// set that <c>docker stats</c> reports and as the managed heap after a full collection, which shows a leak the
-    /// working set hides; neither trends upward; and the threads and file descriptors stay flat. A run too short for a
-    /// trend (<see cref="MinimumTrendWindow"/>, <see cref="MinimumTrendSamples"/> samples) records them only.
+    /// set that <c>docker stats</c> reports and as the managed heap's live bytes after a full collection
+    /// (<see cref="C14ManagedHeap"/>), which shows a leak the working set hides; neither trends upward; and the threads
+    /// and file descriptors stay flat. A run too short for a trend (<see cref="MinimumTrendWindow"/>,
+    /// <see cref="MinimumTrendSamples"/> samples) records them only.
     /// </summary>
     private static IEnumerable<Check> ResourceChecks(SoakRun run)
     {
@@ -460,15 +481,29 @@ public sealed class C14SoakScenarios
     /// </summary>
     private static Check MemoryCheck(string name, Sample[] settled, Sample[] first, Sample[] last, Func<Sample, long> bytes)
     {
-        var start = Median(first.Select(s => (double)bytes(s)));
-        var end = Median(last.Select(s => (double)bytes(s)));
-        var growth = (end - start) / start;
-        var slope = Slope(settled.Select(s => (s.At.TotalSeconds, (double)bytes(s))).ToArray());
-        var trend = slope * (settled[^1].At - settled[0].At).TotalSeconds / start;
+        var (start, end, growth, trend) = Growth(
+            settled.Select(s => (s.At, bytes(s))).ToArray(), first.Select(bytes).ToArray(), last.Select(bytes).ToArray());
         return new Check(name,
-            growth < MemoryGrowthLimit && trend < MemoryGrowthLimit,
+            GrewLessThanTheLimit(growth, trend),
             $"{start / 1048576:0.0} MB to {end / 1048576:0.0} MB ({growth:+0.0%;-0.0%}), trend {trend:+0.0%;-0.0%} over {settled[^1].At - settled[0].At:hh\\:mm\\:ss}");
     }
+
+    /// <summary>
+    /// C14's memory growth over the settled samples: from the median of <paramref name="first"/> to the median of
+    /// <paramref name="last"/>, and the least-squares trend over <paramref name="settled"/>, both as a share of the start.
+    /// </summary>
+    internal static (double Start, double End, double Growth, double Trend) Growth(
+        (TimeSpan At, long Bytes)[] settled, long[] first, long[] last)
+    {
+        var start = Median(first.Select(b => (double)b));
+        var end = Median(last.Select(b => (double)b));
+        var slope = Slope(settled.Select(s => (s.At.TotalSeconds, (double)s.Bytes)).ToArray());
+        var trend = slope * (settled[^1].At - settled[0].At).TotalSeconds / start;
+        return (start, end, (end - start) / start, trend);
+    }
+
+    /// <summary>Whether a growth and its trend both stay under C14's limit, 10%.</summary>
+    internal static bool GrewLessThanTheLimit(double growth, double trend) => growth < MemoryGrowthLimit && trend < MemoryGrowthLimit;
 
     private static readonly string[] LimitEventKeys = ["closed cleared", "open reached", "open cleared", "closed reached"];
     private static readonly (string, string) FullTravel = ("roof.stop.reason", nameof(RoofControllerStopReason.LimitSwitchReached));
@@ -546,14 +581,14 @@ public sealed class C14SoakScenarios
             notes = run.Notes.Take(100)
         }, new JsonSerializerOptions { WriteIndented = true }));
 
-        var csv = new StringBuilder("seconds,cycles,managed_bytes,working_set_bytes,threads,file_descriptors,ready,status_version,inputs_healthy,input_read_age_s,input_read_failures,relay_reads_healthy,relay_read_age_s,relay_read_failures,fault_latched,violations,log_entries,held_collector_connections\n");
+        var csv = new StringBuilder("seconds,cycles,managed_bytes,working_set_bytes,threads,file_descriptors,ready,status_version,inputs_healthy,input_read_age_s,input_read_failures,relay_reads_healthy,relay_read_age_s,relay_read_failures,fault_latched,violations,log_entries,held_collector_connections,total_memory_bytes\n");
         foreach (var s in run.Samples)
         {
             csv.AppendLine(string.Join(',',
                 s.At.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture), s.Cycles, s.ManagedBytes, s.WorkingSetBytes, s.Threads, s.FileDescriptors,
                 s.Ready, s.StatusVersion, s.InputsHealthy, s.InputReadAgeSeconds.ToString("0.000", CultureInfo.InvariantCulture), s.ConsecutiveInputReadFailures,
                 s.RelayReadsHealthy, s.RelayReadAgeSeconds.ToString("0.000", CultureInfo.InvariantCulture), s.ConsecutiveRelayReadFailures,
-                s.FaultLatched, s.Violations, s.LogEntries, s.HeldCollectorConnections));
+                s.FaultLatched, s.Violations, s.LogEntries, s.HeldCollectorConnections, s.TotalMemoryBytes));
         }
 
         File.WriteAllText(Path.Combine(directory, "soak-samples.csv"), csv.ToString());
@@ -605,6 +640,11 @@ public sealed class C14SoakScenarios
 
     private sealed record Check(string Name, bool Passed, string Detail);
 
+    /// <summary>
+    /// One sample. <see cref="ManagedBytes"/> is the managed heap's live bytes after the forced full collection
+    /// (<see cref="C14ManagedHeap"/>), which the check judges; <see cref="TotalMemoryBytes"/> is
+    /// <see cref="GC.GetTotalMemory(bool)"/>'s approximation of them, recorded only.
+    /// </summary>
     private sealed record Sample(
         TimeSpan At,
         int Cycles,
@@ -623,7 +663,8 @@ public sealed class C14SoakScenarios
         bool FaultLatched,
         int Violations,
         long LogEntries,
-        int HeldCollectorConnections);
+        int HeldCollectorConnections,
+        long TotalMemoryBytes);
 
     private sealed class SoakRun(TimeSpan duration, TimeSpan warmUp)
     {

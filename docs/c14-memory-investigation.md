@@ -143,3 +143,48 @@ MALLOC_ARENA_MAX=2 HVO_SOAK_DURATION=02:00:00 dotnet test \
   --no-build --filter 'FullyQualifiedName~C14SoakScenarios' \
   -nodeReuse:false -p:UseSharedCompilation=false
 ```
+
+## The managed heap reading and the command history
+
+C14 failed its managed heap check three times between October 27 and November 1, 2026: the nightly on `main` at
+`08c3121` (+31.7%, trend +22.0%) and at `c94d5ad` (+21.4%, trend +9.8%), and PR #232's two-hour soak at `d1fd160`
+([run 41349362192](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41349362192): +32.7%, trend
++17.9%). Two causes, neither in the controller, account for them (#220, PR #232).
+
+**The reading.** The check read `GC.GetTotalMemory(forceFullCollection: true)`, which forces a full collection and
+then returns the runtime's approximation of the bytes in use. `soak-memory.jsonl` also records the GC's own figures
+for that collection: every sample's record is the forced, compacting, generation-2 collection, and its heap size less
+its fragmentation is the bytes it left live. Over 2,266 samples from the 22 soaks with these records (October 19 to
+November 1), the approximation read under the live bytes in 976 samples, by up to 8.2 MB, and never over. Whether the
+first or last five samples land on short readings decides the endpoint. On `08c3121` the live bytes moved +0.6%
+while the reading said +31.7%. The controlled experiment above shows the same: identical baselines read −20.67% and
++0.68%.
+
+**The command history.** The roof command history (#206) keeps every command in memory, up to
+`RoofCommandHistory:MaximumEntries` (10,000 by default) or its retention. A soak cycle records four commands, so the
+history grows for about six hours of soak before it fills: about 0.4 to 0.5 KB a command, which is the step between
+these groups of runs:
+
+| Runs, judged on the live bytes with C14's own formula | Growth after the warm-up | Trend |
+|---|---:|---:|
+| 13 two-hour soaks before the history (`main` and #159's branch, October 19-30) | +0.3% to +0.6% | +0.4% to +0.6% |
+| 7 two-hour soaks with it (`main` from `2dbdbee`, the #220 phase 3 and phase 4 branches) | +4.7% to +5.4% | +4.9% to +5.7% |
+
+The same runs judged on the approximation range from −20.8% to +32.7%. Every one passes on the live bytes; phase 4
+reads +5.3% (trend +5.5%), as the others with the history do.
+
+Heap snapshots attribute the step. `dotnet-gcdump` snapshots were taken of 24-minute C14 runs on `main` at `25a23f4`
+and on PR #232 at `d1fd160`, side by side on one machine, at minutes 7, 15 and 23. Between the last two, each added 254
+`RoofCommandHistoryEntry` objects (four per cycle) and their strings. Neither added anything else that grows with the
+cycles but the emulator's event log, which was still filling to its 1,000-event limit, and the harness's own samples.
+No Alpaca command state (tickets, grants, alerts, leases), timer or subscription grew. The history is bounded: at its
+default limit it holds about 4 to 5 MB.
+
+**The correction.** C14 judges the live bytes the forced collection left, read from
+`GC.GetGCMemoryInfo(GCKind.FullBlocking)`. A reading whose collection is not newer than the one before is refused.
+`GetTotalMemory` still forces the collection, and its approximation is recorded as `totalMemoryBytes`.
+`C14ManagedHeapTests` replays run 41349362192's settled samples through the check: they fail it as the approximation
+(+32.7%) and pass it as the live bytes (+5.3%). A leak of 6% added to the live bytes still fails it. The soak also
+keeps the command history at its least, 100 entries, so it is full 25 cycles in, as the emulator's event log is during
+the warm-up (`C14SoakRigScenarios`). The warm-up, sample cadence, endpoint medians, least-squares trend and the 10%
+limits are unchanged.

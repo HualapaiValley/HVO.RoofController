@@ -548,7 +548,9 @@ The scenario job runs it for 90 s, which records resources but does not assess t
 the warm-up. Only the nightly soak checks that resources stay flat. It runs for two hours and publishes
 `soak-summary.md` (the invariant table and the motion timings), `soak-summary.json`, `soak-samples.csv` and
 `soak-log.txt` (every Warning or above, and the latest 1,000 log entries). The soak's host writes no console log: the
-test framework keeps a test's console output in memory, which grows the heap the soak measures.
+test framework keeps a test's console output in memory, which grows the heap the soak measures. For the same reason the
+controller's command history keeps its least, 100 entries (`RoofCommandHistory:MaximumEntries`), and is full within the
+first 25 cycles: at the production 10,000 it would grow the heap for about six hours of soak before it filled.
 
 For the memory investigation in [#159](https://github.com/HualapaiValley/HVO.RoofController/issues/159), every C14 run
 also writes contributor diagnostics to the same results directory. These do not change any check below:
@@ -560,9 +562,12 @@ also writes contributor diagnostics to the same results directory. These do not 
   publishing only numeric values and withholding other values. These record requested settings, not their effective
   precedence; absent names were unset.
 - `soak-memory.jsonl` appends and flushes each `sample` record to disk during the run, before mapping snapshots.
-  `originalSample` repeats the original resource/health observation; its managed bytes still come from
-  `GC.GetTotalMemory(forceFullCollection: true)`, followed by the original working-set and other observations in
-  their original order. Additional diagnostics are taken afterward, without another forced collection. GC fields
+  `originalSample` repeats the original resource/health observation. `GC.GetTotalMemory(forceFullCollection: true)`
+  still forces the full collection; its managed bytes are the live bytes that collection left, from the GC's own
+  record of it (heap size less fragmentation), and `totalMemoryBytes` keeps `GetTotalMemory`'s approximation. Runs
+  before PR #232 recorded the approximation as the managed bytes: see
+  [the managed heap reading](c14-memory-investigation.md#the-managed-heap-reading-and-the-command-history). The
+  working-set and other observations follow in their original order. Additional diagnostics are taken afterward, without another forced collection. GC fields
   include committed bytes, heap size, fragmentation, the most recent collection's index/generation and flags,
   per-generation before/after sizes and fragmentation (0/1/2, LOH, POH), collection counts and cumulative allocated
   bytes. Global JIT counters record compiled IL bytes, method count and compilation time; IL bytes are not the size
@@ -610,8 +615,8 @@ The soak's checks:
   stays within 100 ms (the C13 margin) of the first quarter, by the median and, once every quarter has at least 100
   Stops (a soak of about half an hour or more), by the 99th percentile. C13 steps 1-3 compare Stops during an outage
   with a reachable collector.
-- After the warm-up, the working set and the managed heap grow less than 10%, and threads and file descriptors stay
-  flat.
+- After the warm-up, the working set and the managed heap (its live bytes after a full blocking collection) grow less
+  than 10%, and threads and file descriptors stay flat.
 - Every camera stream closes.
 - The exporter keeps retrying the collector.
 
