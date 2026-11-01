@@ -197,6 +197,16 @@ class ModesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             alpaca_ci.with_modes("// no object\n[]", "OpenAndClose", "Warn")
 
+    def test_max_reading_age_is_written_with_the_modes_for_the_stale_weather_run_and_dropped_again(self):
+        text = alpaca_ci.with_modes(DEVELOPMENT_SETTINGS, "OpenAndClose", "Warn", "00:00:07")
+        self.assertIn('"RoofSafety": { "InterlockMode": "Warn", "MaxReadingAge": "00:00:07" },', text)
+        self.assertEqual(alpaca_ci.read_modes(text), ("OpenAndClose", "Warn"))
+        json.loads("\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//")))
+        self.assertEqual(alpaca_ci.with_modes(text, "OpenAndClose", "Warn"), alpaca_ci.with_modes(DEVELOPMENT_SETTINGS, "OpenAndClose", "Warn"))
+        for bad in ("7", "00:00:07.5", '00:00:07" }, "X": { "Y": "Z'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                alpaca_ci.with_modes(DEVELOPMENT_SETTINGS, "OpenAndClose", "Warn", bad)
+
     def test_writing_the_modes_replaces_the_file_whole_and_leaves_nothing_beside_it(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "appsettings.Development.json")

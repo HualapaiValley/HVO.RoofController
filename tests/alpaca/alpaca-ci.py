@@ -20,6 +20,7 @@ Subcommands, each reading its secrets from files (never from arguments, never pr
                  credential, an unparked mount, a Close grant, a new reason after a grant, and unsafe weather; each
                  checks what the emulated roof and relays did.
 - open-runs:     the scripted Open runs: a safe Open, unsafe weather, a weather monitor not connected and one failing,
+                 stale weather,
                  an unparked mount, an Open grant, a grant dropped when the interlock turns Block at runtime, an Alpaca
                  Close reversing an Alpaca Open, and CloseOnly; each starts the emulated roof in a known state through the
                  emulator, checks it, and then checks the relays' register writes, the roof's position and the grants.
@@ -184,10 +185,13 @@ def exists(path):
     return os.path.isfile(path)
 
 
-def with_modes(text, allow_commands, interlock_mode):
-    """The settings file's text with this run's modes, right after its opening brace, in place of any earlier ones."""
+def with_modes(text, allow_commands, interlock_mode, max_reading_age=None):
+    """The settings file's text with this run's modes, right after its opening brace, in place of any earlier ones; with
+    `max_reading_age` (hh:mm:ss), RoofSafety:MaxReadingAge too, for the stale-weather run."""
     if allow_commands not in ALLOW_COMMANDS or interlock_mode not in INTERLOCK_MODES:
         raise ValueError(f"AllowCommands must be one of {ALLOW_COMMANDS} and InterlockMode one of {INTERLOCK_MODES}")
+    if max_reading_age is not None and not re.fullmatch(r"\d\d:\d\d:\d\d", max_reading_age):
+        raise ValueError("MaxReadingAge must be hh:mm:ss")
     start = text.find("\n" + MODES_BEGIN)
     if start >= 0:
         text = text[:start] + text[text.index(MODES_END, start) + len(MODES_END):]
@@ -196,7 +200,8 @@ def with_modes(text, allow_commands, interlock_mode):
     brace = text.index("{")
     block = "\n".join(["", MODES_BEGIN,
                        f'  "RoofController": {{ "Alpaca": {{ "AllowCommands": "{allow_commands}" }} }},',
-                       f'  "RoofSafety": {{ "InterlockMode": "{interlock_mode}" }},',
+                       f'  "RoofSafety": {{ "InterlockMode": "{interlock_mode}"'
+                       + (f', "MaxReadingAge": "{max_reading_age}"' if max_reading_age else '') + ' },',
                        MODES_END])
     return text[:brace + 1] + block + text[brace + 1:]
 
@@ -207,10 +212,10 @@ def read_modes(text):
     return (match.group(1), match.group(2)) if match else None
 
 
-def write_modes(path, allow_commands, interlock_mode):
+def write_modes(path, allow_commands, interlock_mode, max_reading_age=None):
     """Rewrites the run-only settings file in one step (a rename), so the controller never reads half of it."""
     with open(path, encoding="utf-8") as stream:
-        text = with_modes(stream.read(), allow_commands, interlock_mode)
+        text = with_modes(stream.read(), allow_commands, interlock_mode, max_reading_age)
     temporary = os.path.join(os.path.dirname(path), "." + os.path.basename(path) + ".alpaca-ci")
     with open(temporary, "w", encoding="utf-8") as stream:
         stream.write(text)
@@ -480,6 +485,7 @@ class OpenRuns(Runs):
         if current is None:
             fail(f"{args.settings_file} has no modes of this run's: only a settings file the harness prepared is changed")
         self.allow_commands, self.interlock_mode = current
+        self.max_reading_age = None
 
     def open(self, headers):
         return self.command("openshutter", headers)
@@ -500,10 +506,17 @@ class OpenRuns(Runs):
         """Rewrites the run-only settings file, and waits for the running controller to have reloaded it."""
         self.allow_commands = allow_commands or self.allow_commands
         self.interlock_mode = interlock_mode or self.interlock_mode
-        write_modes(self.args.settings_file, self.allow_commands, self.interlock_mode)
+        write_modes(self.args.settings_file, self.allow_commands, self.interlock_mode, self.max_reading_age)
         self.wait(lambda: self.status()["alpaca"]["mode"] == self.allow_commands
                   and self.status()["safety"]["interlockMode"] == self.interlock_mode,
                   f"the controller to reload its settings (AllowCommands {self.allow_commands}, InterlockMode {self.interlock_mode})", timeout=20)
+
+    def set_max_reading_age(self, value, seconds):
+        """RoofSafety:MaxReadingAge for the stale-weather run (None: the default, `seconds`), and waits for the reload."""
+        self.max_reading_age = value
+        write_modes(self.args.settings_file, self.allow_commands, self.interlock_mode, value)
+        self.wait(lambda: self.source(self.WEATHER)["maxReadingAgeSeconds"] == seconds,
+                  f"the controller to reload its settings (MaxReadingAge {seconds} s)", timeout=20)
 
     def begin(self, what, metres=None):
         """Resets the plant with the roof closed (or `metres` open) and its Alpaca devices parked, safe and answering, and
@@ -620,6 +633,27 @@ class OpenRuns(Runs):
             self.settled([], f"a weather monitor {name}")
         print("Run: a weather monitor not connected, and one failing, refuse the Open at once (its latest read failed), "
               "while the ordinary conditions still show the last safe reading; nothing moves")
+
+        # Stale weather (plan section 9): the last safe reading expires with no good read since (the monitor stops
+        # answering, and MaxReadingAge is shortened to 7 s for this run by a reload; it must be longer than the 1 s poll and
+        # the 5 s read timeout), so the ordinary conditions read it stale too. The Open is refused with the weather's
+        # reason and an alert, nothing moves, and nothing is queued for when fresh safe readings return.
+        self.begin("closed")
+        self.set_max_reading_age("00:00:07", 7)
+        self.emulator("/alpaca/safetymonitor", {"device": 0, "connected": False})
+        self.wait(lambda: self.source(self.WEATHER)["isStale"], "the weather's last safe reading to go stale", timeout=30)
+        source = self.source(self.WEATHER)
+        if source["state"] != "Unknown":
+            fail(f"Stale weather: the ordinary conditions read {source['state']}, not Unknown")
+        self.refused_with_alert({f"weather-unknown:{self.WEATHER}"}, f"Weather monitor '{self.WEATHER}'", "stale weather")
+        self.emulator("/alpaca/safetymonitor", {"device": 0, "connected": True})
+        self.wait(lambda: self.source(self.WEATHER)["state"] == "Safe" and not self.source(self.WEATHER)["isStale"],
+                  "the controller to read the weather safe and fresh again")
+        self.still("a refused Open is never queued", seconds=1.5)
+        self.settled([], "stale weather")
+        self.set_max_reading_age(None, 60)
+        print("Run: stale weather (the last safe reading older than MaxReadingAge) refuses the Open (0x40B) with an alert; "
+              "nothing moves, nor once fresh safe readings return")
 
         # An unparked blocking mount: refused with an alert; nothing moves or is queued once it parks.
         self.begin("closed")

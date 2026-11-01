@@ -911,7 +911,10 @@ on the runner's loopback, never against hardware, and never before its chain gua
 - **Then the scripted Open runs** (`alpaca-ci.py open-runs`), the same way: a safe Open reads Opening at once and
   reaches Open with the open relay alone; unsafe weather refuses it (`0x40B`, an alert with `weather-unsafe`) with
   nothing moving or queued; a weather monitor that stops answering refuses it at once ("its latest read failed") while
-  the ordinary conditions still show its last safe reading; an unparked mount refuses it; an Open grant made through the
+  the ordinary conditions still show its last safe reading; stale weather (that monitor kept silent until its last safe
+  reading is older than `MaxReadingAge`, shortened to 7 s for the run by a reload, so the ordinary conditions read it
+  stale too) refuses it with `weather-unknown`, nothing moving and nothing queued once fresh safe readings return; an
+  unparked mount refuses it; an Open grant made through the
   session API lets the refused Open go and is used up; a grant made in `Warn` is dropped when `InterlockMode` turns
   `Block` at runtime (the reload checked on the status), `openGrantUnavailable` says why, a new Open grant is refused
   (403 `BlockMode`) and the Open is refused with nothing moving; an Alpaca Open then an Alpaca Close reverses the roof
