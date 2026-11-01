@@ -333,6 +333,21 @@ public sealed class HatEmulatorServerTests
     }
 
     [TestMethod]
+    public async Task ALateHelloOnAnOlderConnection_NeverFencesTheNewerOne()
+    {
+        // PR #230 review, Opus F8: the fence keeps the newest connection, whichever Hello is answered last.
+        await using var rig = ServerRig.Start();
+        using var older = await RawLink.ConnectAsync(rig.Server);
+        using var newer = await RawLink.ConnectAsync(rig.Server);
+        await newer.HelloAsync(clientTag: 0x4321);
+        await older.HelloAsync(clientTag: 0x4321); // the older connection's Hello, delayed
+
+        (await newer.RequestAsync(Read(2, SmI010Board.RelayValueRegister, 1))).Kind.Should().Be(HatEmulatorFrameKind.Ok, "the newer connection stays live");
+        await older.SendAsync(Read(3, SmI010Board.RelayValueRegister, 1));
+        (await older.ReceiveOrClosedAsync()).Should().BeNull("the older connection is the fenced one");
+    }
+
+    [TestMethod]
     public async Task OtherClientsAndUntaggedConnections_AreNotFenced()
     {
         await using var rig = ServerRig.Start();

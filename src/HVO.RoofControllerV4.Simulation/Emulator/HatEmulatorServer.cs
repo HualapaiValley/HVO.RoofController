@@ -407,7 +407,9 @@ public sealed class HatEmulatorServer : IAsyncDisposable
             await _accessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                _latestHello[tag] = id;
+                // The newest connection wins, whichever Hello is answered last (a delayed Hello of an older connection
+                // never points the fence back at it).
+                _latestHello.AddOrUpdate(tag, id, (_, latest) => Math.Max(latest, id));
             }
             finally
             {
