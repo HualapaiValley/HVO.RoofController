@@ -40,10 +40,12 @@ public sealed class InstallerSecretTests
 
     private static void ShowsNoSecret(FakeMachine machine, InstallerRun run, params string[] secrets)
     {
-        var log = machine.Read(InstallPaths.SystemLog);
+        // Without the random folder names: a 4-digit PIN can turn up inside a GUID's hex.
+        var log = machine.WithoutRandomNames(machine.Read(InstallPaths.SystemLog));
+        var output = machine.WithoutRandomNames(run.ToString());
         foreach (var secret in secrets.Concat(machine.ApiKeyValues()))
         {
-            run.ToString().Should().NotContain(secret);
+            output.Should().NotContain(secret);
             log.Should().NotContain(secret);
         }
 

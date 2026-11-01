@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Installer;
 using HVO.RoofControllerV4.Installer.Answers;
@@ -967,6 +968,16 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     }
 
     /// <summary>Every file under the machine's root, as text: for proving a secret is in none of them.</summary>
+    /// <summary>
+    /// <paramref name="text"/> with the random names in it (this machine's root and the installer's work folders, GUIDs in
+    /// hex) replaced, so a check that a short secret is not shown (a 4-digit PIN) never matches one inside them.
+    /// </summary>
+    public string WithoutRandomNames(string text)
+        => InstallerWorkFolder().Replace(text.Replace(Root, "<root>", StringComparison.Ordinal), "hvo-roof-install-<random>");
+
+    [GeneratedRegex("hvo-roof-install-[0-9a-f]{32}")]
+    private static partial Regex InstallerWorkFolder();
+
     public string AllText()
     {
         var text = new StringBuilder();
