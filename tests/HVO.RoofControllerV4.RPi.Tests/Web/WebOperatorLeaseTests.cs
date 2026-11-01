@@ -204,8 +204,7 @@ public sealed class WebOperatorLeaseTests
     [TestMethod]
     public async Task AnOpenGrant_StepsThePersonAway_SayingAlpacaMayOpenTheRoofOnce_AndTheirNextClickTakesTheLeaseBack()
     {
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        using var harness = await WebRoofHarness.CreateAsync(settings: CloseOnly(), configureServices: open.AddTo, operatorLease: true);
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose(), operatorLease: true);
         var requests = harness.RecordLeaseRequests();
         harness.RaiseRefusedOpen("weather-unsafe:Sky");
         await using var context = Context(harness);
@@ -220,7 +219,7 @@ public sealed class WebOperatorLeaseTests
 
         await page.WaitForAssertionAsync(() =>
         {
-            open.OpenGrant(harness.Host.Services).Should().NotBeNull();
+            harness.Alpaca().Grants().Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
             harness.Alpaca().GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
             lease.SteppedAway.Should().BeTrue();
             const string stepped = "You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. "
@@ -232,32 +231,29 @@ public sealed class WebOperatorLeaseTests
         page.Click("[data-testid=refresh]");
 
         await ClientTestSupport.WaitUntilAsync(() => harness.Alpaca().GetStatus().OperatorLease.Held, "the next click to take the lease back");
-        open.OpenGrant(harness.Host.Services).Should().BeNull("taking the lease back drops the grant");
+        harness.Alpaca().Grants().Should().BeEmpty("taking the lease back drops the grant");
         await page.WaitForAssertionAsync(() => page.FindAll("[data-testid=alpaca-lease-notice], [data-testid=alpaca-grant]").Should().BeEmpty());
     }
 
     [TestMethod]
     public async Task WithAnOpenGrantAndACloseGrantInForce_TheSteppedAwayNotice_SaysAlpacaMayOpenAndCloseOnceEach()
     {
-        // Another person's Open grant is in force when this person grants a Close.
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        open.Show(new RoofOverrideGrant
-        {
-            Id = "open-1",
-            Kind = RoofAlpacaCommandKind.Open,
-            ReasonKeys = ["weather-unsafe:Sky"],
-            GrantedBy = "ada (signed in)",
-            Ui = "session",
-            GrantedUtc = WebRoofHarness.Start,
-            SecondsRemaining = 120
-        });
-        using var harness = await WebRoofHarness.CreateAsync(settings: CloseOnly(), configureServices: open.AddTo, operatorLease: true);
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose(), operatorLease: true);
         var requests = harness.RecordLeaseRequests();
         harness.RaiseRefusedClose("scope-not-clear:Main");
         await using var context = Context(harness);
         var page = context.Render<Dashboard>();
         await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-grant-ask]"));
         await harness.TakeTheLeaseAsync(requests);
+
+        // Another person's Open grant is in force when this person grants a Close (taking the lease drops every grant, so
+        // it comes after this page took it).
+        await RoofClientApiTests.AddUserAsync(harness.Host, "ada", RoofControllerApiContract.OperatorRole);
+        using (var other = ClientTestSupport.CreateClient(harness.Host))
+        {
+            other.Credential = await other.Auth.SignInAsync("ada", Security.TestSecrets.Password);
+            await other.Alpaca.GrantAsync(RoofAlpacaCommandKind.Open, ["weather-unsafe:Sky"]);
+        }
 
         page.Click("[data-testid=alpaca-grant-ask]");
         await page.WaitForAssertionAsync(() => page.Find("[data-testid=alpaca-question-confirm]"));

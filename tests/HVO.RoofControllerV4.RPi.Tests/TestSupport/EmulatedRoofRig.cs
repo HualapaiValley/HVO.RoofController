@@ -47,9 +47,6 @@ internal sealed record EmulatedRoofRigOptions
     /// <summary>Settings for the controller host, applied last.</summary>
     public IReadOnlyDictionary<string, string?>? Settings { get; init; }
 
-    /// <summary>More of the controller's services, after its own (a stand-in for a route, say); null adds none.</summary>
-    public Action<IServiceCollection>? ConfigureServices { get; init; }
-
     /// <summary>
     /// The address every request to the in-memory controller comes from (the TCP peer it judges trusted Alpaca servers
     /// by); null leaves the test server's (none, which is never trusted).
@@ -246,11 +243,7 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 
     private EmulatedRoofApp CreateApp(RecordingLoggerProvider logs)
     {
-        var app = new EmulatedRoofApp(_settings, Options.Environment, logs, Options.ConsoleLog)
-        {
-            RemoteAddress = Options.RemoteAddress,
-            ConfigureServices = Options.ConfigureServices
-        };
+        var app = new EmulatedRoofApp(_settings, Options.Environment, logs, Options.ConsoleLog) { RemoteAddress = Options.RemoteAddress };
         if (Options.Kestrel)
         {
             app.UseKestrel(0);
@@ -364,9 +357,6 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
     /// <summary>The address every in-memory request comes from; null leaves the test server's.</summary>
     public System.Net.IPAddress? RemoteAddress { get; init; }
 
-    /// <summary>More of the controller's services, after its own.</summary>
-    public Action<IServiceCollection>? ConfigureServices { get; init; }
-
     public override async ValueTask DisposeAsync()
     {
         // Found before the host is disposed; disposed once it has stopped serving. The server is taken when the host
@@ -420,11 +410,6 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
         if (RemoteAddress is { } remote)
         {
             builder.ConfigureServices(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(new RemoteAddressFilter(remote)));
-        }
-
-        if (ConfigureServices is { } configure)
-        {
-            builder.ConfigureServices(configure);
         }
 
         // Program reads the exporter endpoint while it adds services, before the configuration above applies.

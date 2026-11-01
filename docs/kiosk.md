@@ -604,9 +604,8 @@ Nothing here needs the Pi, the display or the roof.
   Allow Alpaca again, a grant of the refused command's kind that sends exactly the alert's reasons after the question
   and nothing on Cancel, Esc or the lock, an Open's grant disabled with the reason in Block mode, the person stepping
   away with it (heartbeats without input until a later touch takes control back and cancels it), Acknowledge and
-  Revoke, the bottom bar kept to one row, and everything at once in bounded pages at every size, the Mac app's too. The
-  controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`); its own tests check its
-  rules.
+  Revoke, the bottom bar kept to one row, and everything at once in bounded pages at every size, the Mac app's too.
+  Open grants run with Alpaca Open and Close on, and Block mode with the safety interlock set to `Block`.
 - **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.

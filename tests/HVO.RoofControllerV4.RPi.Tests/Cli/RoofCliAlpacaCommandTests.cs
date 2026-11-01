@@ -286,13 +286,12 @@ public sealed class RoofCliAlpacaCommandTests
         again.Json.GetProperty("error").GetProperty("detail").GetString().Should().Be("No Close grant is in force.");
     }
 
-    // ---- Open grants (#220, phase 4; the controller's are a stand-in's) -----------------------------------------------
+    // ---- Open grants (#220, phase 4) ----------------------------------------------------------------------------------
 
     [TestMethod]
-    public async Task Grant_ByARefusedOpensAlert_AsksWithWhatItLifts_AndSendsAnOpenGrantWithExactlyItsReasonKeys()
+    public async Task Grant_ByARefusedOpensAlert_AsksWithWhatItLifts_AndGrantsAnOpenWithExactlyItsReasonKeys()
     {
-        var open = new AlpacaOpenGrantStandIn();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky", "scope-unknown:Main", RoofAlpacaContract.NoRequiredWeatherKey);
         using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
@@ -308,10 +307,10 @@ public sealed class RoofCliAlpacaCommandTests
 
         result.Error.Should().Contain("Once open, the roof stays open if the weather turns");
         rig.Prompts.Should().ContainSingle().Which.Should().Be(($"{RoofAlpacaText.GrantOpenLabel}? [y/N] ", false));
-        var sent = open.Requests.Should().ContainSingle().Subject;
-        sent.Kind.Should().Be(RoofAlpacaCommandKind.Open);
-        sent.ReasonKeys.Should().Equal(alert.ReasonKeys);
-        var grant = open.OpenGrant(host.Services)!;
+        var grant = AlpacaCliSupport.Commands(host).Grants().Should().ContainSingle().Subject;
+        grant.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        grant.ReasonKeys.Should().Equal(alert.ReasonKeys);
+        grant.GrantedBy.Should().Contain("ada");
         result.Out.Should().Be($"Granted. {RoofAlpacaText.DescribeGrant(grant with { SecondsRemaining = 300 })}" + Environment.NewLine)
             .And.StartWith("Granted. One Open allowed by ada");
     }
@@ -321,8 +320,7 @@ public sealed class RoofCliAlpacaCommandTests
     [DataRow(true, DisplayName = "--json")]
     public async Task Grant_ForAnOpen_IsAPersonsDecisionAtATerminal_WithoutOne_ItIsRefused_AndNothingIsSent(bool json)
     {
-        var open = new AlpacaOpenGrantStandIn();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky");
         var requests = new ConcurrentQueue<string>();
         using var rig = new CliRig(host) { Interactive = json, WrapHandler = inner => new RequestLog(inner, requests) };
@@ -337,7 +335,7 @@ public sealed class RoofCliAlpacaCommandTests
         (json ? result.Json.GetProperty("error").GetProperty("message").GetString() : result.Error).Should().Contain(RoofCliAlpaca.GrantNeedsATerminal);
         requests.Should().BeEmpty("nothing is read or sent");
         rig.Prompts.Should().BeEmpty();
-        open.Requests.Should().BeEmpty();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
@@ -346,8 +344,7 @@ public sealed class RoofCliAlpacaCommandTests
     [DataRow("--reason", "weather-unsafe:Sky")]
     public async Task Grant_ForAnOpen_HasNoScriptingOptions(params string[] args)
     {
-        var open = new AlpacaOpenGrantStandIn();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky");
         using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
@@ -355,15 +352,13 @@ public sealed class RoofCliAlpacaCommandTests
         var result = await rig.RunAsync(["alpaca", "grant", "--alert", alert.Id, .. args]);
 
         result.Code.Should().Be(RoofExitCode.Usage, result.ToString());
-        open.Requests.Should().BeEmpty();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task Grant_ForAnOpen_InBlockMode_IsRefusedWithTheReason_BeforeAnythingIsAskedOrSent()
     {
-        var open = new AlpacaOpenGrantStandIn();
-        open.Block();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose(block: true));
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky");
         var requests = new ConcurrentQueue<string>();
         using var rig = new CliRig(host) { Interactive = true, WrapHandler = inner => new RequestLog(inner, requests) };
@@ -373,38 +368,41 @@ public sealed class RoofCliAlpacaCommandTests
         var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
 
         result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
-        result.Error.Should().Contain($"{RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, AlpacaOpenGrantStandIn.BlockReason)} Nothing was sent.");
+        result.Error.Should().Contain($"{RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, RoofAlpacaCommands.OpenGrantsBlocked)} Nothing was sent.");
         result.Error.Should().NotContain("Allow one Alpaca Open despite", "nothing is asked");
         rig.Prompts.Should().BeEmpty();
         requests.Should().NotContain(request => request.StartsWith("POST", StringComparison.Ordinal));
-        open.Requests.Should().BeEmpty();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task Grant_ForAnOpen_ThatTheControllerRefuses_SaysItsReason()
     {
-        // The interlock turned to Block after the status was read: the controller refuses the grant (403, BlockMode).
-        var open = new AlpacaOpenGrantStandIn();
-        open.RefuseOnly();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        // The interlock turns to Block after the status was read, just before the grant: the controller refuses it (403,
+        // BlockMode).
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky");
-        using var rig = new CliRig(host) { Interactive = true };
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host)
+        {
+            Interactive = true,
+            WrapHandler = inner => new RequestLog(new AlpacaOpenUiSupport.BeforeSending(inner, request => AlpacaOpenUiSupport.BlockBeforeTheGrant(host.Services, request)), requests)
+        };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
         rig.Input.Enqueue("y");
 
         var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
 
         result.Code.Should().Be(RoofExitCode.Forbidden, result.ToString());
-        result.Error.Should().Contain(AlpacaOpenGrantStandIn.BlockReason);
-        open.Requests.Should().ContainSingle();
-        open.OpenGrant(host.Services).Should().BeNull();
+        result.Error.Should().Contain(RoofAlpacaCommands.OpenGrantsBlocked);
+        requests.Should().ContainSingle(request => request.StartsWith("POST /api/v4.0/alpaca/grants", StringComparison.Ordinal));
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task Grant_FromAnOpensAlertAGrantCannotLift_IsRefused()
     {
-        var open = new AlpacaOpenGrantStandIn();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky", "stop-hold");
         using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
@@ -417,35 +415,29 @@ public sealed class RoofCliAlpacaCommandTests
             $"Alert {alert.Id} cannot be granted from: only a refused Close or Open that is not acknowledged, whose every reason a grant "
             + "can lift, can be (for a Close, a telescope not clear of the roof or not known; for an Open, also a required weather "
             + "monitor's unsafe or unknown weather, no required weather source, or no telescope set to block the roof). Nothing was sent.");
-        open.Requests.Should().BeEmpty();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task Revoke_KindOpen_RevokesTheOpenGrant()
     {
-        var open = new AlpacaOpenGrantStandIn();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         using var rig = new CliRig(host);
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
-        using (var person = ClientTestSupport.CreateClient(host))
-        {
-            person.Credential = await person.Auth.SignInAsync("ada", TestSecrets.Password);
-            await person.Alpaca.GrantAsync(RoofAlpacaCommandKind.Open, ["weather-unsafe:Sky"]);
-        }
-
-        open.OpenGrant(host.Services).Should().NotBeNull();
+        AlpacaCliSupport.Commands(host).Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["weather-unsafe:Sky"]))
+            .Grant.Should().NotBeNull();
 
         var result = await rig.RunAsync("alpaca", "revoke", "--kind", "open");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Out.Should().Be("Revoked the Open grant." + Environment.NewLine);
-        open.OpenGrant(host.Services).Should().BeNull();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task Alerts_SayAGrantCanLiftARefusedOpensWeather()
     {
-        using var host = AlpacaCliSupport.CreateHost();
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var refused = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unknown:Sky");
         using var rig = new CliRig(host);
         rig.UseApiKey(TestApiKeys.Viewer);
@@ -457,6 +449,7 @@ public sealed class RoofCliAlpacaCommandTests
         lines[1].Should().MatchRegex($@"^{refused.Id} +NEW +yes +{System.Text.RegularExpressions.Regex.Escape(RoofAlpacaText.DescribeAlert(refused))}$");
         lines[2].Should().Be(RoofCliAlpaca.GrantHint)
             .And.Be("To allow one Close or Open despite an alert's reasons: 'hvo-roof alpaca grant --alert ID' (GRANT yes).");
+        lines.Should().HaveCount(3);
     }
 
     [TestMethod]
@@ -588,10 +581,10 @@ internal static class AlpacaCliSupport
     public const string DocumentationAddress = "192.0.2.50";
 
     /// <summary>
-    /// The controller in process with Alpaca Close on (no telescope blocks the roof), with <paramref name="openGrants"/>
-    /// standing in for its Open grants when given (#220, phase 4).
+    /// The controller in process with Alpaca Close on (no telescope blocks the roof), or as <paramref name="settings"/> set
+    /// it (Alpaca Open and Close, say: <see cref="AlpacaOpenUiSupport.OpenAndClose"/>).
     /// </summary>
-    public static RoofApiTestHost CreateHost(string mode = "CloseOnly", IDictionary<string, string?>? settings = null, AlpacaOpenGrantStandIn? openGrants = null)
+    public static RoofApiTestHost CreateHost(string mode = "CloseOnly", IDictionary<string, string?>? settings = null)
     {
         var all = new Dictionary<string, string?> { ["RoofController:Alpaca:AllowCommands"] = mode };
         foreach (var (key, value) in settings ?? new Dictionary<string, string?>())
@@ -599,7 +592,7 @@ internal static class AlpacaCliSupport
             all[key] = value;
         }
 
-        var host = RoofClientApiTests.CreateHost(configureServices: openGrants is null ? null : openGrants.AddTo, settings: all);
+        var host = RoofClientApiTests.CreateHost(settings: all);
         _ = host.Server;
         return host;
     }

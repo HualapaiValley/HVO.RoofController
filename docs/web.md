@@ -456,9 +456,9 @@ Nothing here needs the Pi, the HAT or the roof.
   after the question, with exactly the alert's reasons, and of the refused command's kind), alerts, the lease taken by
   the first page and released by the last, input from the person's actions only, an idle lease not taken again without
   input, and a grant that steps the person away until their next click (`WebAlpacaBrowserTests` checks that last in
-  Chromium too, for a Close and an Open grant, and an Open grant disabled with its reason in Block mode). The controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`): the
-  page's tests check what the page does with them (the Open question, the grant sent, the control disabled with the
-  reason in Block mode, a refusal said), and the controller's own tests check its rules.
+  Chromium too, for a Close and an Open grant, and an Open grant disabled with its reason in Block mode). Open grants
+  run with Alpaca Open and Close on, and Block mode with the safety interlock set to `Block` (or turned to it at run
+  time, for a refusal the page's status did not foresee).
 - **Browser tests** (`TestCategory=Browser`, `tests/HVO.RoofControllerV4.RPi.Tests/Browser`) run the web UI in
   Chromium against the whole controller and the emulated roof, on phones over HTTPS, and on tablets (upright and
   sideways) and a desktop window over HTTP: sign-in, the session cookie, a session that expires while its page is open,

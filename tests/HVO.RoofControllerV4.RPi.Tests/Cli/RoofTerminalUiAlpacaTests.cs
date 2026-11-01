@@ -4,6 +4,7 @@ using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -473,13 +474,12 @@ public sealed class RoofTerminalUiAlpacaTests
             .Should().Be("You stepped away from the operator lease, but grace holds it: Alpaca commands stay refused. Press any key to take control back; that cancels the grants.");
     }
 
-    // ---- Open grants (#220, phase 4; the controller's are a stand-in's) -----------------------------------------------
+    // ---- Open grants (#220, phase 4) ----------------------------------------------------------------------------------
 
     [TestMethod]
-    public void AllowThisOpenOnce_AsksTheOpenQuestion_SendsExactlyTheAlertsReasonKeys_AndStepsThePersonAwayUntilTheirNextKey()
+    public void AllowThisOpenOnce_AsksTheOpenQuestion_GrantsExactlyTheAlertsReasonKeys_AndStepsThePersonAwayUntilTheirNextKey()
     {
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky", "scope-unknown:Main");
         using var rig = new CliRig(host);
         SignedIn(host, rig, "ada");
@@ -499,15 +499,15 @@ public sealed class RoofTerminalUiAlpacaTests
         question.Prompt.Title.Should().Be("Allow this Open once?");
         question.Prompt.Message.Should().Be(string.Join('\n', [.. RoofAlpacaText.DescribeGrantQuestion(alert, 5), RoofCliAlpaca.StepAwayQuestion]));
         question.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.GrantOpenLabel, "Cancel");
-        open.Requests.Should().BeEmpty("nothing is sent before the person confirms");
+        commands.Grants().Should().BeEmpty("nothing is sent before the person confirms");
 
         question.Buttons[0].HasFocus.Should().BeTrue();
         tui.Press(Key.Enter);
         tui.WaitIdle("the grant", () => tui.Ui.Message.StartsWith("Granted.", StringComparison.Ordinal));
 
-        var sent = open.Requests.Should().ContainSingle().Subject;
-        sent.Kind.Should().Be(RoofAlpacaCommandKind.Open);
-        sent.ReasonKeys.Should().Equal(alert.ReasonKeys);
+        var grant = commands.Grants().Should().ContainSingle().Subject;
+        grant.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        grant.ReasonKeys.Should().Equal(alert.ReasonKeys);
         tui.Ui.Message.Should().StartWith("Granted. One Open allowed by ada");
         commands.GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away from the lease with the grant");
         tui.WaitIdle("the banner", () => tui.Ui.Banner.Contains(
@@ -517,52 +517,57 @@ public sealed class RoofTerminalUiAlpacaTests
 
         tui.Press(Key.F1);
         tui.WaitIdle("the lease taken back", () => commands.GetStatus().OperatorLease.Held);
-        open.OpenGrant(host.Services).Should().BeNull("taking the lease back drops the grant");
+        commands.Grants().Should().BeEmpty("taking the lease back drops the grant");
         tui.WaitIdle("the banner cleared", () => !tui.Ui.Banner.Contains("stepped away", StringComparison.Ordinal));
     }
 
     [TestMethod]
     public void InBlockMode_AnOpensAlert_OffersNoGrant_AndSaysWhyInItsPlace_WhileACloseIsUnaffected()
     {
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        open.Block();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose(block: true));
         AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unknown:Sky");
-        using var rig = new CliRig(host);
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host) { WrapHandler = inner => new RequestLog(inner, requests) };
         SignedIn(host, rig, "ada");
         using var tui = Started(rig);
         var page = ShowAlpaca(tui);
+        var unavailable = RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, RoofAlpacaCommands.OpenGrantsBlocked);
 
         Enter(tui, page, RoofUiAlpacaItemKind.Alert);
 
         var actions = tui.Ui.Panel!;
         actions.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.AcknowledgeLabel, "Cancel");
-        actions.Prompt.Message.Should().EndWith("\n" + RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, AlpacaOpenGrantStandIn.BlockReason))
-            .And.EndWith($"Allow this Open once is not available: {AlpacaOpenGrantStandIn.BlockReason}");
+        actions.Prompt.Message.Should().EndWith("\n" + unavailable)
+            .And.EndWith($"Allow this Open once is not available: {RoofAlpacaCommands.OpenGrantsBlocked}");
         tui.Screen.Should().Contain("Allow this Open once is not available:");
         tui.Press(Key.Esc);
 
         // A question asked from a stale line says why, and sends nothing.
         page.Alpaca.AskGrant(page.Alpaca.Items.Single(item => item.Kind == RoofUiAlpacaItemKind.Alert).Alert!);
         tui.Ui.Panel.Should().BeNull();
-        tui.Ui.Message.Should().Be(RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, AlpacaOpenGrantStandIn.BlockReason));
+        tui.Ui.Message.Should().Be(unavailable);
 
         AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
         tui.WaitIdle("the Close alert", () => page.Alpaca.Items.Count(item => item.Kind == RoofUiAlpacaItemKind.Alert) == 2);
         Enter(tui, page, RoofUiAlpacaItemKind.Alert);
         tui.Ui.Panel!.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.AcknowledgeLabel, RoofAlpacaText.GrantCloseLabel, "Cancel");
         Settle(tui);
-        open.Requests.Should().BeEmpty();
+        requests.Should().NotContain(request => request.StartsWith("POST /api/v4.0/alpaca/grants", StringComparison.Ordinal));
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public void AnOpenGrantTheControllerRefuses_IsSaidInItsWords()
     {
-        var open = new AlpacaOpenGrantStandIn();
-        open.RefuseOnly();
-        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        // The interlock turns to Block after the interface's status, just before the grant: the controller refuses it (403,
+        // BlockMode).
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
         AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky");
-        using var rig = new CliRig(host);
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host)
+        {
+            WrapHandler = inner => new RequestLog(new AlpacaOpenUiSupport.BeforeSending(inner, request => AlpacaOpenUiSupport.BlockBeforeTheGrant(host.Services, request)), requests)
+        };
         SignedIn(host, rig, "ada");
         using var tui = Started(rig);
         var page = ShowAlpaca(tui);
@@ -571,8 +576,9 @@ public sealed class RoofTerminalUiAlpacaTests
 
         tui.Ui.Panel!.Press(RoofAlpacaText.GrantOpenLabel);
 
-        tui.WaitIdle("the refusal", () => tui.Ui.Message.Contains(AlpacaOpenGrantStandIn.BlockReason, StringComparison.Ordinal));
-        open.Requests.Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        tui.WaitIdle("the refusal", () => tui.Ui.Message.Contains(RoofAlpacaCommands.OpenGrantsBlocked, StringComparison.Ordinal));
+        requests.Should().ContainSingle(request => request.StartsWith("POST /api/v4.0/alpaca/grants", StringComparison.Ordinal));
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
         tui.Ui.SteppedAway.Should().BeNull("nothing was granted");
     }
 

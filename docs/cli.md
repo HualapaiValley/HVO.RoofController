@@ -683,9 +683,8 @@ Nothing here needs the Pi, the HAT or the roof.
     grant of the refused command's kind with exactly its alert's reasons, a refused Open's grant not offered in Block
     mode, F9 withdrawing a prompt, an API key refused, and the operator lease held only for a person who may operate,
     renewed with input only after a key or a click, released on closing, and stepped away from with a grant: while it
-    lasts, heartbeats go on without taking it back, and the next key takes it back and cancels the grant. The
-    controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`); its own tests check its
-    rules.
+    lasts, heartbeats go on without taking it back, and the next key takes it back and cancels the grant. Open grants
+    run with Alpaca Open and Close on, and Block mode with the safety interlock set to `Block`.
 - **Scenarios** (`RoofCliScenarios`, `TestCategory=Scenario`) run `hvo-roof open`, `close` and `stop`, and the terminal
   interface, against the emulated roof. The operator lease is 5 s, shorter than the travel, so a motion reaches its
   limit only if the client renews the lease.

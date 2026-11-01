@@ -20,7 +20,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
 /// process: the Alpaca nav item and page (the commands setting, the Stop hold with Allow Alpaca again, the operator lease,
 /// grants with Revoke, alerts newest first with Acknowledge and Allow this Close once, the warnings, also in the summary
 /// banner); the grant sent with exactly the alert's reasons after the question, and nothing on Cancel; Allow this Open once
-/// (#220, phase 4, the controller's Open grants a stand-in's), disabled with the reason in Block mode; and the operator
+/// (#220, phase 4, with Alpaca Open and Close on), disabled with the reason in Block mode; and the operator
 /// lease the screens hold while an operator is signed in, whose heartbeats say "input" only after the person touched the
 /// screen, which stops when it lapses for want of input until the next touch, and which is given up when they lock.
 /// </summary>
@@ -422,8 +422,7 @@ public sealed class KioskAlpacaTests
     [DataRow(800, 480, 5.2)]
     public async Task AllowThisOpenOnce_AsksTheOpenQuestion_SendsAnOpenGrantWithExactlyTheAlertsReasons_AndStepsThePersonAway(int width, int height, double density)
     {
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly, services: open.AddTo);
+        await using var harness = await KioskHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose());
         await harness.StartLiveAsync();
         await harness.UnlockAsync(KioskHarness.Operator);
         harness.Clock.Advance(TimeSpan.Zero);
@@ -446,14 +445,15 @@ public sealed class KioskAlpacaTests
         asked["alpaca-question-title"].Should().Be(RoofAlpacaText.GrantQuestionTitleFor(RoofAlpacaCommandKind.Open));
         Enumerable.Range(0, 4).Select(i => asked[$"alpaca-question-{i}"]).Should().Equal(RoofAlpacaText.DescribeGrantQuestion(alert, 5));
         await OnUiAsync(() => screen.Text("alpaca-answer-0").Should().Be(RoofAlpacaText.GrantOpenLabel));
-        open.Requests.Should().BeEmpty("nothing is sent before the person answers");
+        harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaGrants).Should().Be(0, "nothing is sent before the person answers");
 
         await screen.TouchAsync(screen.Find("alpaca-answer-0")!);
-        await UntilAsync(() => open.Requests.Count == 1 && screen.Shell.Alpaca.Busy is null, "the grant");
+        await UntilAsync(() => harness.Answered(HttpMethod.Post, RoofApiRoutes.AlpacaGrants) == 1 && screen.Shell.Alpaca.Busy is null, "the grant");
 
-        var sent = open.Requests.Single();
-        sent.Kind.Should().Be(RoofAlpacaCommandKind.Open);
-        sent.ReasonKeys.Should().Equal(alert.ReasonKeys, "exactly the reasons the person was shown");
+        var grant = Alpaca(harness).Grants().Should().ContainSingle().Subject;
+        grant.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        grant.ReasonKeys.Should().Equal(alert.ReasonKeys, "exactly the reasons the person was shown");
+        grant.Ui.Should().Be("kiosk", "granted with the person's PIN session");
         await OnUiAsync(() => screen.Shell.Alpaca.Message!.Text.Should().StartWith("Granted. One Open allowed by"));
         Alpaca(harness).GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
         await harness.WaitForAsync(view => view.AlpacaSteppedAway is not null && view.Status?.Alpaca?.Grants.Count == 1, "the step away");
@@ -466,9 +466,7 @@ public sealed class KioskAlpacaTests
     [DataRow(800, 480, 5.2)]
     public async Task InBlockMode_AnOpensGrant_IsShownDisabledWithTheReason_AndSendsNothing_WhileACloseIsUnaffected(int width, int height, double density)
     {
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        open.Block();
-        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly, services: open.AddTo);
+        await using var harness = await KioskHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose(block: true));
         await harness.StartLiveAsync();
         await harness.UnlockAsync(KioskHarness.Operator);
         Refuse(harness, "scope-not-clear:Main");
@@ -483,7 +481,7 @@ public sealed class KioskAlpacaTests
 
         shown["alpaca-alert-0-text"].Should().Be(RoofAlpacaText.DescribeAlert(refusedOpen), "newest first");
         shown["alpaca-grant-open-0"].Should().Be(RoofAlpacaText.GrantOpenLabel);
-        shown["alpaca-alert-0-unavailable"].Should().Be(AlpacaOpenGrantStandIn.BlockReason);
+        shown["alpaca-alert-0-unavailable"].Should().Be(RoofAlpacaCommands.OpenGrantsBlocked);
         shown["alpaca-grant-close-1"].Should().Be(RoofAlpacaText.GrantCloseLabel);
         shown.Keys.Should().NotContain("alpaca-alert-1-unavailable", "Block never gates a Close grant");
         var grantClose = await FindAsync(screen, "alpaca-grant-close-1");
@@ -498,22 +496,23 @@ public sealed class KioskAlpacaTests
             screen.Shell.Alpaca.Question.Should().BeNull();
             screen.Shell.Alpaca.AskGrant(refusedOpen);
             screen.Shell.Alpaca.Question.Should().BeNull();
-            screen.Shell.Alpaca.Message!.Text.Should().Be($"Not sent: {AlpacaOpenGrantStandIn.BlockReason}");
+            screen.Shell.Alpaca.Message!.Text.Should().Be($"Not sent: {RoofAlpacaCommands.OpenGrantsBlocked}");
         });
-        open.Requests.Should().BeEmpty();
         harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaGrants).Should().Be(0);
+        Alpaca(harness).Grants().Should().BeEmpty();
     }
 
     [TestMethod]
     public async Task AnOpenGrantTheControllerRefuses_IsSaidInItsWords()
     {
-        var open = new AlpacaOpenGrantStandIn();
-        open.RefuseOnly();
-        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly, services: open.AddTo);
+        // The interlock turns to Block after the kiosk's status, just before the grant: the controller refuses it (403,
+        // BlockMode).
+        await using var harness = await KioskHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose());
         await harness.StartLiveAsync();
         await harness.UnlockAsync(KioskHarness.Operator);
         RefuseOpen(harness, "weather-unsafe:Sky");
         await harness.WaitForAsync(view => view.Status?.Alpaca?.Alerts.Count == 1, "the alert");
+        harness.AlterRequest = request => AlpacaOpenUiSupport.BlockBeforeTheGrant(harness.Host.Services, request);
         await using var screen = await KioskScreen.ShowAsync(harness, 1280, 720, 8.2);
         await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Alpaca));
         await screen.TouchAsync(await FindAsync(screen, "alpaca-grant-open-0"));
@@ -521,12 +520,13 @@ public sealed class KioskAlpacaTests
 
         await screen.TouchAsync(screen.Find("alpaca-answer-0")!);
 
-        await UntilAsync(() => open.Requests.Count == 1 && screen.Shell.Alpaca.Busy is null, "the refusal");
+        await UntilAsync(() => harness.Answered(HttpMethod.Post, RoofApiRoutes.AlpacaGrants) == 1 && screen.Shell.Alpaca.Busy is null, "the refusal");
         await OnUiAsync(() =>
         {
             screen.Shell.Alpaca.Message!.Level.Should().Be(KioskNoticeLevel.Danger);
-            screen.Shell.Alpaca.Message.Text.Should().Contain(AlpacaOpenGrantStandIn.BlockReason);
+            screen.Shell.Alpaca.Message.Text.Should().Contain(RoofAlpacaCommands.OpenGrantsBlocked);
         });
+        Alpaca(harness).Grants().Should().BeEmpty();
         harness.Console.View.AlpacaSteppedAway.Should().BeNull("nothing was granted");
     }
 

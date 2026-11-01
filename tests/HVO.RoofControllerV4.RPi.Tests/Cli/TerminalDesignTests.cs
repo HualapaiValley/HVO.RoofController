@@ -618,19 +618,13 @@ public sealed class TerminalDesignTests
     [DataRow("nocolor,unicode", 120, 32)]
     public void AlpacaOpenGrant_AndItsBlockState_KeepEveryActionAndStopVisible(string mode, int width, int height)
     {
-        // #220, phase 4: a refused Open's alert, its grant question, and the alert in Block mode, where the grant is not
-        // offered and why is said in its place. The controller's Open grants are a stand-in's. The 120x32 truecolour renders
-        // are the docs' captures: a documentation address for the client, fixture names.
+        // #220, phase 4: Alpaca Open and Close on, a refused Open's alert, its grant question, and the alert in Block mode,
+        // where the grant is not offered and why is said in its place. The 120x32 truecolour renders are the docs'
+        // captures: a documentation address for the client, fixture names.
         var tag = $"{mode.Replace(',', '-')}-{width}x{height}";
         foreach (var block in new[] { false, true })
         {
-            var open = new HVO.RoofControllerV4.RPi.Tests.Alpaca.AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-            if (block)
-            {
-                open.Block();
-            }
-
-            using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+            using var host = AlpacaCliSupport.CreateHost(settings: HVO.RoofControllerV4.RPi.Tests.Alpaca.AlpacaOpenUiSupport.OpenAndClose(block));
             AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky", RoofAlpacaContract.NoBlockingScopesKey);
             using var rig = new CliRig(host);
             RoofTerminalUiAlpacaTests.SignedIn(host, rig, "ada");
@@ -658,7 +652,7 @@ public sealed class TerminalDesignTests
             tui.Press(Key.F9);
             tui.WaitIdle("Stop over the grant question", () => tui.Ui.StopResult != RoofStopText.Sending);
             tui.Ui.Panel.Should().BeNull();
-            open.Requests.Should().BeEmpty();
+            AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
         }
 
         static void CheckPrompt(TuiDriver tui, RoofUiPanel panel, int width, params string[] buttons)

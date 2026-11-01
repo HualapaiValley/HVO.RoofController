@@ -80,6 +80,9 @@ internal sealed class WebRoofHarness : IDisposable
     /// </summary>
     public Func<HttpRequestMessage, Task>? HoldAnswer { get; set; }
 
+    /// <summary>Called with each request before the controller reads it (a setting changed just before, say).</summary>
+    public Action<HttpRequestMessage>? BeforeRequest { get; set; }
+
     public ILoggerFactory LoggerFactory { get; }
 
     public WebSessionStore Store { get; }
@@ -193,6 +196,7 @@ internal sealed class WebRoofHarness : IDisposable
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            harness.BeforeRequest?.Invoke(request);
             var response = await base.SendAsync(request, cancellationToken);
             if (harness.HoldAnswer is { } hold)
             {

@@ -230,15 +230,16 @@ public sealed class WebScreenshotTests
     [TestMethod]
     public async Task TheAlpacaPanel_WithARefusedOpensGrantQuestion_AndTheOpenGrantDisabledInBlockMode_IsCaptured()
     {
-        // #220, phase 4: Alpaca Open and Close on (the controller's Open grants and Block mode are a stand-in's), a refused
-        // Open's alert from a client at a documentation address and its grant question; then, in Block mode, its grant
-        // disabled with the reason under it, beside a refused Close's, which Block never gates.
-        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
-        var settings = new Dictionary<string, string?>(DocumentedHost)
+        // #220, phase 4: Alpaca Open and Close on, a refused Open's alert from a client at a documentation address and its
+        // grant question; then, once the safety interlock turns to Block, its grant disabled with the controller's reason
+        // under it, beside a refused Close's, which Block never gates.
+        var settings = new Dictionary<string, string?>(DocumentedHost);
+        foreach (var (key, value) in AlpacaOpenUiSupport.OpenAndClose())
         {
-            [$"{RoofAlpacaCommandOptions.SectionName}:AllowCommands"] = nameof(RoofAlpacaCommandMode.CloseOnly)
-        };
-        var options = Scenario.Production(travelMeters: 2.0, settings: settings) with { Camera = true, ConfigureServices = open.AddTo };
+            settings[key] = value;
+        }
+
+        var options = Scenario.Production(travelMeters: 2.0, settings: settings) with { Camera = true };
         var browser = _browser = await WebBrowser.StartAsync(TestContext, options, WebDevices.Desktop);
         var page = browser.Page;
         var alpaca = browser.Rig.App.Services.GetRequiredService<RoofAlpacaCommands>();
@@ -258,16 +259,16 @@ public sealed class WebScreenshotTests
         await new Screens(this, browser, "desktop").TakeAsync("21-alpaca-open", wholePage: false, startAtTop: false);
         await page.GetByTestId("alpaca-question-cancel").ClickAsync();
 
-        open.Block();
+        browser.Rig.App.Services.Reconfigure(RoofApiTestHost.SafetyInterlockModeKey, nameof(RoofSafetyInterlockMode.Block));
         alpaca.RaiseAlert("Refused", RoofAlpacaCommandKind.Close, "An Alpaca Close was refused: Telescope 'Main' is not parked.",
             [RoofAlpacaContract.ReasonKey(RoofAlpacaContract.ScopeNotClearKind, "Main")], new RoofAlpacaClient(7, 4, "192.0.2.50", "header"));
         var openAlert = page.Locator($"[data-testid=alpaca-alert][data-id='{refusedOpen.Id}']");
         await Expect(openAlert.GetByTestId("alpaca-grant-ask")).ToBeDisabledAsync(new() { Timeout = 15_000 });
-        await Expect(openAlert.GetByTestId("alpaca-grant-unavailable")).ToHaveTextAsync(AlpacaOpenGrantStandIn.BlockReason);
+        await Expect(openAlert.GetByTestId("alpaca-grant-unavailable")).ToHaveTextAsync(RoofAlpacaCommands.OpenGrantsBlocked);
         await Expect(page.Locator("[data-testid=alpaca-grant-ask][data-kind=Close]")).ToBeEnabledAsync();
         await page.GetByTestId("alpaca").ScrollIntoViewIfNeededAsync();
         await new Screens(this, browser, "desktop").TakeAsync("22-alpaca-open-block", wholePage: false, startAtTop: false);
-        open.Requests.Should().BeEmpty("nothing is granted before the person confirms");
+        alpaca.Grants().Should().BeEmpty("nothing is granted before the person confirms");
     }
 
     [TestMethod]
