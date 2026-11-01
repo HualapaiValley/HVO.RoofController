@@ -16,9 +16,11 @@ namespace HVO.RoofControllerV4.Screens;
 /// (<see cref="KioskView.OffersAlpaca"/>): which commands are on, the controller's Alpaca warnings (the person's idle
 /// warning is the summary under the header, on every page), the human Stop hold with <see cref="RoofAlpacaText.ClearHoldLabel"/>, the operator lease, the override grants
 /// with <see cref="RoofAlpacaText.RevokeLabel"/>, and the alerts, newest first, with
-/// <see cref="RoofAlpacaText.AcknowledgeLabel"/> and, on a refused Close whose reasons a grant can lift,
-/// <see cref="RoofAlpacaText.GrantCloseLabel"/>, which asks first. Anyone may read it; the actions need a person signed in
-/// (the hold, grants and revoking the Operator role). The words are every client's (<see cref="RoofAlpacaText"/>).
+/// <see cref="RoofAlpacaText.AcknowledgeLabel"/> and, on a refused Close (or Open) whose reasons a grant can lift,
+/// <see cref="RoofAlpacaText.GrantCloseLabel"/> (or <see cref="RoofAlpacaText.GrantOpenLabel"/>), which asks first; it is
+/// disabled, with the controller's reason under the alert, while no grant of its kind can be made (an Open's in Block
+/// mode). Anyone may read it; the actions need a person signed in (the hold, grants and revoking the Operator role). The
+/// words are every client's (<see cref="RoofAlpacaText"/>).
 /// </summary>
 /// <remarks>
 /// The document is bounded pages (<see cref="KioskPager"/>), paged only when it overflows. It is built again only when
@@ -255,10 +257,19 @@ public sealed class KioskAlpacaPage : UserControl
             var alert = alerts[i];
             var id = alert.Id;
             var actions = new List<RowAction>();
+            string? unavailable = null;
             if (operating && RoofAlpacaText.CanGrantFrom(alert))
             {
-                // As the alert is when touched: the client the newest refusal named.
-                actions.Add(new RowAction($"alpaca-grant-close-{i}", RoofAlpacaText.GrantCloseLabel, () => _panel.AskGrant(Current(id) ?? alert), Primary: true));
+                // As the alert is when touched: the client the newest refusal named. Disabled, with why under the alert,
+                // while the controller says no grant of its kind can be made (an Open's in Block mode).
+                var kind = alert.Command ?? RoofAlpacaCommandKind.Close;
+                unavailable = RoofAlpacaText.GrantUnavailable(alert, alpaca);
+                actions.Add(new RowAction(
+                    $"alpaca-grant-{kind.ToString().ToLowerInvariant()}-{i}",
+                    RoofAlpacaText.GrantLabel(kind),
+                    () => _panel.AskGrant(Current(id) ?? alert),
+                    Primary: true,
+                    Enabled: unavailable is null));
             }
 
             if (person && !alert.Acknowledged)
@@ -272,12 +283,13 @@ public sealed class KioskAlpacaPage : UserControl
                 text += $" Acknowledged{(alert.AcknowledgedBy is { Length: > 0 } by ? $" by {by}" : string.Empty)}.";
             }
 
+            // Why its grant is disabled is in the card, under the alert, so it is never on another page.
             rows.Add(Row.Card(
                 $"alpaca-alert-{i}",
                 text,
                 alert.Acknowledged ? KioskTheme.Muted : KioskTheme.Tone(KioskNoticeLevel.Warning),
                 actions,
-                identity: $"{alert.Id}:{alert.Acknowledged}"));
+                identity: $"{alert.Id}:{alert.Acknowledged}") with { Note = unavailable is null ? null : new RowNote($"alpaca-alert-{i}-unavailable", unavailable) });
         }
 
         return rows;
@@ -320,6 +332,8 @@ public sealed class KioskAlpacaPage : UserControl
                     KioskTheme.Colour(button, RoofUiPalette.AccentStrong, RoofUiPalette.Text);
                 }
 
+                button.IsEnabled = action.Enabled;
+
                 buttons.Children.Add(button);
             }
 
@@ -327,7 +341,16 @@ public sealed class KioskAlpacaPage : UserControl
             card.Children.Add(buttons);
         }
 
-        card.Children.Add(label);
+        if (row.Note is { } note)
+        {
+            var noted = KioskTheme.Label(note.Text, _metrics.Small, KioskTheme.Muted);
+            noted.Name = note.Name;
+            card.Children.Add(new StackPanel { Spacing = _metrics.Gap / 2, VerticalAlignment = VerticalAlignment.Center, Children = { label, noted } });
+        }
+        else
+        {
+            card.Children.Add(label);
+        }
 
         return new Border
         {
@@ -339,14 +362,17 @@ public sealed class KioskAlpacaPage : UserControl
         };
     }
 
-    /// <summary>What may be done with a row: its button's name and label, and what it does.</summary>
-    private sealed record RowAction(string Name, string Label, Action Click, bool Primary);
+    /// <summary>What may be done with a row: its button's name and label, what it does, and whether it may be done now.</summary>
+    private sealed record RowAction(string Name, string Label, Action Click, bool Primary, bool Enabled = true);
+
+    /// <summary>A card's note under its text (why its grant is disabled): its name and what it says.</summary>
+    private sealed record RowNote(string Name, string Text);
 
     /// <summary>
     /// A row of the page: a line, a banner (<see cref="Level"/>) or a card with buttons (<see cref="Actions"/>).
-    /// <see cref="Structure"/> is what makes it this row: its name, kind, buttons and, unless its words count down
-    /// (<see cref="Countdown"/>) or it is a grant or an alert (<see cref="Identity"/>), its words. While every row's is the
-    /// same, the page is not built again.
+    /// <see cref="Structure"/> is what makes it this row: its name, kind, buttons, its card's note and, unless its words
+    /// count down (<see cref="Countdown"/>) or it is a grant or an alert (<see cref="Identity"/>), its words. While every
+    /// row's is the same, the page is not built again.
     /// </summary>
     private sealed record Row(
         string Name,
@@ -359,6 +385,9 @@ public sealed class KioskAlpacaPage : UserControl
         double? Size = null,
         FontWeight Weight = FontWeight.Normal)
     {
+        /// <summary>A card's note under its text, or null.</summary>
+        public RowNote? Note { get; init; }
+
         public string Structure => string.Join(
             "|",
             Name,
@@ -366,7 +395,8 @@ public sealed class KioskAlpacaPage : UserControl
             Identity ?? "-",
             Size?.ToString(CultureInfo.InvariantCulture) ?? "-",
             Weight.ToString(),
-            Actions is null ? "-" : string.Join(",", Actions.Select(action => action.Name)),
+            Actions is null ? "-" : string.Join(",", Actions.Select(action => action.Enabled ? action.Name : $"{action.Name}:off")),
+            Note is { } note ? $"{note.Name}:{note.Text}" : "-",
             Countdown || Identity is not null ? "-" : Text);
 
         public static Row Line(string name, string text, IBrush foreground, double? size = null, FontWeight weight = FontWeight.Normal, bool countdown = false)

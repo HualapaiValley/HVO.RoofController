@@ -93,8 +93,8 @@ public sealed record KioskView
 
     /// <summary>
     /// After the unlocking person granted an override here, which stepped them away from the operator lease, and while
-    /// nobody holds it: what Alpaca may do, and that a touch takes control back and cancels the grant
-    /// (<see cref="RoofAlpacaText.DescribeSteppedAway"/>); null otherwise.
+    /// nobody holds it: what Alpaca may do with every grant in force, and that a touch takes control back and cancels the
+    /// grant (<see cref="RoofAlpacaText.DescribeSteppedAway(IReadOnlyList{RoofOverrideGrant}, string)"/>); null otherwise.
     /// </summary>
     public string? AlpacaSteppedAway { get; init; }
 

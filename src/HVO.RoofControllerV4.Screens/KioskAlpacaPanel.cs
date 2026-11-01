@@ -5,14 +5,15 @@ namespace HVO.RoofControllerV4.Screens;
 
 /// <summary>
 /// What the Alpaca page does (#220): a person clears the human Stop hold ("Allow Alpaca again"), grants an override for
-/// one Alpaca Close from a refused Close's alert (after a question that says what it lifts), revokes a grant, and
-/// acknowledges an alert. Each goes with the person's own session; the controller refuses the kiosk's device key there.
+/// one Alpaca Close (or Open) from a refused Close's (or Open's) alert, after a question that says what it lifts, unless
+/// the controller says no grant of that kind can be made now (an Open's in Block mode), revokes a grant, and acknowledges
+/// an alert. Each goes with the person's own session; the controller refuses the kiosk's device key there.
 /// What the page shows (the commands setting, the hold, the operator lease, grants, alerts and warnings) is the status's.
 /// </summary>
 /// <remarks>Used on the UI thread only; <see cref="Changed"/> is raised there.</remarks>
 public sealed class KioskAlpacaPanel
 {
-    /// <summary>The grant question's title.</summary>
+    /// <summary>The grant question's title for a Close (an Open's is <see cref="RoofAlpacaText.GrantQuestionTitleFor"/>).</summary>
     public const string GrantQuestionTitle = "Allow one Alpaca Close?";
 
     /// <summary>Why allowing Alpaca again, granting and revoking are not offered to someone without the Operator role.</summary>
@@ -82,9 +83,10 @@ public sealed class KioskAlpacaPanel
     }
 
     /// <summary>
-    /// Asks before granting an override for one Alpaca Close from a refused Close's alert
+    /// Asks before granting an override for one Alpaca Close (or Open) from a refused Close's (or Open's) alert
     /// (<see cref="RoofAlpacaText.CanGrantFrom"/>): what it lifts, for which client, for how long, and that nothing else is
-    /// bypassed. Nothing is sent until the person answers <see cref="RoofAlpacaText.GrantCloseLabel"/>.
+    /// bypassed. Nothing is sent until the person answers <see cref="RoofAlpacaText.GrantLabel"/> for its kind. One the
+    /// controller says cannot be made now (<see cref="RoofAlpacaText.GrantUnavailable"/>) is not asked: why is said.
     /// </summary>
     public void AskGrant(RoofAlpacaAlert alert)
     {
@@ -96,19 +98,25 @@ public sealed class KioskAlpacaPanel
 
         if (!RoofAlpacaText.CanGrantFrom(alert))
         {
-            Message = new KioskNotice("No grant can be made from this alert: only a refused Close whose every reason is a telescope can be allowed once.", KioskNoticeLevel.Warning, Now);
+            Message = new KioskNotice("No grant can be made from this alert: only a refused Close or Open whose every reason a grant can lift can be allowed once.", KioskNoticeLevel.Warning, Now);
             Raise();
             return;
         }
 
+        if (Unavailable(alert))
+        {
+            return;
+        }
+
+        var kind = alert.Command ?? RoofAlpacaCommandKind.Close;
         var window = _console.View.Status?.Alpaca?.OverrideWindowMinutes ?? 0;
         // The reasons the person is shown are the ones sent: the alert's, as it was when asked.
         IReadOnlyList<string> reasons = [.. alert.ReasonKeys];
         Message = null;
         Question = new KioskQuestion(
-            GrantQuestionTitle,
+            RoofAlpacaText.GrantQuestionTitleFor(kind),
             RoofAlpacaText.DescribeGrantQuestion(alert with { ReasonKeys = reasons }, window),
-            [new KioskAnswer(RoofAlpacaText.GrantCloseLabel, () => GrantAsync(reasons))]);
+            [new KioskAnswer(RoofAlpacaText.GrantLabel(kind), () => GrantAsync(alert, reasons))]);
         Raise();
     }
 
@@ -154,20 +162,36 @@ public sealed class KioskAlpacaPanel
 
     private DateTimeOffset Now => _console.Client.Options.TimeProvider.GetUtcNow();
 
-    private Task GrantAsync(IReadOnlyList<string> reasons)
+    private Task GrantAsync(RoofAlpacaAlert alert, IReadOnlyList<string> reasons)
     {
         Question = null;
-        if (Refuse(operatorOnly: true))
+        if (Refuse(operatorOnly: true) || Unavailable(alert))
         {
             return Task.CompletedTask;
         }
 
-        // Through the console: the person steps away from the operator lease with the grant (KioskConsole.GrantCloseAsync).
-        return RunAsync("Granting one Alpaca Close…", async () =>
+        // Through the console: the person steps away from the operator lease with the grant (KioskConsole.GrantAsync).
+        var kind = alert.Command ?? RoofAlpacaCommandKind.Close;
+        return RunAsync($"Granting one Alpaca {kind}…", async () =>
         {
-            var grant = await _console.GrantCloseAsync(reasons);
+            var grant = await _console.GrantAsync(kind, reasons);
             return () => Message = new KioskNotice($"Granted. {RoofAlpacaText.DescribeGrant(grant)}", KioskNoticeLevel.Warning, Now);
         });
+    }
+
+    // True, with why said, when the newest status says no grant of the alert's kind can be made now (an Open's in Block
+    // mode): asked from a stale page, or answered after the status changed.
+    private bool Unavailable(RoofAlpacaAlert alert)
+    {
+        if (RoofAlpacaText.GrantUnavailable(alert, _console.View.Status?.Alpaca) is not { } unavailable)
+        {
+            return false;
+        }
+
+        Question = null;
+        Message = new KioskNotice($"Not sent: {unavailable}", KioskNoticeLevel.Warning, Now);
+        Raise();
+        return true;
     }
 
     // True, with the reason said, when nobody (or nobody who may) is signed in to send it.

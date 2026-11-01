@@ -6,6 +6,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Alpaca;
+using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Screens;
@@ -18,7 +19,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
 /// The kiosk's and the Mac app's Alpaca page and operator lease (#220, phase 3), against the controller's real API in
 /// process: the Alpaca nav item and page (the commands setting, the Stop hold with Allow Alpaca again, the operator lease,
 /// grants with Revoke, alerts newest first with Acknowledge and Allow this Close once, the warnings, also in the summary
-/// banner); the grant sent with exactly the alert's reasons after the question, and nothing on Cancel; and the operator
+/// banner); the grant sent with exactly the alert's reasons after the question, and nothing on Cancel; Allow this Open once
+/// (#220, phase 4, the controller's Open grants a stand-in's), disabled with the reason in Block mode; and the operator
 /// lease the screens hold while an operator is signed in, whose heartbeats say "input" only after the person touched the
 /// screen, which stops when it lapses for want of input until the next touch, and which is given up when they lock.
 /// </summary>
@@ -416,6 +418,119 @@ public sealed class KioskAlpacaTests
     }
 
     [TestMethod]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
+    public async Task AllowThisOpenOnce_AsksTheOpenQuestion_SendsAnOpenGrantWithExactlyTheAlertsReasons_AndStepsThePersonAway(int width, int height, double density)
+    {
+        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
+        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly, services: open.AddTo);
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        harness.Clock.Advance(TimeSpan.Zero);
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.OperatorLease is { Held: true, Holder: KioskHarness.Operator }, "the operator lease taken");
+        RefuseOpen(harness, "weather-unsafe:Sky", RoofAlpacaContract.NoBlockingScopesKey);
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Alerts.Count == 1, "the alert");
+        var alert = harness.Console.View.Status!.Alpaca!.Alerts[0];
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Alpaca));
+        var shown = await ReadEveryPageAsync(screen, "alpaca-open-alert");
+        shown["alpaca-mode"].Should().Be(RoofAlpacaText.DescribeMode(RoofAlpacaCommandMode.OpenAndClose));
+        shown["alpaca-grant-open-0"].Should().Be(RoofAlpacaText.GrantOpenLabel);
+        shown.Keys.Should().NotContain(["alpaca-grant-close-0", "alpaca-alert-0-unavailable"]);
+        var grantOpen = await FindAsync(screen, "alpaca-grant-open-0");
+        await OnUiAsync(() => grantOpen.IsEnabled.Should().BeTrue());
+
+        await screen.TouchAsync(grantOpen);
+        await UntilAsync(() => screen.Shell.Alpaca.Question is not null, "the question");
+        var asked = await ReadEveryPageAsync(screen, "alpaca-open-question");
+        asked["alpaca-question-title"].Should().Be(RoofAlpacaText.GrantQuestionTitleFor(RoofAlpacaCommandKind.Open));
+        Enumerable.Range(0, 4).Select(i => asked[$"alpaca-question-{i}"]).Should().Equal(RoofAlpacaText.DescribeGrantQuestion(alert, 5));
+        await OnUiAsync(() => screen.Text("alpaca-answer-0").Should().Be(RoofAlpacaText.GrantOpenLabel));
+        open.Requests.Should().BeEmpty("nothing is sent before the person answers");
+
+        await screen.TouchAsync(screen.Find("alpaca-answer-0")!);
+        await UntilAsync(() => open.Requests.Count == 1 && screen.Shell.Alpaca.Busy is null, "the grant");
+
+        var sent = open.Requests.Single();
+        sent.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        sent.ReasonKeys.Should().Equal(alert.ReasonKeys, "exactly the reasons the person was shown");
+        await OnUiAsync(() => screen.Shell.Alpaca.Message!.Text.Should().StartWith("Granted. One Open allowed by"));
+        Alpaca(harness).GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away with the grant");
+        await harness.WaitForAsync(view => view.AlpacaSteppedAway is not null && view.Status?.Alpaca?.Grants.Count == 1, "the step away");
+        harness.Console.View.AlpacaSteppedAway.Should().Be(
+            "You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. Touch anything to take control back; that cancels the grant.");
+    }
+
+    [TestMethod]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
+    public async Task InBlockMode_AnOpensGrant_IsShownDisabledWithTheReason_AndSendsNothing_WhileACloseIsUnaffected(int width, int height, double density)
+    {
+        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
+        open.Block();
+        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly, services: open.AddTo);
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        Refuse(harness, "scope-not-clear:Main");
+        harness.ServerClock.Advance(TimeSpan.FromSeconds(1));
+        RefuseOpen(harness, "weather-unknown:Sky");
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Alerts.Count == 2, "the alerts");
+        var refusedOpen = harness.Console.View.Status!.Alpaca!.Alerts.Single(alert => alert.Command == RoofAlpacaCommandKind.Open);
+        await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Alpaca));
+
+        var shown = await ReadEveryPageAsync(screen, "alpaca-open-block");
+
+        shown["alpaca-alert-0-text"].Should().Be(RoofAlpacaText.DescribeAlert(refusedOpen), "newest first");
+        shown["alpaca-grant-open-0"].Should().Be(RoofAlpacaText.GrantOpenLabel);
+        shown["alpaca-alert-0-unavailable"].Should().Be(AlpacaOpenGrantStandIn.BlockReason);
+        shown["alpaca-grant-close-1"].Should().Be(RoofAlpacaText.GrantCloseLabel);
+        shown.Keys.Should().NotContain("alpaca-alert-1-unavailable", "Block never gates a Close grant");
+        var grantClose = await FindAsync(screen, "alpaca-grant-close-1");
+        await OnUiAsync(() => grantClose.IsEnabled.Should().BeTrue());
+        var grantOpen = await FindAsync(screen, "alpaca-grant-open-0");
+        await OnUiAsync(() => grantOpen.IsEnabled.Should().BeFalse("no grant opens the roof in Block mode"));
+
+        // Touched anyway, or asked from a stale view: nothing is asked or sent, and why is said.
+        await screen.TouchAsync(grantOpen);
+        await OnUiAsync(() =>
+        {
+            screen.Shell.Alpaca.Question.Should().BeNull();
+            screen.Shell.Alpaca.AskGrant(refusedOpen);
+            screen.Shell.Alpaca.Question.Should().BeNull();
+            screen.Shell.Alpaca.Message!.Text.Should().Be($"Not sent: {AlpacaOpenGrantStandIn.BlockReason}");
+        });
+        open.Requests.Should().BeEmpty();
+        harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaGrants).Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task AnOpenGrantTheControllerRefuses_IsSaidInItsWords()
+    {
+        var open = new AlpacaOpenGrantStandIn();
+        open.RefuseOnly();
+        await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly, services: open.AddTo);
+        await harness.StartLiveAsync();
+        await harness.UnlockAsync(KioskHarness.Operator);
+        RefuseOpen(harness, "weather-unsafe:Sky");
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Alerts.Count == 1, "the alert");
+        await using var screen = await KioskScreen.ShowAsync(harness, 1280, 720, 8.2);
+        await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.Alpaca));
+        await screen.TouchAsync(await FindAsync(screen, "alpaca-grant-open-0"));
+        await UntilAsync(() => screen.Shell.Alpaca.Question is not null, "the question");
+
+        await screen.TouchAsync(screen.Find("alpaca-answer-0")!);
+
+        await UntilAsync(() => open.Requests.Count == 1 && screen.Shell.Alpaca.Busy is null, "the refusal");
+        await OnUiAsync(() =>
+        {
+            screen.Shell.Alpaca.Message!.Level.Should().Be(KioskNoticeLevel.Danger);
+            screen.Shell.Alpaca.Message.Text.Should().Contain(AlpacaOpenGrantStandIn.BlockReason);
+        });
+        harness.Console.View.AlpacaSteppedAway.Should().BeNull("nothing was granted");
+    }
+
+    [TestMethod]
     public async Task Revoke_RevokesAnotherPersonsGrant()
     {
         await using var harness = await KioskHarness.CreateAsync(settings: CloseOnly);
@@ -522,14 +637,19 @@ public sealed class KioskAlpacaTests
         shown["alpaca-lease"].Should().Be(RoofAlpacaText.DescribeLease(alpaca.OperatorLease));
         shown["alpaca-grant-0-text"].Should().Be(RoofAlpacaText.DescribeGrant(alpaca.Grants[0]));
         shown["alpaca-revoke-0"].Should().Be(RoofAlpacaText.RevokeLabel);
-        // Newest first: the refused Close a grant can lift, the refused key, the acknowledged hold refusal.
-        shown["alpaca-alert-0-text"].Should().Be(RoofAlpacaText.DescribeAlert(alpaca.Alerts[1]));
-        shown["alpaca-grant-close-0"].Should().Be(RoofAlpacaText.GrantCloseLabel);
-        shown["alpaca-alert-1-text"].Should().Be(RoofAlpacaText.DescribeAlert(alpaca.Alerts[2]));
-        shown["alpaca-alert-2-text"].Should().Be($"{RoofAlpacaText.DescribeAlert(alpaca.Alerts[0])} Acknowledged by olga (PIN at kiosk).");
-        shown.Keys.Should().Contain(["alpaca-acknowledge-0", "alpaca-acknowledge-1"]);
-        shown.Keys.Should().NotContain(["alpaca-grant-close-1", "alpaca-grant-close-2", "alpaca-acknowledge-2"],
-            "a refused key cannot be granted, and an acknowledged alert is done with");
+        shown["alpaca-mode"].Should().Be(RoofAlpacaText.DescribeMode(RoofAlpacaCommandMode.OpenAndClose));
+        // Newest first: the refused Open a grant can lift, the refused Close a grant can lift, the refused key, the
+        // acknowledged hold refusal.
+        shown["alpaca-alert-0-text"].Should().Be(RoofAlpacaText.DescribeAlert(alpaca.Alerts[3]));
+        shown["alpaca-grant-open-0"].Should().Be(RoofAlpacaText.GrantOpenLabel);
+        shown["alpaca-alert-1-text"].Should().Be(RoofAlpacaText.DescribeAlert(alpaca.Alerts[1]));
+        shown["alpaca-grant-close-1"].Should().Be(RoofAlpacaText.GrantCloseLabel);
+        shown["alpaca-alert-2-text"].Should().Be(RoofAlpacaText.DescribeAlert(alpaca.Alerts[2]));
+        shown["alpaca-alert-3-text"].Should().Be($"{RoofAlpacaText.DescribeAlert(alpaca.Alerts[0])} Acknowledged by olga (PIN at kiosk).");
+        shown.Keys.Should().Contain(["alpaca-acknowledge-0", "alpaca-acknowledge-1", "alpaca-acknowledge-2"]);
+        shown.Keys.Should().NotContain(["alpaca-grant-close-0", "alpaca-grant-open-1", "alpaca-grant-close-2", "alpaca-grant-close-3", "alpaca-acknowledge-3"],
+            "a grant is of the refused command's kind, a refused key cannot be granted, and an acknowledged alert is done with");
+        shown.Keys.Should().NotContain(key => key.EndsWith("-unavailable", StringComparison.Ordinal), "an Open grant can be made");
         harness.Sent(HttpMethod.Post, RoofApiRoutes.AlpacaGrants).Should().Be(0);
     }
 
@@ -542,13 +662,18 @@ public sealed class KioskAlpacaTests
         => Alpaca(harness).RaiseAlert("Refused", RoofAlpacaCommandKind.Close,
             $"An Alpaca Close was refused: {RoofAlpacaText.DescribeReasons(reasons)}.", reasons, new RoofAlpacaClient(7, 42, "192.0.2.50", "header"));
 
+    // A refused Alpaca Open (#220, phase 4), as the controller raises it.
+    private static void RefuseOpen(KioskHarness harness, params string[] reasons)
+        => Alpaca(harness).RaiseAlert("Refused", RoofAlpacaCommandKind.Open,
+            $"An Alpaca Open was refused: {RoofAlpacaText.DescribeReasons(reasons)}.", reasons, new RoofAlpacaClient(7, 43, "192.0.2.50", "header"));
+
     // Everything the page shows at once: the hold, the person's lease 45 s from lapsing, a grant, three alerts.
     private static RoofAlpacaStatus Everything()
     {
         var at = KioskHarness.Start;
         return new RoofAlpacaStatus
         {
-            Mode = RoofAlpacaCommandMode.CloseOnly,
+            Mode = RoofAlpacaCommandMode.OpenAndClose,
             Hold = new RoofStopHoldState { Held = true, SetBy = "olga (PIN at kiosk)", SinceUtc = at },
             OperatorLease = new RoofOperatorLeaseState { Held = true, Holder = KioskHarness.Operator, IdleSecondsRemaining = 45 },
             Grants =
@@ -578,6 +703,12 @@ public sealed class KioskAlpacaTests
                     Id = "2", Kind = "NotAuthorised", Command = RoofAlpacaCommandKind.Close,
                     Message = "An Alpaca Close was refused as not authorised: the controller did not accept its key.",
                     ClientId = 12, ClientAddress = "192.0.2.51", FirstUtc = at.AddMinutes(2), LastUtc = at.AddMinutes(2)
+                },
+                new RoofAlpacaAlert
+                {
+                    Id = "4", Kind = "Refused", Command = RoofAlpacaCommandKind.Open, ReasonKeys = ["weather-unsafe:Sky"],
+                    Message = "An Alpaca Open was refused: Weather monitor 'Sky' reports unsafe weather.",
+                    ClientId = 7, ClientAddress = "192.0.2.50", FirstUtc = at.AddMinutes(4), LastUtc = at.AddMinutes(4)
                 }
             ],
             Warnings = [RoofAlpacaCommands.NoBlockingScopeWarning],

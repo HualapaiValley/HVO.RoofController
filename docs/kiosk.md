@@ -225,7 +225,8 @@ has an Alpaca alert, grant or warning to show, **Alpaca** in the bottom bar show
 words the web UI and the terminal use. Anyone at the kiosk can read it; its actions need someone who unlocked it, and
 go with their PIN session (the controller refuses the kiosk's device key for every one of them).
 
-- **Which commands are on**: `Alpaca may close the roof (never open it)`, or `Alpaca commands are off`.
+- **Which commands are on**: `Alpaca may close the roof (never open it)`, `Alpaca may open and close the roof`, or
+  `Alpaca commands are off`.
 - **The Stop hold.** Every Stop but the Alpaca server's own AbortSlew sets it, and so does the controller's start:
   `Alpaca commands are held after a Stop (…): a person must allow them again.` **Allow Alpaca again** clears it, for an
   operator; the controller logs it with their name.
@@ -241,21 +242,29 @@ go with their PIN session (the controller refuses the kiosk's device key for eve
   `Renewing lease` badge), and the kiosk still never locks itself while it renews that one.
 - **Override grants**: what each lifts, who granted it and how long it has left, and **Revoke** for an operator.
 - **Alerts**, newest first, with how often and the client the Alpaca server reported: **Acknowledge** for anyone who
-  unlocked the kiosk and, on a refused Close whose every reason is a telescope, **Allow this Close once** for an
-  operator. That asks first, with **Allow this Close once** and **Cancel** always on the screen below the question:
-  what the grant lifts (exactly the alert's reasons), for which client, that it lasts the override window and is used up
-  by one Close, and that it never bypasses the fault latch, the interlocks, the limits, the motor protections, a
-  person's operator lease or the Stop hold. Nothing is sent until the answer; Cancel, Esc, another page and the kiosk
-  locking send nothing. Where only an admin may grant an override (`RoofSafety:OverrideRole`), a PIN session cannot,
-  and the page says why.
-- **Stepping away.** A person's operator lease would refuse the Close they allow, so granting steps them away from it:
-  the controller ends their lease with the grant, and the summary under the header says `You stepped away from the
-  operator lease: Alpaca may close the roof once in the next 5 min. Touch anything to take control back; that cancels
-  the grant.` The touches that asked for the grant are not input after it, nor is anything the kiosk does by itself;
-  the heartbeats go on without taking the lease back. The person's next touch takes it back as it ends (after the
-  button it pressed has acted), and taking it back cancels the grant. Once the grant is gone (the Close that used it
-  decided, or the grant lapsed, revoked or dropped), the next heartbeat takes the lease back by itself. Another person's
-  lease still refuses.
+  unlocked the kiosk and, for an operator, on a refused Close whose every reason is a telescope, **Allow this Close
+  once**, and on a refused Open whose every reason a grant can lift (a telescope, a required weather monitor's unsafe or
+  unknown weather, no required weather source, no telescope set to block the roof), **Allow this Open once**. That asks
+  first (`Allow one Alpaca Close?` or `Allow one Alpaca Open?`), with the grant's button and **Cancel** always on the
+  screen below the question: what the grant lifts (exactly the alert's reasons), for which client, that it lasts the
+  override window and is used up by one command of its kind, that it never bypasses the fault latch, the interlocks,
+  the limits, the motor protections, a person's operator lease or the Stop hold, and for an Open that the roof stays
+  open if the weather turns. Nothing is sent until the answer; Cancel, Esc, another page and the kiosk locking send
+  nothing. Where only an admin may grant an override (`RoofSafety:OverrideRole`), a PIN session cannot, and the page
+  says why.
+- **No Open grant in Block mode.** While the safety interlock is `Block` (`RoofSafety:InterlockMode`), no grant opens
+  the roof: **Allow this Open once** is shown disabled, with the controller's reason under the alert, and nothing is
+  asked or sent (a question asked before says `Not sent:` and the reason). A Close's grant is unaffected. A refusal from
+  the controller is said on the page in its words.
+- **Stepping away.** A person's operator lease would refuse the command they allow, so granting steps them away from
+  it: the controller ends their lease with the grant, and the summary under the header says what every grant in force
+  allows: `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Touch anything
+  to take control back; that cancels the grant.` (`may open the roof once` for an Open grant, `may open and close the
+  roof once each` and `that cancels the grants` with both). The touches that asked for the grant are not input after
+  it, nor is anything the kiosk does by itself; the heartbeats go on without taking the lease back. The person's next
+  touch takes it back as it ends (after the button it pressed has acted), and taking it back cancels the grant. Once the
+  grant is gone (the command that used it decided, or the grant lapsed, revoked or dropped), the next heartbeat takes
+  the lease back by itself. Another person's lease still refuses.
 - **Warnings** from the controller (`Alpaca Close checks no telescope: …`) are on the page, in the summary under the header
   (`Alpaca warning. Readings has details.`), and whole on Readings.
 
@@ -267,6 +276,11 @@ The page is bounded pages, paged only when it overflows, and Stop stays at the r
 </p>
 
 ![After the grant: the summary says the person stepped away, Alpaca may close the roof once in the next 5 min, and a touch takes control back](images/kiosk/alpaca-stepped-away-1280x720.png)
+
+<p>
+  <img src="images/kiosk/alpaca-open-question-p1-800x480.png" alt="Allow this Open once asks first on the first 7-inch display: Allow one Alpaca Open? with the reasons it lifts (no telescope set to block the roof, the weather) and the client, and the answers below" width="400">
+  <img src="images/kiosk/alpaca-open-block-p3-1280x720.png" alt="In Block mode a refused Open's alert shows Allow this Open once disabled, with the controller's reason under the alert, beside Acknowledge" width="480">
+</p>
 
 ## The status
 
@@ -587,10 +601,12 @@ Nothing here needs the Pi, the display or the roof.
   `KioskAlpacaTests` (#220) covers the Alpaca page and the operator lease: the lease held only while an operator is
   signed in (not a viewer) with Alpaca commands on, and given up on Lock, heartbeats that say input only after a touch
   (never for a status or a timer), the idle warning, the lapse that heartbeats never take back and the touch that does,
-  Allow Alpaca again, a grant that sends exactly the alert's reasons after the question and nothing on Cancel, Esc or
-  the lock, the person stepping away with it (heartbeats without input until a later touch takes control back and
-  cancels it), Acknowledge and Revoke, the bottom bar kept to one row, and everything at once in bounded pages at every
-  size, the Mac app's too.
+  Allow Alpaca again, a grant of the refused command's kind that sends exactly the alert's reasons after the question
+  and nothing on Cancel, Esc or the lock, an Open's grant disabled with the reason in Block mode, the person stepping
+  away with it (heartbeats without input until a later touch takes control back and cancels it), Acknowledge and
+  Revoke, the bottom bar kept to one row, and everything at once in bounded pages at every size, the Mac app's too. The
+  controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`); its own tests check its
+  rules.
 - **The program** (`KioskProgramTests`): its settings, the device key, the display and the backlight, and exit code 78
   for settings it cannot start with; CI runs the published program without settings to check that code. The install
   steps above are checked against the files they install, which are the files of CI's artifact.
