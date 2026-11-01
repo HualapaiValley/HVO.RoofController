@@ -85,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `hvo-roof alpaca` (`status`, `clear-hold`, `grant`, `revoke`, `alerts`, `ack`).
 - `RoofControllerOptionsV4:DirectionChangeDelay` (0 to 10 s, default 0, local-only): every start waits that long after
   the relays were last verified off, without holding up Stop, and checks again before it energizes a relay.
+- An Alpaca Close refused when its direction-change delay ends reads `ShutterStatus` Error on Dome 0, wherever the roof
+  stands, until the next start, Stop or `ClearFault` (#220): the status says so (`isContinuationRefused`), and the
+  controller's own status and every UI keep the roof's real state.
 - The command history's `Alpaca` source (#220): the client's address, `ClientID`, `ClientTransactionID` and how it
   authenticated, as the Alpaca server reported them, the address the controller saw, and the grant used.
 - The HAT emulator fences a client's older connections at its next tagged Hello, holds register writes on request

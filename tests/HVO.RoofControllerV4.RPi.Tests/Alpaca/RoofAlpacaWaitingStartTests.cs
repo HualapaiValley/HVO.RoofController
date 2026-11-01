@@ -158,6 +158,34 @@ public sealed class RoofAlpacaWaitingStartTests
     }
 
     [TestMethod]
+    public async Task AStopThatHadToWaitForTheLock_StillEndsTheRefusedContinuationsError()
+    {
+        // PR #230 rereview round 3, Opus F23: a Stop queued behind a blocked HAT access ends the Error too, once it runs.
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: Delay)).Ready();
+        await Task.Delay(Delay);
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening))).IsSuccessful.Should().BeTrue();
+        rig.Hat.SetInputs(false, true, false, false); // the open limit (NC: LOW = active)
+        rig.Controller.ForceStatusRefresh();
+        var close = rig.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Controller.GetCurrentStatusSnapshot().IsStartPending, "the waiting start");
+        rig.RotateCommanderKey();
+        (await close).Rule().Should().Be("AuthorizationChanged");
+        rig.Controller.GetCurrentStatusSnapshot().IsContinuationRefused.Should().BeTrue();
+
+        var (_, release, holder) = Services.RoofControllerCommandFencingTests.HoldTheLock(rig.Controller);
+        using (release)
+        {
+            (await Task.Run(() => rig.Controller.Stop())).ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified, "the Stop was queued");
+            release.Set();
+            holder.Join(TimeSpan.FromSeconds(5));
+        }
+
+        await AlpacaCommandRig.WaitUntilAsync(() => !rig.Controller.GetCurrentStatusSnapshot().IsContinuationRefused, "the queued Stop to end the Error");
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.StateOf(rig.Controller.GetCurrentStatusSnapshot())
+            .Should().Be(HVO.RoofControllerV4.Alpaca.Devices.DomeShutterState.Open);
+    }
+
+    [TestMethod]
     public async Task CommandsTurnedOffDuringTheWait_LeaveTheRoofStopped()
     {
         var (rig, _, writes) = await JustStoppedAsync();

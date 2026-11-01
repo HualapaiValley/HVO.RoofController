@@ -805,7 +805,7 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private Result<RoofControllerStatus> DeferStop(RoofControllerStopReason reason)
     {
-        QueueDeferredStop(reason, null, onlyWhileMoving: false);
+        QueueDeferredStop(reason, null, onlyWhileMoving: false, stopRequest: true);
         const string message = "Stop could not take the controller lock within 2 s: a relay or input access is still in progress. " +
             "The relays-off write is queued and runs as soon as it ends; until then the relay state is unverified. Use the independent hardware stop.";
         _logger.LogCritical("{Message} Reason={Reason}", message, reason);
@@ -815,9 +815,11 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// Queues a stop to run as soon as the controller lock is free. With <paramref name="onlyWhileMoving"/> it acts only
-    /// when motion (or a waiting start) is still there by then; its fence is raised at once.
+    /// when motion (or a waiting start) is still there by then; its fence is raised at once. A Stop request's
+    /// (<paramref name="stopRequest"/>) also ends a refused continuation's Error, as a Stop that took the lock does.
     /// </summary>
-    private void QueueDeferredStop(RoofControllerStopReason reason, string? error, bool onlyWhileMoving, long? motionGeneration = null)
+    private void QueueDeferredStop(RoofControllerStopReason reason, string? error, bool onlyWhileMoving, long? motionGeneration = null,
+        bool stopRequest = false)
     {
         FenceRelaysOff();
         Interlocked.Increment(ref _deferredStops);
@@ -839,6 +841,11 @@ public partial class RoofControllerServiceV4
                     }
 
                     CancelPendingStart_NoLock("A stop queued behind a blocked HAT access ran; nothing moved for this start.");
+                    if (stopRequest)
+                    {
+                        _continuationRefused = false;
+                    }
+
                     if (_commandedMotion != RoofMotionDirection.None)
                     {
                         StopMotion_NoLock(reason, error);

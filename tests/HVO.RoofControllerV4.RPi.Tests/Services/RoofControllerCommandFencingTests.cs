@@ -140,7 +140,7 @@ public class RoofControllerCommandFencingTests
     }
 
     /// <summary>Holds the controller's lock on a thread of its own until released (a HAT access that blocks, say).</summary>
-    private static (ManualResetEventSlim Held, ManualResetEventSlim Release, Thread Holder) HoldTheLock(RoofControllerServiceV4 service)
+    internal static (ManualResetEventSlim Held, ManualResetEventSlim Release, Thread Holder) HoldTheLock(RoofControllerServiceV4 service)
     {
         var syncLock = typeof(RoofControllerServiceV4).GetField("_syncLock", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(service)!;
         var held = new ManualResetEventSlim(false);

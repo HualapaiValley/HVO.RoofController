@@ -542,11 +542,12 @@ now, the roof stays stopped, the Close is refused and an alert says so. During t
 - a request refused for its own fault (a bad ticket, the wrong kind) changes nothing.
 
 **Status during the wait** (an exception to "a roof not moving is never reported as moving"): the waiting start reads
-`ShutterStatus` Closing and `Slewing` true, since it has been accepted and will start unless something stops it. A
-start refused when the wait ends reads `ShutterStatus` Error, wherever the roof stands (part way, or at a limit), with
-why in the `status` action, until the next start, Stop or ClearFault, so a client polling the shutter sees its command
-failed. The controller's own status, and so every UI, keeps the roof's real state (Open at the open limit, say), with the
-same reason as its last error and in an alert; its `isContinuationRefused` says a refused continuation is being reported.
+`ShutterStatus` Closing and `Slewing` true, since it has been accepted and will start unless something stops it. A start
+refused when the wait ends reads `ShutterStatus` Error, wherever the roof stands (part way, or at a limit), with why in
+the `status` action, until the next start, Stop (a Stop that had to wait for the controller's lock, once it has run) or
+ClearFault, so a client polling the shutter sees its command failed. The controller's own status, and so every UI, keeps
+the roof's real state (Open at the open limit, say), with the same reason as its last error and in an alert; its
+`isContinuationRefused` says a refused continuation is being reported.
 
 ### Alerts
 
@@ -631,8 +632,9 @@ The controller's side, under `RoofController:Alpaca` and `RoofController:Lease`,
 
 The status (`GET RoofControl/Status`, and every hub snapshot) carries `alpaca`: the mode, the hold, the operator
 lease, the grants, the alerts, the warnings, the number of blocking telescopes, the budget, the window and each
-telescope's latency; and `isStartPending`, `pendingMotion` and `motionOwner` (a person, the Alpaca account, or nobody
-in particular).
+telescope's latency; and `isStartPending`, `pendingMotion`, `motionOwner` (a person, the Alpaca account, or nobody
+in particular) and `isContinuationRefused` (a start refused when its direction-change delay ended, which Dome 0 reports
+as Error).
 
 The controller's routes, under `api/v4.0/alpaca`:
 
