@@ -197,6 +197,11 @@ the person's role allows.
   sent; a question already asked sends nothing once the status says so (`Not sent:` and the reason). A Close's grant is
   unaffected. Should the controller refuse a grant anyway (the interlock changed a moment before), its refusal is said
   under **Command feedback**, in its words.
+
+  ![The Alpaca panel with Alpaca Open and Close on: a refused Open's alert, from a client at a documentation address, and its question, Allow one Alpaca Open?, with what it lifts and that the roof stays open if the weather turns](images/web/21-alpaca-open-desktop.jpg)
+
+  ![In Block mode: the refused Open's Allow this Open once disabled, with the controller's reason under the alert, beside a refused Close's Allow this Close once, which Block never gates](images/web/22-alpaca-open-block-desktop.jpg)
+
 - **Stepping away.** A grant never lifts a person's operator lease, so the person who grants steps away with it: the
   controller ends their lease, in every session of theirs, and every page of the session they granted from says
   `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Click or type on this page to take control back; that cancels the grant.`
@@ -451,7 +456,7 @@ Nothing here needs the Pi, the HAT or the roof.
   after the question, with exactly the alert's reasons, and of the refused command's kind), alerts, the lease taken by
   the first page and released by the last, input from the person's actions only, an idle lease not taken again without
   input, and a grant that steps the person away until their next click (`WebAlpacaBrowserTests` checks that last in
-  Chromium too). The controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`): the
+  Chromium too, for a Close and an Open grant, and an Open grant disabled with its reason in Block mode). The controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`): the
   page's tests check what the page does with them (the Open question, the grant sent, the control disabled with the
   reason in Block mode, a refusal said), and the controller's own tests check its rules.
 - **Browser tests** (`TestCategory=Browser`, `tests/HVO.RoofControllerV4.RPi.Tests/Browser`) run the web UI in
