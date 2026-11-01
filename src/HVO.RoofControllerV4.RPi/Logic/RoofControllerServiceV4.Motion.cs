@@ -264,22 +264,27 @@ public partial class RoofControllerServiceV4
         if (_commandedMotion != RoofMotionDirection.None)
         {
             var repeat = _commandedMotion == direction;
-            CheckDeadlines_NoLock(now);
 
-            // The inputs re-read at an input deadline can show the destination limit: the roof arrived, so a
-            // repeat has nothing left to do.
-            if (repeat && _commandedMotion == RoofMotionDirection.None && _lastStopReason == RoofControllerStopReason.LimitSwitchReached
-                && !_faultLatched && _relayRegisterState == RoofRelayRegisterState.Verified)
+            // A deadline stop is bounded through its LEDs here; a reversal it leaves to go ahead is a start, unbounded.
+            using (BoundedSection())
             {
-                FinishMutation_NoLock();
-                return Result<RoofControllerStatus>.Success(_status);
-            }
+                CheckDeadlines_NoLock(now);
 
-            if (_commandedMotion == RoofMotionDirection.None
-                && (repeat || _faultLatched || _relayRegisterState != RoofRelayRegisterState.Verified))
-            {
-                FinishMutation_NoLock();
-                return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
+                // The inputs re-read at an input deadline can show the destination limit: the roof arrived, so a
+                // repeat has nothing left to do.
+                if (repeat && _commandedMotion == RoofMotionDirection.None && _lastStopReason == RoofControllerStopReason.LimitSwitchReached
+                    && !_faultLatched && _relayRegisterState == RoofRelayRegisterState.Verified)
+                {
+                    FinishMutation_NoLock();
+                    return Result<RoofControllerStatus>.Success(_status);
+                }
+
+                if (_commandedMotion == RoofMotionDirection.None
+                    && (repeat || _faultLatched || _relayRegisterState != RoofRelayRegisterState.Verified))
+                {
+                    FinishMutation_NoLock();
+                    return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
+                }
             }
 
             // Only the lease expired, or the destination limit was reached, under a reversal: the roof is now
@@ -738,7 +743,8 @@ public partial class RoofControllerServiceV4
         var deadline = startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency);
         Result<RoofControllerStatus> result;
         var lockTaken = false;
-        var bound = BoundHatIo(deadline);
+        var reverify = false;
+        var section = BoundedSection(deadline, armNow: true);
         try
         {
             Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
@@ -775,23 +781,36 @@ public partial class RoofControllerServiceV4
                         : StopIdle_NoLock(reason);
                 }
 
-                var overran = !verified && HasPassed(deadline);
                 FinishMutation_NoLock();
 
-                result = verified
+                // Decided after all of its I/O, the LEDs included: a Stop whose bound passed answers that the relays are
+                // unverified, and its relays-off work goes on until a read-back shows them off (PR #230 rereview S-F4).
+                var overran = BoundPassed(deadline);
+
+                // An access the bound cut short and still out is followed by the lane's recovery, which reads the relays
+                // back off; otherwise the Stop queues that read-back itself.
+                reverify = verified && overran && !_hatIo.IsOverrun;
+                result = verified && !overran
                     ? Result<RoofControllerStatus>.Success(_status)
                     : Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.RelayStateUnverified, overran
-                        ? "Stop could not verify the relay register all-off state within its 2 s bound; the relays-off work goes on. Use the independent hardware stop."
+                        ? "Stop did not finish within its 2 s bound; the relays-off work goes on until a read-back shows them off. Use the independent hardware stop."
                         : "Stop could not verify the relay register all-off state. Use the independent hardware stop.");
             }
         }
         finally
         {
-            bound.Dispose();
+            section.Dispose();
             if (lockTaken)
             {
                 Monitor.Exit(_syncLock);
             }
+        }
+
+        if (reverify)
+        {
+            // The relays read back off before the bound passed, during the LEDs: they are read back again once the lock is
+            // free. (A relays-off sequence the bound cut short queued its own.)
+            QueueDeferredStop(reason, null, onlyWhileMoving: false, stopRequest: true);
         }
 
         RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);
@@ -880,6 +899,8 @@ public partial class RoofControllerServiceV4
     {
         lock (_syncLock)
         {
+            // A deadline stop found here is bounded through its LEDs (PR #230 rereview S-F4).
+            using var section = BoundedSection();
             if (_shuttingDown || _disposed)
             {
                 return RejectShuttingDown_NoLock<RoofStatusResponse>();

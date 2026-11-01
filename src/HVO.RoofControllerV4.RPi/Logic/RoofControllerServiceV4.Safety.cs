@@ -22,7 +22,8 @@ public partial class RoofControllerServiceV4
 
     private void OnInputEdge(int input, bool isHigh)
     {
-        // One bound for the edge's wait for the lock and every HAT access its stop makes, as a Stop has.
+        // A protective edge's stop has one bound from the edge, over its wait for the lock and every HAT access it makes,
+        // as a Stop has; a stop another edge leads to is bounded from its decision.
         var deadline = StopDeadlineFromNow();
 
         // A protective edge (a drive fault, or a limit asserting) raises its fence before anything waits, so a start that
@@ -55,7 +56,7 @@ public partial class RoofControllerServiceV4
                 return;
             }
 
-            using var bound = BoundHatIo(deadline);
+            using var section = BoundedSection(faultActive || limitAsserted ? deadline : null);
             ApplyInputEdge_NoLock(input, isHigh);
         }
         finally
@@ -334,6 +335,8 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private bool StopMotion_NoLock(RoofControllerStopReason reason, string? error)
     {
+        // Inside a bounded section the stop, and the rest of the section, has its one bound from here.
+        BoundTheStop();
         Interlocked.Increment(ref _stopSequenceCount);
         var now = Now;
         var direction = _commandedMotion;
@@ -529,7 +532,7 @@ public partial class RoofControllerServiceV4
             }
 
             _logger.LogWarning("Safety watchdog TRIGGERED after {Timeout}s of {Direction}; stopping", _options.SafetyWatchdogTimeout.TotalSeconds, _commandedMotion);
-            using var bound = BoundHatIo(deadline);
+            using var section = BoundedSection(deadline);
             StopMotion_NoLock(RoofControllerStopReason.SafetyWatchdogTimeout,
                 $"Safety watchdog stopped motion after {_options.SafetyWatchdogTimeout.TotalSeconds:0.#} s without reaching the destination limit.");
             FinishMutation_NoLock();
@@ -557,27 +560,52 @@ public partial class RoofControllerServiceV4
     private T HatCall<T>(Func<T> access)
     {
         var limit = HatIoLimit;
+        var bounded = false;
         if (t_ioDeadline is { } deadline)
         {
             // A stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereviews S-F4, F19).
             var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
             if (left <= TimeSpan.Zero)
             {
-                throw new HatIoOverrunException("The stop's 2 s bound has passed; this access was not sent. The relays-off work goes on after it.");
+                t_boundCut = true;
+                throw new HatIoOverrunException("The 2 s bound of the stop in progress has passed; this access was not sent. The relays-off work goes on after it.");
             }
 
             if (left < limit)
             {
                 limit = left;
+                bounded = true;
             }
         }
 
-        return _hatIo.Run(access, limit);
+        try
+        {
+            return _hatIo.Run(access, limit);
+        }
+        catch (HatIoOverrunException) when (bounded)
+        {
+            // Cut by the stop's bound, not by the access's own limit.
+            t_boundCut = true;
+            throw;
+        }
     }
 
     // The deadline (a Stopwatch timestamp) bounding the HAT I/O of the stop running on this thread, or null.
     [ThreadStatic]
     private static long? t_ioDeadline;
+
+    // True inside a bounded section (BoundedSection) on this thread, with the deadline a stop decided in it takes (null: 2 s
+    // from the decision). Outside one no stop is bounded: a queued stop's, shutdown's and disposal's relays-off work goes
+    // on at each access's own limit.
+    [ThreadStatic]
+    private static bool t_inBoundedSection;
+
+    [ThreadStatic]
+    private static long? t_sectionDeadline;
+
+    // True once the bound of the section on this thread has cut a HAT access short (or kept one from being sent).
+    [ThreadStatic]
+    private static bool t_boundCut;
 
     /// <summary>
     /// The deadline of a Stop or a protective stop that starts now: <see cref="StopLockWait"/> from now, for its wait for
@@ -589,24 +617,68 @@ public partial class RoofControllerServiceV4
     private static bool HasPassed(long deadline) => Stopwatch.GetTimestamp() >= deadline;
 
     /// <summary>
-    /// Bounds every HAT access this thread makes, until the scope is disposed, by <paramref name="deadline"/>, or by an
-    /// earlier deadline already set (a Stop's, around the deadline stop it makes first).
+    /// True once the bound of the section on this thread has cut a HAT access short or kept one from being sent, or
+    /// <paramref name="deadline"/> has passed. (A cut access can end a moment before the deadline itself.)
     /// </summary>
-    private static HatIoBound BoundHatIo(long deadline)
+    private static bool BoundPassed(long deadline) => t_boundCut || HasPassed(deadline);
+
+    /// <summary>
+    /// A locked section (a command, an input edge, the watchdog's timer, a supervision cycle) in which a stop is bounded
+    /// (#220, PR #230 rereviews S-F4, F19, F24): once a stop is decided in it (<see cref="BoundTheStop"/>), every HAT access
+    /// until the section ends, the caller's LEDs included, has one deadline. That is <paramref name="deadline"/> when the
+    /// section has one from its start (an edge or the watchdog's timer, whose bound counts their wait for the lock),
+    /// otherwise 2 s from the decision; a Stop's bound runs from its start (<paramref name="armNow"/>). Before a stop is
+    /// decided, routine accesses keep their own limit only.
+    /// </summary>
+    private static HatIoSection BoundedSection(long? deadline = null, bool armNow = false)
     {
-        var previous = t_ioDeadline;
-        t_ioDeadline = previous is { } outer && outer < deadline ? outer : deadline;
-        return new HatIoBound(previous);
+        var section = new HatIoSection(t_ioDeadline, t_inBoundedSection, t_sectionDeadline, t_boundCut);
+        t_inBoundedSection = true;
+        t_sectionDeadline = deadline;
+        t_boundCut = false;
+        if (armNow)
+        {
+            BoundTheStop();
+        }
+
+        return section;
     }
 
-    /// <summary>Restores the HAT I/O deadline that was set before <see cref="BoundHatIo"/>.</summary>
-    private readonly struct HatIoBound : IDisposable
+    /// <summary>A stop has been decided: bounds the rest of the section's HAT I/O (see <see cref="BoundedSection"/>).</summary>
+    private static void BoundTheStop()
     {
-        private readonly long? _previous;
+        if (!t_inBoundedSection)
+        {
+            return;
+        }
 
-        public HatIoBound(long? previous) => _previous = previous;
+        var deadline = t_sectionDeadline ?? StopDeadlineFromNow();
+        t_ioDeadline = t_ioDeadline is { } earlier && earlier < deadline ? earlier : deadline;
+    }
 
-        public void Dispose() => t_ioDeadline = _previous;
+    /// <summary>Restores the HAT I/O bound of the section around <see cref="BoundedSection"/>.</summary>
+    private readonly struct HatIoSection : IDisposable
+    {
+        private readonly long? _ioDeadline;
+        private readonly bool _inBoundedSection;
+        private readonly long? _sectionDeadline;
+        private readonly bool _boundCut;
+
+        public HatIoSection(long? ioDeadline, bool inBoundedSection, long? sectionDeadline, bool boundCut)
+        {
+            _ioDeadline = ioDeadline;
+            _inBoundedSection = inBoundedSection;
+            _sectionDeadline = sectionDeadline;
+            _boundCut = boundCut;
+        }
+
+        public void Dispose()
+        {
+            t_ioDeadline = _ioDeadline;
+            t_inBoundedSection = _inBoundedSection;
+            t_sectionDeadline = _sectionDeadline;
+            t_boundCut = _boundCut;
+        }
     }
 
     /// <summary>
@@ -738,7 +810,7 @@ public partial class RoofControllerServiceV4
 
             var verified = mask == 0;
             RecordRelayState_NoLock(verified, mask);
-            if (!verified && t_ioDeadline is { } deadline && HasPassed(deadline))
+            if (!verified && t_ioDeadline is { } deadline && BoundPassed(deadline))
             {
                 // The stop's bound cut its relays-off work short: it goes on as soon as the lock is free, each access at its
                 // own limit, and the relays stay unverified until a read-back shows them off.
@@ -987,9 +1059,9 @@ public partial class RoofControllerServiceV4
                 return;
             }
 
-            // The cycle's HAT I/O, a protective stop's included, is bounded as a Stop's is; its wait for the lock is bounded
-            // above, and past it a protective stop is queued.
-            using var bound = BoundHatIo(StopDeadlineFromNow());
+            // A stop the cycle decides is bounded as a Stop is, from its decision to the cycle's end, its LEDs included; the
+            // routine reads before it keep their own limit (PR #230 rereview F24). The wait for the lock is bounded above.
+            using var section = BoundedSection();
             var now = Now;
 
             if (_relayRegisterState == RoofRelayRegisterState.Unverified && !_clearFaultInProgress && _commandedMotion == RoofMotionDirection.None)
@@ -1114,8 +1186,6 @@ public partial class RoofControllerServiceV4
             return;
         }
 
-        // A deadline stop is a protective stop: its HAT I/O is bounded as a Stop's is, or by an earlier bound already set.
-        using var bound = BoundHatIo(StopDeadlineFromNow());
 
         if (_watchdogDeadlineUtc is { } watchdogDeadline && now >= watchdogDeadline)
         {

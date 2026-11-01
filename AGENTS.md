@@ -135,7 +135,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   2 s deadline covers its wait for the lock and all its HAT I/O (a passed deadline's stop first, its relays-off writes,
   the read-back and the LEDs), and past it Stop answers `RelayStateUnverified` and its relays-off work goes on once the
   lock is free until a read-back shows the relays off. The protective stops (an edge, the watchdog's timer, a
-  supervision cycle's deadline stops) have the same bound over their I/O; shutdown, a drive-fault
+  supervision cycle's or a renewal's deadline stop) have the same bound from their decision through their caller's
+  LEDs; routine reads keep their own 1.5 s; shutdown, a drive-fault
   edge and a limit asserting fence before they wait, and an edge that cannot take the lock in time is applied, with its
   own level and motion, once it is free. A
   relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault`

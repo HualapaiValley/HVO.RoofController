@@ -101,9 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fault and a limit asserting raise it too. A Stop has one 2 s deadline for its wait for the controller's lock and all
   its HAT I/O (a passed watchdog, lease or drive deadline's stop, which it makes first, and the LEDs included), and past
   it answers `RelayStateUnverified`, writing the relays off as soon as it can; the protective stops have the same bound
-  over their I/O. An input edge that cannot take the lock in time is applied once it is free,
-  with its own level and motion, never dropped. A relay write the controller gave up on keeps the relays unverified,
-  and `ClearFault` refused, until a read-back shows them off.
+  from their decision through their caller's LEDs. An input edge that cannot take the lock in time is applied once it is
+  free, with its own level and motion, never dropped. A relay write the controller gave up on keeps the relays
+  unverified, and `ClearFault` refused, until a read-back shows them off.
 - Every HAT access the controller makes is bounded (#220): relay writes and read-back, input reads and the LEDs run on
   the HAT's own access thread, and the controller waits at most 1.5 s for each. One that runs longer fails as a failed transfer does
   (relays unverified, `RelayVerificationFailed` latched), lets the controller's lock go, and holds off every later

@@ -128,6 +128,12 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     /// </summary>
     public Action<byte, byte>? BeforeLedWrite { get; set; }
 
+    /// <summary>
+    /// Invoked (outside the client lock) before each read of the relay register (0) or the input register (3) with the
+    /// register: a test sleeps here to model slow reads.
+    /// </summary>
+    public Action<byte>? BeforeRead { get; set; }
+
     /// <summary>Number of digital input register reads attempted.</summary>
     public int InputReadCount
     {
@@ -196,6 +202,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override byte ReadByte(byte register)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -206,6 +213,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override ushort ReadUInt16(byte register)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -215,6 +223,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override uint ReadUInt32(byte register)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -224,6 +233,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override void ReadBlock(byte register, Span<byte> destination)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -327,6 +337,14 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     }
 
     private static bool IsRelayRegister(byte register) => register is RelayMaskRegister or RelaySetRegister or RelayClearRegister;
+
+    private void InvokeBeforeRead(byte register)
+    {
+        if (register is RelayMaskRegister or InputRegister)
+        {
+            BeforeRead?.Invoke(register);
+        }
+    }
 
     private void ThrowIfReadFails_NoLock(byte register)
     {

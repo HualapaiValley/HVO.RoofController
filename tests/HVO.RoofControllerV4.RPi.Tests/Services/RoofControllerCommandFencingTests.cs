@@ -474,9 +474,11 @@ public class RoofControllerCommandFencingTests
     }
 
     [TestMethod]
-    public async Task AStopWithSlowLedWrites_AnswersWithinItsOneBound()
+    public async Task AStopWithSlowLedWrites_AnswersWithinItsOneBound_AndUnverifiedWhenItPassesIt()
     {
-        // Opus P1: an LED write failed, so the next update retries it, and each LED write now takes 1.2 s.
+        // Opus P1, and Sol's round-4 probe: an LED write failed, so the next update retries it, and each LED write now
+        // takes 1.2 s. The LEDs are inside the Stop's one bound, and a Stop whose bound passes during them answers that the
+        // relays are unverified; they are read back off again after.
         var (service, hat) = await CreateAsync();
         using var _ = service;
         hat.Registers.FailLedValueWrites = true;
@@ -492,7 +494,7 @@ public class RoofControllerCommandFencingTests
             watch.Stop();
 
             watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin, "the LEDs are inside the Stop's one bound");
-            stop.IsSuccessful.Should().BeTrue("the relays were verified off before the LEDs; the LEDs never decide a Stop");
+            stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified, "the bound passed before its HAT work ended");
         }
         finally
         {
@@ -500,6 +502,75 @@ public class RoofControllerCommandFencingTests
         }
 
         await RelaysVerifiedOffAfterAsync(service, hat);
+        service.GetCurrentStatusSnapshot().IsFaultLatched.Should().BeFalse("nothing failed: the relays were read back off");
+    }
+
+    [TestMethod]
+    [DataRow("renewal")]
+    [DataRow("repeated Close")]
+    public async Task ADeadlineStopFoundByARenewalOrARepeat_IsBoundedThroughItsLeds(string route)
+    {
+        // Sol's round-4 probes: the lease expired without supervision acting; a renewal or a repeated Close makes the
+        // deadline stop, and its LED retry, with 450 ms relay-off writes and 1.2 s LED writes, within the one bound.
+        var time = new ManualTimeProvider();
+        var (service, hat) = await CreateAsync(time, o => o.OperatorLeaseTimeout = TimeSpan.FromSeconds(5));
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        time.AdvanceWithoutTimers(TimeSpan.FromSeconds(6));
+        PendingLedRetry(service, hat);
+        SlowRelayOffWrites(hat, 450);
+        hat.Registers.BeforeLedWrite = (_, _) => Thread.Sleep(1200);
+
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var answer = route == "renewal" ? service.RenewLease().IsSuccessful : service.Close().IsSuccessful;
+            watch.Stop();
+
+            watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin, "the deadline stop's bound covers the caller's LEDs");
+            answer.Should().BeFalse("the lease had expired");
+            service.GetCurrentStatusSnapshot().LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        }
+        finally
+        {
+            hat.Registers.BeforeLedWrite = null;
+        }
+
+        await RelaysVerifiedOffAfterAsync(service, hat);
+    }
+
+    [TestMethod]
+    public async Task ASupervisionCycle_WithSlowButWorkingReads_LatchesNothing_AndTheRoofKeepsMoving()
+    {
+        // Opus F24: a cycle's routine reads keep their own 1.5 s limit; the stop bound starts only once a stop is decided.
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        hat.Registers.BeforeRead = _ => Thread.Sleep(1100);
+
+        try
+        {
+            service.RunSupervisionCycle();
+        }
+        finally
+        {
+            hat.Registers.BeforeRead = null;
+        }
+
+        var status = service.GetCurrentStatusSnapshot();
+        status.IsFaultLatched.Should().BeFalse(status.LastError);
+        service.IsHatIoOverrun.Should().BeFalse();
+        service.IsMoving.Should().BeTrue("a slow read within its limit stops nothing");
+        hat.RelayMask.Should().Be(0x0A);
+    }
+
+    /// <summary>An LED write fails, so the next LED update retries it (and the modes) while idle or not.</summary>
+    private static void PendingLedRetry(SimulatedRoofControllerService service, FakeRoofHat hat)
+    {
+        const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        typeof(RoofControllerServiceV4).GetField("_lastIndicatorLedMask", flags)!.SetValue(service, null);
+        typeof(RoofControllerServiceV4).GetField("_lastAttemptedIndicatorLedMask", flags)!.SetValue(service, null);
+        typeof(RoofControllerServiceV4).GetField("_ledModesApplied", flags)!.SetValue(service, false);
     }
 
     [TestMethod]
