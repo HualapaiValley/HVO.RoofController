@@ -45,19 +45,28 @@ public sealed class HatIoLaneTests
     [TestMethod]
     public async Task TheLane_StaysClosed_UntilItsRecoveryHasRun()
     {
-        // PR #230 rereview Opus F17: the recovery raises the controller's fence; no access may reach the HAT before it.
+        // PR #230 rereviews, Opus F17 and F25: the recovery raises the controller's fence; no access may reach the HAT before
+        // it. An access made while it runs waits for the lane's turn, which is still held ("stayed busy"); were the turn
+        // released first, it would be posted to the lane's thread, busy with the recovery, and run past its limit instead.
         var lane = HatIoLane.For(new object());
         using var release = new ManualResetEventSlim(false);
-        var reachedTheHat = 0L;
-        var reachedDuringRecovery = (bool?)null;
+        string? duringRecovery = null;
         var recovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<int>? during = null;
         lane.Recovered += () =>
         {
-            // An access made while the recovery runs waits for it, whatever it is.
-            during = Task.Run(() => lane.Run(() => { Interlocked.Exchange(ref reachedTheHat, Stopwatch.GetTimestamp()); return 4; }, TimeSpan.FromSeconds(5)));
-            Thread.Sleep(200);
-            reachedDuringRecovery = Interlocked.Read(ref reachedTheHat) != 0;
+            var attempt = Task.Run(() =>
+            {
+                try
+                {
+                    lane.Run(() => 0, TimeSpan.FromMilliseconds(50));
+                    return "it ran";
+                }
+                catch (HatIoOverrunException ex)
+                {
+                    return ex.Message;
+                }
+            });
+            duringRecovery = attempt.Wait(TimeSpan.FromSeconds(2)) ? attempt.Result : "no answer";
             recovered.TrySetResult();
         };
 
@@ -66,8 +75,9 @@ public sealed class HatIoLaneTests
         release.Set();
         await recovered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        reachedDuringRecovery.Should().BeFalse("the lane reopens only after its recovery has run");
-        (await during!.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(4);
+        duringRecovery.Should().Contain("stayed busy", "the lane's turn is held until its recovery has run");
+        SpinWait.SpinUntil(() => !lane.IsOverrun, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        lane.Run(() => 5, Limit).Should().Be(5, "the lane is open again after its recovery");
     }
 
     [TestMethod]
