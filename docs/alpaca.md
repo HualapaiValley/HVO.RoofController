@@ -498,7 +498,8 @@ kiosk, `hvo-roof`, or the API with any other key or a person's session leaves Al
 drops any grant, until a **person** clears the hold in the web UI, the terminal or the kiosk (`DELETE
 api/v4.0/alpaca/hold`, a person's session; every API key 403; audited). The Alpaca server's `AbortSlew` counts as its
 own only with its own account's key from a trusted address; with any other key it sets the hold too. The controller
-sets the hold when it starts, so after any restart Alpaca waits for a person. The roof's protective stops (limits,
+sets the hold when it starts, and whenever Alpaca commands are turned on, so after any restart, and before the first
+Alpaca command after commands go on, Alpaca waits for a person. The roof's protective stops (limits,
 the watchdog, the drive inputs) do not set it: the ones that matter latch a fault, which refuses every Close until
 cleared. A hold left overnight blocks Alpaca's Close, as a person's lease does.
 

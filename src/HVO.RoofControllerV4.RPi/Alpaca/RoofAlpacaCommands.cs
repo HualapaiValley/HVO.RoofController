@@ -744,8 +744,12 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 _mode = options.AllowCommands;
                 if (was == RoofAlpacaCommandMode.Off)
                 {
-                    // The idle clock starts when commands go on (#220, §14.4, L7).
+                    // The idle clock starts when commands go on (#220, §14.4, L7), and a person allows the first Alpaca
+                    // command, as after the controller's start: a hold cleared while they were off does not carry over
+                    // (PR #230 review, Opus F5).
                     _commandsOnSince = _time.GetTimestamp();
+                    _hold = new RoofStopHoldState { Held = true, SetBy = "Alpaca commands being turned on", SinceUtc = _time.GetUtcNow() };
+                    _logger.LogWarning("Alpaca commands turned on ({Mode}): the human Stop hold is set until a person clears it in the web UI, the terminal or the kiosk", _mode);
                 }
 
                 BumpEpoch_NoLock($"AllowCommands changed from {was} to {_mode}");

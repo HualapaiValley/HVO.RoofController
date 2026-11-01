@@ -349,4 +349,19 @@ public sealed class RoofAlpacaCloseTests
         rig.Hat.RelayMask.Should().Be(0x0A, "a soft condition changing mid-motion never stops it");
         rig.Commands.Alerts().Should().Contain(alert => alert.Kind == "MidMotion" && alert.ReasonKeys.SequenceEqual(new[] { "scope-not-clear:Main" }));
     }
+
+    [TestMethod]
+    public async Task TurningCommandsOn_SetsTheStopHold_SoAPersonAllowsTheFirstAlpacaClose()
+    {
+        // PR #230 review, Opus F5: a hold cleared while commands were off does not carry over when they go on.
+        await using var rig = (await AlpacaCommandRig.StartAsync(mode: RoofAlpacaCommandMode.Off)).Ready();
+        rig.Commands.GetStatus().Hold.Held.Should().BeFalse();
+
+        rig.Options.Set(new RoofAlpacaCommandOptions { AllowCommands = RoofAlpacaCommandMode.CloseOnly });
+
+        rig.Commands.GetStatus().Hold.Held.Should().BeTrue("commands going on wait for a person, as after a start");
+        (await rig.CloseAsync()).Rule().Should().Be("StopHold");
+        rig.Ready();
+        (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue();
+    }
 }
