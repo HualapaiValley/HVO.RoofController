@@ -266,6 +266,7 @@ internal static class RoofServiceMock
                 Task.FromResult(request.Direction == RoofMotionDirection.Opening ? mock.Object.Open() : mock.Object.Close()));
         mock.SetupGet(s => s.InstanceId).Returns("test-instance");
         mock.SetupGet(s => s.CommandGeneration).Returns(1);
+        mock.Setup(s => s.GetStartDelay(It.IsAny<RoofMotionDirection>())).Returns(TimeSpan.Zero);
         mock.Setup(s => s.Stop(It.IsAny<RoofControllerStopReason>())).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Stopped));
         mock.Setup(s => s.RenewLease()).Returns(() => Result<RoofStatusResponse>.Success(Snapshot()));
         mock.Setup(s => s.ClearFault(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(Result<bool>.Success(true));
