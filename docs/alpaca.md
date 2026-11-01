@@ -412,8 +412,8 @@ no credential, ignore one that is sent, and work with commands off, a fault latc
 The controller accepts the External key only from the Alpaca server's addresses: loopback, and
 `RoofController:Alpaca:ServerAddresses`, judged on the connection's own peer address, never on a header a proxy adds.
 From any other address the right key is refused. The account may do nothing else: it may ask for a ticket, send a
-Close, and read the status (`GET RoofControl/Status`, `GET Safety`); every other route answers 403, Stop and the
-ordinary Open and Close included. No other key and no person's session may use the Alpaca routes.
+Close (and, under `OpenAndClose`, an Open: [Alpaca Open](#alpaca-open)), and read the status (`GET RoofControl/Status`,
+`GET Safety`); every other route answers 403, Stop and the ordinary Open and Close included. No other key and no person's session may use the Alpaca routes.
 
 **Guessing is slowed down.** After three refusals in a row from one client address, the server delays each further
 "Not authorised" answer, by 100 ms, doubling, at most 2 s, and forgets the address 10 minutes after its last refusal.
