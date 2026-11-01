@@ -326,21 +326,22 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
 
     public async Task<TelescopeParkReading> RereadAsync(CancellationToken cancellationToken)
     {
-        Interlocked.Increment(ref _reads);
-        Interlocked.Increment(ref _rereads);
+        // Recorded (and held) before it is counted, so a test that has seen the count can always release it.
+        TaskCompletionSource<bool?>? held = null;
         lock (_gate)
         {
             _rereadTokens.Add(cancellationToken);
-        }
-
-        if (HoldRereads)
-        {
-            var held = new TaskCompletionSource<bool?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            lock (_gate)
+            if (HoldRereads)
             {
+                held = new TaskCompletionSource<bool?>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _held.Enqueue(held);
             }
+        }
 
+        Interlocked.Increment(ref _reads);
+        Interlocked.Increment(ref _rereads);
+        if (held is not null)
+        {
             var answer = await held.Task.WaitAsync(cancellationToken);
             return answer is { } value ? new TelescopeParkReading(value) : throw new IOException("Scripted telescope failed.");
         }
