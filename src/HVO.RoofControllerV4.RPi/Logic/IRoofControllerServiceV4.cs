@@ -199,6 +199,14 @@ public interface IRoofControllerServiceV4
         string InstanceId { get; }
 
         /// <summary>
+        /// How long a start in <paramref name="direction"/> asked for now would wait out the direction-change delay before
+        /// its relay (#220, §20 N1/N4): the whole delay for a reversal of the current motion or waiting start, what is left
+        /// of it after the last verified relay-off for a start from rest, what is left of a waiting start's wait in the same
+        /// direction, and nothing for a repeat. An Alpaca ticket's answer deadline counts it.
+        /// </summary>
+        TimeSpan GetStartDelay(RoofMotionDirection direction) => GetConfigurationSnapshot().DirectionChangeDelay;
+
+        /// <summary>
         /// Starts opening. Requires a fresh input read and an unlatched controller; the watchdog, optional operator lease
         /// and optional at-speed interlock are armed before the relays are energized. Repeating Open while opening renews
         /// the lease but never extends the watchdog. Opening while closing performs a verified stop first. Succeeds without

@@ -426,6 +426,32 @@ public partial class RoofControllerServiceV4
     private bool DestinationActive_NoLock(RoofMotionDirection direction)
         => (direction == RoofMotionDirection.Opening ? OpenLimitActive_NoLock : ClosedLimitActive_NoLock) == true;
 
+    /// <inheritdoc />
+    public TimeSpan GetStartDelay(RoofMotionDirection direction)
+    {
+        lock (_syncLock)
+        {
+            var now = Now;
+            if (_pendingStart is { } waiting)
+            {
+                if (waiting.Direction != direction)
+                {
+                    return _options.DirectionChangeDelay;
+                }
+
+                var left = waiting.ReadyAtUtc - now;
+                return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+            }
+
+            if (_commandedMotion == direction)
+            {
+                return TimeSpan.Zero;
+            }
+
+            return _commandedMotion != RoofMotionDirection.None ? _options.DirectionChangeDelay : RemainingDelay_NoLock(now);
+        }
+    }
+
     /// <summary>How much of the direction-change delay is still to run before a start may energize a relay.</summary>
     private TimeSpan RemainingDelay_NoLock(DateTimeOffset now)
     {
@@ -544,6 +570,9 @@ public partial class RoofControllerServiceV4
 
         if (pending.Admission?.Recheck() is { } recheck)
         {
+            // The status keeps why (N6): the roof stays stopped, and the Alpaca status action shows the reason.
+            _lastError = $"A waiting {pending.Direction.ToString().ToLowerInvariant()} was refused when its direction-change delay ended: {recheck.Message}";
+            FinishMutation_NoLock();
             var refusal = Refuse_NoLock(recheck);
             pending.Admission.ContinuationRefused((RoofControllerException)refusal.Error!);
             return refusal;

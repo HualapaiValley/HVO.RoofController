@@ -80,6 +80,24 @@ public class RoofControllerWaitingStartTests
     }
 
     [TestMethod]
+    public async Task TheStartDelay_IsWhatAStartWouldReallyWait()
+    {
+        // PR #230 review F5: an Alpaca ticket's deadline counts only this.
+        using var rig = await CreateAsync();
+        ((IRoofControllerServiceV4)rig.Service).GetStartDelay(RoofMotionDirection.Closing).Should().Be(Delay, "right after the start's all-off");
+
+        await rig.AdvanceAsync(Delay);
+        ((IRoofControllerServiceV4)rig.Service).GetStartDelay(RoofMotionDirection.Closing).Should().Be(TimeSpan.Zero, "the delay has run");
+        (await Within(rig.Service.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening)))).IsSuccessful.Should().BeTrue();
+        ((IRoofControllerServiceV4)rig.Service).GetStartDelay(RoofMotionDirection.Opening).Should().Be(TimeSpan.Zero, "a repeat waits for nothing");
+        ((IRoofControllerServiceV4)rig.Service).GetStartDelay(RoofMotionDirection.Closing).Should().Be(Delay, "a reversal waits the whole delay after its stop");
+
+        rig.Service.Stop().IsSuccessful.Should().BeTrue();
+        rig.Time.Advance(TimeSpan.FromMilliseconds(500));
+        ((IRoofControllerServiceV4)rig.Service).GetStartDelay(RoofMotionDirection.Closing).Should().Be(Delay - TimeSpan.FromMilliseconds(500), "what is left after the stop");
+    }
+
+    [TestMethod]
     public async Task NoDelay_StartsAtOnce()
     {
         using var rig = await CreateAsync(TimeSpan.Zero);

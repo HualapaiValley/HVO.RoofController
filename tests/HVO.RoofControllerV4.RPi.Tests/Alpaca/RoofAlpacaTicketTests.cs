@@ -20,7 +20,8 @@ public sealed class RoofAlpacaTicketTests
     [TestMethod]
     public async Task ATicket_CarriesTheInstance_TheGeneration_AndTheAnswerDeadline()
     {
-        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: TimeSpan.FromSeconds(1), budgetMs: 700)).Ready();
+        // Right after the controller's start, whose all-off the whole delay runs from (on a clock that does not move).
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: TimeSpan.FromSeconds(1), budgetMs: 700, time: new ManualTimeProvider())).Ready();
 
         var outcome = rig.Commands.IssueTicket(RoofAlpacaCommandKind.Close, rig.Commander, AlpacaCommandRig.Client);
 
@@ -28,8 +29,44 @@ public sealed class RoofAlpacaTicketTests
         ticket.InstanceId.Should().Be(rig.Controller.InstanceId);
         ticket.Generation.Should().Be(rig.Controller.CommandGeneration);
         ticket.Kind.Should().Be(RoofAlpacaCommandKind.Close);
-        ticket.AnswerDeadlineMilliseconds.Should().Be(700 + 1000 + 400, "budget + direction-change delay + 400 ms");
+        ticket.AnswerDeadlineMilliseconds.Should().Be(700 + 1000 + 400, "budget + what is left of the direction-change delay + 400 ms");
         ticket.TicketId.Should().HaveLength(22);
+    }
+
+    [TestMethod]
+    public async Task TheAnswerDeadline_CountsOnlyWhatIsLeftOfTheDelay()
+    {
+        var time = new ManualTimeProvider();
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: TimeSpan.FromSeconds(2), budgetMs: 600, time: time)).Ready();
+        time.Advance(TimeSpan.FromSeconds(3));
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening))).IsSuccessful.Should().BeTrue();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue();
+
+        time.Advance(TimeSpan.FromMilliseconds(1500));
+        rig.Ticket().AnswerDeadlineMilliseconds.Should().Be(600 + 500 + 400, "half a second of the delay is left");
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        rig.Ticket().AnswerDeadlineMilliseconds.Should().Be(600 + 400, "none of the delay is left");
+    }
+
+    [TestMethod]
+    public async Task ACloseDeliveredPastItsDeadline_WithNoDelayLeft_IsRefused_AndNothingMoves()
+    {
+        // PR #230 review F5: with the delay long over, the deadline is the budget and the margin alone.
+        var time = new ManualTimeProvider();
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: TimeSpan.FromSeconds(2), budgetMs: 600, time: time)).Ready();
+        time.Advance(TimeSpan.FromSeconds(3));
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening))).IsSuccessful.Should().BeTrue();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue();
+        time.Advance(TimeSpan.FromSeconds(3));
+        rig.Hat.ClearRelayWriteLog();
+
+        var ticket = rig.Ticket();
+        time.Advance(TimeSpan.FromMilliseconds(1300));
+        var outcome = await rig.CloseAsync(ticket);
+
+        outcome.Rule().Should().Be("DeadlineExceeded");
+        rig.RelayOnWrites(CloseRelay).Should().Be(0);
     }
 
     [TestMethod]

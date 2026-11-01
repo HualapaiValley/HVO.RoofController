@@ -106,6 +106,29 @@ public sealed class RoofAlpacaWaitingStartTests
     }
 
     [TestMethod]
+    public async Task TheDomeReadsClosingAndSlewingDuringTheWait_AndARefusedContinuationReadsErrorWithItsReason()
+    {
+        // N6 (PR #230 review F6): the accepted start reads as moving while it waits; refused when the wait ends, the roof
+        // reads Error and the status keeps why.
+        var (rig, _, _) = await JustStoppedAsync();
+        await using var __ = rig;
+        var close = rig.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Controller.GetCurrentStatusSnapshot().IsStartPending, "the waiting start");
+
+        var waiting = rig.Controller.GetCurrentStatusSnapshot();
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.StateOf(waiting).Should().Be(HVO.RoofControllerV4.Alpaca.Devices.DomeShutterState.Closing);
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.IsSlewing(waiting).Should().BeTrue("the start is accepted and waits out the delay");
+
+        rig.RotateCommanderKey();
+        (await close).Rule().Should().Be("AuthorizationChanged");
+
+        var after = rig.Controller.GetCurrentStatusSnapshot();
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.StateOf(after).Should().Be(HVO.RoofControllerV4.Alpaca.Devices.DomeShutterState.Error);
+        HVO.RoofControllerV4.Alpaca.Devices.DomeShutter.IsSlewing(after).Should().BeFalse();
+        after.LastError.Should().Contain("refused when its direction-change delay ended").And.Contain("changed after the ticket was issued");
+    }
+
+    [TestMethod]
     public async Task CommandsTurnedOffDuringTheWait_LeaveTheRoofStopped()
     {
         var (rig, _, writes) = await JustStoppedAsync();

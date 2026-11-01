@@ -42,7 +42,8 @@ public sealed partial class RoofAlpacaCommands
 
         var options = _options.CurrentValue;
         var budget = TimeSpan.FromMilliseconds(options.ScopeRereadBudgetMs);
-        var delay = _controller.GetConfigurationSnapshot().DirectionChangeDelay;
+        // Only the delay this Close would really wait counts (§20 N1/N4): what is left of it, or none.
+        var delay = _controller.GetStartDelay(RoofMotionDirection.Closing);
         var deadline = budget + delay + RoofAlpacaContract.AnswerMargin;
         var arrival = _safety.Timestamp();
         var id = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
