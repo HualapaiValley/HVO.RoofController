@@ -146,6 +146,13 @@ internal sealed class FakeRoofControllerService : IRoofControllerServiceV4
 
     public Result<RoofControllerStatus> Close() => Result<RoofControllerStatus>.Success(RoofControllerStatus.Closing);
 
+    public Task<Result<RoofControllerStatus>> StartMotionAsync(RoofMotionRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(request.Direction == RoofMotionDirection.Opening ? Open() : Close());
+
+    public long CommandGeneration { get; set; }
+
+    public string InstanceId { get; set; } = "fake-instance";
+
     public void RefreshStatus(bool forceHardwareRead = false)
         => StatusChanged?.Invoke(this, new RoofStatusChangedEventArgs(Snapshot));
 

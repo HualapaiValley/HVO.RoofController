@@ -22,6 +22,14 @@ public static class DomeShutter
     public static DomeShutterState StateOf(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
+
+        // A start that waited out the direction-change delay and was refused when its wait ended reads Error until the
+        // next start, Stop or ClearFault (#220, N6), whatever the roof's position: the client sees its command failed.
+        if (status.IsContinuationRefused && !status.IsMoving && !status.IsStartPending)
+        {
+            return DomeShutterState.Error;
+        }
+
         return status.Status switch
         {
             RoofControllerStatus.Open => DomeShutterState.Open,
@@ -34,12 +42,13 @@ public static class DomeShutter
     }
 
     /// <summary>
-    /// Whether the roof is moving: the controller is driving it, or the drive still reports running (IN4) after a stop
-    /// while the roof coasts to a halt.
+    /// Whether the roof is moving: the controller is driving it, a start it accepted waits out the direction-change delay
+    /// (#220, N6: it reads Opening or Closing meanwhile), or the drive still reports running (IN4) after a stop while the
+    /// roof coasts to a halt.
     /// </summary>
     public static bool IsSlewing(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
-        return status.IsMoving || status.CommandedMotion != RoofMotionDirection.None || status.IsAtSpeed;
+        return status.IsMoving || status.IsStartPending || status.CommandedMotion != RoofMotionDirection.None || status.IsAtSpeed;
     }
 }

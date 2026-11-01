@@ -208,9 +208,10 @@ public sealed class InstallerWizardControllerTests
         passwords.Describe().Should().NotContain(line => line.Contains(Password) || line.Contains(Pin) || line.Contains(CameraPassword));
         foreach (var secret in new[] { Password, Pin, CameraPassword })
         {
+            // Without the random folder names: a 4-digit PIN can turn up inside a GUID's hex.
             wizard.Screen.Should().NotContain(secret);
-            pi.Read(InstallPaths.SystemLog).Should().NotContain(secret);
-            pi.Read(InstallPaths.SystemRecord).Should().NotContain(secret);
+            pi.WithoutRandomNames(pi.Read(InstallPaths.SystemLog)).Should().NotContain(secret);
+            pi.WithoutRandomNames(pi.Read(InstallPaths.SystemRecord)).Should().NotContain(secret);
         }
     }
 

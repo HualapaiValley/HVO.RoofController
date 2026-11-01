@@ -518,13 +518,14 @@ public static partial class RoofCli
 
         /// <summary>
         /// Asks a yes/no question. Without a terminal, or with <c>--json</c>, the answer is no and the caller is told which
-        /// option confirms; with <c>--json</c>, standard output says so too, so a script always has a document to read.
+        /// option confirms (<paramref name="option"/>, <c>--force</c> unless the command names another); with
+        /// <c>--json</c>, standard output says so too, so a script always has a document to read.
         /// </summary>
-        internal static bool Confirm(RoofCliContext context, string question)
+        internal static bool Confirm(RoofCliContext context, string question, string option = "--force")
         {
             if (!context.Host.IsInteractive || context.Json)
             {
-                var message = $"{question} Not confirmed: run the command again with --force.";
+                var message = $"{question} Not confirmed: run the command again with {option}.";
                 context.Host.Error.WriteLine(message);
                 if (context.Json)
                 {

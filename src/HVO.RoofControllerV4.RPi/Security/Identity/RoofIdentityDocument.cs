@@ -85,7 +85,19 @@ public sealed record StoredApiKey(
     bool Kiosk,
     string KeySha256,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset UpdatedUtc);
+    DateTimeOffset UpdatedUtc)
+{
+    /// <summary>
+    /// For an Alpaca account's key (#220): its role, <see cref="RoofAlpacaContract.CommanderRole"/> or
+    /// <see cref="RoofAlpacaContract.ServerRole"/>; null for any other key. <see cref="Role"/> is then
+    /// <c>RoofViewer</c>, so an older controller (a rollback), which ignores this field, reads the store as it is and
+    /// treats the key as a Viewer key: status reads and Stop, never a command.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Account { get; init; }
+
+    /// <summary>The role the key authenticates with: its Alpaca account's, or <see cref="Role"/>.</summary>
+    [JsonIgnore] public string EffectiveRole => Account ?? Role;
+}
 
 /// <summary>An open session.</summary>
 /// <param name="Id">Non-secret identifier (32 hex characters).</param>

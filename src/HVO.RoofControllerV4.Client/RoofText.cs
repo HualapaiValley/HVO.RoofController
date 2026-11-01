@@ -98,6 +98,8 @@ public static class RoofText
         RoofControllerErrorCode.SettingNotFound => "The setting was not found.",
         RoofControllerErrorCode.SafetyInterlockActive => "The safety interlock refused Open: the conditions are not confirmed safe.",
         RoofControllerErrorCode.SafetyOverrideRequired => "The conditions are not confirmed safe. Open needs a safety override.",
+        RoofControllerErrorCode.Superseded => "A Stop or another command came first, so nothing moved for this one.",
+        RoofControllerErrorCode.AlpacaCommandRefused => "The Alpaca command rules refused it.",
         _ => "The controller reported an unexpected error."
     };
 

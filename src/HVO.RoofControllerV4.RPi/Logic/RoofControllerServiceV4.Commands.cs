@@ -66,6 +66,10 @@ public partial class RoofControllerServiceV4
             }
 
             _initialized = true;
+
+            // The relays were off before this start (or their state was unknown): every start waits out the
+            // direction-change delay from here, as after any stop.
+            _lastDriveOffUtc = Now;
             ApplyHardwareSettings_NoLock();
             ApplyIndicatorLedModes_NoLock();
 
@@ -90,318 +94,6 @@ public partial class RoofControllerServiceV4
 
     private bool IgnoringLimitsOnHardwareWithoutConsent(RoofControllerOptionsV4 options)
         => options.IgnorePhysicalLimitSwitches && _hat.IsHardwareBacked && !options.AllowIgnoringLimitSwitchesOnPhysicalHardware;
-
-    #endregion
-
-    #region Motion commands
-
-    /// <inheritdoc />
-    public Result<RoofControllerStatus> Open() => ExecuteMotionCommand("open", RoofMotionDirection.Opening);
-
-    /// <inheritdoc />
-    public Result<RoofControllerStatus> Close() => ExecuteMotionCommand("close", RoofMotionDirection.Closing);
-
-    private Result<RoofControllerStatus> ExecuteMotionCommand(string command, RoofMotionDirection direction)
-    {
-        var startTimestamp = Stopwatch.GetTimestamp();
-        using var activity = RoofControllerTelemetry.StartCommand(command);
-        Result<RoofControllerStatus> result;
-        try
-        {
-            result = StartMotion(direction);
-        }
-        catch (Exception ex)
-        {
-            lock (_syncLock)
-            {
-                _logger.LogError(ex, "Unexpected error while starting {Direction}; stopping", direction);
-                if (_commandedMotion != RoofMotionDirection.None)
-                {
-                    StopMotion_NoLock(RoofControllerStopReason.EmergencyStop, $"Unexpected error while starting {direction}: {ex.Message}");
-                }
-
-                FinishMutation_NoLock();
-                result = Result<RoofControllerStatus>.Failure(Rejection_NoLock(RoofControllerErrorCode.Unknown, $"Unexpected error while starting {direction}.", ex));
-            }
-        }
-
-        RoofControllerTelemetry.CompleteCommand(activity, command, result.IsSuccessful, startTimestamp);
-        return result;
-    }
-
-    private Result<RoofControllerStatus> StartMotion(RoofMotionDirection direction)
-    {
-        lock (_syncLock)
-        {
-            if (_shuttingDown || _disposed)
-            {
-                return RejectShuttingDown_NoLock<RoofControllerStatus>();
-            }
-
-            if (!_initialized)
-            {
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.NotInitialized, "The roof controller is not initialized.");
-            }
-
-            if (_clearFaultInProgress)
-            {
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.OperationInProgress, "A clear-fault pulse is in progress.");
-            }
-
-            if (_faultLatched)
-            {
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.FaultLatched,
-                    $"A safety fault is latched ({_latchedFaultReason}); run ClearFault before commanding motion.");
-            }
-
-            var now = Now;
-
-            // A deadline can pass before the watchdog timer callback or the next supervision cycle acts on it. Enforce it
-            // first, so neither a repeat nor a reversal revives an expired lease or outlives a missed watchdog or at-speed
-            // deadline, and the stop is recorded (and latched) with the deadline's reason.
-            if (_commandedMotion != RoofMotionDirection.None)
-            {
-                var repeat = _commandedMotion == direction;
-                CheckDeadlines_NoLock(now);
-
-                // The inputs re-read at an input deadline can show the destination limit: the roof arrived, so a
-                // repeat has nothing left to do.
-                if (repeat && _commandedMotion == RoofMotionDirection.None && _lastStopReason == RoofControllerStopReason.LimitSwitchReached
-                    && !_faultLatched && _relayRegisterState == RoofRelayRegisterState.Verified)
-                {
-                    FinishMutation_NoLock();
-                    return Result<RoofControllerStatus>.Success(_status);
-                }
-
-                if (_commandedMotion == RoofMotionDirection.None
-                    && (repeat || _faultLatched || _relayRegisterState != RoofRelayRegisterState.Verified))
-                {
-                    FinishMutation_NoLock();
-                    return RejectAfterDeadlineStop_NoLock<RoofControllerStatus>();
-                }
-
-                // Only the lease expired, or the destination limit was reached, under a reversal: the roof is now
-                // stopped (verified) and the reversal is a start.
-            }
-
-            // A repeat of the current command renews the operator lease only. It never extends the watchdog, which is
-            // an absolute cap measured from motion start.
-            if (_commandedMotion == direction)
-            {
-                if (_options.OperatorLeaseTimeout is { } leaseTimeout && _leaseDeadlineUtc is not null)
-                {
-                    _leaseDeadlineUtc = now + leaseTimeout;
-                }
-
-                FinishMutation_NoLock();
-                return Result<RoofControllerStatus>.Success(_status);
-            }
-
-            // Reversal: stop (verified) before anything else.
-            if (_commandedMotion != RoofMotionDirection.None)
-            {
-                if (!StopMotion_NoLock(RoofControllerStopReason.NormalStop, null))
-                {
-                    FinishMutation_NoLock();
-                    return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.RelayStateUnverified,
-                        "Reversal refused: the stop before reversing could not verify the relay register.");
-                }
-            }
-
-            // Every start requires a fresh, successful input read.
-            if (!ReadInputs_NoLock())
-            {
-                FinishMutation_NoLock();
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.HardwareUnavailable,
-                    "Safety inputs could not be read; motion refused.");
-            }
-
-            // A reversal's stop and this read take time, and IN4 can drop within them: measure the stop delay, and this
-            // move's timing, from the read.
-            now = Now;
-            Evaluate_NoLock(now);
-            if (DriveFaultActive_NoLock == true)
-            {
-                FinishMutation_NoLock();
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.InterlockActive, "The drive fault input (IN3) is active; motion refused.");
-            }
-
-            if (LimitsContradictory_NoLock)
-            {
-                FinishMutation_NoLock();
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.InterlockActive, "Both limit switches report active; motion refused.");
-            }
-
-            if (_faultLatched)
-            {
-                FinishMutation_NoLock();
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.FaultLatched,
-                    $"A safety fault is latched ({_latchedFaultReason}); run ClearFault before commanding motion.");
-            }
-
-            // With the run interlock configured, the start must be confirmed by IN4 rising. A drive that already reports
-            // running (ramping down after a ramp stop, in a DC brake with the Run output on, or running without a
-            // command) would confirm it at once, so the start is refused until IN4 drops. With the coast stop IN4 drops
-            // within milliseconds, so a reversal proceeds while the roof is still coasting.
-            if (_options.AtSpeedConfirmationTimeout is not null && _rawIn4 == true)
-            {
-                FinishMutation_NoLock();
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.InterlockActive,
-                    "The drive still reports running (IN4); motion refused until it stops.");
-            }
-
-            // Already at the destination: nothing to energize.
-            var destinationActive = direction == RoofMotionDirection.Opening ? OpenLimitActive_NoLock : ClosedLimitActive_NoLock;
-            if (destinationActive == true)
-            {
-                _logger.LogInformation("{Direction} requested but the destination limit is already active; no motion", direction);
-                FinishMutation_NoLock();
-                return Result<RoofControllerStatus>.Success(_status);
-            }
-
-            // Arm all supervision before energizing.
-            var departureLimit = direction == RoofMotionDirection.Opening ? ClosedLimitActive_NoLock : OpenLimitActive_NoLock;
-            _motionGeneration++;
-            _commandedMotion = direction;
-            _lastMotionDirection = direction;
-            _motionStartUtc = now;
-            _lastMotionStopUtc = null;
-            _driveStopDelayPending = null;
-            _lastError = null;
-            ArmWatchdog_NoLock(now);
-            _leaseDeadlineUtc = _options.OperatorLeaseTimeout is { } lease ? now + lease : null;
-            _atSpeedDeadlineUtc = _options.AtSpeedConfirmationTimeout is { } atSpeed ? now + atSpeed : null;
-            _atSpeedConfirmed = false;
-            _runLostUtc = null;
-            _driveStoppedAtStart = _rawIn4 == false;
-            _startedAtLimit = departureLimit == true;
-            _departureReleaseVerified = departureLimit != true;
-            _releaseObservedUtc = null;
-            _departureDeadlineUtc = departureLimit == true && _options.DepartureReleaseTimeout is { } departure ? now + departure : null;
-
-            if (!SetRelayStatesAtomically(stopRelay: true, openRelay: direction == RoofMotionDirection.Opening, closeRelay: direction == RoofMotionDirection.Closing))
-            {
-                StopMotion_NoLock(RoofControllerStopReason.RelayVerificationFailed,
-                    $"The relay register did not verify while energizing {direction}; motion aborted.");
-                FinishMutation_NoLock();
-                return Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.RelayStateUnverified,
-                    $"{direction} aborted: the relay register did not verify the requested state.");
-            }
-
-            _logger.LogInformation("Roof {Direction} started. Watchdog={Watchdog}s Lease={Lease} AtSpeedTimeout={AtSpeed} DepartingFromLimit={Departing} DepartureTimeout={DepartureTimeout}",
-                direction, _options.SafetyWatchdogTimeout.TotalSeconds, _options.OperatorLeaseTimeout, _options.AtSpeedConfirmationTimeout, departureLimit == true,
-                _departureDeadlineUtc is null ? null : _options.DepartureReleaseTimeout);
-
-            // Edges may have been missed between the read and the relay writes; the supervision cycle re-reads promptly.
-            FinishMutation_NoLock();
-            WakeSupervision_NoLock();
-            return Result<RoofControllerStatus>.Success(_status);
-        }
-    }
-
-    /// <inheritdoc />
-    public Result<RoofControllerStatus> Stop(RoofControllerStopReason reason = RoofControllerStopReason.NormalStop)
-    {
-        var startTimestamp = Stopwatch.GetTimestamp();
-        using var activity = RoofControllerTelemetry.StartCommand("stop");
-        Result<RoofControllerStatus> result;
-        lock (_syncLock)
-        {
-            if (_disposed)
-            {
-                result = RejectShuttingDown_NoLock<RoofControllerStatus>();
-            }
-            else
-            {
-                // A stop preempts a clear-fault pulse; the all-off sequence below also drops the clear-fault relay.
-                _clearFaultCts?.Cancel();
-
-                // A deadline that has already passed stops the motion first, so the recorded stop reason (and any latch)
-                // is the deadline's rather than the operator's. The stop below then re-asserts and verifies all-off.
-                if (_commandedMotion != RoofMotionDirection.None)
-                {
-                    CheckDeadlines_NoLock(Now);
-                }
-
-                var verified = _commandedMotion != RoofMotionDirection.None
-                    ? StopMotion_NoLock(reason, null)
-                    : StopIdle_NoLock(reason);
-                FinishMutation_NoLock();
-
-                result = verified
-                    ? Result<RoofControllerStatus>.Success(_status)
-                    : Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.RelayStateUnverified,
-                        "Stop could not verify the relay register all-off state. Use the independent hardware stop.");
-            }
-        }
-
-        RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);
-        return result;
-    }
-
-    /// <inheritdoc />
-    public Result<RoofStatusResponse> RenewLease()
-    {
-        lock (_syncLock)
-        {
-            if (_shuttingDown || _disposed)
-            {
-                return RejectShuttingDown_NoLock<RoofStatusResponse>();
-            }
-
-            if (!_initialized)
-            {
-                return Reject_NoLock<RoofStatusResponse>(RoofControllerErrorCode.NotInitialized, "The roof controller is not initialized.");
-            }
-
-            var now = Now;
-            if (_commandedMotion == RoofMotionDirection.None || _leaseDeadlineUtc is null || _options.OperatorLeaseTimeout is not { } leaseTimeout)
-            {
-                return Reject_NoLock<RoofStatusResponse>(RoofControllerErrorCode.LeaseNotActive, "No leased motion is active.");
-            }
-
-            // Never revive an expired lease, or renew past a missed watchdog or at-speed deadline; stop now instead of
-            // waiting for the next supervision cycle.
-            CheckDeadlines_NoLock(now);
-            if (_commandedMotion == RoofMotionDirection.None)
-            {
-                FinishMutation_NoLock();
-                return RejectAfterDeadlineStop_NoLock<RoofStatusResponse>();
-            }
-
-            _leaseDeadlineUtc = now + leaseTimeout;
-            FinishMutation_NoLock();
-            return Result<RoofStatusResponse>.Success(BuildSnapshot_NoLock(now, forKey: false));
-        }
-    }
-
-    /// <summary>
-    /// Rejection for a lease renewal, repeated Open/Close or reversal that found a passed deadline and stopped motion
-    /// instead, or whose input re-read at a deadline found the destination limit. (A reversal that found only an expired
-    /// lease or the destination limit, with the stop verified, proceeds as a start; a repeat that found the destination
-    /// limit succeeds.)
-    /// </summary>
-    private Result<T> RejectAfterDeadlineStop_NoLock<T>()
-    {
-        if (_relayRegisterState == RoofRelayRegisterState.Unverified)
-        {
-            return Reject_NoLock<T>(RoofControllerErrorCode.RelayStateUnverified,
-                $"Motion had passed a deadline ({_lastStopReason}) and the stop could not verify the relay register. Use the independent hardware stop.");
-        }
-
-        if (_faultLatched)
-        {
-            return Reject_NoLock<T>(RoofControllerErrorCode.FaultLatched,
-                $"Motion had passed a safety deadline ({_lastStopReason}); motion stopped and the fault is latched.");
-        }
-
-        if (_lastStopReason == RoofControllerStopReason.LimitSwitchReached)
-        {
-            return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "Motion had already ended at the destination limit.");
-        }
-
-        return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "The operator lease had already expired; motion stopped.");
-    }
 
     #endregion
 
@@ -476,6 +168,14 @@ public partial class RoofControllerServiceV4
             if (_commandedMotion != RoofMotionDirection.None)
             {
                 return (Reject_NoLock<bool>(RoofControllerErrorCode.OperationInProgress, "ClearFault is refused while the roof is moving; stop first."), "rejected");
+            }
+
+            // A HAT access past its time limit may still switch a relay: nothing is cleared until it has returned and the
+            // relays have been written off and verified (#220, §19 M1, §20 N3).
+            if (_hatIo.IsOverrun)
+            {
+                return (Reject_NoLock<bool>(RoofControllerErrorCode.RelayStateUnverified,
+                    "A HAT access is still running past its time limit; the relays cannot be verified until it returns, so the fault is not cleared yet."), "rejected");
             }
 
             if (cancellationToken.IsCancellationRequested)
@@ -592,6 +292,7 @@ public partial class RoofControllerServiceV4
             _faultLatched = false;
             _latchedFaultReason = null;
             _lastError = null;
+            _continuationRefused = false;
             FinishMutation_NoLock();
             return (Result<bool>.Success(true), "cleared");
         }
@@ -636,10 +337,10 @@ public partial class RoofControllerServiceV4
                     $"Configuration version {expected} does not match the current version {_configurationVersion}.");
             }
 
-            if (_commandedMotion != RoofMotionDirection.None || _clearFaultInProgress)
+            if (_commandedMotion != RoofMotionDirection.None || _pendingStart is not null || _clearFaultInProgress)
             {
                 return Reject_NoLock<RoofControllerOptionsV4>(RoofControllerErrorCode.OperationInProgress,
-                    "Configuration cannot be changed while the roof is moving or a clear-fault pulse is in progress.");
+                    "Configuration cannot be changed while the roof is moving (or a start waits out the direction-change delay) or a clear-fault pulse is in progress.");
             }
 
             // The consent flag and the drive-stop and departure windows are local-only configuration: only a caller the
@@ -650,7 +351,8 @@ public partial class RoofControllerServiceV4
                 {
                     AllowIgnoringLimitSwitchesOnPhysicalHardware = _options.AllowIgnoringLimitSwitchesOnPhysicalHardware,
                     DriveStopConfirmationTimeout = _options.DriveStopConfirmationTimeout,
-                    DepartureReleaseTimeout = _options.DepartureReleaseTimeout
+                    DepartureReleaseTimeout = _options.DepartureReleaseTimeout,
+                    DirectionChangeDelay = _options.DirectionChangeDelay
                 };
 
             var validation = _optionsValidator.Validate(null, candidate);
@@ -768,6 +470,15 @@ public partial class RoofControllerServiceV4
     /// <inheritdoc />
     public async Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken)
     {
+        // The intent and the relay fence go up before shutdown waits for the lock (#220, PR #230 rereview F11): a start
+        // that passed its checks and holds the lock never energizes, and nothing new is admitted meanwhile.
+        var firstCall = !_shuttingDown;
+        if (!_disposed)
+        {
+            _shuttingDown = true;
+            FenceRelaysOff();
+        }
+
         Task<bool> retry;
         lock (_syncLock)
         {
@@ -786,9 +497,9 @@ public partial class RoofControllerServiceV4
             }
             else
             {
-                var firstCall = !_shuttingDown;
                 _shuttingDown = true;
                 _clearFaultCts?.Cancel();
+                CancelPendingStart_NoLock("The controller is shutting down; nothing moved for this start.");
 
                 var verified = _commandedMotion != RoofMotionDirection.None
                     ? StopMotion_NoLock(RoofControllerStopReason.HostShutdown, null)
@@ -993,6 +704,28 @@ public partial class RoofControllerServiceV4
                 return false;
             }
 
+            if (!_disposed && _hatIo.IsOverrun)
+            {
+                // A HAT access past its time limit may still switch a relay when it returns: the all-off stop waits for it.
+                _shuttingDown = true;
+                var deferred = new Task(() =>
+                {
+                    while (_hatIo.IsOverrun)
+                    {
+                        Thread.Sleep(20);
+                    }
+
+                    RunDeferredDisposal();
+                }, TaskCreationOptions.LongRunning);
+                if (Interlocked.CompareExchange(ref _deferredDisposalTask, deferred, null) is null)
+                {
+                    _logger.LogCritical("Disposal found a HAT access still running past its time limit. The all-off stop will run when it returns; until then relay state is unknown, so use the independent hardware stop.");
+                    deferred.Start(TaskScheduler.Default);
+                }
+
+                return false;
+            }
+
             return !_disposed && DisposeCore_NoLock(out pending);
         }
         finally
@@ -1028,6 +761,7 @@ public partial class RoofControllerServiceV4
         _disposed = true;
         _clearFaultCts?.Cancel();
         _shutdownStopRetryCts?.Cancel();
+        CancelPendingStart_NoLock("The controller is shutting down; nothing moved for this start.");
 
         var verified = _commandedMotion != RoofMotionDirection.None
             ? StopMotion_NoLock(RoofControllerStopReason.SystemDisposal, null)
@@ -1040,6 +774,9 @@ public partial class RoofControllerServiceV4
 
         StopSupervision_NoLock();
         UnsubscribeInputs_NoLock();
+
+        // The HAT's lane outlives this controller (its thread idles a while), so it must not keep it.
+        _hatIo.Recovered -= OnHatIoRecovered;
         FinishMutation_NoLock();
         _statusChannel.Writer.TryComplete();
 

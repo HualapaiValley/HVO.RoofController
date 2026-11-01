@@ -99,6 +99,9 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private readonly long _clockOriginTimestamp;
 
     private readonly object _hatTransactionLock;
+
+    // Every HAT access runs on this lane, bounded by HatIoLimit (#220, §17 AA5).
+    private readonly HatIoLane _hatIo;
     private readonly string _controllerName;
     private readonly string _controllerInstanceId = Guid.NewGuid().ToString();
     private readonly RoofControllerOptionsV4Validator _optionsValidator = new();
@@ -227,6 +230,8 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _clockOriginTimestamp = _timeProvider.GetTimestamp();
         _options = (roofControllerOptions.Value ?? new RoofControllerOptionsV4()) with { };
         _hatTransactionLock = HatTransactionLocks.GetValue(fourRelayFourInputHat, static _ => new object());
+        _hatIo = HatIoLane.For(fourRelayFourInputHat);
+        _hatIo.Recovered += OnHatIoRecovered;
         _hatMode = RoofHatConnection.ModeFor(hatConnection?.IsEmulated == true, _hat.IsHardwareBacked);
 
         var configuredName = hostOptions?.Value?.ControllerName;
@@ -485,11 +490,12 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         {
             status = RoofControllerStatus.Error;
         }
-        else if (_commandedMotion == RoofMotionDirection.Opening)
+        else if (_commandedMotion == RoofMotionDirection.Opening || _pendingStart?.Direction == RoofMotionDirection.Opening)
         {
+            // A start waiting out the direction-change delay reads as moving in its direction (#220, N6).
             status = RoofControllerStatus.Opening;
         }
-        else if (_commandedMotion == RoofMotionDirection.Closing)
+        else if (_commandedMotion == RoofMotionDirection.Closing || _pendingStart?.Direction == RoofMotionDirection.Closing)
         {
             status = RoofControllerStatus.Closing;
         }
@@ -582,6 +588,10 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             ControllerName = _controllerName,
             ControllerInstanceId = _controllerInstanceId,
             HatMode = _hatMode,
+            IsStartPending = _pendingStart is not null,
+            IsContinuationRefused = _continuationRefused,
+            PendingMotion = _pendingStart?.Direction ?? RoofMotionDirection.None,
+            MotionOwner = _commandedMotion != RoofMotionDirection.None ? _motionOwner : _pendingStart?.Owner,
             LastError = _lastError
         };
     }
@@ -601,6 +611,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _lastPublishedKey = key;
         _statusVersion++;
         var snapshot = BuildSnapshot_NoLock(now, forKey: false);
+        _lastPublishedSnapshot = snapshot;
         _statusChannel.Writer.TryWrite(snapshot);
     }
 
@@ -681,7 +692,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             // while healthy with the active-low fault wiring). Re-assert the modes with each change, and while idle until
             // a write succeeds, so a HAT that reset since initialization shows the logical states again.
             ApplyIndicatorLedModes_NoLock();
-            var result = _hat.SetLedsMask(mask);
+            var result = HatCall(() => _hat.SetLedsMask(mask));
             if (result.IsSuccessful)
             {
                 _lastIndicatorLedMask = mask;
@@ -706,7 +717,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
         _ledModesApplied = false;
         try
         {
-            var result = _hat.SetLedModesMask(IndicatorLedModes);
+            var result = HatCall(() => _hat.SetLedModesMask(IndicatorLedModes));
             if (result.IsSuccessful)
             {
                 _ledModesApplied = true;
@@ -736,7 +747,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
 
         try
         {
-            var result = _hat.GetLedModesMask();
+            var result = HatCall(_hat.GetLedModesMask);
             if (result.IsSuccessful && (result.Value & 0x0F) == IndicatorLedModes)
             {
                 return;

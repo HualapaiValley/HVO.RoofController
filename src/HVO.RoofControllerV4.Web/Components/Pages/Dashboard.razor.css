@@ -88,8 +88,25 @@
 .rc2-safety-question p { margin: 0 0 8px; }
 .rc2-safety-question-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
 .rc2-safety-question-actions .btn { min-height: 44px; }
+/* #220: the Alpaca panel, across the page under the controls and the camera. Each state has words; colour only repeats it. */
+.rc2-main--alpaca { grid-template-areas: "controls camera" "alpaca alpaca" "details activity"; }
+.rc2-alpaca { grid-area: alpaca; }
+.rc2-alpaca--compact .rc2-card-body { padding-top: 14px; padding-bottom: 14px; }
+.rc2-alpaca-mode { margin: 0; font-size: 13px; font-weight: 600; }
+.rc2-alpaca--compact .rc2-alpaca-mode { color: var(--roof-muted); font-weight: 400; }
+.rc2-alpaca-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0 0; font-size: 13px; }
+.rc2-alpaca-line > .bi { flex-shrink: 0; font-size: 16px; }
+.rc2-alpaca-line--warn { padding: 8px 12px; border-left: 3px solid var(--roof-warning); border-radius: 4px; background: var(--roof-warning-background); color: var(--roof-warning-text); }
+.rc2-alpaca-question { margin: 12px 0 0; }
+.rc2-alpaca-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.rc2-alpaca-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--roof-border); border-left-width: 3px; border-radius: 6px; font-size: 13px; }
+.rc2-alpaca-item--grant { border-left-color: var(--roof-info); }
+.rc2-alpaca-item--alert { border-left-color: var(--roof-warning); }
+.rc2-alpaca-item--acknowledged { border-left-color: var(--roof-border); color: var(--roof-muted); }
+.rc2-alpaca-text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.rc2-alpaca-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 850px) { .rc2-main { gap: 16px; } .rc2-state { grid-template-columns: 1fr 1fr; } .rc2-state-limits { grid-column: 1 / -1; border-top: 1px solid var(--roof-border); } .rc2-state-item:nth-child(2) { border: 0; } }
-@media (max-width: 680px) { .rc2-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "controls" "camera" "details" "activity"; } .rc2-card-body, .rc2-card-head { padding: 16px; } .rc2-header { margin-bottom: 20px; } .rc2-title { font-size: 26px; } }
+@media (max-width: 680px) { .rc2-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "controls" "camera" "details" "activity"; } .rc2-main--alpaca { grid-template-areas: "controls" "alpaca" "camera" "details" "activity"; } .rc2-card-body, .rc2-card-head { padding: 16px; } .rc2-header { margin-bottom: 20px; } .rc2-title { font-size: 26px; } }
 @media (max-width: 360px) { .rc2-action:not(.rc2-action--small) { flex-direction: column; text-align: center; min-height: 108px; } .rc2-row { grid-template-columns: 1fr; gap: 4px; } }
 
 .rc-open .bi { color: var(--roof-success); }

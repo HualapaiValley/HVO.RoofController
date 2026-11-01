@@ -116,6 +116,24 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     /// <summary>Invoked (outside the client lock) after each relay-register write with the register, value and resulting mask.</summary>
     public Action<byte, byte, byte>? RelayWriteObserver { get; set; }
 
+    /// <summary>
+    /// Invoked (outside the client lock) before each byte write to a relay register with the register and value, before the
+    /// write lands: a test blocks here to model a relay write that hangs in the transfer.
+    /// </summary>
+    public Action<byte, byte>? BeforeRelayWrite { get; set; }
+
+    /// <summary>
+    /// Invoked (outside the client lock) before each write to an LED register (5-8) with the register and value: a test
+    /// sleeps here to model slow LED writes.
+    /// </summary>
+    public Action<byte, byte>? BeforeLedWrite { get; set; }
+
+    /// <summary>
+    /// Invoked (outside the client lock) before each read of the relay register (0) or the input register (3) with the
+    /// register: a test sleeps here to model slow reads.
+    /// </summary>
+    public Action<byte>? BeforeRead { get; set; }
+
     /// <summary>Number of digital input register reads attempted.</summary>
     public int InputReadCount
     {
@@ -184,6 +202,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override byte ReadByte(byte register)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -194,6 +213,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override ushort ReadUInt16(byte register)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -203,6 +223,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override uint ReadUInt32(byte register)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -212,6 +233,7 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override void ReadBlock(byte register, Span<byte> destination)
     {
+        InvokeBeforeRead(register);
         lock (_gate)
         {
             ThrowIfReadFails_NoLock(register);
@@ -225,6 +247,15 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override void WriteByte(byte register, byte value)
     {
+        if (IsRelayRegister(register))
+        {
+            BeforeRelayWrite?.Invoke(register, value);
+        }
+        else if (register is >= LedValueRegister and <= LedModeRegister)
+        {
+            BeforeLedWrite?.Invoke(register, value);
+        }
+
         byte? mask = null;
         Action<byte, byte, byte>? observer;
         lock (_gate)
@@ -285,6 +316,11 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override void WriteBlock(byte register, ReadOnlySpan<byte> data)
     {
+        if (register is >= LedValueRegister and <= LedModeRegister)
+        {
+            BeforeLedWrite?.Invoke(register, data.Length > 0 ? data[0] : (byte)0);
+        }
+
         lock (_gate)
         {
             if (IsRelayRegister(register))
@@ -301,6 +337,14 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     }
 
     private static bool IsRelayRegister(byte register) => register is RelayMaskRegister or RelaySetRegister or RelayClearRegister;
+
+    private void InvokeBeforeRead(byte register)
+    {
+        if (register is RelayMaskRegister or InputRegister)
+        {
+            BeforeRead?.Invoke(register);
+        }
+    }
 
     private void ThrowIfReadFails_NoLock(byte register)
     {

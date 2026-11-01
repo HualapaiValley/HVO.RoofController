@@ -111,10 +111,21 @@ public sealed class C13TelemetryOutageScenarios
         var limitStops = new List<TimeSpan> { await LimitStopAsync(rig, client) };
 
         await rig.ConfigureAsync(r => r with { SafetyWatchdogTimeoutSeconds = WatchdogSeconds });
-        await client.AcceptedAsync("Open");
+
+        // The overrun is measured from the controller's own deadline (the Open's status: its snapshot time plus the
+        // watchdog's remaining seconds), put on the plant's clock, to the open relay's release. It was measured from the
+        // open relay's closing, but the watchdog is armed before the start's relay writes, so that took the start's
+        // relay I/O (about 110 ms of register round trips, varying between runs by more than the margin) off the
+        // overrun and made the comparison between runs flaky.
+        var opened = await client.AcceptedAsync("Open");
+        var wallBefore = DateTimeOffset.UtcNow;
+        var plantNow = rig.Plant.Elapsed / rig.Options.TimeScale;
+        var wallNow = wallBefore + (DateTimeOffset.UtcNow - wallBefore) / 2;
+        opened.WatchdogSecondsRemaining.Should().NotBeNull("the Open's status carries the watchdog's countdown");
+        var deadline = plantNow + (opened.SnapshotUtc + TimeSpan.FromSeconds(opened.WatchdogSecondsRemaining!.Value) - wallNow);
         (await rig.WaitForRestAsync("the watchdog stop")).LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
-        var forward = rig.ContactChanges(1).TakeLast(2).ToArray();
-        var overrun = forward[1].At - forward[0].At - TimeSpan.FromSeconds(WatchdogSeconds);
+        var overrun = rig.ContactChanges(1).Last(change => !change.Closed).At - deadline;
+        overrun.Should().BePositive("the watchdog stops the roof after its deadline, never before");
         await rig.ConfigureAsync(r => r with { SafetyWatchdogTimeoutSeconds = ProductionWatchdogSeconds });
         await client.AcceptedAsync("ClearFault");
         limitStops.Add(await LimitStopAsync(rig, client));

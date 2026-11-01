@@ -461,7 +461,7 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
     private void AddKey() => Ui.Ask(new RoofUiPrompt(
         "Add an API key",
-        $"Name: {RoofIdentityText.NameRule}\nRole: viewer, operator or admin. Kiosk: yes for a kiosk's device key.",
+        $"Name: {RoofIdentityText.NameRule}\nRole: viewer, operator or admin. {RoofCli.CommandBuilder.KeyAlpacaRoles} Kiosk: yes for a kiosk's device key.",
         [new RoofUiField("Name"), new RoofUiField("Role", Initial: "viewer"), new RoofUiField("Kiosk", Initial: "no")],
         [new RoofUiAction("Add", values =>
         {
@@ -471,9 +471,9 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
                 return $"'{name}' is not a valid name: {RoofIdentityText.NameRule}";
             }
 
-            if (RoofCliFormat.ParseRole(values[1]) is not { } role)
+            if (RoofCliFormat.ParseKeyRole(values[1]) is not { } role)
             {
-                return "The role must be viewer, operator or admin.";
+                return KeyRoleRule;
             }
 
             if (ParseYesNo(values[2]) is not { } kiosk)
@@ -495,13 +495,13 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
 
         Ui.Ask(new RoofUiPrompt(
             $"Key {key.Name}",
-            "Role: viewer, operator or admin. Kiosk: yes for a kiosk's device key.",
+            $"Role: viewer, operator or admin. {RoofCli.CommandBuilder.KeyAlpacaRoles} Kiosk: yes for a kiosk's device key.",
             [new RoofUiField("Role", Initial: RoofCliFormat.Role(key.Role)), new RoofUiField("Kiosk", Initial: key.Kiosk ? "yes" : "no")],
             [new RoofUiAction("Change", values =>
             {
-                if (RoofCliFormat.ParseRole(values[0]) is not { } role)
+                if (RoofCliFormat.ParseKeyRole(values[0]) is not { } role)
                 {
-                    return "The role must be viewer, operator or admin.";
+                    return KeyRoleRule;
                 }
 
                 if (ParseYesNo(values[1]) is not { } kiosk)
@@ -614,6 +614,9 @@ internal sealed class RoofUiPeoplePage : RoofUiPage
             run();
             return null;
         })]));
+
+    /// <summary>Said when a key's role is not one: a person's three, or an Alpaca account's two (#220).</summary>
+    internal static readonly string KeyRoleRule = $"The role must be viewer, operator or admin. {RoofCli.CommandBuilder.KeyAlpacaRoles}";
 
     private static bool? ParseYesNo(string text) => text.Trim().ToLowerInvariant() switch
     {

@@ -39,4 +39,10 @@ public static class RoofControllerSecurityDefaults
     /// when <c>RoofControllerSecurity:AllowAnonymousStop</c> is set.
     /// </summary>
     public const string StopPolicy = "RoofStopPolicy";
+
+    /// <summary>The External Alpaca account's shutter routes (#220): its role, from a trusted Alpaca server address.</summary>
+    public const string AlpacaCommanderPolicy = "RoofAlpacaCommanderPolicy";
+
+    /// <summary>The Alpaca server's own account's events route (#220): its role, from a trusted Alpaca server address.</summary>
+    public const string AlpacaServerPolicy = "RoofAlpacaServerPolicy";
 }

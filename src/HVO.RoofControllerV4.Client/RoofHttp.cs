@@ -47,16 +47,23 @@ internal sealed class RoofHttp : IDisposable
         CancellationToken cancellationToken,
         HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead,
         HttpStatusCode? alsoAccept = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        RoofCredential? credentialOverride = null,
+        IReadOnlyDictionary<string, string>? headers = null)
     {
         var retried = false;
         while (true)
         {
             using var request = new HttpRequestMessage(method, path);
             var credential = use is null ? null
-                : _localAuthorization is { } local
+                : credentialOverride ?? (_localAuthorization is { } local
                     ? await RoofLocalAuthorization.ObtainAsync(local, RoofLocalAuthorization.Operation(method, path), cancellationToken).ConfigureAwait(false)
-                    : _credential();
+                    : _credential());
+            foreach (var (name, value) in headers ?? new Dictionary<string, string>())
+            {
+                request.Headers.TryAddWithoutValidation(name, value);
+            }
+
             if (credential is not null)
             {
                 foreach (var header in credential.GetHeaders(use!.Value))
@@ -84,7 +91,8 @@ internal sealed class RoofHttp : IDisposable
                 if (response.StatusCode == HttpStatusCode.Unauthorized && credential is not null
                     && refusal.Code != RoofControllerErrorCode.SignInFailed)
                 {
-                    var changed = credential.OnRefused(use!.Value);
+                    // A per-call credential (the Alpaca server passing a client's key on) is never this client's to change.
+                    var changed = credentialOverride is null && credential.OnRefused(use!.Value);
                     if (changed && !retried && method == HttpMethod.Get)
                     {
                         retried = true;

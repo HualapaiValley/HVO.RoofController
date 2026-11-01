@@ -546,21 +546,28 @@ public sealed partial class RoofIdentityStore
                 return RoofIdentityResult<StoredApiKey>.Failure(RoofControllerErrorCode.InvalidRequest, KioskRoleRequired);
             }
 
+            var (storedRole, account) = StoredRole(role);
+
             if (document.ApiKeys.Exists(key => Same(key.Name, name)) || ConfiguredKeyNames().Contains(name))
             {
                 return RoofIdentityResult<StoredApiKey>.Failure(RoofControllerErrorCode.IdentityNameConflict, $"An API key named '{name}' already exists.");
             }
 
-            var key = new StoredApiKey(name, role, kiosk, keySha256, now, now);
+            var key = new StoredApiKey(name, storedRole, kiosk, keySha256, now, now) { Account = account };
             document.ApiKeys.Add(key);
             return RoofIdentityResult<StoredApiKey>.Success(key);
         });
+
+    /// <summary>An Alpaca account's key is stored as a Viewer key carrying its account (rollback-safe, #220).</summary>
+    private static (string Role, string? Account) StoredRole(string role)
+        => RoofPrincipalFactory.IsAlpacaAccountRole(role) ? (RoofControllerApiContract.ViewerRole, role) : (role, null);
 
     /// <summary>Changes a managed key's role or kiosk flag. Turning the kiosk flag off ends the PIN sessions opened at it.</summary>
     public RoofIdentityResult<StoredApiKey> UpdateManagedKey(string name, string role, bool kiosk)
         => MutateManagedKey(name, (document, key, now) =>
         {
-            var after = key with { Role = role, Kiosk = kiosk, UpdatedUtc = now };
+            var (storedRole, account) = StoredRole(role);
+            var after = key with { Role = storedRole, Account = account, Kiosk = kiosk, UpdatedUtc = now };
             if (key.Kiosk && !kiosk)
             {
                 EndDeviceSessions(document, key);
@@ -629,7 +636,7 @@ public sealed partial class RoofIdentityStore
                 return RoofIdentityResult<StoredApiKey>.Success(before);
             }
 
-            if (after.Kiosk && after.Role != RoofControllerApiContract.ViewerRole)
+            if (after.Kiosk && (after.Role != RoofControllerApiContract.ViewerRole || after.Account is not null))
             {
                 return RoofIdentityResult<StoredApiKey>.Failure(RoofControllerErrorCode.InvalidRequest, KioskRoleRequired);
             }

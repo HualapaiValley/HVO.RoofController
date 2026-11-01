@@ -21,11 +21,12 @@ public sealed class AlpacaRequest
 
     private readonly Dictionary<string, string> _parameters;
 
-    private AlpacaRequest(bool isPut, Dictionary<string, string> parameters, IPAddress remoteAddress)
+    private AlpacaRequest(bool isPut, Dictionary<string, string> parameters, IPAddress remoteAddress, Security.AlpacaClientCredential? credential = null)
     {
         IsPut = isPut;
         _parameters = parameters;
         RemoteAddress = remoteAddress;
+        Credential = credential ?? Security.AlpacaClientCredential.From(new HeaderDictionary());
         ClientId = ParseId(ClientIdName, Find(ClientIdName));
         ClientTransactionId = ParseId(ClientTransactionIdName, Find(ClientTransactionIdName));
     }
@@ -34,6 +35,12 @@ public sealed class AlpacaRequest
 
     /// <summary>The client's address (IPv4 when it came over a dual-stack socket).</summary>
     public IPAddress RemoteAddress { get; }
+
+    /// <summary>
+    /// The key the client sent for OpenShutter or CloseShutter (<c>X-HVO-Api-Key</c>, or HTTP Basic with the key as both
+    /// parts). Only those two use it; it is never logged.
+    /// </summary>
+    public Security.AlpacaClientCredential Credential { get; }
 
     /// <summary>The client's <c>ClientID</c>, or 0. Untrusted: it only tells one client from another at an address.</summary>
     public uint ClientId { get; }
@@ -61,7 +68,7 @@ public sealed class AlpacaRequest
             throw new AlpacaBadRequestException("PUT parameters must be form-encoded (application/x-www-form-urlencoded).");
         }
 
-        return new AlpacaRequest(true, Parse(body, StringComparer.Ordinal), remote);
+        return new AlpacaRequest(true, Parse(body, StringComparer.Ordinal), remote, Security.AlpacaClientCredential.From(request.Headers));
     }
 
     /// <summary>The value of the parameter <paramref name="name"/>, or null when it was not sent (or, in a PUT, was cased otherwise).</summary>

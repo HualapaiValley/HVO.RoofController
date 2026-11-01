@@ -18,11 +18,6 @@
         "Why": "Skipped with DomeOpenShutter false; a roll-off roof has no altitude anyway."
       },
       {
-        "Member": "PUT CloseShutter",
-        "Contains": "InvalidOperationException error (0x0000040B)",
-        "Why": "Phase 1 refuses CloseShutter with 0x40B: commands are disabled. The protocol check sends it whatever DomeOpenShutter says."
-      },
-      {
         "Member": "GET Description",
         "Contains": "Bad Alpaca URL base element (api = apx)\" - Received HTTP status 404 (NotFound)",
         "Why": "ProtocolTestPrimaryUrlStructure: a path outside /api and /management is not found."
@@ -65,7 +60,7 @@
       {
         "Key": "Conform configuration",
         "Contains": "Shutter related tests were omitted due to Conform configuration.",
-        "Why": "DomeOpenShutter is false: phase 1 is graded on its read-only coverage, and ConformU never opens or closes the roof."
+        "Why": "DomeOpenShutter is false: ConformU never opens the roof, and the roof starts Closed (phase 3's Close is a no-op there); the scripted runs check Close (tests/alpaca/alpaca-ci.py close-runs)."
       }
     ]
   },

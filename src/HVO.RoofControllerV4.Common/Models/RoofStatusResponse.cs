@@ -92,8 +92,38 @@ namespace HVO.RoofControllerV4.Common.Models
         /// </summary>
         public RoofHatMode HatMode { get; init; }
 
+        /// <summary>
+        /// True while an admitted start waits out the direction-change delay
+        /// (<see cref="RoofControllerOptionsV4.DirectionChangeDelay"/>) with every relay off; <see cref="PendingMotion"/> is
+        /// its direction and <see cref="Status"/> reads Opening or Closing meanwhile. It is checked again before the relay,
+        /// and Stop cancels it.
+        /// </summary>
+        public bool IsStartPending { get; init; }
+
+        /// <summary>
+        /// True after a start that waited out the direction-change delay was refused when its wait ended (#220, N6), until
+        /// the next start, Stop or ClearFault; <see cref="LastError"/> says why. The roof's <see cref="Status"/> stays its
+        /// real state; an Alpaca client reads the Dome's shutter as Error meanwhile.
+        /// </summary>
+        public bool IsContinuationRefused { get; init; }
+
+        /// <summary>The direction of the start waiting out the direction-change delay; None when none waits.</summary>
+        public RoofMotionDirection PendingMotion { get; init; }
+
+        /// <summary>
+        /// Whose the commanded or waiting motion is (a person's, the Alpaca account's, or nobody's in particular); null while
+        /// none is commanded or waiting.
+        /// </summary>
+        public RoofMotionOwner? MotionOwner { get; init; }
+
         /// <summary>Most recent safety or hardware error message, if any.</summary>
         public string? LastError { get; init; }
+
+        /// <summary>
+        /// The Alpaca command state (#220): which commands are on, the human Stop hold, a person's operator lease, override
+        /// grants, alerts and warnings. Null from controllers that do not report it.
+        /// </summary>
+        public RoofAlpacaStatus? Alpaca { get; init; }
 
         /// <summary>
         /// The observatory's safety conditions (telescope park, weather) as the controller's safety service judges them

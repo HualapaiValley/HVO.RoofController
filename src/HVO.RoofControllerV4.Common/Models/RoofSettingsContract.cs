@@ -49,6 +49,9 @@ public static class RoofSettingsContract
 
     /// <summary>Shared client preferences (<c>RoofControllerUi</c>). Operator writes, viewer reads.</summary>
     public const string UiGroup = "ui";
+
+    /// <summary>The controller's Alpaca command settings (#220): all local-only.</summary>
+    public const string AlpacaGroup = "alpaca";
 }
 
 /// <summary>How a setting's value is written on the wire.</summary>

@@ -197,25 +197,44 @@ public sealed class AlpacaDomeTests
     }
 
     [TestMethod]
-    [DataRow("openshutter")]
-    [DataRow("closeshutter")]
-    public async Task OpenAndClose_AreRefused_AsCommandsDisabled_AndNeverReachTheController(string member)
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task OpenShutter_IsRefused_AndNeverReachesTheController_WhateverIsSent(bool withACredential)
     {
         var roof = RoofServiceMock.Create();
         await using var alpaca = await AlpacaTestHost.StartAsync(RoofClientApiTests.CreateHost(roof));
 
-        var notConnected = await alpaca.PutAsync(member, "ClientID=1");
+        var notConnected = await alpaca.PutAsync("openshutter", "ClientID=1");
         await alpaca.ConnectAsync();
-        var connected = await alpaca.PutAsync(member, "ClientID=1");
+        var connected = withACredential
+            ? await alpaca.PutAsync("openshutter", "ClientID=1", headers: new() { [RoofAlpacaContract.ClientKeyHeader] = TestApiKeys.Operator })
+            : await alpaca.PutAsync("openshutter", "ClientID=1");
 
         notConnected.GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.NotConnected);
         connected.GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.InvalidOperation);
-        connected.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.CommandsDisabled);
+        connected.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.OpenNotAvailable);
         (await alpaca.GetAsync("shutterstatus")).GetProperty("Value").GetInt32().Should().Be((int)DomeShutterState.Closed, "a refused command leaves the roof as it was");
-        roof.Verify(service => service.Open(), Times.Never());
-        roof.Verify(service => service.Close(), Times.Never());
         alpaca.Controller!.RoofService.Invocations.Select(invocation => invocation.Method.Name)
-            .Should().NotIntersectWith(["Open", "Close", "ClearFault", "Stop", "RenewLease"]);
+            .Should().NotIntersectWith(["Open", "Close", "StartMotionAsync", "ClearFault", "Stop", "RenewLease"]);
+        alpaca.ControllerRequests.Should().NotContain(path => path.Contains("/alpaca/", StringComparison.OrdinalIgnoreCase), "no ticket is asked for");
+    }
+
+    [TestMethod]
+    public async Task CloseShutter_WithNoCredential_IsRefusedAsNotAuthorised_AndNeverReachesTheController()
+    {
+        var roof = RoofServiceMock.Create();
+        await using var alpaca = await AlpacaTestHost.StartAsync(RoofClientApiTests.CreateHost(roof));
+
+        var notConnected = await alpaca.PutAsync("closeshutter", "ClientID=1");
+        await alpaca.ConnectAsync();
+        var connected = await alpaca.PutAsync("closeshutter", "ClientID=1");
+
+        notConnected.GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.NotConnected);
+        connected.GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.InvalidOperation);
+        connected.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.NotAuthorised);
+        alpaca.Controller!.RoofService.Invocations.Select(invocation => invocation.Method.Name)
+            .Should().NotIntersectWith(["Open", "Close", "StartMotionAsync", "ClearFault", "Stop", "RenewLease"]);
+        alpaca.ControllerRequests.Should().NotContain(path => path.Contains("/shutter/", StringComparison.OrdinalIgnoreCase), "no ticket is asked for");
     }
 
     [TestMethod]

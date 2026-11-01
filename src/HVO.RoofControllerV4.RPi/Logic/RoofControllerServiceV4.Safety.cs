@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.RPi.Logic;
@@ -21,27 +22,123 @@ public partial class RoofControllerServiceV4
 
     private void OnInputEdge(int input, bool isHigh)
     {
-        lock (_syncLock)
+        // A protective edge's stop has one bound from the edge, over its wait for the lock and every HAT access it makes,
+        // as a Stop has; a stop another edge leads to is bounded from its decision.
+        var deadline = StopDeadlineFromNow();
+
+        // A protective edge (a drive fault, or a limit asserting) raises its fence before anything waits, so a start that
+        // passed its checks while it came never energizes (#220, PR #230 review F3, rereview S-F3).
+        var options = _options;
+        var faultActive = input == 3 && isHigh == options.FaultInputActiveHigh;
+        var limitAsserted = input is 1 or 2 && !options.IgnorePhysicalLimitSwitches && isHigh != options.UseNormallyClosedLimitSwitches;
+        if ((faultActive || limitAsserted) && _initialized && !_disposed)
         {
+            FenceRelaysOff();
+        }
+
+        // The motion the edge belongs to, so a queued edge is judged with it.
+        var motion = Interlocked.Read(ref _motionGeneration);
+
+        // Never blocks the HAT's poll loop for long, and never drops an edge: past StopLockWait it is applied as soon as
+        // the lock is free.
+        var lockTaken = false;
+        try
+        {
+            Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
+            if (!lockTaken)
+            {
+                QueueInputEdge(input, isHigh, faultActive, motion);
+                return;
+            }
+
             if (_disposed || !_initialized)
             {
                 return;
             }
 
-            switch (input)
-            {
-                case 1: _rawIn1 = isHigh; break;
-                case 2: _rawIn2 = isHigh; break;
-                case 3: _rawIn3 = isHigh; break;
-                default: _rawIn4 = isHigh; break;
-            }
-
-            _logger.LogDebug("Input IN{Input} edge RawHigh={RawHigh} (Commanded={Commanded})", input, isHigh, _commandedMotion);
-
-            // Edge events update the cached level only; freshness comes from direct reads.
-            Evaluate_NoLock(Now);
-            FinishMutation_NoLock();
+            using var section = BoundedSection(faultActive || limitAsserted ? deadline : null);
+            ApplyInputEdge_NoLock(input, isHigh);
         }
+        finally
+        {
+            if (lockTaken)
+            {
+                Monitor.Exit(_syncLock);
+            }
+        }
+    }
+
+    private void ApplyInputEdge_NoLock(int input, bool isHigh)
+    {
+        switch (input)
+        {
+            case 1: _rawIn1 = isHigh; break;
+            case 2: _rawIn2 = isHigh; break;
+            case 3: _rawIn3 = isHigh; break;
+            default: _rawIn4 = isHigh; break;
+        }
+
+        _logger.LogDebug("Input IN{Input} edge RawHigh={RawHigh} (Commanded={Commanded})", input, isHigh, _commandedMotion);
+
+        // Edge events update the cached level only; freshness comes from direct reads.
+        Evaluate_NoLock(Now);
+        FinishMutation_NoLock();
+    }
+
+    /// <summary>
+    /// An edge that could not take the lock within <see cref="StopLockWait"/> (a HAT access holds it): applied the moment
+    /// the lock is free. Its own evidence is applied first, while the motion it came during (<paramref name="motion"/>) is
+    /// still the one commanded, so a limit trip that has cleared again by then still stops the roof (and latches where a
+    /// trip does); then the inputs are read fresh. A drive fault seen on the edge stops any motion and latches, even if
+    /// the input has cleared by then.
+    /// </summary>
+    private void QueueInputEdge(int input, bool isHigh, bool faultActive, long motion)
+    {
+        _logger.LogWarning("Input IN{Input} edge RawHigh={RawHigh} came while the controller lock was held by a blocked HAT access; it is applied as soon as the lock is free", input, isHigh);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                lock (_syncLock)
+                {
+                    if (_disposed || !_initialized)
+                    {
+                        return;
+                    }
+
+                    if (Interlocked.Read(ref _motionGeneration) == motion)
+                    {
+                        // The edge's own evidence, with the motion it came during (#220, PR #230 rereview S-F3).
+                        ApplyInputEdge_NoLock(input, isHigh);
+                    }
+
+                    if (ReadInputs_NoLock())
+                    {
+                        Evaluate_NoLock(Now);
+                        FinishMutation_NoLock();
+                    }
+
+                    if (faultActive && !(_faultLatched && _latchedFaultReason == RoofControllerStopReason.DriveFault))
+                    {
+                        const string error = "Drive fault input (IN3) became active while the controller lock was held by a blocked HAT access.";
+                        if (_commandedMotion != RoofMotionDirection.None)
+                        {
+                            StopMotion_NoLock(RoofControllerStopReason.DriveFault, error);
+                        }
+                        else
+                        {
+                            Latch_NoLock(RoofControllerStopReason.DriveFault, error);
+                        }
+
+                        FinishMutation_NoLock();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Applying the queued IN{Input} edge failed", input);
+            }
+        });
     }
 
     #endregion
@@ -211,6 +308,7 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private void Latch_NoLock(RoofControllerStopReason reason, string message)
     {
+        CancelPendingStart_NoLock($"A safety fault latched ({reason}) while this start waited; nothing moved for it.");
         if (!_faultLatched)
         {
             _faultLatched = true;
@@ -237,6 +335,8 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private bool StopMotion_NoLock(RoofControllerStopReason reason, string? error)
     {
+        // Inside a bounded section the stop, and the rest of the section, has its one bound from here.
+        BoundTheStop();
         Interlocked.Increment(ref _stopSequenceCount);
         var now = Now;
         var direction = _commandedMotion;
@@ -247,6 +347,7 @@ public partial class RoofControllerServiceV4
 
         CancelMotionSupervision_NoLock();
         _commandedMotion = RoofMotionDirection.None;
+        _motionOwner = null;
 
         if (wasMoving)
         {
@@ -257,6 +358,11 @@ public partial class RoofControllerServiceV4
         }
 
         var verified = AllRelaysOff_NoLock();
+        if (wasMoving)
+        {
+            // The direction-change delay runs from here: the drive command ended (whether or not the read-back verified it).
+            _lastDriveOffUtc = Now;
+        }
 
         if (IsLatchingReason(reason))
         {
@@ -398,8 +504,22 @@ public partial class RoofControllerServiceV4
     /// </summary>
     protected void OnSafetyWatchdogElapsed(long generation)
     {
-        lock (_syncLock)
+        // One bound for the callback's wait for the lock and every HAT access its stop makes, as a Stop has.
+        var deadline = StopDeadlineFromNow();
+        var lockTaken = false;
+        try
         {
+            Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
+            if (!lockTaken)
+            {
+                // A blocked HAT access holds the lock: the watchdog stop is queued to run the moment it is free.
+                _logger.LogCritical("Safety watchdog TRIGGERED while the controller lock is held by a blocked HAT access; the stop is queued");
+                QueueDeferredStop(RoofControllerStopReason.SafetyWatchdogTimeout,
+                    $"Safety watchdog stopped motion after {_options.SafetyWatchdogTimeout.TotalSeconds:0.#} s without reaching the destination limit.",
+                    onlyWhileMoving: true, motionGeneration: generation);
+                return;
+            }
+
             if (_disposed)
             {
                 return;
@@ -412,9 +532,17 @@ public partial class RoofControllerServiceV4
             }
 
             _logger.LogWarning("Safety watchdog TRIGGERED after {Timeout}s of {Direction}; stopping", _options.SafetyWatchdogTimeout.TotalSeconds, _commandedMotion);
+            using var section = BoundedSection(deadline);
             StopMotion_NoLock(RoofControllerStopReason.SafetyWatchdogTimeout,
                 $"Safety watchdog stopped motion after {_options.SafetyWatchdogTimeout.TotalSeconds:0.#} s without reaching the destination limit.");
             FinishMutation_NoLock();
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                Monitor.Exit(_syncLock);
+            }
         }
     }
 
@@ -424,13 +552,174 @@ public partial class RoofControllerServiceV4
 
     private static int RelayBit(int relayId) => 1 << (relayId - 1);
 
+    /// <summary>
+    /// One HAT access on the HAT's lane, bounded by <see cref="HatIoLimit"/> (#220, §17 AA5): past it, it fails with
+    /// <see cref="HatIoOverrunException"/> as a failed transfer does, and every later access fails at once until it has
+    /// returned (<see cref="OnHatIoRecovered"/>).
+    /// </summary>
+    private T HatCall<T>(Func<T> access)
+    {
+        var limit = HatIoLimit;
+        var bounded = false;
+        if (t_ioDeadline is { } deadline)
+        {
+            // A stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereviews S-F4, F19).
+            var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
+            if (left <= TimeSpan.Zero)
+            {
+                t_boundCut = true;
+                throw new HatIoOverrunException("The 2 s bound of the stop in progress has passed; this access was not sent. The relays-off work goes on after it.");
+            }
+
+            if (left < limit)
+            {
+                limit = left;
+                bounded = true;
+            }
+        }
+
+        try
+        {
+            return _hatIo.Run(access, limit);
+        }
+        catch (HatIoOverrunException) when (bounded)
+        {
+            // Cut by the stop's bound, not by the access's own limit.
+            t_boundCut = true;
+            throw;
+        }
+    }
+
+    // The deadline (a Stopwatch timestamp) bounding the HAT I/O of the stop running on this thread, or null.
+    [ThreadStatic]
+    private static long? t_ioDeadline;
+
+    // True inside a bounded section (BoundedSection) on this thread, with the deadline a stop decided in it takes (null: 2 s
+    // from the decision). Outside one no stop is bounded: a queued stop's, shutdown's and disposal's relays-off work goes
+    // on at each access's own limit.
+    [ThreadStatic]
+    private static bool t_inBoundedSection;
+
+    [ThreadStatic]
+    private static long? t_sectionDeadline;
+
+    // True once the bound of the section on this thread has cut a HAT access short (or kept one from being sent).
+    [ThreadStatic]
+    private static bool t_boundCut;
+
+    /// <summary>
+    /// The deadline of a Stop or a protective stop that starts now: <see cref="StopLockWait"/> from now, for its wait for
+    /// the lock and every HAT access it makes, its LEDs included (#220, PR #230 rereviews S-F4, F19).
+    /// </summary>
+    private static long StopDeadlineFromNow() => Stopwatch.GetTimestamp() + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency);
+
+    /// <summary>True once <paramref name="deadline"/> (a Stopwatch timestamp) has passed.</summary>
+    private static bool HasPassed(long deadline) => Stopwatch.GetTimestamp() >= deadline;
+
+    /// <summary>
+    /// True once the bound of the section on this thread has cut a HAT access short or kept one from being sent, or
+    /// <paramref name="deadline"/> has passed. (A cut access can end a moment before the deadline itself.)
+    /// </summary>
+    private static bool BoundPassed(long deadline) => t_boundCut || HasPassed(deadline);
+
+    /// <summary>
+    /// A locked section (a command, an input edge, the watchdog's timer, a supervision cycle) in which a stop is bounded
+    /// (#220, PR #230 rereviews S-F4, F19, F24): once a stop is decided in it (<see cref="BoundTheStop"/>), every HAT access
+    /// until the section ends, the caller's LEDs included, has one deadline. That is <paramref name="deadline"/> when the
+    /// section has one from its start (an edge or the watchdog's timer, whose bound counts their wait for the lock),
+    /// otherwise 2 s from the decision; a Stop's bound runs from its start (<paramref name="armNow"/>). Before a stop is
+    /// decided, routine accesses keep their own limit only.
+    /// </summary>
+    private static HatIoSection BoundedSection(long? deadline = null, bool armNow = false)
+    {
+        var section = new HatIoSection(t_ioDeadline, t_inBoundedSection, t_sectionDeadline, t_boundCut);
+        t_inBoundedSection = true;
+        t_sectionDeadline = deadline;
+        t_boundCut = false;
+        if (armNow)
+        {
+            BoundTheStop();
+        }
+
+        return section;
+    }
+
+    /// <summary>A stop has been decided: bounds the rest of the section's HAT I/O (see <see cref="BoundedSection"/>).</summary>
+    private static void BoundTheStop()
+    {
+        if (!t_inBoundedSection)
+        {
+            return;
+        }
+
+        var deadline = t_sectionDeadline ?? StopDeadlineFromNow();
+        t_ioDeadline = t_ioDeadline is { } earlier && earlier < deadline ? earlier : deadline;
+    }
+
+    /// <summary>Restores the HAT I/O bound of the section around <see cref="BoundedSection"/>.</summary>
+    private readonly struct HatIoSection : IDisposable
+    {
+        private readonly long? _ioDeadline;
+        private readonly bool _inBoundedSection;
+        private readonly long? _sectionDeadline;
+        private readonly bool _boundCut;
+
+        public HatIoSection(long? ioDeadline, bool inBoundedSection, long? sectionDeadline, bool boundCut)
+        {
+            _ioDeadline = ioDeadline;
+            _inBoundedSection = inBoundedSection;
+            _sectionDeadline = sectionDeadline;
+            _boundCut = boundCut;
+        }
+
+        public void Dispose()
+        {
+            t_ioDeadline = _ioDeadline;
+            t_inBoundedSection = _inBoundedSection;
+            t_sectionDeadline = _sectionDeadline;
+            t_boundCut = _boundCut;
+        }
+    }
+
+    /// <summary>
+    /// A HAT access that ran past its limit has returned (on the lane's thread). It may have switched a relay late, so
+    /// every relay is written off and verified as soon as the lock is free; the latch its overrun set stays until a
+    /// person clears it.
+    /// </summary>
+    private void OnHatIoRecovered()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _logger.LogCritical("A HAT access that ran past its {Limit} ms limit has returned; every relay is written off and verified now", HatIoLimit.TotalMilliseconds);
+        QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false);
+    }
+
     private static string FormatMask(int? mask) => mask is { } value ? $"0x{value:X2}" : "unreadable";
+
+    /// <summary>
+    /// Writes an ON for a start admitted at <paramref name="fenceGeneration"/>: dropped (<see cref="RelayWriteOutcome.Fenced"/>)
+    /// when a relays-off request came after that admission. Called inside the HAT transaction lock, immediately before the
+    /// bus write, so it is the last point software decides. A null generation is unfenced (tests).
+    /// </summary>
+    private RelayWriteOutcome TryWriteRelayOn_NoLock(int relayId, long? fenceGeneration)
+    {
+        if (fenceGeneration is { } generation && !OnAllowed(generation))
+        {
+            _logger.LogInformation("Relay {Relay} ON dropped: a relays-off request came after the start's admission (generation {Generation})", relayId, generation);
+            return RelayWriteOutcome.Fenced;
+        }
+
+        return TryWriteRelay_NoLock(relayId, true) ? RelayWriteOutcome.Verified : RelayWriteOutcome.Failed;
+    }
 
     private bool TryWriteRelay_NoLock(int relayId, bool on)
     {
         try
         {
-            var result = _hat.SetRelay(relayId, on);
+            var result = HatCall(() => _hat.SetRelay(relayId, on));
             if (result.IsSuccessful)
             {
                 return true;
@@ -452,7 +741,7 @@ public partial class RoofControllerServiceV4
         Exception? error = null;
         try
         {
-            var result = _hat.GetRelaysMask();
+            var result = HatCall(_hat.GetRelaysMask);
             if (result.IsSuccessful)
             {
                 _lastSuccessfulRelayReadUtc = Now;
@@ -489,6 +778,9 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private bool AllRelaysOff_NoLock()
     {
+        // Every relays-off path moves the command generation and raises the relay fence first (#220).
+        FenceRelaysOff();
+        CancelPendingStart_NoLock("The relays were driven off while this start waited; nothing moved for it.");
         lock (_hatTransactionLock)
         {
             TryWriteRelay_NoLock(_options.OpenRelayId, false);
@@ -502,7 +794,7 @@ public partial class RoofControllerServiceV4
                 _logger.LogWarning("All-off read-back was {Mask}; writing the whole relay register to zero", FormatMask(mask));
                 try
                 {
-                    var result = _hat.SetRelaysMask(0);
+                    var result = HatCall(() => _hat.SetRelaysMask(0));
                     if (!result.IsSuccessful)
                     {
                         _logger.LogWarning(result.Error, "Relay register zero write failed");
@@ -518,16 +810,33 @@ public partial class RoofControllerServiceV4
 
             var verified = mask == 0;
             RecordRelayState_NoLock(verified, mask);
+            if (!verified && t_ioDeadline is { } deadline && BoundPassed(deadline))
+            {
+                // The stop's bound cut its relays-off work short: it goes on as soon as the lock is free, each access at its
+                // own limit, and the relays stay unverified until a read-back shows them off.
+                QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false);
+            }
+
             return verified;
         }
     }
 
     /// <summary>
-    /// The single entry point for relay combinations. Valid requests are all-off, STOP permit only, STOP + open and
-    /// STOP + close. Requests with both directions, or a direction without the STOP permit, are refused: all relays are
-    /// driven off and false is returned. Returns true only when each step's register read-back matched.
+    /// The single entry point for relay combinations, unfenced (tests force relay states through it). Returns true only
+    /// when each step's register read-back matched.
     /// </summary>
     protected bool SetRelayStatesAtomically(bool stopRelay, bool openRelay, bool closeRelay)
+        => SetRelayStatesAtomically(stopRelay, openRelay, closeRelay, fenceGeneration: null) == RelayWriteOutcome.Verified;
+
+    /// <summary>
+    /// The single entry point for relay combinations. Valid requests are all-off, STOP permit only, STOP + open and
+    /// STOP + close. Requests with both directions, or a direction without the STOP permit, are refused: all relays are
+    /// driven off and <see cref="RelayWriteOutcome.Failed"/> is returned. Every ON is fenced at
+    /// <paramref name="fenceGeneration"/>: a relays-off request after the start's admission drops it, drives every relay
+    /// off and returns <see cref="RelayWriteOutcome.Fenced"/>. <see cref="RelayWriteOutcome.Verified"/> only when each
+    /// step's register read-back matched.
+    /// </summary>
+    private RelayWriteOutcome SetRelayStatesAtomically(bool stopRelay, bool openRelay, bool closeRelay, long? fenceGeneration)
     {
         lock (_syncLock)
         {
@@ -535,19 +844,19 @@ public partial class RoofControllerServiceV4
             {
                 _logger.LogCritical("Refused relay request with both Open and Close asserted; driving all relays off");
                 AllRelaysOff_NoLock();
-                return false;
+                return RelayWriteOutcome.Failed;
             }
 
             if ((openRelay || closeRelay) && !stopRelay)
             {
                 _logger.LogCritical("Refused relay request with a direction but no STOP permit; driving all relays off");
                 AllRelaysOff_NoLock();
-                return false;
+                return RelayWriteOutcome.Failed;
             }
 
             if (!stopRelay)
             {
-                return AllRelaysOff_NoLock();
+                return AllRelaysOff_NoLock() ? RelayWriteOutcome.Verified : RelayWriteOutcome.Failed;
             }
 
             var stopBit = RelayBit(_options.StopRelayId);
@@ -567,9 +876,12 @@ public partial class RoofControllerServiceV4
                 }
 
                 // 2. Assert the STOP permit.
-                if (!TryWriteRelay_NoLock(_options.StopRelayId, true))
+                var permit = TryWriteRelayOn_NoLock(_options.StopRelayId, fenceGeneration);
+                if (permit != RelayWriteOutcome.Verified)
                 {
-                    return AbortEnergize_NoLock("STOP permit write failed", mask);
+                    return permit == RelayWriteOutcome.Fenced
+                        ? FencedEnergize_NoLock()
+                        : AbortEnergize_NoLock("STOP permit write failed", mask);
                 }
 
                 mask = TryReadRelayMask_NoLock();
@@ -581,15 +893,18 @@ public partial class RoofControllerServiceV4
                 if (!openRelay && !closeRelay)
                 {
                     RecordRelayState_NoLock(true, mask);
-                    return true;
+                    return RelayWriteOutcome.Verified;
                 }
 
                 // 3. Assert the direction.
                 var directionRelay = openRelay ? _options.OpenRelayId : _options.CloseRelayId;
                 var expected = requested;
-                if (!TryWriteRelay_NoLock(directionRelay, true))
+                var written = TryWriteRelayOn_NoLock(directionRelay, fenceGeneration);
+                if (written != RelayWriteOutcome.Verified)
                 {
-                    return AbortEnergize_NoLock("direction write failed", mask);
+                    return written == RelayWriteOutcome.Fenced
+                        ? FencedEnergize_NoLock()
+                        : AbortEnergize_NoLock("direction write failed", mask);
                 }
 
                 mask = TryReadRelayMask_NoLock();
@@ -599,17 +914,27 @@ public partial class RoofControllerServiceV4
                 }
 
                 RecordRelayState_NoLock(true, mask);
-                return true;
+                return RelayWriteOutcome.Verified;
             }
         }
     }
 
-    private bool AbortEnergize_NoLock(string reason, int? mask)
+    /// <summary>A start's ON was fenced by a later relays-off request: every relay off, nothing latched.</summary>
+    private RelayWriteOutcome FencedEnergize_NoLock()
+    {
+        AllRelaysOff_NoLock();
+        return RelayWriteOutcome.Fenced;
+    }
+
+    private RelayWriteOutcome AbortEnergize_NoLock(string reason, int? mask)
     {
         _logger.LogCritical("Relay energize sequence aborted: {Reason}; register {Mask}. Driving all relays off", reason, FormatMask(mask));
         // The energize request failed whatever the all-off outcome; the relay state reflects the all-off read-back.
         AllRelaysOff_NoLock();
-        return false;
+
+        // A direction or the permit may have been on for a moment: the direction-change delay runs from here.
+        _lastDriveOffUtc = Now;
+        return RelayWriteOutcome.Failed;
     }
 
     /// <summary>Asserts only the clear-fault relay and verifies the register shows exactly that bit.</summary>
@@ -659,7 +984,7 @@ public partial class RoofControllerServiceV4
         Exception? error = null;
         try
         {
-            var result = _hat.GetAllDigitalInputs();
+            var result = HatCall(_hat.GetAllDigitalInputs);
             if (result.IsSuccessful)
             {
                 var (in1, in2, in3, in4) = result.Value;
@@ -704,15 +1029,39 @@ public partial class RoofControllerServiceV4
     /// relay register with the commanded state and enforces the watchdog, lease and at-speed deadlines. While idle it
     /// also reads back the HAT LED modes. Runs on the background loop; tests call it directly.
     /// </summary>
-    internal void RunSupervisionCycle()
+    internal void RunSupervisionCycle() => RunSupervisionCycle(Timeout.InfiniteTimeSpan);
+
+    /// <summary>
+    /// <see cref="RunSupervisionCycle()"/> waiting at most <paramref name="lockWait"/> for the lock. When a blocked HAT access
+    /// holds it longer while the roof moves, a protective stop is queued to run the moment the lock is free: supervision
+    /// cannot see the limits meanwhile.
+    /// </summary>
+    private void RunSupervisionCycle(TimeSpan lockWait)
     {
-        lock (_syncLock)
+        var lockTaken = false;
+        try
         {
+            Monitor.TryEnter(_syncLock, lockWait, ref lockTaken);
+            if (!lockTaken)
+            {
+                if (_lastPublishedSnapshot is { IsMoving: true })
+                {
+                    _logger.LogCritical("Supervision could not take the controller lock within {Wait} while the roof moves (a HAT access is blocked); a protective stop is queued", lockWait);
+                    QueueDeferredStop(RoofControllerStopReason.InputReadFailure,
+                        $"Supervision could not run for {lockWait.TotalSeconds:0.#} s while the roof moved: a HAT access was blocked.", onlyWhileMoving: true);
+                }
+
+                return;
+            }
+
             if (_disposed || _shuttingDown || !_initialized)
             {
                 return;
             }
 
+            // A stop the cycle decides is bounded as a Stop is, from its decision to the cycle's end, its LEDs included; the
+            // routine reads before it keep their own limit (PR #230 rereview F24). The wait for the lock is bounded above.
+            using var section = BoundedSection();
             var now = Now;
 
             if (_relayRegisterState == RoofRelayRegisterState.Unverified && !_clearFaultInProgress && _commandedMotion == RoofMotionDirection.None)
@@ -741,6 +1090,13 @@ public partial class RoofControllerServiceV4
             }
 
             FinishMutation_NoLock();
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                Monitor.Exit(_syncLock);
+            }
         }
     }
 
@@ -829,6 +1185,7 @@ public partial class RoofControllerServiceV4
             CheckDriveStoppedAfterStop_NoLock(now);
             return;
         }
+
 
         if (_watchdogDeadlineUtc is { } watchdogDeadline && now >= watchdogDeadline)
         {
@@ -1026,29 +1383,50 @@ public partial class RoofControllerServiceV4
         {
             TimeSpan delay;
             CancellationTokenSource wake;
-            lock (_syncLock)
+
+            // The loop never waits for the lock without a bound (#220, §17 AA5): when a blocked HAT access holds it, the
+            // next cycle comes after the idle interval and its own bounded wait queues the protective stop.
+            var lockTaken = false;
+            try
             {
-                if (_disposed || _shuttingDown)
+                Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
+                if (lockTaken && (_disposed || _shuttingDown))
                 {
                     return;
                 }
 
-                delay = ComputeSupervisionDelay_NoLock(Now);
-                var previous = _supervisionWakeCts;
+                delay = lockTaken ? ComputeSupervisionDelay_NoLock(Now) : TimeSpan.Zero;
                 wake = CancellationTokenSource.CreateLinkedTokenSource(token);
-                _supervisionWakeCts = wake;
-                previous?.Dispose();
+                if (lockTaken)
+                {
+                    var previous = _supervisionWakeCts;
+                    _supervisionWakeCts = wake;
+                    previous?.Dispose();
+                }
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    Monitor.Exit(_syncLock);
+                }
             }
 
             await Task.Delay(delay, _timeProvider, wake.Token)
                 .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ForceYielding);
+            var wokenEarly = wake.IsCancellationRequested;
+            if (!lockTaken)
+            {
+                // Never handed to the controller (the lock was not taken), so nothing else disposes it.
+                wake.Dispose();
+            }
 
             if (token.IsCancellationRequested)
             {
                 break;
             }
 
-            if (wake.IsCancellationRequested)
+            if (wokenEarly)
             {
                 // Woken early (motion started); recompute the delay without an extra read.
                 continue;
@@ -1056,7 +1434,7 @@ public partial class RoofControllerServiceV4
 
             try
             {
-                RunSupervisionCycle();
+                RunSupervisionCycle(StopLockWait);
             }
             catch (Exception ex)
             {
@@ -1066,4 +1444,17 @@ public partial class RoofControllerServiceV4
     }
 
     #endregion
+}
+
+/// <summary>What a fenced relay sequence did.</summary>
+internal enum RelayWriteOutcome
+{
+    /// <summary>Every step's read-back matched.</summary>
+    Verified,
+
+    /// <summary>A write failed or a read-back did not match; every relay was driven off.</summary>
+    Failed,
+
+    /// <summary>A relays-off request after the start's admission dropped its ON; every relay was driven off.</summary>
+    Fenced
 }

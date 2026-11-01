@@ -302,7 +302,7 @@ public sealed class TerminalDesignTests
         {
             RoofSettingsContract.RoofGroup, RoofSettingsContract.ControllerGroup, RoofSettingsContract.CameraGroup,
             RoofSettingsContract.SecurityGroup, RoofSettingsContract.IdentityGroup, RoofSettingsContract.LoggingGroup,
-            RoofSettingsContract.UiGroup
+            RoofSettingsContract.UiGroup, RoofSettingsContract.AlpacaGroup
         });
         rig.Environment["HVO_TERMINAL"] = mode;
         using var tui = new TuiDriver(rig, width, height);
@@ -533,6 +533,82 @@ public sealed class TerminalDesignTests
         }
         static IEnumerable<View> Descendants(View view)
             => view.SubViews.SelectMany(child => new[] { child }.Concat(Descendants(child)));
+    }
+
+    [TestMethod]
+    [DataRow("truecolor,unicode", 80, 24)]
+    [DataRow("ansi16,unicode", 80, 24)]
+    [DataRow("nocolor,unicode", 80, 24)]
+    [DataRow("ansi16,ascii", 80, 24)]
+    [DataRow("truecolor,unicode", 120, 32)]
+    [DataRow("ansi16,unicode", 120, 32)]
+    [DataRow("nocolor,unicode", 120, 32)]
+    [DataRow("nocolor,ascii", 120, 32)]
+    public void AlpacaSection_AndItsPrompts_KeepEveryActionAndStopVisible(string mode, int width, int height)
+    {
+        // #220: the Alpaca section in place of the roof's state, the alert's actions and the grant question. The 120x32
+        // truecolour renders are the docs' captures: a documentation address for the client, fixture names.
+        using var host = AlpacaCliSupport.CreateHost();
+        AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main", "scope-not-clear:Guide");
+        using var rig = new CliRig(host);
+        RoofTerminalUiAlpacaTests.SignedIn(host, rig, "ada");
+        rig.Environment["HVO_TERMINAL"] = mode;
+        using var tui = RoofTerminalUiAlpacaTests.Started(rig, width, height);
+        tui.WaitIdle("the operator lease", () => tui.Ui.Status?.Alpaca?.OperatorLease.Held == true);
+        var page = (RoofUiRoofPage)tui.Ui.CurrentPage;
+        var tag = $"{mode.Replace(',', '-')}-{width}x{height}";
+
+        // Every Roof page action, Alpaca and Readings included, is on the screen beside the others.
+        foreach (var button in page.SubViews.OfType<Button>())
+        {
+            button.FrameToScreen().Right.Should().BeLessThanOrEqualTo(width - 1, $"'{button.Text}' fits at {width} columns");
+        }
+
+        RoofTerminalUiAlpacaTests.ShowAlpaca(tui);
+        foreach (var button in page.SubViews.OfType<Button>())
+        {
+            button.FrameToScreen().Right.Should().BeLessThanOrEqualTo(width - 1, $"'{button.Text}' fits at {width} columns");
+        }
+
+        var screen = tui.Screen;
+        screen.Should().Contain("ALPACA").And.Contain("[ Readings ]").And.Contain("Stop roof (F9)").And.Contain("Alpaca may close the roof");
+        if (mode.EndsWith("ascii", StringComparison.Ordinal))
+            screen.Should().Contain("+--").And.NotContainAny("┌", "─", "│", "╭", "╰");
+        tui.Render(TestContext, $"220-alpaca-{tag}");
+
+        RoofTerminalUiAlpacaTests.Enter(tui, page, RoofUiAlpacaItemKind.Alert);
+        CheckPrompt(tui.Ui.Panel!, RoofAlpacaText.AcknowledgeLabel, RoofAlpacaText.GrantCloseLabel, "Cancel");
+        tui.Render(TestContext, $"220-alpaca-alert-{tag}");
+
+        tui.Ui.Panel!.Press(RoofAlpacaText.GrantCloseLabel);
+        var question = tui.Ui.Panel!;
+        CheckPrompt(question, RoofAlpacaText.GrantCloseLabel, "Cancel");
+        tui.Screen.Should().Contain("Allow one Alpaca Close despite:");
+        tui.Render(TestContext, $"220-alpaca-grant-{tag}");
+
+        // Stop over the question: sent, answered, and the question withdrawn.
+        tui.Press(Key.F9);
+        tui.WaitIdle("Stop over the grant question", () => tui.Ui.StopResult != RoofStopText.Sending);
+        tui.Ui.StopResult.Should().Be(RoofStopText.AcknowledgedVerified);
+        tui.Ui.Panel.Should().BeNull();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+
+        void CheckPrompt(RoofUiPanel panel, params string[] buttons)
+        {
+            var drawn = tui.Screen;
+            panel.Buttons.Select(button => button.Text).Should().Equal(buttons);
+            drawn.Should().Contain("Stop roof (F9)");
+            tui.Ui.StopButton.Enabled.Should().BeTrue();
+            panel.FrameToScreen().Bottom.Should().BeLessThanOrEqualTo(tui.Ui.StopButton.FrameToScreen().Y);
+            foreach (var button in panel.Buttons)
+            {
+                drawn.Should().Contain(button.Text);
+                var bounds = button.FrameToScreen();
+                bounds.Right.Should().BeLessThanOrEqualTo(width);
+                bounds.Bottom.Should().BeLessThanOrEqualTo(tui.Ui.StopButton.FrameToScreen().Y);
+                tui.Ui.Window.GetViewsUnderLocation(bounds.Location, ViewportSettingsFlags.None).Should().Contain(button);
+            }
+        }
     }
 
     [TestMethod]

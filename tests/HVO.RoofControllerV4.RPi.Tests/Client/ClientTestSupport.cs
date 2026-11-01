@@ -93,7 +93,7 @@ internal static class ClientTestSupport
     }
 
     /// <summary>Sends each request to the test server running now. A stopped server answers as a refused connection does.</summary>
-    private sealed class CurrentServerHandler(Func<TestServer> server) : HttpMessageHandler
+    internal sealed class CurrentServerHandler(Func<TestServer> server) : HttpMessageHandler
     {
         public static TestServer Resolve(Func<TestServer> server)
         {

@@ -51,6 +51,12 @@ public static class RoofPrincipalFactory
 
     private static readonly string[] ViewerRoles = [RoofControllerApiContract.ViewerRole];
 
+    // The Alpaca accounts' roles (#220) sit outside the person hierarchy: each carries Viewer for the status reads, and
+    // the External account's is refused everywhere but its own routes (RoofAlpacaCommanderFilter).
+    private static readonly string[] AlpacaCommanderRoles = [RoofAlpacaContract.CommanderRole, RoofControllerApiContract.ViewerRole];
+
+    private static readonly string[] AlpacaServerRoles = [RoofAlpacaContract.ServerRole, RoofControllerApiContract.ViewerRole];
+
     /// <summary>Returns the canonical role name for <paramref name="role"/> (case-insensitive), or null when unknown.</summary>
     public static string? NormalizeRole(string? role)
     {
@@ -72,14 +78,45 @@ public static class RoofPrincipalFactory
         return null;
     }
 
+    /// <summary>
+    /// The canonical role name for an API key's <paramref name="role"/> (case-insensitive): a person's role, or one of the
+    /// Alpaca accounts' (<see cref="RoofAlpacaContract.CommanderRole"/>, <see cref="RoofAlpacaContract.ServerRole"/>);
+    /// null when unknown. People never hold the Alpaca roles.
+    /// </summary>
+    public static string? NormalizeKeyRole(string? role)
+        => NormalizeRole(role)
+            ?? (string.Equals(role, RoofAlpacaContract.CommanderRole, StringComparison.OrdinalIgnoreCase) ? RoofAlpacaContract.CommanderRole
+                : string.Equals(role, RoofAlpacaContract.ServerRole, StringComparison.OrdinalIgnoreCase) ? RoofAlpacaContract.ServerRole
+                : null);
+
+    /// <summary>True for one of the Alpaca accounts' roles.</summary>
+    public static bool IsAlpacaAccountRole(string? role)
+        => role is RoofAlpacaContract.CommanderRole or RoofAlpacaContract.ServerRole;
+
     /// <summary>The role itself plus every role it implies, highest first. Empty for an unknown role.</summary>
-    public static IReadOnlyList<string> GetImpliedRoles(string? role) => NormalizeRole(role) switch
+    public static IReadOnlyList<string> GetImpliedRoles(string? role) => NormalizeKeyRole(role) switch
     {
         RoofControllerApiContract.AdminRole => AdminRoles,
         RoofControllerApiContract.OperatorRole => OperatorRoles,
         RoofControllerApiContract.ViewerRole => ViewerRoles,
+        RoofAlpacaContract.CommanderRole => AlpacaCommanderRoles,
+        RoofAlpacaContract.ServerRole => AlpacaServerRoles,
         _ => Array.Empty<string>()
     };
+
+    /// <summary>
+    /// The role an API key's principal was made with: an Alpaca account's role when it carries one, otherwise its highest
+    /// role (<see cref="GetHighestRole"/>). Null when it holds none.
+    /// </summary>
+    public static string? GetKeyRole(ClaimsPrincipal? user)
+        => user is null ? null
+            : user.IsInRole(RoofAlpacaContract.CommanderRole) ? RoofAlpacaContract.CommanderRole
+            : user.IsInRole(RoofAlpacaContract.ServerRole) ? RoofAlpacaContract.ServerRole
+            : GetHighestRole(user);
+
+    /// <summary>True when <paramref name="user"/> is a person's interactive session (password or PIN), never an API key.</summary>
+    public static bool IsPersonSession(ClaimsPrincipal? user)
+        => GetCredentialKind(user) is RoofCredentialKind.Session or RoofCredentialKind.Pin;
 
     /// <summary>
     /// Creates the principal for <paramref name="identity"/> under <paramref name="authenticationType"/>.

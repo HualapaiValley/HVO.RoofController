@@ -45,7 +45,10 @@ public sealed record KioskWording
         AcceptedAfterSignOut = "accepted after the app signed out, so it does not renew the operator lease. If the roof is still moving, it stops when the lease runs out.",
         RenewsLease = "The app renews the operator lease while the roof moves; if it signs out or cannot reach the controller, the roof stops when the lease runs out.",
         SecretsElsewhere = "Secrets are not typed in this app: set them in the web UI or with hvo-roof.",
-        WithoutUse = "without use"
+        WithoutUse = "without use",
+        KeepsOperatorLease =
+            "While you are signed in, the app holds the operator lease for you, so Alpaca commands are refused; it gives it up when you sign out.",
+        AlpacaNeedsPerson = "sign in to allow Alpaca again, grant, revoke or acknowledge"
     };
 
     public KioskSignIn SignIn { get; init; } = KioskSignIn.Pin;
@@ -110,6 +113,13 @@ public sealed record KioskWording
 
     /// <summary>Why a secret setting cannot be changed here.</summary>
     public string SecretsElsewhere { get; init; } = "Secrets are not typed on the kiosk: set them in the web UI or with hvo-roof.";
+
+    /// <summary>The Alpaca page's line while the screens keep the operator lease for the person (#220).</summary>
+    public string KeepsOperatorLease { get; init; } =
+        "While the kiosk is unlocked, it holds the operator lease for you, so Alpaca commands are refused; it gives it up when it locks.";
+
+    /// <summary>Why the Alpaca page's actions are not offered while no one is signed in.</summary>
+    public string AlpacaNeedsPerson { get; init; } = "unlock the kiosk with a PIN to allow Alpaca again, grant, revoke or acknowledge";
 
     /// <summary>The answer to a sign-in while the screens close.</summary>
     public string Closing => $"The {Device} is closing.";

@@ -36,7 +36,9 @@ internal static class RoofSettingsCatalogue
         (RoofSettingsContract.SecurityGroup, "Security", "Transport and Stop rules."),
         (RoofSettingsContract.IdentityGroup, "Sign-in", "Session lifetimes, lockouts and sign-in rate limits."),
         (RoofSettingsContract.LoggingGroup, "Logging", "Log levels."),
-        (RoofSettingsContract.UiGroup, "Clients", "Preferences shared by the web UI, the kiosk and the command line.")
+        (RoofSettingsContract.UiGroup, "Clients", "Preferences shared by the web UI, the kiosk and the command line."),
+        (RoofSettingsContract.AlpacaGroup, "Alpaca commands",
+            "What Alpaca clients may command through the Alpaca server, and the override and operator lease rules. Local credential only.")
     ];
 
     public static IReadOnlyList<RoofSettingDefinition> All { get; } = Build();
@@ -170,6 +172,9 @@ internal static class RoofSettingsCatalogue
             "Time allowed for the drive to stop reporting running after a stop. Null uses the at-speed time. Local credential only.",
             min: RoofControllerLimits.MinDriveStopConfirmationSeconds, max: RoofControllerLimits.MaxDriveStopConfirmationSeconds, unit: "s",
             nullable: true, safety: RoofSettingSafety.WhenTurnedOff, localOnly: true);
+        Roof(nameof(roof.DirectionChangeDelay), RoofSettingType.Duration,
+            "Every start waits this long after the last stop before it energizes a direction relay, without holding up Stop. 0 (the default) does not wait. Local credential only.",
+            min: 0, max: RoofControllerLimits.MaxDirectionChangeDelaySeconds, unit: "s", localOnly: true);
         Roof(nameof(roof.DepartureReleaseTimeout), RoofSettingType.Duration,
             "Motion stops unless the starting limit releases within this time (a jammed or reversed roof). Null turns it off. Local credential only.",
             min: RoofControllerLimits.MinDepartureReleaseSeconds, max: RoofControllerLimits.MaxDepartureReleaseSeconds, unit: "s",
@@ -236,6 +241,26 @@ internal static class RoofSettingsCatalogue
             "How long the kiosk screen stays on without a touch. 0 keeps it on.", ui.KioskScreenTimeout,
             min: 0, max: RoofControllerUiOptions.MaximumKioskScreenTimeout.TotalSeconds, unit: "s", writeRole: Operator, readRole: Viewer);
 
+        // Alpaca commands (#220).
+        var alpaca = new Alpaca.RoofAlpacaCommandOptions();
+        const string alpacaSection = Alpaca.RoofAlpacaCommandOptions.SectionName + ":";
+        Add(alpacaSection + nameof(alpaca.AllowCommands), RoofSettingsContract.AlpacaGroup, RoofSettingType.Enum,
+            "Which Alpaca commands the controller accepts: Off, or CloseOnly. Any change drops every override grant.",
+            nameof(RoofAlpacaCommandMode.Off), allowed: [nameof(RoofAlpacaCommandMode.Off), nameof(RoofAlpacaCommandMode.CloseOnly)],
+            safety: RoofSettingSafety.Always, localOnly: true);
+        Add(alpacaSection + nameof(alpaca.OverrideWindowMinutes), RoofSettingsContract.AlpacaGroup, RoofSettingType.Integer,
+            "How long an override grant lasts, in minutes. Any change drops every grant.", alpaca.OverrideWindowMinutes,
+            min: Alpaca.RoofAlpacaCommandOptions.MinOverrideWindowMinutes, max: Alpaca.RoofAlpacaCommandOptions.MaxOverrideWindowMinutes, unit: "min", localOnly: true);
+        Add(alpacaSection + nameof(alpaca.ScopeRereadBudgetMs), RoofSettingsContract.AlpacaGroup, RoofSettingType.Integer,
+            "How long an Alpaca command's last-moment re-read of the blocking telescopes may take: at least 250 ms plus the slowest GET's p99 plus 100 ms.",
+            alpaca.ScopeRereadBudgetMs, min: Alpaca.RoofAlpacaCommandOptions.MinScopeRereadBudgetMs, max: Alpaca.RoofAlpacaCommandOptions.MaxScopeRereadBudgetMs,
+            unit: "ms", localOnly: true);
+        var lease = new Alpaca.RoofOperatorLeaseOptions();
+        Add(Alpaca.RoofOperatorLeaseOptions.SectionName + ":" + nameof(lease.OperatorLeaseIdleMinutes), RoofSettingsContract.AlpacaGroup, RoofSettingType.Integer,
+            "A person's operator lease lapses after this long without input, while Alpaca commands are on; never during their own motion.",
+            lease.OperatorLeaseIdleMinutes, min: Alpaca.RoofOperatorLeaseOptions.MinIdleMinutes, max: Alpaca.RoofOperatorLeaseOptions.MaxIdleMinutes,
+            unit: "min", localOnly: true);
+
         return list;
 
         void Roof(string name, RoofSettingType type, string description, double? min = null, double? max = null, string? unit = null,
@@ -267,9 +292,10 @@ internal static class RoofSettingsCatalogue
         void Add(string key, string group, RoofSettingType type, string description, object? codeDefault,
             double? min = null, double? max = null, string? unit = null, bool nullable = false, bool secret = false,
             bool afterRestart = false, RoofSettingSafety safety = RoofSettingSafety.None, IReadOnlyList<string>? allowed = null,
-            string writeRole = Admin, string readRole = Admin)
+            string writeRole = Admin, string readRole = Admin, bool localOnly = false)
             => list.Add(new RoofSettingDefinition
             {
+                LocalOnly = localOnly,
                 Key = key,
                 Group = group,
                 Type = type,

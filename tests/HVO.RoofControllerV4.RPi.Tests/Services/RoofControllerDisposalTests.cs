@@ -148,7 +148,7 @@ public sealed class RoofControllerDisposalTests
     [TestMethod]
     [DataRow(false, DisplayName = "Dispose")]
     [DataRow(true, DisplayName = "DisposeAsync")]
-    public async Task Dispose_WhileACallIsBlockedInHatIo_ShouldReturnAfterTheWaitTimeout_AndLogCritical(bool disposeAsync)
+    public async Task Dispose_WhileAHatAccessIsPastItsLimit_ShouldDeferTheAllOffStopUntilItReturns_AndLogCritical(bool disposeAsync)
     {
         var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false);
@@ -156,7 +156,8 @@ public sealed class RoofControllerDisposalTests
         var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), logger: logger);
         (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
 
-        // A wedged I2C transfer: the shutdown stop blocks in a relay write while holding the controller lock.
+        // A wedged I2C transfer: the shutdown stop's relay write hangs. It fails at the HAT access limit (#220, §17 AA5),
+        // which lets the controller lock go, but it may still switch a relay when it returns.
         using var wedged = new ManualResetEventSlim(false);
         using var blocked = new ManualResetEventSlim(false);
         hat.Registers.RelayWriteObserver = (_, _, _) =>
@@ -173,14 +174,12 @@ public sealed class RoofControllerDisposalTests
             var stopwatch = Stopwatch.StartNew();
             var dispose = disposeAsync ? Task.Run(async () => await service.DisposeAsync()) : Task.Run(service.Dispose);
             await dispose.WaitAsync(RoofControllerServiceV4.DisposeWaitTimeout + TimeSpan.FromSeconds(5));
-            stopwatch.Elapsed.Should().BeGreaterThanOrEqualTo(RoofControllerServiceV4.DisposeWaitTimeout - TimeSpan.FromMilliseconds(100))
-                .And.BeLessThan(RoofControllerServiceV4.DisposeWaitTimeout + TimeSpan.FromSeconds(2));
+            stopwatch.Elapsed.Should().BeLessThan(service.HatIoLimit + TimeSpan.FromSeconds(1), "the hanging access failed at its limit and let the lock go");
 
-            service.IsServiceDisposed.Should().BeFalse("the all-off stop has not run, so the controller is not disposed yet");
+            service.IsServiceDisposed.Should().BeFalse("the all-off stop waits for the hanging access, so the controller is not disposed yet");
             service.IsShuttingDown.Should().BeTrue("no new command is admitted");
             service.DeferredDisposalTask.Should().NotBeNull();
-            logger.Contains(LogLevel.Critical, "could not acquire the controller lock").Should().BeTrue();
-            shutdown.IsCompleted.Should().BeFalse("the blocked call is still inside the HAT write");
+            logger.Contains(LogLevel.Critical, "still running past its time limit").Should().BeTrue();
 
             // A repeated disposal returns at once.
             await Task.Run(service.Dispose).WaitAsync(TimeSpan.FromMilliseconds(500));
@@ -208,7 +207,7 @@ public sealed class RoofControllerDisposalTests
         service.Open().IsSuccessful.Should().BeTrue();
         hat.RelayMask.Should().Be(0x09);
 
-        // The reversal's first relay write wedges while it holds the controller lock; the rest of it runs on release.
+        // The reversal's first relay write wedges: it fails at the HAT access limit, and so does the reversal.
         using var wedged = new ManualResetEventSlim(false);
         using var blocked = new ManualResetEventSlim(false);
         var armed = 1;
@@ -234,12 +233,13 @@ public sealed class RoofControllerDisposalTests
             wedged.Set();
         }
 
-        (await reversal.WaitAsync(TimeSpan.FromSeconds(5))).IsSuccessful.Should().BeTrue("the reversal resumes and energizes the close relays");
+        (await reversal.WaitAsync(TimeSpan.FromSeconds(5))).ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified,
+            "its stop could not be verified while the write hung");
         await service.DeferredDisposalTask!.WaitAsync(TimeSpan.FromSeconds(5));
 
         service.IsServiceDisposed.Should().BeTrue();
         service.IsMoving.Should().BeFalse();
-        hat.RelayMask.Should().Be(0x00, "the deferred disposal stops what the resumed reversal started");
+        hat.RelayMask.Should().Be(0x00, "the deferred disposal writes every relay off once the late write has returned");
         logger.Contains(LogLevel.Warning, "Deferred disposal ran").Should().BeTrue();
     }
 

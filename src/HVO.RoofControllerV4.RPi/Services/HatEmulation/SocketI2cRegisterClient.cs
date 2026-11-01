@@ -30,6 +30,14 @@ namespace HVO.RoofControllerV4.RPi.Services.HatEmulation;
 /// <para>
 /// <see cref="Dispose"/> does not wait for an access in flight: it closes the connection, which fails that access at once.
 /// </para>
+/// <para>
+/// Every Hello carries this client's random tag, and the emulator runs no request of an older connection of the same tag
+/// once a newer connection's Hello is answered (#220, N3). This client opens a new connection only after it has given up
+/// on the old one, so the first access to succeed after a timed-out write proves that write either landed before it (its
+/// read-back shows it) or never will: no ON this client gave up on can energize a relay after a Stop that verified the
+/// relays off. A timed-out access ends within <see cref="HatEmulatorOptions.RequestTimeout"/> (default 1 s), or
+/// <c>ConnectTimeout + RequestTimeout</c> when it also connects.
+/// </para>
 /// </remarks>
 public sealed class SocketI2cRegisterClient : II2cRegisterClient
 {
@@ -43,6 +51,9 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
     private string? _lastFailure;
     private long _connects;
     private int _disposed;
+
+    // This client's tag in every Hello: the emulator fences this client's older connections with it (#220, N3).
+    private readonly int _clientTag = Random.Shared.Next(1, HatEmulatorProtocol.MaxClientTag + 1);
 
     /// <param name="options">The emulator endpoint and timeouts.</param>
     /// <param name="busId">The I2C bus the HAT is on; the emulator must report the same.</param>
@@ -267,7 +278,7 @@ public sealed class SocketI2cRegisterClient : II2cRegisterClient
 
             // The Hello and the access share one request timeout.
             deadline = Deadline(_options.RequestTimeout);
-            var reply = Send(socket, HatEmulatorProtocol.CreateHello(unchecked(++_sequence)), deadline);
+            var reply = Send(socket, HatEmulatorProtocol.CreateHello(unchecked(++_sequence), _clientTag), deadline);
             var (busId, address) = HatEmulatorProtocol.ReadHelloReply(reply);
             if (busId != ConnectionSettings.BusId || address != ConnectionSettings.DeviceAddress)
             {

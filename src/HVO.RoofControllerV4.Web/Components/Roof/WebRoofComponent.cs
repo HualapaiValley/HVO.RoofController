@@ -29,7 +29,13 @@ public abstract class WebRoofComponent : ComponentBase, IDisposable
     public void Dispose()
     {
         Roof.Changed -= OnChanged;
+        Dispose(disposing: true);
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Releases what a derived component holds besides the view; called once, from <see cref="Dispose()"/>.</summary>
+    protected virtual void Dispose(bool disposing)
+    {
     }
 
     private void OnChanged() => _ = RenderViewAsync();

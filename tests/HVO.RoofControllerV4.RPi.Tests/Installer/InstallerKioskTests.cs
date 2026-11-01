@@ -662,10 +662,12 @@ public sealed class InstallerKioskTests
 
     private static void ShowsNoSecret(FakeMachine pi, InstallerRun run, params string[] secrets)
     {
-        var log = pi.Read(InstallPaths.SystemLog);
+        // Without the random folder names: a 4-digit PIN can turn up inside a GUID's hex.
+        var log = pi.WithoutRandomNames(pi.Read(InstallPaths.SystemLog));
+        var output = pi.WithoutRandomNames(run.ToString());
         foreach (var secret in secrets.Concat(pi.ApiKeyValues()))
         {
-            run.ToString().Should().NotContain(secret);
+            output.Should().NotContain(secret);
             log.Should().NotContain(secret);
         }
     }

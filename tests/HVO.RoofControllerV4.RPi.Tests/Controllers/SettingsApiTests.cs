@@ -121,7 +121,7 @@ public sealed class SettingsApiTests
             RoofSettingsContract.SecurityGroup,
             RoofSettingsContract.IdentityGroup,
             RoofSettingsContract.LoggingGroup,
-            RoofSettingsContract.UiGroup);
+            RoofSettingsContract.UiGroup, RoofSettingsContract.AlpacaGroup);
         var settings = catalogue.Groups.SelectMany(group => group.Settings).ToDictionary(setting => setting.Key);
         settings[OpenRelay].Safety.Should().Be(RoofSettingSafety.Always);
         settings[OpenRelay].WriteRole.Should().Be(RoofControllerApiContract.AdminRole);

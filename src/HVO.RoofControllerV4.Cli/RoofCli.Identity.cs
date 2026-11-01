@@ -402,7 +402,7 @@ public static partial class RoofCli
         private Command CreateKeysAddCommand()
         {
             var name = NameArgument("The key's name, for example the device or script that uses it.");
-            var role = RoleOption(required: true);
+            var role = KeyRoleOption(required: true);
             var kiosk = new Option<bool>("--kiosk") { Description = "A kiosk's key: people sign in at it with a PIN. Must have the viewer role." };
             var command = new Command("add", "Add an API key. The controller generates it; it is shown once.") { name, role, kiosk };
             SetAction(command, async (context, parseResult, cancellationToken) =>
@@ -424,7 +424,7 @@ public static partial class RoofCli
         private Command CreateKeysSetCommand()
         {
             var name = NameArgument("The key.");
-            var role = RoleOption(required: false);
+            var role = KeyRoleOption(required: false);
             var kiosk = new Option<bool?>("--kiosk") { Description = "true to make it a kiosk's key, false to make it an ordinary key." };
             var command = new Command("set", "Change a managed key's role, or whether it is a kiosk's key. Requests with its old role are refused at once.")
             {
@@ -595,6 +595,39 @@ public static partial class RoofCli
             option.CompletionSources.Add("viewer", "operator", "admin");
             return option;
         }
+
+        /// <summary>
+        /// An API key's <c>--role</c>: a person's role, or an Alpaca account's (#220): alpaca-commander, the External Alpaca
+        /// account an Alpaca client's key belongs to, or alpaca-server, the Alpaca server's own account. The controller
+        /// judges which a key may have (an Alpaca account's key is never a kiosk's).
+        /// </summary>
+        private static Option<string?> KeyRoleOption(bool required)
+        {
+            var option = new Option<string?>("--role")
+            {
+                Description = $"viewer (status and Stop), operator (also open, close, clear fault), admin (also settings, people, keys, restart), "
+                    + $"{RoofCliFormat.AlpacaCommanderRole} (the External Alpaca account: an Alpaca client's key, for Alpaca Close) "
+                    + $"or {RoofCliFormat.AlpacaServerRole} (the Alpaca server's own account).",
+                Required = required,
+                CustomParser = result =>
+                {
+                    var text = result.Tokens.Count == 0 ? string.Empty : result.Tokens[0].Value;
+                    if (RoofCliFormat.ParseKeyRole(text) is { } role)
+                    {
+                        return role;
+                    }
+
+                    result.AddError($"'{text}' is not a role. Use viewer, operator or admin. {KeyAlpacaRoles}");
+                    return null;
+                }
+            };
+            option.CompletionSources.Add("viewer", "operator", "admin", RoofCliFormat.AlpacaCommanderRole, RoofCliFormat.AlpacaServerRole);
+            return option;
+        }
+
+        /// <summary>Said where a key's role is asked for: the Alpaca accounts' roles a key may also have.</summary>
+        internal static readonly string KeyAlpacaRoles =
+            $"An Alpaca account's key may also be {RoofCliFormat.AlpacaCommanderRole} or {RoofCliFormat.AlpacaServerRole}.";
 
         private static string RequireName(string name) => RoofIdentityContract.IsValidName(name)
             ? name

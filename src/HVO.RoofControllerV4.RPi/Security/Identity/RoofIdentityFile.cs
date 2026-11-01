@@ -259,7 +259,8 @@ internal sealed class RoofIdentityFile
         {
             var key = keys[i];
             if (key is null || !RoofIdentityContract.IsValidName(key.Name) || RoofPrincipalFactory.NormalizeRole(key.Role) != key.Role
-                || !IsSha256Hex(key.KeySha256) || (key.Kiosk && key.Role != RoofControllerApiContract.ViewerRole))
+                || !IsSha256Hex(key.KeySha256) || (key.Kiosk && key.Role != RoofControllerApiContract.ViewerRole)
+                || (key.Account is not null && (!RoofPrincipalFactory.IsAlpacaAccountRole(key.Account) || key.Role != RoofControllerApiContract.ViewerRole || key.Kiosk)))
             {
                 problems.Add($"apiKeys[{i}] is incomplete or has an invalid name, role or hash.");
             }

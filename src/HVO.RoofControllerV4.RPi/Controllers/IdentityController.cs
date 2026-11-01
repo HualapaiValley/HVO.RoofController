@@ -385,10 +385,10 @@ public sealed class IdentityController : ControllerBase
             return Invalid(NameRule);
         }
 
-        var role = RoofPrincipalFactory.NormalizeRole(request.Role);
+        var role = RoofPrincipalFactory.NormalizeKeyRole(request.Role);
         if (role is null)
         {
-            return Invalid(RoleRule);
+            return Invalid(KeyRoleRule);
         }
 
         if (!_identity.IsAvailable)
@@ -423,10 +423,10 @@ public sealed class IdentityController : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public IActionResult UpdateApiKey(string name, [FromBody] RoofApiKeyUpdateRequest request)
     {
-        var role = RoofPrincipalFactory.NormalizeRole(request.Role);
+        var role = RoofPrincipalFactory.NormalizeKeyRole(request.Role);
         if (role is null)
         {
-            return Invalid(RoleRule);
+            return Invalid(KeyRoleRule);
         }
 
         if (!RoofIdentityContract.IsValidName(name))
@@ -570,6 +570,9 @@ public sealed class IdentityController : ControllerBase
 
     internal const string RoleRule = "The role must be RoofViewer, RoofOperator or RoofAdmin.";
 
+    /// <summary>The roles an API key may have: a person's, or an Alpaca account's (#220).</summary>
+    internal const string KeyRoleRule = "The role must be RoofViewer, RoofOperator, RoofAdmin, RoofAlpacaCommander (the External Alpaca account) or RoofAlpacaServer (the Alpaca server's own account).";
+
     internal static readonly string DisplayNameRule = string.Create(
         System.Globalization.CultureInfo.InvariantCulture,
         $"A display name has 1 to {RoofIdentityContract.MaximumDisplayNameLength} characters, without control or formatting characters.");
@@ -651,7 +654,7 @@ public sealed class IdentityController : ControllerBase
         };
 
     private static RoofApiKeyResponse ToResponse(StoredApiKey key)
-        => new(key.Name, key.Role, key.Kiosk, RoofApiKeySource.Managed, key.CreatedUtc, key.UpdatedUtc);
+        => new(key.Name, key.EffectiveRole, key.Kiosk, RoofApiKeySource.Managed, key.CreatedUtc, key.UpdatedUtc);
 
     private ObjectResult Invalid(string detail) => RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, detail);
 

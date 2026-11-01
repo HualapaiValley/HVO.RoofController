@@ -45,10 +45,17 @@ public sealed record BusFaultRequest(
     int? FailNextInputReads = null);
 
 /// <summary>Faults of the TCP link itself. Null leaves a setting unchanged; <c>Disconnect</c> drops the open connections once.</summary>
-public sealed record LinkRequest(bool? Outage = null, double? ResponseDelayMilliseconds = null, bool Disconnect = false);
+public sealed record LinkRequest(bool? Outage = null, double? ResponseDelayMilliseconds = null, bool Disconnect = false, double? WriteHoldMilliseconds = null);
 
 /// <summary>The register link's state.</summary>
-public sealed record LinkStatus(string RegisterEndpoint, bool Outage, double ResponseDelayMilliseconds, int OpenConnections, long AcceptedConnections, long Requests);
+public sealed record LinkStatus(string RegisterEndpoint, bool Outage, double ResponseDelayMilliseconds, int OpenConnections, long AcceptedConnections, long Requests)
+{
+    /// <summary>How long each register write is held before it takes its turn (a late write, #220 N3).</summary>
+    public double WriteHoldMilliseconds { get; init; }
+
+    /// <summary>Requests not run because a newer connection's Hello had fenced their connection.</summary>
+    public long FencedRequests { get; init; }
+}
 
 public sealed record EmulatorStatusResponse(HatEmulatorStatus Plant, LinkStatus Link, EmulatedCameraStatus Camera);
 
@@ -147,6 +154,16 @@ internal static class EmulatorApi
                     server.ResponseDelay = TimeSpan.FromMilliseconds(delay);
                 }
 
+                if (request.WriteHoldMilliseconds is { } hold)
+                {
+                    if (double.IsNaN(hold) || hold < 0 || hold > 60_000)
+                    {
+                        throw new ArgumentOutOfRangeException(nameof(request.WriteHoldMilliseconds), "The write hold must be between 0 and 60000 ms.");
+                    }
+
+                    server.WriteHold = TimeSpan.FromMilliseconds(hold);
+                }
+
                 if (request.Outage is { } outage)
                 {
                     server.Outage = outage;
@@ -166,7 +183,11 @@ internal static class EmulatorApi
             server.ResponseDelay.TotalMilliseconds,
             server.OpenConnections,
             server.AcceptedConnections,
-            server.Requests),
+            server.Requests)
+        {
+            WriteHoldMilliseconds = server.WriteHold.TotalMilliseconds,
+            FencedRequests = server.FencedRequests
+        },
             camera.GetStatus());
 
     /// <summary>A field the request must give.</summary>

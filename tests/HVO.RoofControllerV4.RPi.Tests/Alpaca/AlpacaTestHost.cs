@@ -27,18 +27,22 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
     private readonly WebApplication _app;
     private readonly string _directory;
 
-    private AlpacaTestHost(WebApplication app, string directory, HttpClient client, RoofApiTestHost? controller)
+    private AlpacaTestHost(WebApplication app, string directory, HttpClient client, RoofApiTestHost? controller, System.Collections.Concurrent.ConcurrentQueue<string>? requests = null)
     {
         _app = app;
         _directory = directory;
         Http = client;
         Controller = controller;
+        ControllerRequests = requests ?? new();
     }
 
     /// <summary>The controller behind the server, or null for one that cannot be reached.</summary>
     public RoofApiTestHost? Controller { get; }
 
     public HttpClient Http { get; }
+
+    /// <summary>Every request the server sent the controller, as "METHOD /path?query", in order.</summary>
+    public System.Collections.Concurrent.ConcurrentQueue<string> ControllerRequests { get; }
 
     public IServiceProvider Services => _app.Services;
 
@@ -64,9 +68,12 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
     public static Task<AlpacaTestHost> StartAsync(Func<HttpRequestMessage, HttpResponseMessage> answer)
         => StartAsync(null, null, null, null, TestApiKeys.Viewer, waitForStatus: false, answer);
 
-    /// <summary>Starts the server in front of the controller <paramref name="server"/> serves (the emulated rig's).</summary>
-    public static Task<AlpacaTestHost> StartAsync(Func<TestServer> server, IReadOnlyDictionary<string, string?>? settings = null)
-        => StartAsync(server, null, settings, null, TestApiKeys.Viewer, waitForStatus: true);
+    /// <summary>
+    /// Starts the server in front of the controller <paramref name="server"/> serves (the emulated rig's), with its own key
+    /// <paramref name="apiKey"/> (a Viewer key by default; the Alpaca server's own account's for commands).
+    /// </summary>
+    public static Task<AlpacaTestHost> StartAsync(Func<TestServer> server, IReadOnlyDictionary<string, string?>? settings = null, string apiKey = TestApiKeys.Viewer)
+        => StartAsync(server, null, settings, null, apiKey, waitForStatus: true);
 
     private static async Task<AlpacaTestHost> StartAsync(
         Func<TestServer>? server,
@@ -108,6 +115,7 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
         }
 
         var args = values.Where(pair => pair.Value is not null).Select(pair => $"--{pair.Key}={pair.Value}").ToArray();
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var app = AlpacaProgram.BuildApp(args, builder =>
         {
             builder.WebHost.UseTestServer();
@@ -123,11 +131,12 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
                     RequestTimeout = TimeSpan.FromSeconds(5),
                     StopTimeout = TimeSpan.FromSeconds(5),
                 })
-                : ClientTestSupport.CreateClient(server, new RoofApiKeyCredential(apiKey), stopTimeout: TimeSpan.FromSeconds(5))));
+                : ClientTestSupport.CreateClient(server, new RoofApiKeyCredential(apiKey), stopTimeout: TimeSpan.FromSeconds(5),
+                    handler: () => new RecordingHandler(requests) { InnerHandler = new ClientTestSupport.CurrentServerHandler(server) })));
         }) ?? throw new InvalidOperationException("The Alpaca server is off.");
 
         await app.StartAsync();
-        var host = new AlpacaTestHost(app, directory, app.GetTestClient(), controller);
+        var host = new AlpacaTestHost(app, directory, app.GetTestClient(), controller, requests);
         if (waitForStatus && server is not null)
         {
             await host.ConnectAsync(clientId: 999);
@@ -157,10 +166,19 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
     }
 
-    /// <summary>PUTs a Dome member, form-encoded, and returns the envelope.</summary>
-    public async Task<JsonElement> PutAsync(string member, string form = "ClientID=1&ClientTransactionID=1")
+    /// <summary>PUTs a Dome member, form-encoded (with <paramref name="headers"/>), and returns the envelope.</summary>
+    public async Task<JsonElement> PutAsync(string member, string form = "ClientID=1&ClientTransactionID=1", Dictionary<string, string>? headers = null)
     {
-        using var response = await PutRawAsync(member, form);
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/dome/0/{member}")
+        {
+            Content = new StringContent(form, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded")
+        };
+        foreach (var (name, value) in headers ?? [])
+        {
+            request.Headers.TryAddWithoutValidation(name, value);
+        }
+
+        using var response = await Http.SendAsync(request);
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
     }
@@ -223,6 +241,16 @@ internal sealed class AlpacaTestHost : IAsyncDisposable
             });
             next(app);
         };
+    }
+
+    /// <summary>Records each request the server sends the controller (method and path), never its headers.</summary>
+    private sealed class RecordingHandler(System.Collections.Concurrent.ConcurrentQueue<string> requests) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            requests.Enqueue($"{request.Method} {request.RequestUri?.PathAndQuery}");
+            return base.SendAsync(request, cancellationToken);
+        }
     }
 
     private sealed class UnreachableHandler : HttpMessageHandler

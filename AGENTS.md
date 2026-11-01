@@ -42,7 +42,7 @@ macOS machine with Docker.
 |---|---|
 | `HVO.RoofControllerV4.RPi` | The controller: ASP.NET Core on the Pi. It drives the Sequent Microsystems HAT over I2C (`HVO.Iot.Devices`) and serves the REST API and the status hub. It serves no pages. Its own rules: [AGENTS.md](src/HVO.RoofControllerV4.RPi/AGENTS.md). |
 | `HVO.RoofControllerV4.Web` | The web UI, Blazor Server: a separate process in the controller's container ([docs/web.md](docs/web.md)). |
-| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process, off by default, over the client library with its own key. It reads and stops (AbortSlew), never opens or closes ([docs/alpaca.md](docs/alpaca.md)). |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process, off by default, over the client library with its own account's key. It reads, stops (AbortSlew), and closes (CloseShutter) with the Alpaca client's own key when the controller allows it; it never opens ([docs/alpaca.md](docs/alpaca.md)). |
 | `HVO.RoofControllerV4.Client` | The client library every UI uses: the REST API, the status hub, credentials and the CA, Stop, and the shared wording and palette. |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the commands and the Terminal.Gui interface ([docs/cli.md](docs/cli.md)). |
 | `HVO.RoofControllerV4.TerminalUi` | HVO Dark for Terminal.Gui, shared by `hvo-roof` and the installer. |
@@ -101,7 +101,12 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   deadlines before renewing; a repeat never revives an expired lease.
 - Shutdown: the host requests a verified stop. An unverified one is retried (all-off every 500 ms until verified,
   disposal or 15 s); the host's wait is bounded even if HAT I/O blocks, and disposal stops waiting for a lock held by
-  blocked HAT I/O after 2 s, deferring its all-off stop until that call returns.
+  blocked HAT I/O after 2 s, and waits for a HAT access past its limit to return, before its all-off stop.
+- HAT accesses are bounded (#220, AA5): every one the controller makes runs on the HAT's own access thread (the HAT
+  library's input poll reads outside it), and the controller waits at most 1.5 s for it (less than Stop's 2 s). Past
+  that it fails as a failed transfer does (relays unverified, the fault latched), the controller's lock is let go,
+  every later access fails at once until it returns, and then, before any other access, the fence goes up and every
+  relay is written off and verified; `ClearFault` is refused meanwhile.
 - The container's supervisor turns every relay off and verifies the register whenever the controller is not running
   (after each exit, before each start, after a failed try while it is not running, and when it stops), with the
   controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. The controller
@@ -124,6 +129,34 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   it. `Block` refuses Open (`SafetyInterlockActive`); `Off` only reports. Unknown counts as Unsafe. Only Open is
   checked: never Close or Stop, and the service never moves the roof. A device's address is private: never log, show
   or commit one ([docs/safety-service.md](docs/safety-service.md), [docs/alpaca.md](docs/alpaca.md)).
+- Stop is bounded and fenced (#220): every command that may start motion carries the controller's command generation,
+  which every start and every relays-off path moves on, and a relay ON whose generation is older than the last
+  relays-off write is dropped. A person's Stop sets the Stop hold, then the fence, before it waits for anything; one
+  2 s deadline covers its wait for the lock and all its HAT I/O (a passed deadline's stop first, its relays-off writes,
+  the read-back and the LEDs), and past it Stop answers `RelayStateUnverified` and its relays-off work goes on once the
+  lock is free until a read-back shows the relays off. The protective stops (an edge, the watchdog's timer, a
+  supervision cycle's or a renewal's deadline stop) have the same bound from their decision through their caller's
+  LEDs; routine reads keep their own 1.5 s; shutdown, a drive-fault
+  edge and a limit asserting fence before they wait, and an edge that cannot take the lock in time is applied, with its
+  own level and motion, once it is free. A
+  relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault`
+  refused) until a read-back shows them off: the emulator transport fences a client's older connections at its next
+  Hello, and on the Pi each I2C write runs on the HAT's one access thread.
+- `DirectionChangeDelay` (0 to 10 s, default 0: no wait; local-only): every start waits that long after the relays were
+  last verified off, admitted first and then waiting without the lock, and runs its checks again before it energizes a
+  relay ([docs/alpaca.md](docs/alpaca.md#waiting-out-the-direction-change-delay)).
+- Alpaca Close (#220, phase 3; `RoofController:Alpaca:AllowCommands`, `Off` by default, `CloseOnly` the only other
+  value): an Alpaca client's `CloseShutter` reaches the controller only with the External Alpaca account's key
+  (`RoofAlpacaCommander`, deny by default, accepted only from loopback and `ServerAddresses`) and a single-use ticket,
+  and the controller alone decides it under its lock, with every check an ordinary Close has. It is refused while the
+  human Stop hold is set (every Stop but the Alpaca server's own `AbortSlew` sets it, and so do the controller's start and
+  turning commands on; only a person's UI session clears it), while a person holds the operator lease (a UI's, lapsing after
+  `OperatorLeaseIdleMinutes` without input only while commands are on, never stopping a motion), and unless every
+  blocking telescope, read again for that Close within `ScopeRereadBudgetMs`, is clear (the weather never gates it).
+  A person's UI grant (one Close, 1 to 15 min, the reasons shown) lifts only a telescope refusal, never the hold, a
+  lease, a latch or `AllowCommands`. An Alpaca client never reverses a person's motion. Alpaca Open does not exist:
+  `OpenShutter` is refused before anything reaches the controller, which has no Open route
+  ([docs/alpaca.md](docs/alpaca.md#alpaca-close)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see
@@ -134,10 +167,13 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 - Routes are under `api/v4.0/RoofControl`. Commands (`Open`, `Close`, `Stop`, `ClearFault`, `Lease`) are `POST`;
   `GET Status`, `GET History` (the roof command history: an admin's is everyone's, anyone else's their own; with
   `mine=true` anyone's own) and `GET`/`POST Configuration` complete the surface, with `GET api/v4.0/Safety` beside it.
-  There are no GET command routes.
+  The Alpaca routes are under `api/v4.0/alpaca` ([docs/security.md](docs/security.md#endpoints)). There are no GET
+  command routes.
 - Every protected request needs an `X-Api-Key` header or a person's session (`Authorization: Bearer`). Roles are
-  `RoofViewer`, `RoofOperator` and `RoofAdmin` (Admin includes Operator includes Viewer); Stop accepts any
-  authenticated role. Failures are RFC 7807 ProblemDetails with `code` and `roofStatus` extensions.
+  `RoofViewer`, `RoofOperator` and `RoofAdmin` (Admin includes Operator includes Viewer), plus two API-key-only roles
+  for the Alpaca server, `RoofAlpacaServer` and `RoofAlpacaCommander` ([docs/security.md](docs/security.md#roles));
+  Stop accepts any authenticated role but the External Alpaca account's (`RoofAlpacaCommander`). Failures are RFC 7807 ProblemDetails with `code` and
+  `roofStatus` extensions.
 - `POST Configuration` requires `ExpectedVersion`, and safety-critical changes also need
   `ConfirmSafetyCriticalChange`.
 - Keys, roles, people, sessions and HTTPS: [docs/security.md](docs/security.md).
@@ -179,7 +215,7 @@ scripts have their own tests, which CI runs; run the ones for what you change, f
 
 ```bash
 python3 -m unittest discover -s tests/<docs|releasing|security|cli|mac|alpaca> -p 'test_*.py'
-tests/alpaca/conformu.sh          # the Alpaca server under a pinned ConformU, against the HAT emulator
+tests/alpaca/conformu.sh          # the Alpaca server under a pinned ConformU and the scripted Close runs, behind a chain guard, against the HAT emulator
 tests/versioning/version-tests.sh
 tests/deploy/deploy-script-tests.sh
 build/check-doc-links.py          # every relative link and anchor in the Markdown resolves
