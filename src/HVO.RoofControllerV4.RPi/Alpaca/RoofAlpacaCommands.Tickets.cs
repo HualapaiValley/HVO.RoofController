@@ -105,38 +105,46 @@ public sealed partial class RoofAlpacaCommands
         Ticket? ticket;
         Task<RoofAlpacaCommandOutcome>? inProgress = null;
         TaskCompletionSource<RoofAlpacaCommandOutcome>? mine = null;
+        (string Rule, string Message)? refusal = null;
+
+        // Decided under the gate, answered after it: a refusal's answer carries the controller's status, and nothing may
+        // hold the gate while it waits for the controller's lock (an admission holds that lock and then takes the gate).
         lock (_gate)
         {
             _tickets.TryGetValue(request.TicketId, out ticket);
             if (ticket is null)
             {
-                return Refused("TicketUnknown", "The ticket is unknown: never issued here, forgotten, or issued by a controller that has since restarted.");
+                refusal = ("TicketUnknown", "The ticket is unknown: never issued here, forgotten, or issued by a controller that has since restarted.");
             }
 
             // Identity, kind and field consistency first.
-            if (!string.Equals(ticket.InstanceId, _controller.InstanceId, StringComparison.Ordinal)
+            else if (!string.Equals(ticket.InstanceId, _controller.InstanceId, StringComparison.Ordinal)
                 || !string.Equals(request.InstanceId, ticket.InstanceId, StringComparison.Ordinal)
                 || request.Generation != ticket.Generation
                 || ticket.Kind != RoofAlpacaCommandKind.Close
                 || !string.Equals(ticket.KeyId, RoofPrincipalFactory.GetCredentialId(user) ?? string.Empty, StringComparison.Ordinal))
             {
-                return Refused("TicketMismatch", "The ticket does not match the command: another kind, another controller instance or generation, or another key.");
+                refusal = ("TicketMismatch", "The ticket does not match the command: another kind, another controller instance or generation, or another key.");
             }
-
-            if (ticket.Outcome is { } done)
+            else if (ticket.Outcome is { } done)
             {
                 // Used: the stored answer of its first request, while the record is kept (also after the 5 s deadline).
                 inProgress = done.Task;
             }
             else if (_time.GetTimestamp() > ticket.TicketDeadline)
             {
-                return Refused("TicketExpired", "The ticket expired: the command came more than 5 s after it was issued.");
+                refusal = ("TicketExpired", "The ticket expired: the command came more than 5 s after it was issued.");
             }
             else
             {
                 mine = new TaskCompletionSource<RoofAlpacaCommandOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
                 ticket.Outcome = mine;
             }
+        }
+
+        if (refusal is { } refused)
+        {
+            return Refused(refused.Rule, refused.Message);
         }
 
         if (inProgress is not null)
@@ -148,11 +156,11 @@ public sealed partial class RoofAlpacaCommands
         RoofAlpacaCommandOutcome outcome;
         try
         {
-            outcome = await AdmitCloseAsync(ticket, client).ConfigureAwait(false);
+            outcome = await AdmitCloseAsync(ticket!, client).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "The Alpaca Close on ticket {TicketId} failed unexpectedly", ticket.Id);
+            _logger.LogError(ex, "The Alpaca Close on ticket {TicketId} failed unexpectedly", ticket!.Id);
             outcome = new RoofAlpacaCommandOutcome(Result<RoofControllerStatus>.Failure(
                 new RoofControllerException(RoofControllerErrorCode.Unknown, "The Alpaca Close failed unexpectedly. See the controller log.", innerException: ex)), [], null);
         }
@@ -190,6 +198,7 @@ public sealed partial class RoofAlpacaCommands
         return new RoofAlpacaCommandOutcome(result, admission.Reasons, admission.UsedGrant?.Id);
     }
 
+    /// <summary>A refusal before admission, with the controller's status. Never called holding the gate.</summary>
     private RoofAlpacaCommandOutcome Refused(string rule, string message)
     {
         _logger.LogInformation("Alpaca command refused ({Rule}): {Message}", rule, message);
