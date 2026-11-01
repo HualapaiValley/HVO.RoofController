@@ -136,6 +136,9 @@ public sealed class AlpacaOpenScenarios
 
     private static async Task ShouldNotMoveAsync(Setup setup, string because)
     {
+        // A roof that just stopped (at a limit, or after an AbortSlew) coasts to rest after its relays go off: what must
+        // not happen is motion after that, so the check starts once the plant is at rest.
+        await setup.Rig.WaitForPlantAsync(plant => Math.Abs(plant.VelocityMetersPerSecond) < 1e-6, "the roof to come to rest");
         var position = setup.Rig.Plant.PositionMeters;
         await Task.Delay(TimeSpan.FromSeconds(1));
         setup.Rig.Plant.PositionMeters.Should().BeApproximately(position, 0.001, because);
