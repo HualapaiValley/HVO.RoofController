@@ -113,6 +113,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   opens the roof while the safety interlock is `Block`: the grant route refuses an Open grant (403 `BlockMode`), the
   UIs show the control disabled with the reason (the status's `openGrantUnavailable`), a change of mode drops every
   grant, and an Open grant in force all the same is never honoured.
+- Every UI offers **Allow this Open once** on a refused Alpaca Open's alert (#220): the web UI, the terminal interface and
+  `hvo-roof alpaca grant --alert ID` (interactive only, as for a Close), the kiosk and the Mac app. It asks first, with
+  what the grant lifts and that the roof stays open if the weather turns, and sends an Open grant with exactly the
+  alert's reasons. While the safety interlock is `Block`, the Open grant is shown disabled with the controller's reason
+  (the terminal says why in its place, and `hvo-roof alpaca grant` refuses before asking, exit 7). The stepped-away
+  notice names every grant in force, and `hvo-roof alpaca revoke --kind Open` revokes an Open grant.
 
 ### Changed
 

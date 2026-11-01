@@ -791,7 +791,8 @@ monitor trigger, say) sends its own `CloseShutter`, which the weather never gate
 
 A person may let **one** refused Open through, as for a Close ([Override grants](#override-grants)): from the refused
 Open's alert ("Allow this Open once") in the web UI, the terminal (or `hvo-roof alpaca grant`, interactive only) or the
-kiosk, by a person with the override role, never through Alpaca or with an API key (403).
+kiosk, by a person with the override role, never through Alpaca or with an API key (403). Each UI asks first ("Allow
+one Alpaca Open?"), with what the grant lifts and that the roof stays open if the weather turns.
 
 - **Its own kind.** An Open grant lifts only an Open's reasons, and a Close grant only a Close's: one of each may be in
   force at once, each used up by one command of its kind.

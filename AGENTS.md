@@ -163,8 +163,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   that Open, clear (unparked, unknown, stale or timed out is not clear). With no blocking telescope configured it is
   refused unless `AllowOpenWithoutBlockingScopes` (default `false`, safety-critical, warned in every UI) is on. A
   person's Open grant (separate from Close grants, one Open, 1 to 15 min, the reasons shown, weather's included) lifts
-  only those reasons, and never in `Block`: the grant route refuses it (403), a mode change drops it, and the admission
-  never honours one. The weather turning or a telescope unparking mid-Open never stops the roof (a UI alert), and
+  only those reasons, and never in `Block`: the grant route refuses it (403), every UI shows it disabled with the
+  reason, a mode change drops it, and the admission never honours one. The weather turning or a telescope unparking mid-Open never stops the roof (a UI alert), and
   nothing ever closes it on its own ([docs/alpaca.md](docs/alpaca.md#alpaca-open)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
