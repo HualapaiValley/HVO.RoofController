@@ -430,16 +430,17 @@ In this order, under the lock that starts the relays:
 3. **A person in charge.** The [human Stop hold](#the-human-stop-hold) (`StopHold`) and a person's
    [operator lease](#the-operator-lease) (`LeaseHeld`) refuse every Alpaca Close.
 4. **What the Close would do.** Already closed: success, nothing sent. Already closing: success, nothing changes (no
-   relay write, no new deadline, no grant used). Opening on a person's command, or on one nobody in particular started
-   (a local input): refused (`PersonsMotion`); an Alpaca client never reverses a person's motion. Opening on an Alpaca
-   client's Open: a reversal, admitted like a start (the relays go off, the delay is waited out, everything is checked
-   again). Otherwise it is a start.
+   relay write, no new deadline, no grant used). Opening (or about to): a reversal. Otherwise it is a start.
 5. **In time** for its answer's deadline (`DeadlineExceeded`).
 6. **The grant is used up here**: from this point any [override grant](#override-grants) for a Close is spent, whatever
    follows.
 7. **Nothing came after the ticket**: a Stop, a protective stop or another start since the ticket was issued refuses
    it (`Superseded`). A refusal, a repeat or a no-op never counts as one.
-8. **The Close rule**: every telescope that can block the roof is clear of it, from a read made after the Close
+8. **Never a person's motion**: a reversal of an Open on a person's command, or of one nobody in particular started (a
+   local input), is refused (`PersonsMotion`), the grant already used up; an Alpaca client never reverses a person's
+   motion. A reversal of an Alpaca client's Open is admitted like a start (the relays go off, the delay is waited out,
+   everything is checked again).
+9. **The Close rule**: every telescope that can block the roof is clear of it, from a read made after the Close
    arrived; otherwise a grant must lift every reason (`NotSafe`, with the reasons, and an alert).
 
 Then the Close starts, or [waits](#waiting-out-the-direction-change-delay). Any refusal leaves the roof as it was and
@@ -494,8 +495,8 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
 - **For a while**: `OverrideWindowMinutes` (5 by default, 1 to 15), on the controller's monotonic clock, so changing
   the wall clock neither lengthens nor revives one. One grant at a time; a new one replaces it and starts the window
   again. Any UI can revoke it.
-- **Dropped** when the controller restarts, `AllowCommands`, `ServerAddresses`, `OverrideWindowMinutes` or
-  `InterlockMode` changes, the External account's keys change (added, rotated, revoked or re-roled), a person takes
+- **Dropped** when the controller restarts, `AllowCommands`, `AllowOpenWithoutBlockingScopes`, `ServerAddresses`,
+  `OverrideWindowMinutes` or `InterlockMode` changes, the External account's keys change (added, rotated, revoked or re-roled), a person takes
   the operator lease, or a Stop sets the [hold](#the-human-stop-hold).
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands`.
 - **The person who grants steps away, for as long as the grant lasts.** A grant never lifts a person's lease, so the
@@ -782,10 +783,11 @@ In the order a Close is checked ([What the controller checks](#what-the-controll
 3. The [human Stop hold](#the-human-stop-hold) and a person's [operator lease](#the-operator-lease) refuse every Alpaca
    Open, exactly as they refuse a Close.
 4. **What the Open would do.** Already open: success, nothing sent. Already opening: success, nothing changes (no relay
-   write, no new deadline, no grant used). Closing on a person's command, or on one nobody in particular started:
-   refused (`PersonsMotion`). Closing on an Alpaca client's Close: a reversal, admitted like a start.
+   write, no new deadline, no grant used). Closing (or about to): a reversal. Otherwise it is a start.
 5. to 7. In time, the grant used up, nothing after the ticket, as for a Close.
-8. **The Open rule**, below.
+8. **Never a person's motion**: a reversal of a Close on a person's command, or of one nobody in particular started, is
+   refused (`PersonsMotion`), the grant already used up; a reversal of an Alpaca client's Close is admitted like a start.
+9. **The Open rule**, below.
 
 ### The Open rule
 
@@ -847,8 +849,12 @@ one Alpaca Open?"), with what the grant lifts and that the roof stays open if th
 - **Dropped** when anything that drops a Close grant happens, and also when `AllowOpenWithoutBlockingScopes` changes.
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands` (`CloseOnly` refuses an Open
   before its grant is used).
-- **The person who grants steps away**, as for a Close grant. With an Open and a Close grant both in force, the person
-  stays stepped away until both have ended: ending one (used, lapsed, revoked) leaves them away while the other lasts.
+- **The person who grants steps away**, as for a Close grant. With an Open and a Close grant of theirs both in force,
+  the person stays stepped away until both have ended: ending one (used, lapsed, revoked) leaves them away while the
+  other lasts. A person taking the lease drops every grant in force, another person's included, and that is also so
+  when a person's UI takes it back by itself once all their own grants have ended: with two people's grants in force,
+  the first person's UI coming back drops the second person's grant. It fails safe (the first person's lease would
+  refuse that command anyway); the second person grants again once the first has stepped away.
 
 ### Known limitations
 
