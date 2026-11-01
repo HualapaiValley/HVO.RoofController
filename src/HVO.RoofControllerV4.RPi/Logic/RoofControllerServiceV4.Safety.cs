@@ -21,15 +21,23 @@ public partial class RoofControllerServiceV4
 
     private void OnInputEdge(int input, bool isHigh)
     {
-        // Never blocks the HAT's poll loop for long: past StopLockWait the edge is dropped, and the next supervision cycle
-        // reads the inputs directly.
+        // A drive fault is protective: its fence goes up before anything waits, so a start that passed its checks while the
+        // fault came never energizes (#220, PR #230 review F3).
+        var faultActive = input == 3 && isHigh == _options.FaultInputActiveHigh;
+        if (faultActive && _initialized && !_disposed)
+        {
+            FenceRelaysOff();
+        }
+
+        // Never blocks the HAT's poll loop for long, and never drops an edge: past StopLockWait it is applied as soon as
+        // the lock is free.
         var lockTaken = false;
         try
         {
             Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
             if (!lockTaken)
             {
-                _logger.LogDebug("Input IN{Input} edge RawHigh={RawHigh} dropped: the controller lock is held by a blocked HAT access", input, isHigh);
+                QueueInputEdge(input, isHigh, faultActive);
                 return;
             }
 
@@ -38,19 +46,7 @@ public partial class RoofControllerServiceV4
                 return;
             }
 
-            switch (input)
-            {
-                case 1: _rawIn1 = isHigh; break;
-                case 2: _rawIn2 = isHigh; break;
-                case 3: _rawIn3 = isHigh; break;
-                default: _rawIn4 = isHigh; break;
-            }
-
-            _logger.LogDebug("Input IN{Input} edge RawHigh={RawHigh} (Commanded={Commanded})", input, isHigh, _commandedMotion);
-
-            // Edge events update the cached level only; freshness comes from direct reads.
-            Evaluate_NoLock(Now);
-            FinishMutation_NoLock();
+            ApplyInputEdge_NoLock(input, isHigh);
         }
         finally
         {
@@ -59,6 +55,75 @@ public partial class RoofControllerServiceV4
                 Monitor.Exit(_syncLock);
             }
         }
+    }
+
+    private void ApplyInputEdge_NoLock(int input, bool isHigh)
+    {
+        switch (input)
+        {
+            case 1: _rawIn1 = isHigh; break;
+            case 2: _rawIn2 = isHigh; break;
+            case 3: _rawIn3 = isHigh; break;
+            default: _rawIn4 = isHigh; break;
+        }
+
+        _logger.LogDebug("Input IN{Input} edge RawHigh={RawHigh} (Commanded={Commanded})", input, isHigh, _commandedMotion);
+
+        // Edge events update the cached level only; freshness comes from direct reads.
+        Evaluate_NoLock(Now);
+        FinishMutation_NoLock();
+    }
+
+    /// <summary>
+    /// An edge that could not take the lock within <see cref="StopLockWait"/> (a HAT access holds it): applied the moment
+    /// the lock is free, from a fresh read of the inputs (the edge's own level when the read fails). A drive fault seen
+    /// on the edge stops any motion and latches, even if the input has cleared by then.
+    /// </summary>
+    private void QueueInputEdge(int input, bool isHigh, bool faultActive)
+    {
+        _logger.LogWarning("Input IN{Input} edge RawHigh={RawHigh} came while the controller lock was held by a blocked HAT access; it is applied as soon as the lock is free", input, isHigh);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                lock (_syncLock)
+                {
+                    if (_disposed || !_initialized)
+                    {
+                        return;
+                    }
+
+                    if (ReadInputs_NoLock())
+                    {
+                        Evaluate_NoLock(Now);
+                        FinishMutation_NoLock();
+                    }
+                    else
+                    {
+                        ApplyInputEdge_NoLock(input, isHigh);
+                    }
+
+                    if (faultActive && !(_faultLatched && _latchedFaultReason == RoofControllerStopReason.DriveFault))
+                    {
+                        const string error = "Drive fault input (IN3) became active while the controller lock was held by a blocked HAT access.";
+                        if (_commandedMotion != RoofMotionDirection.None)
+                        {
+                            StopMotion_NoLock(RoofControllerStopReason.DriveFault, error);
+                        }
+                        else
+                        {
+                            Latch_NoLock(RoofControllerStopReason.DriveFault, error);
+                        }
+
+                        FinishMutation_NoLock();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Applying the queued IN{Input} edge failed", input);
+            }
+        });
     }
 
     #endregion

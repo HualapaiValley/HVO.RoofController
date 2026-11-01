@@ -57,7 +57,7 @@ public class RoofControllerCommandFencingTests
     }
 
     [TestMethod]
-    public async Task DriveFaultTripBetweenTheChecksAndTheRelay_StopsTheStartedRoof_AndLatches()
+    public async Task DriveFaultTripBetweenTheChecksAndTheRelay_FencesTheStart_AndLatches()
     {
         var (service, hat) = await CreateAsync();
         using var _ = service;
@@ -72,12 +72,63 @@ public class RoofControllerCommandFencingTests
         var result = service.Close();
         await trip!;
 
-        result.IsSuccessful.Should().BeTrue("the start finished its write before the trip, which then switched it off");
+        result.ErrorCode().Should().Be(RoofControllerErrorCode.Superseded, "the drive fault's fence goes up before its edge waits for the lock the start holds");
         hat.RelayMask.Should().Be(0x00);
         var status = service.GetCurrentStatusSnapshot();
         status.IsMoving.Should().BeFalse();
         status.IsFaultLatched.Should().BeTrue();
         status.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+    }
+
+    [TestMethod]
+    public async Task ADriveFaultEdge_WhileAStartHoldsTheLockPastTheWait_IsNeverDropped_FencesTheStart_AndLatches()
+    {
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        Task? trip = null;
+        service.BeforeEnergizeHook = () =>
+        {
+            service.BeforeEnergizeHook = null;
+            hat.SetInputs(true, true, true, false);
+            trip = Task.Run(() => service.SimFaultRaw(true));
+
+            // The start holds the lock longer than an edge waits for it (a HAT access that hangs).
+            Thread.Sleep(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(500));
+        };
+        hat.ClearRelayWriteLog();
+
+        var result = service.Close();
+        await trip!;
+
+        result.ErrorCode().Should().Be(RoofControllerErrorCode.Superseded, "the fault's fence went up before the edge waited for the lock");
+        hat.RelayWriteLog.Should().NotContain(write => write.Register == RelaySetRegister, "no relay was switched on");
+        SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().IsFaultLatched, TimeSpan.FromSeconds(5)).Should().BeTrue("the edge's latch was queued, not dropped");
+        var status = service.GetCurrentStatusSnapshot();
+        status.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+        status.IsMoving.Should().BeFalse();
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task ALimitEdge_WhileAStartHoldsTheLockPastTheWait_IsAppliedOnceTheLockIsFree()
+    {
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        Task? edge = null;
+        service.BeforeEnergizeHook = () =>
+        {
+            service.BeforeEnergizeHook = null;
+            hat.SetInputs(true, false, false, false); // the closed limit (NC: LOW = active)
+            edge = Task.Run(() => service.SimReverseLimitRaw(false));
+            Thread.Sleep(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(500));
+        };
+
+        service.Close().IsSuccessful.Should().BeTrue();
+        await edge!;
+
+        SpinWait.SpinUntil(() => !service.GetCurrentStatusSnapshot().IsMoving, TimeSpan.FromSeconds(5)).Should().BeTrue("the edge was applied as soon as the lock was free");
+        service.GetCurrentStatusSnapshot().LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
+        hat.RelayMask.Should().Be(0x00);
     }
 
     [TestMethod]
