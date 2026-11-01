@@ -52,7 +52,9 @@ def main():
         for name, source in [('08-provider-signin', '08-provider-signin'), ('09-linux-users', '09-linux-users'),
                              ('10-system-offline', '10-system-offline-120x36'),
                              ('11-alpaca', '220-alpaca-truecolor-unicode-120x32'),
-                             ('12-alpaca-grant', '220-alpaca-grant-truecolor-unicode-120x32')]:
+                             ('12-alpaca-grant', '220-alpaca-grant-truecolor-unicode-120x32'),
+                             ('13-alpaca-open-grant', '220-alpaca-open-grant-truecolor-unicode-120x32'),
+                             ('14-alpaca-open-block', '220-alpaca-open-block-truecolor-unicode-120x32')]:
             selections.append((args.roof / f'{source}.ans', ROOT / f'docs/images/terminal/{name}.svg', 'hvo-roof ui'))
         for target in sorted((ROOT / 'docs/images/install').glob('*.svg')):
             selections.append((args.installer / f'{target.stem}.ans', target, 'hvo-roof-install'))

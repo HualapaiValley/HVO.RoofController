@@ -27,6 +27,9 @@ public sealed class RoofAlpacaTextTests
         RoofAlpacaText.GrantWithdrawnFor(RoofAlpacaCommandKind.Open).Should().Be("No Open was allowed: Stop withdrew the question.");
         RoofAlpacaText.GrantWithdrawnFor(RoofAlpacaCommandKind.Close).Should().Be(RoofAlpacaText.GrantWithdrawn);
         RoofAlpacaText.DescribeRevoked(RoofAlpacaCommandKind.Open).Should().Be("The grant for one Open is revoked.");
+        RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, "The safety interlock is Block.")
+            .Should().Be("Allow this Open once is not available: The safety interlock is Block.");
+        RoofAlpacaText.KeyToTakeBack.Should().Be("Press any key");
     }
 
     [TestMethod]

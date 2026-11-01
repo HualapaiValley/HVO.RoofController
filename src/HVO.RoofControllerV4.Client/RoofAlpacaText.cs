@@ -95,6 +95,9 @@ public static class RoofAlpacaText
     /// <summary>How a person takes the operator lease back in the web UI.</summary>
     public const string ClickToTakeBack = "Click or type on this page";
 
+    /// <summary>How a person takes the operator lease back in the terminal interface.</summary>
+    public const string KeyToTakeBack = "Press any key";
+
     /// <summary>
     /// Said after the person granted an override, which steps them away from the operator lease, until their next input
     /// takes it back: with a grant in force, that Alpaca may close (or open) the roof once within it and that taking
@@ -178,6 +181,12 @@ public static class RoofAlpacaText
         ArgumentNullException.ThrowIfNull(alert);
         return alert.Command == RoofAlpacaCommandKind.Open ? status?.OpenGrantUnavailable : null;
     }
+
+    /// <summary>
+    /// Said in place of a grant control no grant can be made for now (<see cref="GrantUnavailable"/>), where a disabled
+    /// control cannot be shown: "Allow this Open once is not available: " and the controller's reason.
+    /// </summary>
+    public static string DescribeGrantUnavailable(RoofAlpacaCommandKind kind, string reason) => $"{GrantLabel(kind)} is not available: {reason}";
 
     /// <summary>
     /// The grant question's lines: what the grant lifts, for which client, for how long, and that nothing else is bypassed.

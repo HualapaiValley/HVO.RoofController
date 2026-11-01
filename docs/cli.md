@@ -336,29 +336,32 @@ hvo-roof history --user ada --since 2026-10-01 --until 2026-11-01 --json
 
 ## Alpaca
 
-When the controller accepts Alpaca Close (`RoofController:Alpaca:AllowCommands`, see [alpaca.md](alpaca.md)), it keeps
-rules that only a person changes (#220):
+When the controller accepts Alpaca commands (`RoofController:Alpaca:AllowCommands`: Close, or Open and Close, see
+[alpaca.md](alpaca.md)), it keeps rules that only a person changes (#220):
 
 - **The Stop hold.** Every Stop (and the controller's start) sets it, except the Alpaca server's own AbortSlew, and
   Alpaca commands wait until a person allows them again.
 - **The operator lease.** While any person holds it from an open interface, Alpaca commands are refused. It lapses 30 s
   after the interface stops renewing it and, while Alpaca commands are on, after the controller's idle limit without
   that person's input; Alpaca may then move the roof.
-- **Override grants.** A refused Alpaca Close raises an alert. A person may allow one Close despite exactly that alert's
-  reasons (a telescope not clear of the roof, or not known) for the override window. A grant never bypasses the fault
-  latch, the interlocks, the limits, the motor protections, a person's operator lease or the Stop hold, and a Stop that
-  sets the hold, or a newly taken operator lease, drops it. So the person who grants steps away: the controller ends
-  their operator lease in every interface they have open, and while the grant lasts only their input there takes it
-  back, which drops the grant. Once the grant is gone (the Close that used it decided, or the grant lapsed, revoked or
-  dropped), their interfaces hold the lease again with their next heartbeat. `hvo-roof alpaca grant` holds no lease
-  itself.
+- **Override grants.** A refused Alpaca Close or Open raises an alert. A person may allow one command of that kind
+  despite exactly that alert's reasons for the override window: for a Close, a telescope not clear of the roof, or not
+  known; for an Open, also a required weather monitor's unsafe or unknown weather, no required weather source, or no
+  telescope set to block the roof. An Open grant and a Close grant are separate, one of each at a time. While the safety
+  interlock is `Block` (`RoofSafety:InterlockMode`) no Open grant can be made, and the status says why; a Close grant is
+  unaffected. A grant never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's
+  operator lease or the Stop hold, and a Stop that sets the hold, or a newly taken operator lease, drops it. So the
+  person who grants steps away: the controller ends their operator lease in every interface they have open, and while
+  the grant lasts only their input there takes it back, which drops the grant. Once the grant is gone (the command that
+  used it decided, or the grant lapsed, revoked or dropped), their interfaces hold the lease again with their next
+  heartbeat. `hvo-roof alpaca grant` holds no lease itself.
 
 | Command | Role | What it does |
 |---------|------|--------------|
 | `alpaca status` | viewer | Which Alpaca commands are on, the Stop hold, the operator lease, the warnings, the grants, the alerts (newest first), how many telescopes block the roof and the override window. `--json` writes the status's `alpaca` object (`mode`, `hold`, `operatorLease`, `grants`, `alerts`, `warnings`, `blockingScopes`, `rereadBudgetMilliseconds`, `overrideWindowMinutes`, `scopeLatencies`). A controller without it is exit 1. |
 | `alpaca clear-hold` | operator, a person's session | **Allow Alpaca again**: clears the Stop hold. With `--json`, the hold as the controller then has it. |
-| `alpaca grant --alert ID` | operator, a person's session, at a terminal | **Allow this Close once**: writes on standard error what the grant lifts, for which client, for how long and what it never bypasses, then asks. It sends exactly that alert's reasons. An alert a grant cannot lift (acknowledged, not a refused Close, or a reason other than a telescope's) is refused, exit 7, and nothing is sent. |
-| `alpaca revoke [--kind Close]` | operator, a person's session | Revokes the grant in force. Exit 7 when there is none. |
+| `alpaca grant --alert ID` | operator, a person's session, at a terminal | **Allow this Close once** or **Allow this Open once**, as the alert's refused command was: writes on standard error what the grant lifts, for which client, for how long and what it never bypasses (and, for an Open, that the roof stays open if the weather turns), then asks. It sends a grant of that kind with exactly that alert's reasons. An alert a grant cannot lift (acknowledged, not a refused Close or Open, or a reason no grant of its kind lifts) is refused, exit 7, and nothing is sent; so is a refused Open's while the controller says no Open grant can be made (the safety interlock is `Block`), with its reason: `Allow this Open once is not available: ...`. A grant the controller refuses (a 403 in Block mode, say) is exit 6, in its words. |
+| `alpaca revoke [--kind Close\|Open]` | operator, a person's session | Revokes the grant of that kind in force (Close by default). Exit 7 when there is none. |
 | `alpaca alerts` | viewer | The alerts, newest first, with their ID, whether they are acknowledged, whether a grant can lift their reasons (`GRANT yes`), and the client the Alpaca server reported. `--json` writes the controller's list. |
 | `alpaca ack ID` | a person's session | Acknowledges an alert; the controller records who. |
 
@@ -383,6 +386,7 @@ Only a person's session may do this, and this credential is an API key: the cont
 hvo-roof alpaca status
 hvo-roof alpaca alerts
 hvo-roof alpaca grant --alert 3
+hvo-roof alpaca revoke --kind Open
 hvo-roof alpaca clear-hold
 ```
 
@@ -390,14 +394,20 @@ hvo-roof alpaca clear-hold
 (**Readings** shows them again), and the controller's readings say which Alpaca commands are on, the Stop hold while
 they are, and how many alerts are not acknowledged. Enter on a line offers what can be done about it, in a prompt over
 the page: **Allow Alpaca again** on the Stop hold, **Revoke** on a grant, **Acknowledge** on an alert, and
-**Allow this Close once** on a refused Close a grant can lift. That one asks again, with the question `grant` writes,
-and only **Allow this Close once** there sends the grant, with exactly the alert's reasons; Cancel or Esc sends nothing.
-F9 still sends Stop over every one of these prompts, and withdraws the prompt: its action then sends nothing. With an
-API key, each action says why it is a person's and sends nothing.
+**Allow this Close once** (or **Allow this Open once**) on a refused Close (or Open) a grant can lift. That one asks
+again, with the question `grant` writes, and only **Allow this Close once** (or **Allow this Open once**) there sends the
+grant, of the alert's kind and with exactly its reasons; Cancel or Esc sends nothing. While the controller says no Open
+grant can be made (Block mode), a refused Open's alert does not offer one, and says why in its place. F9 still sends
+Stop over every one of these prompts, and withdraws the prompt: its action then sends nothing. With an API key, each
+action says why it is a person's and sends nothing.
 
 ![The Roof page's Alpaca section: Alpaca Close on, the Stop hold, the operator lease held by the signed-in person, the warning that no telescope blocks the roof, no grant, and a refused Close's alert](images/terminal/11-alpaca.svg)
 
 ![The question before an override grant: what it lifts, for which client, for how long, and what it never bypasses, with Allow this Close once and Cancel, and Stop still visible](images/terminal/12-alpaca-grant.svg)
+
+![The question before an Open grant: Alpaca Open and Close on, a refused Open's reasons (the weather and no telescope set to block the roof), that the roof stays open if the weather turns, with Allow this Open once and Cancel, and Stop still visible](images/terminal/13-alpaca-open-grant.svg)
+
+![A refused Open's alert in Block mode: only Acknowledge and Cancel are offered, and the alert says that Allow this Open once is not available and why](images/terminal/14-alpaca-open-block.svg)
 
 **The operator lease in the terminal interface.** Signed in with a person's session (`hvo-roof login`) and the
 Operator role, the interface holds the operator lease while it is open, from a controller whose status has the Alpaca
@@ -410,15 +420,16 @@ but the controller takes the lease back only with your input: your next key or c
 once. Closing the interface (or changing the connection) gives the lease up. Taking the lease drops any override grant
 in force, as every newly taken lease does.
 
-**Stepping away with a grant.** While the interface holds the lease, **Allow this Close once** steps you away from it,
-since a grant never lifts a person's lease: the question says so, and the controller ends your lease with the grant. No
-heartbeat crosses the grant, and the key or click that confirmed it does not count after it. The banner (and the Alpaca
-section) then says
-`You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Press any key to take control back; that cancels the grant.`,
-and once the grant is gone, that you are still away, until the next heartbeat. While the grant lasts the heartbeats go on
-without taking the lease back, and your next key or click takes control back at once, which cancels the grant. Once the
-grant is gone (the Close that used it decided, or the grant lapsed, revoked or dropped), the next heartbeat takes the
-lease back by itself.
+**Stepping away with a grant.** While the interface holds the lease, **Allow this Close once** (or **Allow this Open
+once**) steps you away from it, since a grant never lifts a person's lease: the question says so, and the controller
+ends your lease with the grant. No heartbeat crosses the grant, and the key or click that confirmed it does not count
+after it. The banner (and the Alpaca section) then says what every grant in force allows,
+`You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Press any key to take control back; that cancels the grant.`
+(`may open the roof once` for an Open grant, `may open and close the roof once each` and `that cancels the grants`
+with both), and once the grants are gone, that you are still away, until the next heartbeat. While the grant lasts the
+heartbeats go on without taking the lease back, and your next key or click takes control back at once, which cancels
+the grant. Once the grant is gone (the command that used it decided, or the grant lapsed, revoked or dropped), the next
+heartbeat takes the lease back by itself.
 
 It holds no lease with an API key (the controller refuses every key one), with the Viewer role, or in local mode. In
 local mode every request is authorized as a session of its own, while the controller keeps a lease per session, so each
@@ -669,10 +680,12 @@ Nothing here needs the Pi, the HAT or the roof.
   - the HVO Dark colours, and the interface with `NO_COLOR`;
   - the Setup, People, Settings and System pages, including confirmation of safety-critical changes;
   - the Alpaca section and its prompts (`RoofTerminalUiAlpacaTests`): each action sent only from its prompt, an override
-    grant with exactly its alert's reasons, F9 withdrawing a prompt, an API key refused, and the operator lease held only
-    for a person who may operate, renewed with input only after a key or a click, released on closing, and stepped away
-    from with a grant: while it lasts, heartbeats go on without taking it back, and the next key takes it back and
-    cancels the grant.
+    grant of the refused command's kind with exactly its alert's reasons, a refused Open's grant not offered in Block
+    mode, F9 withdrawing a prompt, an API key refused, and the operator lease held only for a person who may operate,
+    renewed with input only after a key or a click, released on closing, and stepped away from with a grant: while it
+    lasts, heartbeats go on without taking it back, and the next key takes it back and cancels the grant. The
+    controller's Open grants and Block mode are a stand-in's there (`AlpacaOpenGrantStandIn`); its own tests check its
+    rules.
 - **Scenarios** (`RoofCliScenarios`, `TestCategory=Scenario`) run `hvo-roof open`, `close` and `stop`, and the terminal
   interface, against the emulated roof. The operator lease is 5 s, shorter than the travel, so a motion reaches its
   limit only if the client renews the lease.

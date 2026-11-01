@@ -17,7 +17,7 @@ internal enum RoofUiAlpacaItemKind
     /// <summary>An override grant in force: Revoke.</summary>
     Grant,
 
-    /// <summary>An alert: Acknowledge, and Allow this Close once where a grant can lift its reasons.</summary>
+    /// <summary>An alert: Acknowledge, and Allow this Close (or Open) once where a grant can lift its reasons.</summary>
     Alert
 }
 
@@ -28,9 +28,11 @@ internal sealed record RoofUiAlpacaItem(RoofUiAlpacaItemKind Kind, string Text, 
 /// The Alpaca command state on the Roof page (#220), in place of the roof's state and readings: which commands are on,
 /// the human Stop hold, the operator lease (with the idle warning for the lease this interface holds), the warnings, the
 /// override grants and the alerts, newest first. Enter on a line offers what can be done about it, in a prompt over the
-/// page: Allow Alpaca again on the hold, Revoke on a grant, Acknowledge on an alert, and Allow this Close once on a
-/// refused Close a grant can lift, which asks again with what the grant lifts before it is sent. Each is a person's, never
-/// an API key's. Stop withdraws a question it crossed: its action then sends nothing.
+/// page: Allow Alpaca again on the hold, Revoke on a grant, Acknowledge on an alert, and Allow this Close once (or Allow
+/// this Open once) on a refused Close (or Open) a grant can lift, which asks again with what the grant lifts before it is
+/// sent. While the controller says no Open grant can be made (Block mode), the Open's is not offered, and why is said in
+/// its place. Each is a person's, never an API key's. Stop withdraws a question it crossed: its action then sends
+/// nothing.
 /// </summary>
 internal sealed class RoofUiAlpacaSection
 {
@@ -181,6 +183,7 @@ internal sealed class RoofUiAlpacaSection
                 break;
             case RoofUiAlpacaItemKind.Alert when item.Alert is { } alert:
                 var actions = new List<RoofUiAction>();
+                var text = item.Text;
                 if (!alert.Acknowledged)
                 {
                     actions.Add(Action(RoofAlpacaText.AcknowledgeLabel, () => Acknowledge(alert.Id)));
@@ -188,10 +191,19 @@ internal sealed class RoofUiAlpacaSection
 
                 if (RoofAlpacaText.CanGrantFrom(alert))
                 {
-                    actions.Add(Action(RoofAlpacaText.GrantCloseLabel, () => AskGrant(alert)));
+                    // A grant the controller says cannot be made now (an Open's in Block mode) is not offered: why is said in
+                    // its place.
+                    if (Unavailable(alert) is { } unavailable)
+                    {
+                        text += "\n" + unavailable;
+                    }
+                    else
+                    {
+                        actions.Add(Action(RoofAlpacaText.GrantLabel(Kind(alert)), () => AskGrant(alert)));
+                    }
                 }
 
-                Ask(new RoofUiPrompt(AlertTitle, item.Text, [], actions, CloseLabel: actions.Count == 0 ? "Done" : "Cancel"));
+                Ask(new RoofUiPrompt(AlertTitle, text, [], actions, CloseLabel: actions.Count == 0 ? "Done" : "Cancel"));
                 break;
             default:
                 _ui.Say(NoAction);
@@ -200,22 +212,36 @@ internal sealed class RoofUiAlpacaSection
     }
 
     /// <summary>
-    /// Asks whether to grant an override for one Close despite <paramref name="alert"/>'s reasons, with what it lifts, for
-    /// whom and for how long (the shared question), and, while this interface holds the operator lease, that granting
-    /// steps the person away from it. Only its confirmation sends the grant, lifting exactly the alert's reasons; Cancel or
-    /// Esc sends nothing.
+    /// Asks whether to grant an override for one Close (or Open, the refused command's kind) despite
+    /// <paramref name="alert"/>'s reasons, with what it lifts, for whom and for how long (the shared question), and, while
+    /// this interface holds the operator lease, that granting steps the person away from it. Only its confirmation sends
+    /// the grant, lifting exactly the alert's reasons; Cancel or Esc sends nothing. A grant the controller says cannot be
+    /// made now is not asked: why is said.
     /// </summary>
     internal void AskGrant(RoofAlpacaAlert alert)
     {
+        if (Unavailable(alert) is { } unavailable)
+        {
+            _ui.Say(unavailable);
+            return;
+        }
+
         var keys = alert.ReasonKeys.ToArray();
+        var label = RoofAlpacaText.GrantLabel(Kind(alert));
         var lines = RoofAlpacaText.DescribeGrantQuestion(alert, _ui.Status?.Alpaca?.OverrideWindowMinutes ?? 0).ToList();
         if (_ui.OperatorLease is { Refused: false })
         {
             lines.Add(RoofCliAlpaca.StepAwayQuestion);
         }
 
-        Ask(new RoofUiPrompt($"{RoofAlpacaText.GrantCloseLabel}?", string.Join('\n', lines), [], [Action(RoofAlpacaText.GrantCloseLabel, () => Grant(keys))]));
+        Ask(new RoofUiPrompt($"{label}?", string.Join('\n', lines), [], [Action(label, () => Grant(alert, keys))]));
     }
+
+    private static RoofAlpacaCommandKind Kind(RoofAlpacaAlert alert) => alert.Command ?? RoofAlpacaCommandKind.Close;
+
+    // Why no grant can be made from the alert now, as the newest status says (an Open's in Block mode); null otherwise.
+    private string? Unavailable(RoofAlpacaAlert alert)
+        => RoofAlpacaText.GrantUnavailable(alert, _ui.Status?.Alpaca) is { } reason ? RoofAlpacaText.DescribeGrantUnavailable(Kind(alert), reason) : null;
 
     private void Ask(RoofUiPrompt prompt)
     {
@@ -283,13 +309,21 @@ internal sealed class RoofUiAlpacaSection
         return $"Acknowledged alert {alert.Id}.";
     });
 
-    // Through the shell: while it holds the operator lease, the person steps away from it with the grant.
-    private void Grant(IReadOnlyList<string> keys)
+    // Through the shell: while it holds the operator lease, the person steps away from it with the grant. Nothing is sent
+    // when the newest status says since the question that no such grant can be made now.
+    private void Grant(RoofAlpacaAlert alert, IReadOnlyList<string> keys)
     {
-        var keeper = _ui.OperatorLease;
-        Send("Granting one Alpaca Close…", async (client, cancellationToken) =>
+        if (Unavailable(alert) is { } unavailable)
         {
-            var grant = await _ui.GrantCloseAsync(client, keeper, keys, cancellationToken).ConfigureAwait(false);
+            _ui.Say(unavailable);
+            return;
+        }
+
+        var kind = Kind(alert);
+        var keeper = _ui.OperatorLease;
+        Send($"Granting one Alpaca {kind}…", async (client, cancellationToken) =>
+        {
+            var grant = await _ui.GrantAsync(client, keeper, kind, keys, cancellationToken).ConfigureAwait(false);
             return $"Granted. {RoofAlpacaText.DescribeGrant(grant)}";
         });
     }

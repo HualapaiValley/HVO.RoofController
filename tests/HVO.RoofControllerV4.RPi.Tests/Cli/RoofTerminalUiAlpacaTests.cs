@@ -4,6 +4,7 @@ using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Terminal.Gui.Input;
@@ -453,10 +454,126 @@ public sealed class RoofTerminalUiAlpacaTests
     [TestMethod]
     public void SteppedAway_WhileAnotherPersonHoldsTheLease_SaysAlpacaStaysRefused()
     {
-        RoofCliAlpaca.DescribeSteppedAway(null, new RoofOperatorLeaseState { Held = true, Holder = "grace" })
+        RoofCliAlpaca.DescribeSteppedAway([], new RoofOperatorLeaseState { Held = true, Holder = "grace" })
             .Should().Be("You stepped away from the operator lease, but grace holds it: Alpaca commands stay refused. Press any key to take control back.");
-        RoofCliAlpaca.DescribeSteppedAway(null, new RoofOperatorLeaseState())
+        RoofCliAlpaca.DescribeSteppedAway([], new RoofOperatorLeaseState())
             .Should().Be("You stepped away from the operator lease: Alpaca may move the roof. Press any key to take control back.");
+    }
+
+    [TestMethod]
+    public void SteppedAway_SaysWhatEveryGrantInForceAllows()
+    {
+        RoofOverrideGrant Grant(RoofAlpacaCommandKind kind) => new() { Id = kind.ToString(), Kind = kind, ReasonKeys = ["scope-unknown:Main"], GrantedBy = "ada", SecondsRemaining = 300 };
+
+        RoofCliAlpaca.DescribeSteppedAway([Grant(RoofAlpacaCommandKind.Open)], new RoofOperatorLeaseState())
+            .Should().Be("You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. Press any key to take control back; that cancels the grant.");
+        RoofCliAlpaca.DescribeSteppedAway([Grant(RoofAlpacaCommandKind.Close), Grant(RoofAlpacaCommandKind.Open)], new RoofOperatorLeaseState())
+            .Should().Be("You stepped away from the operator lease: Alpaca may open and close the roof once each in the next 5 min. Press any key to take control back; that cancels the grants.");
+        RoofCliAlpaca.DescribeSteppedAway([Grant(RoofAlpacaCommandKind.Close), Grant(RoofAlpacaCommandKind.Open)], new RoofOperatorLeaseState { Held = true, Holder = "grace" })
+            .Should().Be("You stepped away from the operator lease, but grace holds it: Alpaca commands stay refused. Press any key to take control back; that cancels the grants.");
+    }
+
+    // ---- Open grants (#220, phase 4; the controller's are a stand-in's) -----------------------------------------------
+
+    [TestMethod]
+    public void AllowThisOpenOnce_AsksTheOpenQuestion_SendsExactlyTheAlertsReasonKeys_AndStepsThePersonAwayUntilTheirNextKey()
+    {
+        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
+        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky", "scope-unknown:Main");
+        using var rig = new CliRig(host);
+        SignedIn(host, rig, "ada");
+        using var tui = Started(rig);
+        var commands = AlpacaCliSupport.Commands(host);
+        tui.WaitIdle("the operator lease", () => commands.GetStatus().OperatorLease.Held);
+        var page = ShowAlpaca(tui);
+        page.Alpaca.Items[0].Text.Should().Be("Alpaca may open and close the roof");
+
+        Enter(tui, page, RoofUiAlpacaItemKind.Alert);
+        var actions = tui.Ui.Panel!;
+        actions.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.AcknowledgeLabel, RoofAlpacaText.GrantOpenLabel, "Cancel");
+
+        actions.Press(RoofAlpacaText.GrantOpenLabel);
+
+        var question = tui.Ui.Panel!;
+        question.Prompt.Title.Should().Be("Allow this Open once?");
+        question.Prompt.Message.Should().Be(string.Join('\n', [.. RoofAlpacaText.DescribeGrantQuestion(alert, 5), RoofCliAlpaca.StepAwayQuestion]));
+        question.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.GrantOpenLabel, "Cancel");
+        open.Requests.Should().BeEmpty("nothing is sent before the person confirms");
+
+        question.Buttons[0].HasFocus.Should().BeTrue();
+        tui.Press(Key.Enter);
+        tui.WaitIdle("the grant", () => tui.Ui.Message.StartsWith("Granted.", StringComparison.Ordinal));
+
+        var sent = open.Requests.Should().ContainSingle().Subject;
+        sent.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        sent.ReasonKeys.Should().Equal(alert.ReasonKeys);
+        tui.Ui.Message.Should().StartWith("Granted. One Open allowed by ada");
+        commands.GetStatus().OperatorLease.Held.Should().BeFalse("the person stepped away from the lease with the grant");
+        tui.WaitIdle("the banner", () => tui.Ui.Banner.Contains(
+            "You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. Press any key to take control back; that cancels the grant.",
+            StringComparison.Ordinal));
+        page.Alpaca.Items.Should().Contain(item => item.Kind == RoofUiAlpacaItemKind.Grant && item.Grant!.Kind == RoofAlpacaCommandKind.Open);
+
+        tui.Press(Key.F1);
+        tui.WaitIdle("the lease taken back", () => commands.GetStatus().OperatorLease.Held);
+        open.OpenGrant(host.Services).Should().BeNull("taking the lease back drops the grant");
+        tui.WaitIdle("the banner cleared", () => !tui.Ui.Banner.Contains("stepped away", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void InBlockMode_AnOpensAlert_OffersNoGrant_AndSaysWhyInItsPlace_WhileACloseIsUnaffected()
+    {
+        var open = new AlpacaOpenGrantStandIn { Mode = RoofAlpacaCommandMode.OpenAndClose };
+        open.Block();
+        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unknown:Sky");
+        using var rig = new CliRig(host);
+        SignedIn(host, rig, "ada");
+        using var tui = Started(rig);
+        var page = ShowAlpaca(tui);
+
+        Enter(tui, page, RoofUiAlpacaItemKind.Alert);
+
+        var actions = tui.Ui.Panel!;
+        actions.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.AcknowledgeLabel, "Cancel");
+        actions.Prompt.Message.Should().EndWith("\n" + RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, AlpacaOpenGrantStandIn.BlockReason))
+            .And.EndWith($"Allow this Open once is not available: {AlpacaOpenGrantStandIn.BlockReason}");
+        tui.Screen.Should().Contain("Allow this Open once is not available:");
+        tui.Press(Key.Esc);
+
+        // A question asked from a stale line says why, and sends nothing.
+        page.Alpaca.AskGrant(page.Alpaca.Items.Single(item => item.Kind == RoofUiAlpacaItemKind.Alert).Alert!);
+        tui.Ui.Panel.Should().BeNull();
+        tui.Ui.Message.Should().Be(RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, AlpacaOpenGrantStandIn.BlockReason));
+
+        AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        tui.WaitIdle("the Close alert", () => page.Alpaca.Items.Count(item => item.Kind == RoofUiAlpacaItemKind.Alert) == 2);
+        Enter(tui, page, RoofUiAlpacaItemKind.Alert);
+        tui.Ui.Panel!.Buttons.Select(button => button.Text).Should().Equal(RoofAlpacaText.AcknowledgeLabel, RoofAlpacaText.GrantCloseLabel, "Cancel");
+        Settle(tui);
+        open.Requests.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public void AnOpenGrantTheControllerRefuses_IsSaidInItsWords()
+    {
+        var open = new AlpacaOpenGrantStandIn();
+        open.RefuseOnly();
+        using var host = AlpacaCliSupport.CreateHost(openGrants: open);
+        AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky");
+        using var rig = new CliRig(host);
+        SignedIn(host, rig, "ada");
+        using var tui = Started(rig);
+        var page = ShowAlpaca(tui);
+        Enter(tui, page, RoofUiAlpacaItemKind.Alert);
+        tui.Ui.Panel!.Press(RoofAlpacaText.GrantOpenLabel);
+
+        tui.Ui.Panel!.Press(RoofAlpacaText.GrantOpenLabel);
+
+        tui.WaitIdle("the refusal", () => tui.Ui.Message.Contains(AlpacaOpenGrantStandIn.BlockReason, StringComparison.Ordinal));
+        open.Requests.Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        tui.Ui.SteppedAway.Should().BeNull("nothing was granted");
     }
 
     [TestMethod]
