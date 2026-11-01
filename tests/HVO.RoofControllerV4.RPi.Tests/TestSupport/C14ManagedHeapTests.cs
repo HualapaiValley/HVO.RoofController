@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using FluentAssertions;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 
@@ -160,24 +161,35 @@ public sealed class C14ManagedHeapTests
     [DoNotParallelize]
     public void TheLiveBytes_FollowWhatTheProcessKeeps()
     {
-        const int Arrays = 32_768;
-        const long Kept = Arrays * 1_048L; // 1,024 bytes of data and a 24-byte header each
+        const long Kept = KeptArrays * 1_048L; // 1,024 bytes of data and a 24-byte header each
         var before = C14ManagedHeap.Read();
-        List<byte[]>? kept = new(Arrays);
-        for (var i = 0; i < Arrays; i++)
-        {
-            kept.Add(new byte[1_024]);
-        }
-
-        var holding = C14ManagedHeap.Read();
-        GC.KeepAlive(kept);
-        kept = null;
+        var holding = ReadWhileKeeping();
         var released = C14ManagedHeap.Read();
 
         holding.CollectionIndex.Should().BeGreaterThan(before.CollectionIndex);
         released.CollectionIndex.Should().BeGreaterThan(holding.CollectionIndex);
         (holding.LiveBytes - before.LiveBytes).Should().BeCloseTo(Kept, 4 * 1_048_576, "the reading sees what the process keeps");
         (released.LiveBytes - before.LiveBytes).Should().BeCloseTo(0, 4 * 1_048_576, "and no longer sees it once it is let go");
+    }
+
+    private const int KeptArrays = 32_768;
+
+    /// <summary>
+    /// Reads the heap while it keeps <see cref="KeptArrays"/> arrays of 1 KB, in a frame of its own: a Debug build keeps
+    /// a method's locals alive to its end, so once this returns nothing of them is left to keep the arrays.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ManagedHeapReading ReadWhileKeeping()
+    {
+        var kept = new List<byte[]>(KeptArrays);
+        for (var i = 0; i < KeptArrays; i++)
+        {
+            kept.Add(new byte[1_024]);
+        }
+
+        var reading = C14ManagedHeap.Read();
+        GC.KeepAlive(kept);
+        return reading;
     }
 
     private static (double Start, double End, double Growth, double Trend) Judge((TimeSpan At, long Bytes)[] settled)
