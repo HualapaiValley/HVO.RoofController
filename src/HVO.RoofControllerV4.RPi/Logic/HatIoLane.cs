@@ -121,7 +121,12 @@ internal sealed class HatIoLane
             }
 
             _workerRunning = true;
-            new Thread(Work) { IsBackground = true, Name = "HAT I/O" }.Start();
+
+            // The thread carries no caller's execution context: one would keep that caller's host alive while it idles.
+            using (ExecutionContext.SuppressFlow())
+            {
+                new Thread(Work) { IsBackground = true, Name = "HAT I/O" }.Start();
+            }
         }
     }
 
@@ -129,7 +134,7 @@ internal sealed class HatIoLane
     {
         while (true)
         {
-            Action work;
+            Action? work;
             lock (_gate)
             {
                 while (_work is null)
@@ -146,6 +151,9 @@ internal sealed class HatIoLane
             }
 
             work();
+
+            // While it idles, the thread keeps nothing the finished access reached (a stopped controller, say).
+            work = null;
         }
     }
 }

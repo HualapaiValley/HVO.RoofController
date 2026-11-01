@@ -774,6 +774,9 @@ public partial class RoofControllerServiceV4
 
         StopSupervision_NoLock();
         UnsubscribeInputs_NoLock();
+
+        // The HAT's lane outlives this controller (its thread idles a while), so it must not keep it.
+        _hatIo.Recovered -= OnHatIoRecovered;
         FinishMutation_NoLock();
         _statusChannel.Writer.TryComplete();
 
