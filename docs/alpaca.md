@@ -487,10 +487,13 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands`.
 - **The person who grants steps away, for as long as the grant lasts.** A grant never lifts a person's lease, so the
   granting person's own lease ends with it, in every one of their sessions. While the grant lasts their UI takes it back
-  only when they do something there, and that drops the grant. A grant the same person makes again keeps them stepped
-  away. Once the grant is gone (the Close that used it decided, which may be after it waits out the direction-change
-  delay, or the grant lapsed, revoked or dropped), their UI holds the lease again with its next heartbeat. Another
-  person's lease still refuses the Close.
+  only when they do something there, and that drops the grant. A grant the same person makes again while their earlier
+  grant is still unused keeps every one of their sessions stepped away. A grant made again while a Close that used the
+  earlier grant is still waiting out the direction-change delay does not: when that Close starts, the next heartbeat
+  from any of their sessions takes the lease back and drops the new grant (nothing moves for it), so grant again once
+  the first Close has started. Once the grant is gone (the Close that used it decided, which may be after it waits out
+  the direction-change delay, or the grant lapsed, revoked or dropped), their UI holds the lease again with its next
+  heartbeat. Another person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
 
@@ -540,6 +543,14 @@ now, the roof stays stopped, the Close is refused and an alert says so. During t
 - a person's own Close takes the waiting start over as theirs (under their lease), still waiting out the delay;
 - an Open replaces it, and a Stop cancels it;
 - a request refused for its own fault (a bad ticket, the wrong kind) changes nothing.
+
+**A limit asserting refuses a waiting Close (a known limitation).** Every time a limit switch asserts, the controller
+raises its relay fence, whether or not a relay is on, so a start waiting out the delay is cancelled (`Superseded`), and
+so is an Alpaca Close whose ticket came before it, even with every relay off. That happens when the roof coasts onto a
+limit while a Close waits (an `AbortSlew` stopped it just short of the open limit, say), and when a limit chatters at
+rest between an Alpaca client's ticket and its Close, even with no delay. It fails safe: nothing moves and the roof
+stays where it is, but the Close is refused. The client should send the Close again (a retry in a NINA sequence, say, or
+the weather trigger's next Close). It is tracked for a follow-up.
 
 **Status during the wait** (an exception to "a roof not moving is never reported as moving"): the waiting start reads
 `ShutterStatus` Closing and `Slewing` true, since it has been accepted and will start unless something stops it. A start
