@@ -152,6 +152,12 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     /// </summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// Test seam: runs between a grant's Block check and its installation, so a test can change the interlock's mode
+    /// exactly there (PR #232 review S1). Never set in production.
+    /// </summary>
+    internal Action? BeforeGrantInstallHook { get; set; }
+
     /// <summary>The commands on now.</summary>
     public RoofAlpacaCommandMode Mode
     {
@@ -457,27 +463,22 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                     + $"{RoofAlpacaContract.NoRequiredWeatherKey} or {RoofAlpacaContract.NoBlockingScopesKey}, as the refusal or alert gave them.");
         }
 
-        if (request.Kind == RoofAlpacaCommandKind.Open)
-        {
-            bool block;
-            lock (_gate)
-            {
-                block = IsBlock_NoLock();
-            }
-
-            if (block)
-            {
-                // Roy's decision 4: no grant opens the roof in Block. The grant route refuses it, not only the UIs.
-                _logger.LogWarning("Refused an Open grant by {Caller}: {Why}", RoofPrincipalFactory.DescribeCaller(user), OpenGrantsBlocked);
-                return RoofGrantOutcome.Forbidden(OpenGrantsBlocked, "BlockMode");
-            }
-        }
-
         var who = RoofPrincipalFactory.DescribeCaller(user);
         var ui = RoofPrincipalFactory.GetCredentialKind(user) == RoofCredentialKind.Pin ? "kiosk" : "session";
         GrantEntry grant;
         lock (_gate)
         {
+            // Roy's decision 4: no grant opens the roof in Block; the grant route refuses it, not only the UIs. Checked in
+            // the same critical section that installs the grant, which a mode change's notification also takes to drop
+            // every grant: either the change comes first and this refuses, or it comes after and drops this grant
+            // (PR #232 review S1).
+            if (request.Kind == RoofAlpacaCommandKind.Open && IsBlock_NoLock())
+            {
+                _logger.LogWarning("Refused an Open grant by {Caller}: {Why}", who, OpenGrantsBlocked);
+                return RoofGrantOutcome.Forbidden(OpenGrantsBlocked, "BlockMode");
+            }
+
+            BeforeGrantInstallHook?.Invoke();
             var now = _time.GetTimestamp();
             grant = new GrantEntry(
                 Guid.NewGuid().ToString("N")[..16],

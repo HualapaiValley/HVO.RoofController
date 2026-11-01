@@ -148,6 +148,29 @@ public sealed class RoofAlpacaOpenGrantTests
     }
 
     [TestMethod]
+    public async Task AWarnToBlockChange_RacingAnOpenGrant_NeverLeavesAnOpenGrantInBlock()
+    {
+        // PR #232 review S1: the mode changes to Block between the grant's Block check and its installation. Either the
+        // change wins (the grant is refused) or the grant does and the change then drops it; never an Open grant in Block.
+        await using var rig = (await RigAsync(weatherSafe: false)).Ready();
+        Thread? change = null;
+        rig.Commands.BeforeGrantInstallHook = () =>
+        {
+            rig.Commands.BeforeGrantInstallHook = null;
+            change = new Thread(() => rig.SetInterlockMode(RoofSafetyInterlockMode.Block));
+            change.Start();
+            change.Join(TimeSpan.FromMilliseconds(300)); // done at once when nothing holds the gate; blocked while the grant holds it
+        };
+
+        var outcome = rig.Commands.Grant(AlpacaCommandRig.Person(), Open("weather-unsafe:Weather"));
+        change!.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        rig.Commands.GetStatus().OpenGrantUnavailable.Should().NotBeNull("the mode is Block now");
+        rig.Commands.Grants().Should().NotContain(grant => grant.Kind == RoofAlpacaCommandKind.Open, $"no Open grant is in force in Block (the grant answered {outcome.StatusCode})");
+        (await rig.OpenAsync()).Rule().Should().Be("NotSafe");
+    }
+
+    [TestMethod]
     public async Task InBlockMode_AMatchingOpenGrantInjectedAnyway_NeverOpensTheRoof()
     {
         // Roy's decision 4 (W4d/X3): the admission itself refuses a grant in Block, not only the grant route. The grant is
