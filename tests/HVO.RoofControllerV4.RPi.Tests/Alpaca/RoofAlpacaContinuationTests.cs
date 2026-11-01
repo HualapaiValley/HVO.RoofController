@@ -211,6 +211,35 @@ public sealed class RoofAlpacaContinuationTests
         rig.RelayOnWrites(CloseRelay).Should().Be(1, "one start");
     }
 
+    [TestMethod]
+    public async Task UsedAndExpiredTicketsDuringTheWait_ChangeNothing_AndTheWaitingCloseGoesAhead()
+    {
+        // §19 M2 (PR #230 rereview O-F9): a request refused for its own fault during the wait never touches the waiting
+        // start: an expired ticket, and a used ticket (which only gets its own stored answer).
+        var time = new ManualTimeProvider();
+        var delay = TimeSpan.FromSeconds(3);
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: delay, time: time)).Ready();
+        await AdvanceAsync(time, delay + TimeSpan.FromMilliseconds(500));
+        var stale = rig.Ticket();
+        var used = rig.Ticket();
+        (await rig.CloseAsync(used)).Result.IsSuccessful.Should().BeTrue(); // its first request: a Close, from mid-travel
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue();
+        await AdvanceAsync(time, TimeSpan.FromSeconds(6)); // the stale ticket expires; the delay since the Stop has run
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening))).IsSuccessful.Should().BeTrue();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue();
+        rig.Hat.ClearRelayWriteLog();
+
+        var close = rig.CloseAsync();
+        await WaitingAsync(rig);
+        (await rig.CloseAsync(stale)).Rule().Should().Be("TicketExpired");
+        (await rig.CloseAsync(used)).Result.IsSuccessful.Should().BeTrue("a used ticket gets its first request's stored answer, no second start");
+        close.IsCompleted.Should().BeFalse();
+
+        await AdvanceAsync(time, delay + TimeSpan.FromMilliseconds(500));
+        (await close.WaitAsync(TimeSpan.FromSeconds(10))).Result.IsSuccessful.Should().BeTrue("neither refusal cancelled the waiting Close");
+        rig.RelayOnWrites(CloseRelay).Should().Be(1, "one start, the waiting Close's");
+    }
+
     private static async Task AdvanceAsync(ManualTimeProvider time, TimeSpan by)
     {
         var step = TimeSpan.FromMilliseconds(100);

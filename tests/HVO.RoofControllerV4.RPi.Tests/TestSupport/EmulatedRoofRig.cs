@@ -437,11 +437,16 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
 /// <summary>Gives every in-memory request the peer address a test chooses, before anything else sees it.</summary>
 internal sealed class RemoteAddressFilter(System.Net.IPAddress address) : Microsoft.AspNetCore.Hosting.IStartupFilter
 {
+    /// <summary>A test-only header: the request's peer address instead of the rig's.</summary>
+    public const string TestPeerHeader = "X-Test-Peer-Address";
+
     public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
     {
         app.Use((context, nextMiddleware) =>
         {
-            context.Connection.RemoteIpAddress = address;
+            // A test may send one request from another address (an untrusted peer, say) with this header.
+            context.Connection.RemoteIpAddress = context.Request.Headers.TryGetValue(TestPeerHeader, out var peer)
+                && System.Net.IPAddress.TryParse(peer.ToString(), out var parsed) ? parsed : address;
             return nextMiddleware(context);
         });
         next(app);

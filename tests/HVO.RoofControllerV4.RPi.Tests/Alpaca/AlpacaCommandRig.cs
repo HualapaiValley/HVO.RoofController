@@ -99,7 +99,9 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         bool startSafety = true,
         IReadOnlyList<string>? configuredTelescopes = null,
         TimeProvider? time = null,
-        IReadOnlyList<ITelescopeRereadSource>? telescopes = null)
+        IReadOnlyList<ITelescopeRereadSource>? telescopes = null,
+        Action<RoofControllerOptionsV4>? configureController = null,
+        bool initialize = true)
     {
         time ??= TimeProvider.System;
         var hat = new FakeRoofHat();
@@ -109,8 +111,12 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
             options.DirectionChangeDelay = directionChangeDelay ?? TimeSpan.Zero;
             options.OperatorLeaseTimeout = operatorLeaseTimeout;
             options.SafetyWatchdogTimeout = watchdog ?? TimeSpan.FromSeconds(30);
+            configureController?.Invoke(options);
         });
-        (await controller.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        if (initialize)
+        {
+            (await controller.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        }
 
         var names = new[] { "Main", "Guide", "Third" };
         var scripted = Enumerable.Range(0, telescopes is null ? scopes : 0).Select(index => new ScriptedTelescopeSource(names[index], parked)).ToArray();
@@ -195,6 +201,9 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
             ]
         });
 
+    /// <summary>Releases every re-read the first telescope holds.</summary>
+    public void ReleaseHeldRereads(bool? parked) => Scope.ReleaseAll(parked);
+
     public int RelayOnWrites(byte relay) => Hat.RelayWriteLog.Count(write => write.Register == 1 && write.Value == relay);
 
     public static async Task WaitUntilAsync(Func<bool> condition, string what, TimeSpan? timeout = null)
@@ -265,6 +274,26 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
     }
 
     /// <summary>Ends the oldest held re-read with <paramref name="parked"/> (null: it fails).</summary>
+    /// <summary>Releases every re-read held so far (the oldest first), each answering <paramref name="parked"/>.</summary>
+    public void ReleaseAll(bool? parked)
+    {
+        while (true)
+        {
+            TaskCompletionSource<bool?> held;
+            lock (_gate)
+            {
+                if (_held.Count == 0)
+                {
+                    return;
+                }
+
+                held = _held.Dequeue();
+            }
+
+            held.TrySetResult(parked);
+        }
+    }
+
     public void ReleaseOne(bool? parked)
     {
         TaskCompletionSource<bool?> held;

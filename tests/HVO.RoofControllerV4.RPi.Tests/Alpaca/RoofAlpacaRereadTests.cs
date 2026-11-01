@@ -8,6 +8,7 @@ using HVO.RoofControllerV4.Common.Safety;
 using HVO.RoofControllerV4.RPi.Alpaca;
 using HVO.RoofControllerV4.RPi.Safety;
 using HVO.RoofControllerV4.RPi.Tests.Safety;
+using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
 
@@ -58,6 +59,43 @@ public sealed class RoofAlpacaRereadTests
         (await Task.WhenAll(closes)).Should().OnlyContain(outcome => outcome.Result.IsSuccessful);
         (rig.Scope.Rereads - before).Should().BeLessThanOrEqualTo(9, "re-reads of one telescope are issued no closer than 250 ms apart");
         rig.RelayOnWrites(CloseRelay).Should().Be(1);
+    }
+
+    [TestMethod]
+    public async Task ASharedReRead_IsCancelledOnlyAtTheLatestJoiningBudget_AndTheLaterCloseClosesWithinItsOwn()
+    {
+        // §19 L2 (PR #230 rereview O-F9): two Closes wait for the same re-read; it is cancelled only when the later one's
+        // budget ends, so a read that answers after the earlier one's budget still lets the later one close in time.
+        var time = new ManualTimeProvider();
+        await using var rig = (await AlpacaCommandRig.StartAsync(budgetMs: 1000, time: time)).Ready();
+        rig.Scope.HoldRereads = true;
+        async Task Advance(int milliseconds)
+        {
+            time.Advance(TimeSpan.FromMilliseconds(milliseconds));
+            await Task.Delay(50);
+        }
+
+        await Advance(10); // past the background poll the rig started with
+        rig.Ticket(); // a re-read issued now, for nobody below: neither Close may use it
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Rereads == 1, "the first re-read");
+        await Advance(50);
+        var first = rig.CloseAsync(); // arrives at 50 ms: its re-read is queued for 250 ms (the spacing); budget to 1050 ms
+        await Advance(100);
+        var second = rig.CloseAsync(); // arrives at 150 ms: joins that queued re-read; budget to 1150 ms
+        await Advance(100);
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Rereads == 2, "the shared re-read, issued at 250 ms");
+
+        await Advance(850); // 1100 ms: past the first Close's budget, not the second's
+        var early = await first.WaitAsync(TimeSpan.FromSeconds(10));
+        second.IsCompleted.Should().BeFalse("the shared re-read is still running for the later Close");
+
+        rig.ReleaseHeldRereads(parked: true); // the shared re-read answers: parked
+        var late = await second.WaitAsync(TimeSpan.FromSeconds(10));
+
+        early.Result.IsSuccessful.Should().BeFalse("its budget ended before the read answered");
+        late.Result.IsSuccessful.Should().BeTrue(late.Result.Error?.Message);
+        rig.Scope.Rereads.Should().Be(2, "both Closes waited for one shared re-read");
+        rig.Hat.RelayMask.Should().Be(0x0A);
     }
 
     [TestMethod]

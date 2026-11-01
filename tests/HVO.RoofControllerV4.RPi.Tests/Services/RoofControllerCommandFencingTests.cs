@@ -263,11 +263,14 @@ public class RoofControllerCommandFencingTests
             service.Stop().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
             watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500));
 
-            // So does a drive fault.
+            // So does a drive fault: it raises the fence and is applied at once (Opus F18: not only its timing).
             hat.SetInputs(true, true, true, false);
+            var before = service.CommandGeneration;
             watch.Restart();
             service.SimFaultRaw(true);
             watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500));
+            service.CommandGeneration.Should().BeGreaterThan(before, "the trip raised the relay fence");
+            service.GetCurrentStatusSnapshot().IsDriveFaultActive.Should().BeTrue("the trip was applied, not queued behind the hanging write");
 
             // The latch cannot be cleared while the write is out.
             (await service.ClearFault()).ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);

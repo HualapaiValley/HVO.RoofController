@@ -238,6 +238,11 @@ public sealed class AlpacaCloseScenarios
         var close = setup.CloseAsync();
         await setup.Rig.WaitForControllerAsync(status => status.IsStartPending, "the Close to wait out the delay");
         Error(await setup.Alpaca.PutAsync("closeshutter", "ClientID=8&ClientTransactionID=1", setup.Basic("not-the-external-key-at-all-000000"))).Should().Be(0x40B);
+
+        // And the External key from an untrusted address is refused at authentication, changing nothing (§19 M2).
+        using var untrusted = setup.Rig.CreateApiClient(ExternalKey);
+        untrusted.DefaultRequestHeaders.Add(RemoteAddressFilter.TestPeerHeader, "192.0.2.77");
+        (await untrusted.PostAsync("api/v4.0/alpaca/shutter/ticket?kind=Close", null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         Error(await close).Should().Be(0);
         answered.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(600) + TimeSpan.FromSeconds(1.5) + TimeSpan.FromMilliseconds(400),
             "the answer comes within the budget, the delay and 400 ms");
