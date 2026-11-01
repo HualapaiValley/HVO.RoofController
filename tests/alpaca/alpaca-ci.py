@@ -636,8 +636,10 @@ class OpenRuns(Runs):
 
         # Stale weather (plan section 9): the last safe reading expires with no good read since (the monitor stops
         # answering, and MaxReadingAge is shortened to 7 s for this run by a reload; it must be longer than the 1 s poll and
-        # the 5 s read timeout), so the ordinary conditions read it stale too. The Open is refused with the weather's
-        # reason and an alert, nothing moves, and nothing is queued for when fresh safe readings return.
+        # the 5 s read timeout), so the ordinary conditions read it stale too. End to end a reading only goes stale after
+        # failed reads, so the Open is refused by its failed latest read (the Open rule checks that first), with the
+        # weather's reason and an alert; nothing moves, and nothing is queued for when fresh safe readings return. The age
+        # rule on its own is RoofAlpacaOpenTests.AStaleWeatherReading_RefusesTheOpen's.
         self.begin("closed")
         self.set_max_reading_age("00:00:07", 7)
         self.emulator("/alpaca/safetymonitor", {"device": 0, "connected": False})
@@ -645,15 +647,15 @@ class OpenRuns(Runs):
         source = self.source(self.WEATHER)
         if source["state"] != "Unknown":
             fail(f"Stale weather: the ordinary conditions read {source['state']}, not Unknown")
-        self.refused_with_alert({f"weather-unknown:{self.WEATHER}"}, f"Weather monitor '{self.WEATHER}'", "stale weather")
+        self.refused_with_alert({f"weather-unknown:{self.WEATHER}"}, f"Weather monitor '{self.WEATHER}': its latest read failed", "stale weather")
         self.emulator("/alpaca/safetymonitor", {"device": 0, "connected": True})
         self.wait(lambda: self.source(self.WEATHER)["state"] == "Safe" and not self.source(self.WEATHER)["isStale"],
                   "the controller to read the weather safe and fresh again")
         self.still("a refused Open is never queued", seconds=1.5)
         self.settled([], "stale weather")
         self.set_max_reading_age(None, 60)
-        print("Run: stale weather (the last safe reading older than MaxReadingAge) refuses the Open (0x40B) with an alert; "
-              "nothing moves, nor once fresh safe readings return")
+        print("Run: stale weather (the last safe reading older than MaxReadingAge, the ordinary conditions Unknown) refuses "
+              "the Open (0x40B, its latest read failed) with an alert; nothing moves, nor once fresh safe readings return")
 
         # An unparked blocking mount: refused with an alert; nothing moves or is queued once it parks.
         self.begin("closed")

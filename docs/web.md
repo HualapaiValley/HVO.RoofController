@@ -282,7 +282,7 @@ once, as it is created; neither the page nor the controller shows it again.
 
 An API key's role may also be one of the two Alpaca accounts' (#220, [docs/alpaca.md](alpaca.md)): the
 **External Alpaca account (RoofAlpacaCommander)**, the key Alpaca clients send through the Alpaca server to close the
-roof while Alpaca commands are on, and the **Alpaca server's own account (RoofAlpacaServer)**. A person never has
+roof, and to open it under `OpenAndClose`, while Alpaca commands are on, and the **Alpaca server's own account (RoofAlpacaServer)**. A person never has
 these roles, and neither is ever a kiosk's key: choosing one clears and disables **A kiosk's key**. The key list names
 the role.
 

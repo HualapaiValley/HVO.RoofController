@@ -737,9 +737,11 @@ the session with the real NINA and the Dynamic Client on the Windows PC, against
    Alpaca mount as a blocking telescope and its safety monitor as a required weather source, and an External key; its
    Alpaca server on the rig's LAN address, with `Alpaca:Location` "EMULATOR RIG, not the roof" and `AllowedNetworks`
    narrowed to the PC. The emulator's control port (its fake mount and weather monitor, and the controls below) listens
-   on loopback only by default, and it has no authentication: either serve it on the rig's address for the test network
-   alone (`--urls http://<rig>:<port>`, [Settings](emulator.md#settings)), or leave NINA's mount out and work the
-   emulator's mount from the rig itself, through its control API. Clear the Stop hold in the rig's web UI.
+   on loopback only, and it has no authentication. On a rig the installer made, work the emulator's mount from the rig
+   itself, through that control API (its container publishes it on `127.0.0.1` only). Only an emulator started with
+   `dotnet run` can be served on the rig's address for the test network alone (`--urls http://<rig>:<port>`,
+   [Settings](emulator.md#settings)), so that NINA's mount can connect to its telescope. Clear the Stop hold in the
+   rig's web UI.
 2. On the PC, open `http://<rig>:11111/setup`: it must show the HAT emulated and the rig's controller.
 3. In a NINA profile of its own, never the observatory's, open the ASCOM Chooser, **Alpaca**, **Create Alpaca Driver
    (Admin)**, named "HVO roof EMULATOR", with the rig's address, port `11111` and device `0`, and the External key as
@@ -917,8 +919,9 @@ on the runner's loopback, never against hardware, and never before its chain gua
   nothing moving or queued; a weather monitor that stops answering refuses it at once ("its latest read failed") while
   the ordinary conditions still show its last safe reading; stale weather (that monitor kept silent until its last safe
   reading is older than `MaxReadingAge`, shortened to 7 s for the run by a reload, so the ordinary conditions read it
-  stale too) refuses it with `weather-unknown`, nothing moving and nothing queued once fresh safe readings return; an
-  unparked mount refuses it; an Open grant made through the
+  stale too) refuses it with `weather-unknown`, nothing moving and nothing queued once fresh safe readings return (end
+  to end a reading goes stale only after failed reads, so the refusal names the failed latest read; the age rule on its
+  own is a unit test's); an unparked mount refuses it; an Open grant made through the
   session API lets the refused Open go and is used up; a grant made in `Warn` is dropped when `InterlockMode` turns
   `Block` at runtime (the reload checked on the status), `openGrantUnavailable` says why, a new Open grant is refused
   (403 `BlockMode`) and the Open is refused with nothing moving; an Alpaca Open then an Alpaca Close reverses the roof
