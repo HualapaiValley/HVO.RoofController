@@ -226,9 +226,9 @@ internal sealed class RoofTerminalUi : IDisposable
             var person = LeaseHolder;
             if (_steppedAway is not null && person is not null && !(lease is { Held: true } && lease.Holder == person))
             {
-                // What every grant in force allows (an Open grant, a Close grant, or both); once none is, that the person is
-                // still away.
-                return RoofCliAlpaca.DescribeSteppedAway(Status?.Alpaca?.Grants ?? [], lease);
+                // What every grant of theirs in force allows (an Open grant, a Close grant, or both); once none is, that the
+                // person is still away.
+                return RoofCliAlpaca.DescribeSteppedAway(RoofAlpacaText.OwnGrants(Status?.Alpaca?.Grants ?? [], person), lease);
             }
 
             return RoofAlpacaText.DescribeIdleWarning(lease, person);

@@ -1547,12 +1547,12 @@ public sealed class KioskConsole : IAsyncDisposable
         Publish();
     }
 
-    // While the person has stepped away by granting and nobody holds the lease: what Alpaca may do with every grant in force
-    // (an Open grant, a Close grant, or both), and that a touch takes control back. Null otherwise (someone holding the
+    // While the person has stepped away by granting and nobody holds the lease: what Alpaca may do with every grant of
+    // theirs in force (an Open grant, a Close grant, or both), and that a touch takes control back. Null otherwise (someone holding the
     // lease refuses Alpaca, so there is nothing to say).
     private string? AlpacaSteppedAwayLocked()
         => _steppedAway && _operatorLease is not null && _status?.Alpaca is { OperatorLease.Held: false } alpaca
-            ? RoofAlpacaText.DescribeSteppedAway(alpaca.Grants)
+            ? RoofAlpacaText.DescribeSteppedAway(RoofAlpacaText.OwnGrants(alpaca.Grants, _session?.Name))
             : null;
 
     // The unlocking person's idle warning: from the keeper's newest answer, counted down here, or else from the status.

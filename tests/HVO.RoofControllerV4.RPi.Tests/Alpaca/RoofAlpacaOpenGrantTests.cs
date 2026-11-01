@@ -40,6 +40,8 @@ public sealed class RoofAlpacaOpenGrantTests
 
         refused.Rule().Should().Be("NotSafe");
         grant.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        grant.GrantedByName.Should().Be("ada", "the person's own name, so each UI tells its person's grants (PR #232 rereview F7)");
+        grant.GrantedBy.Should().Be("ada (signed in)");
         outcome.Result.IsSuccessful.Should().BeTrue(outcome.Result.Error?.Message);
         outcome.GrantId.Should().Be(grant.Id, "the history links the Open to its grant");
         outcome.ReasonKeys.Should().Equal("weather-unsafe:Weather");

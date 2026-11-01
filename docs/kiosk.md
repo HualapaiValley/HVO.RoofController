@@ -257,8 +257,8 @@ go with their PIN session (the controller refuses the kiosk's device key for eve
   asked or sent (a question asked before says `Not sent:` and the reason). A Close's grant is unaffected. A refusal from
   the controller is said on the page in its words.
 - **Stepping away.** A person's operator lease would refuse the command they allow, so granting steps them away from
-  it: the controller ends their lease with the grant, and the summary under the header says what every grant in force
-  allows: `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Touch anything
+  it: the controller ends their lease with the grant, and the summary under the header says what every grant of theirs
+  in force allows (another person's is never promised: it is dropped once anyone takes the operator lease): `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Touch anything
   to take control back; that cancels the grant.` (`may open the roof once` for an Open grant, `may open and close the
   roof once each` and `that cancels the grants` with both). The touches that asked for the grant are not input after
   it, nor is anything the kiosk does by itself; the heartbeats go on without taking the lease back. The person's next

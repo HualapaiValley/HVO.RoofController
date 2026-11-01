@@ -192,6 +192,12 @@ public sealed record RoofOverrideGrant
     /// <summary>Who granted it, as audit lines name them.</summary>
     public string GrantedBy { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The granting person's name alone (their account), so a UI can tell its own person's grants from another person's;
+    /// null from a controller that does not send it.
+    /// </summary>
+    public string? GrantedByName { get; init; }
+
     /// <summary>Where: <c>kiosk</c> for a PIN session, <c>session</c> for a web, terminal or Mac session.</summary>
     public string Ui { get; init; } = string.Empty;
 

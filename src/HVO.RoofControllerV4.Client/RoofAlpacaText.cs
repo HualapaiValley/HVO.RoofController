@@ -108,6 +108,19 @@ public static class RoofAlpacaText
         => DescribeSteppedAway(grant is null ? [] : [grant], takeBack);
 
     /// <summary>
+    /// The grants <paramref name="person"/> made, for their stepped-away notice: another person's grant is dropped once
+    /// anyone takes the operator lease, so it is never promised to them (PR #232 rereview F7). Every grant when the person
+    /// is not known, or the controller names nobody (<see cref="RoofOverrideGrant.GrantedByName"/> null).
+    /// </summary>
+    public static IReadOnlyList<RoofOverrideGrant> OwnGrants(IReadOnlyList<RoofOverrideGrant> grants, string? person)
+    {
+        ArgumentNullException.ThrowIfNull(grants);
+        return string.IsNullOrEmpty(person)
+            ? grants
+            : [.. grants.Where(grant => grant.GrantedByName is null || string.Equals(grant.GrantedByName, person, StringComparison.Ordinal))];
+    }
+
+    /// <summary>
     /// <see cref="DescribeSteppedAway(RoofOverrideGrant?, string)"/> for every grant in force (an Open grant and a Close
     /// grant may both be): "Alpaca may open the roof once", "close the roof once", or "open and close the roof once each".
     /// </summary>

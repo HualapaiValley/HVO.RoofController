@@ -78,6 +78,23 @@ public sealed class RoofAlpacaTextTests
     }
 
     [TestMethod]
+    public void TheSteppedAwayNotice_IsBuiltFromThePersonsOwnGrants()
+    {
+        // PR #232 rereview F7: with two people's grants in force, a person reads only what they granted, since another
+        // person's grant is dropped once someone takes the lease (docs/alpaca.md, Open grants).
+        var mine = Grant(RoofAlpacaCommandKind.Close, 300) with { GrantedByName = "ada" };
+        var theirs = Grant(RoofAlpacaCommandKind.Open, 300) with { GrantedByName = "grace" };
+        var older = Grant(RoofAlpacaCommandKind.Open, 300) with { GrantedByName = null };
+
+        RoofAlpacaText.OwnGrants([mine, theirs], "ada").Should().Equal(mine);
+        RoofAlpacaText.OwnGrants([mine, theirs], "grace").Should().Equal(theirs);
+        RoofAlpacaText.OwnGrants([mine, older], "ada").Should().Equal([mine, older], "a controller that names no person: every grant, as before");
+        RoofAlpacaText.OwnGrants([mine, theirs], null).Should().Equal([mine, theirs]);
+        RoofAlpacaText.DescribeSteppedAway(RoofAlpacaText.OwnGrants([mine, theirs], "ada")).Should().Be(
+            "You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Touch anything to take control back; that cancels the grant.");
+    }
+
+    [TestMethod]
     public void SteppingAway_SaysWhatEveryGrantInForceAllows()
     {
         var open = Grant(RoofAlpacaCommandKind.Open, 290);

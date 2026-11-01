@@ -205,8 +205,9 @@ the person's role allows.
 - **Stepping away.** A grant never lifts a person's operator lease, so the person who grants steps away with it: the
   controller ends their lease, in every session of theirs, and every page of the session they granted from says
   `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Click or type on this page to take control back; that cancels the grant.`
-  (`may open the roof once` for an Open grant, and, with both in force, `may open and close the roof once each` and
-  `that cancels the grants`).
+  (`may open the roof once` for an Open grant, and, with both of theirs in force, `may open and close the roof once
+  each` and `that cancels the grants`). It names only the person's own grants: another person's grant is dropped once
+  anyone takes the operator lease, so it is never promised ([Open grants](alpaca.md#open-grants)).
   The click (or key) that sent the grant does not count, nor do the page's renders: the heartbeats go on without input
   and the lease stays released. The person's next click or key on any of their pages takes it back, and taking it back
   drops the grant, as any person taking the lease does. Once the grant is gone (the command that used it decided, or

@@ -485,6 +485,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 request.Kind,
                 keys,
                 who,
+                user.Identity?.Name,
                 ui,
                 _time.GetUtcNow(),
                 now + (long)(TimeSpan.FromMinutes(_window).TotalSeconds * _time.TimestampFrequency));
@@ -1073,7 +1074,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     }
 
     /// <summary>An override grant (immutable; replaced, used up or dropped as a whole).</summary>
-    private sealed record GrantEntry(string Id, RoofAlpacaCommandKind Kind, IReadOnlyList<string> ReasonKeys, string GrantedBy, string Ui, DateTimeOffset GrantedUtc, long ExpiresAt)
+    private sealed record GrantEntry(string Id, RoofAlpacaCommandKind Kind, IReadOnlyList<string> ReasonKeys, string GrantedBy, string? GrantedByName, string Ui, DateTimeOffset GrantedUtc, long ExpiresAt)
     {
         public RoofOverrideGrant ToContract(TimeProvider time, long now) => new()
         {
@@ -1081,6 +1082,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             Kind = Kind,
             ReasonKeys = ReasonKeys,
             GrantedBy = GrantedBy,
+            GrantedByName = GrantedByName,
             Ui = Ui,
             GrantedUtc = GrantedUtc,
             SecondsRemaining = Math.Max(0, time.GetElapsedTime(now, ExpiresAt).TotalSeconds)

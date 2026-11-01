@@ -236,7 +236,7 @@ public sealed class WebOperatorLeaseTests
     }
 
     [TestMethod]
-    public async Task WithAnOpenGrantAndACloseGrantInForce_TheSteppedAwayNotice_SaysAlpacaMayOpenAndCloseOnceEach()
+    public async Task WithAnotherPersonsOpenGrantInForce_TheSteppedAwayNotice_PromisesOnlyThisPersonsOwnClose()
     {
         using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose(), operatorLease: true);
         var requests = harness.RecordLeaseRequests();
@@ -262,9 +262,10 @@ public sealed class WebOperatorLeaseTests
         await page.WaitForAssertionAsync(() =>
         {
             harness.Console.View.Status!.Alpaca!.Grants.Select(grant => grant.Kind).Should().BeEquivalentTo([RoofAlpacaCommandKind.Close, RoofAlpacaCommandKind.Open]);
+            // PR #232 rereview F7: another person's grant is dropped once anyone takes the lease, so it is never promised here.
             Text(page.Find("[data-testid=alpaca-lease-notice]")).Should().Be(
-                "You stepped away from the operator lease: Alpaca may open and close the roof once each in the next 5 min. "
-                + "Click or type on this page to take control back; that cancels the grants.");
+                "You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. "
+                + "Click or type on this page to take control back; that cancels the grant.");
         });
     }
 
