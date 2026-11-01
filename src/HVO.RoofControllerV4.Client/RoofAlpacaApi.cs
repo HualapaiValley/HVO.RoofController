@@ -21,8 +21,8 @@ public sealed record RoofAlpacaForwarding(uint ClientId, uint ClientTransactionI
 /// <summary>
 /// The controller's Alpaca command surface (<c>api/v4.0/alpaca</c>, #220). The UIs use the person-only routes (override
 /// grants, the human Stop hold, the operator lease, alerts) with the person's own session; the controller refuses every
-/// API key there. The Alpaca server uses the ticket and Close routes with the Alpaca client's own key, passed on for that
-/// one call and never kept, and reports its own refusals with its own key.
+/// API key there. The Alpaca server uses the ticket, Open and Close routes with the Alpaca client's own key, passed on for
+/// that one call and never kept, and reports its own refusals with its own key.
 /// </summary>
 public sealed class RoofAlpacaApi
 {
@@ -78,6 +78,10 @@ public sealed class RoofAlpacaApi
     /// <summary>An Alpaca Close carrying its ticket, with the Alpaca client's own key passed on for this call only.</summary>
     public Task<RoofStatusResponse> CloseAsync(RoofAlpacaCommandRequest request, RoofCredential clientKey, RoofAlpacaForwarding client, TimeSpan timeout, CancellationToken cancellationToken = default)
         => SendWithAsync<RoofStatusResponse>(RoofApiRoutes.AlpacaClose, request, clientKey, client, timeout, cancellationToken);
+
+    /// <summary>An Alpaca Open carrying its ticket, with the Alpaca client's own key passed on for this call only (#220, phase 4).</summary>
+    public Task<RoofStatusResponse> OpenAsync(RoofAlpacaCommandRequest request, RoofCredential clientKey, RoofAlpacaForwarding client, TimeSpan timeout, CancellationToken cancellationToken = default)
+        => SendWithAsync<RoofStatusResponse>(RoofApiRoutes.AlpacaOpen, request, clientKey, client, timeout, cancellationToken);
 
     /// <summary>Reports the Alpaca server's own refusal of a command, with this client's own key (the Alpaca server's account).</summary>
     public Task ReportEventAsync(RoofAlpacaEvent report, CancellationToken cancellationToken = default)

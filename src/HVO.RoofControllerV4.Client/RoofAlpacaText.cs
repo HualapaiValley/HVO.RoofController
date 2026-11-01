@@ -19,6 +19,12 @@ public static class RoofAlpacaText
     /// <summary>The button that grants an override for one Close, on a refused Close's alert.</summary>
     public const string GrantCloseLabel = "Allow this Close once";
 
+    /// <summary>The button that grants an override for one Open, on a refused Open's alert (#220, phase 4).</summary>
+    public const string GrantOpenLabel = "Allow this Open once";
+
+    /// <summary>The grant button for a refused command of <paramref name="kind"/>: <see cref="GrantCloseLabel"/> or <see cref="GrantOpenLabel"/>.</summary>
+    public static string GrantLabel(RoofAlpacaCommandKind kind) => kind == RoofAlpacaCommandKind.Open ? GrantOpenLabel : GrantCloseLabel;
+
     /// <summary>The button that revokes a grant.</summary>
     public const string RevokeLabel = "Revoke";
 
@@ -91,14 +97,33 @@ public static class RoofAlpacaText
 
     /// <summary>
     /// Said after the person granted an override, which steps them away from the operator lease, until their next input
-    /// takes it back: with a Close grant in force, that Alpaca may close the roof once within it and that taking control
-    /// back cancels it; without one, that Alpaca may move the roof. <paramref name="takeBack"/> says how this UI takes it
-    /// back (<see cref="TouchToTakeBack"/>, <see cref="ClickToTakeBack"/>).
+    /// takes it back: with a grant in force, that Alpaca may close (or open) the roof once within it and that taking
+    /// control back cancels it; without one, that Alpaca may move the roof. <paramref name="takeBack"/> says how this UI
+    /// takes it back (<see cref="TouchToTakeBack"/>, <see cref="ClickToTakeBack"/>).
     /// </summary>
     public static string DescribeSteppedAway(RoofOverrideGrant? grant, string takeBack = TouchToTakeBack)
-        => grant is { Kind: RoofAlpacaCommandKind.Close }
-            ? $"You stepped away from the operator lease: Alpaca may close the roof once in the next {Duration(grant.SecondsRemaining)}. {takeBack} to take control back; that cancels the grant."
-            : $"You stepped away from the operator lease: Alpaca may move the roof. {takeBack} to take control back.";
+        => DescribeSteppedAway(grant is null ? [] : [grant], takeBack);
+
+    /// <summary>
+    /// <see cref="DescribeSteppedAway(RoofOverrideGrant?, string)"/> for every grant in force (an Open grant and a Close
+    /// grant may both be): "Alpaca may open the roof once", "close the roof once", or "open and close the roof once each".
+    /// </summary>
+    public static string DescribeSteppedAway(IReadOnlyList<RoofOverrideGrant> grants, string takeBack = TouchToTakeBack)
+    {
+        ArgumentNullException.ThrowIfNull(grants);
+        var open = grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Open);
+        var close = grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Close);
+        var what = (open, close) switch
+        {
+            ({ }, { }) => $"open and close the roof once each in the next {Duration(Math.Max(open.SecondsRemaining, close.SecondsRemaining))}",
+            ({ }, null) => $"open the roof once in the next {Duration(open.SecondsRemaining)}",
+            (null, { }) => $"close the roof once in the next {Duration(close.SecondsRemaining)}",
+            _ => null
+        };
+        return what is null
+            ? $"You stepped away from the operator lease: Alpaca may move the roof. {takeBack} to take control back."
+            : $"You stepped away from the operator lease: Alpaca may {what}. {takeBack} to take control back; that cancels the {(open is not null && close is not null ? "grants" : "grant")}.";
+    }
 
     /// <summary>A grant: "One Close allowed (lifts: Telescope 'Main' unknown) by ada, 4 min left".</summary>
     public static string DescribeGrant(RoofOverrideGrant grant)
@@ -130,14 +155,28 @@ public static class RoofAlpacaText
         return $"{id}{address} (reported by the Alpaca server)";
     }
 
-    /// <summary>True for an alert a person may grant an override from: a refused Close whose every reason a grant can lift.</summary>
+    /// <summary>
+    /// True for an alert a person may grant an override from: a refused Close or Open whose every reason a grant of that
+    /// kind can lift (<see cref="RoofAlpacaContract.IsGrantableReasonKey"/>). An Open alert may still be one no grant can
+    /// be made for now (<see cref="GrantUnavailable"/>): the UIs show its grant control disabled, with the reason.
+    /// </summary>
     public static bool CanGrantFrom(RoofAlpacaAlert alert)
     {
         ArgumentNullException.ThrowIfNull(alert);
-        return !alert.Acknowledged && alert.Kind == "Refused" && alert.Command == RoofAlpacaCommandKind.Close
+        return !alert.Acknowledged && alert.Kind == "Refused" && alert.Command is { } command
             && alert.ReasonKeys.Count > 0
-            && alert.ReasonKeys.All(key => key.StartsWith(RoofAlpacaContract.ScopeNotClearKind + ":", StringComparison.Ordinal)
-                || key.StartsWith(RoofAlpacaContract.ScopeUnknownKind + ":", StringComparison.Ordinal));
+            && alert.ReasonKeys.All(key => RoofAlpacaContract.IsGrantableReasonKey(command, key));
+    }
+
+    /// <summary>
+    /// Why no grant can be made from <paramref name="alert"/> now, for a disabled grant control: an Open's while the
+    /// controller says no Open grant can be made (<see cref="RoofAlpacaStatus.OpenGrantUnavailable"/>: the safety interlock
+    /// is Block); null otherwise.
+    /// </summary>
+    public static string? GrantUnavailable(RoofAlpacaAlert alert, RoofAlpacaStatus? status)
+    {
+        ArgumentNullException.ThrowIfNull(alert);
+        return alert.Command == RoofAlpacaCommandKind.Open ? status?.OpenGrantUnavailable : null;
     }
 
     /// <summary>
@@ -146,17 +185,23 @@ public static class RoofAlpacaText
     public static IReadOnlyList<string> DescribeGrantQuestion(RoofAlpacaAlert alert, double windowMinutes)
     {
         ArgumentNullException.ThrowIfNull(alert);
+        var kind = alert.Command ?? RoofAlpacaCommandKind.Close;
         var lines = new List<string>
         {
-            $"Allow one Alpaca Close despite: {DescribeReasons(alert.ReasonKeys)}.",
+            $"Allow one Alpaca {kind} despite: {DescribeReasons(alert.ReasonKeys)}.",
         };
         if (DescribeClient(alert) is { } client)
         {
-            lines.Add($"It was refused for {client}; any Alpaca client's next Close uses the grant.");
+            lines.Add($"It was refused for {client}; any Alpaca client's next {kind} uses the grant.");
         }
 
-        lines.Add($"The grant lasts {windowMinutes.ToString("0", CultureInfo.InvariantCulture)} min and is used up by one Close, which may still be refused for a new reason. "
+        lines.Add($"The grant lasts {windowMinutes.ToString("0", CultureInfo.InvariantCulture)} min and is used up by one {kind}, which may still be refused for a new reason. "
             + "It never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's operator lease or the Stop hold. It is logged with your name.");
+        if (kind == RoofAlpacaCommandKind.Open)
+        {
+            lines.Add("Once open, the roof stays open if the weather turns: Alpaca closes it only when a client sends a Close.");
+        }
+
         return lines;
     }
 
@@ -177,25 +222,41 @@ public static class RoofAlpacaText
             {
                 RoofAlpacaContract.ScopeNotClearKind => $"Telescope '{source}' not clear of the roof",
                 RoofAlpacaContract.ScopeUnknownKind => $"Telescope '{source}' state unknown",
+                RoofAlpacaContract.WeatherUnsafeKind => $"Weather monitor '{source}' reports unsafe weather",
+                RoofAlpacaContract.WeatherUnknownKind => $"Weather monitor '{source}' state unknown",
+                RoofAlpacaContract.NoRequiredWeatherKey => "no required weather source",
+                RoofAlpacaContract.NoBlockingScopesKey => "no telescope set to block the roof",
                 _ => key
             };
         }));
     }
 
-    /// <summary>The grant question's title, above <see cref="DescribeGrantQuestion"/>'s lines.</summary>
+    /// <summary>The grant question's title for a Close, above <see cref="DescribeGrantQuestion"/>'s lines.</summary>
     public const string GrantQuestionTitle = "Allow one Alpaca Close?";
 
-    /// <summary>The grant question's button that grants the override.</summary>
+    /// <summary>The grant question's title for <paramref name="kind"/>: "Allow one Alpaca Open?".</summary>
+    public static string GrantQuestionTitleFor(RoofAlpacaCommandKind kind) => $"Allow one Alpaca {kind}?";
+
+    /// <summary>The grant question's button that grants the override for a Close.</summary>
     public const string GrantConfirmLabel = "Allow one Close";
+
+    /// <summary>The grant question's button that grants the override for <paramref name="kind"/>: "Allow one Open".</summary>
+    public static string GrantConfirmLabelFor(RoofAlpacaCommandKind kind) => $"Allow one {kind}";
 
     /// <summary>The grant question's button that grants nothing.</summary>
     public const string GrantCancelLabel = "Cancel";
 
-    /// <summary>Said when the person answered the grant question with Cancel.</summary>
+    /// <summary>Said when the person answered a Close's grant question with Cancel.</summary>
     public const string GrantCancelled = "No Close was allowed: the question was cancelled.";
 
-    /// <summary>Said when a Stop, or the end of the person's session, withdrew the grant question before its answer.</summary>
+    /// <summary>Said when the person answered the grant question for <paramref name="kind"/> with Cancel.</summary>
+    public static string GrantCancelledFor(RoofAlpacaCommandKind kind) => $"No {kind} was allowed: the question was cancelled.";
+
+    /// <summary>Said when a Stop, or the end of the person's session, withdrew a Close's grant question before its answer.</summary>
     public const string GrantWithdrawn = "No Close was allowed: Stop withdrew the question.";
+
+    /// <summary>Said when a Stop, or the end of the person's session, withdrew the grant question for <paramref name="kind"/>.</summary>
+    public static string GrantWithdrawnFor(RoofAlpacaCommandKind kind) => $"No {kind} was allowed: Stop withdrew the question.";
 
     /// <summary>Said after a person cleared the human Stop hold.</summary>
     public const string HoldCleared = "Alpaca commands are no longer held after a Stop; every other Alpaca rule still applies.";
