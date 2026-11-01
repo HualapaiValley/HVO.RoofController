@@ -139,6 +139,21 @@ public class RoofControllerWaitingStartTests
     }
 
     [TestMethod]
+    public async Task AShutdownDuringTheWait_RefusesTheStart_AndNoDirectionRelayEverEnergizes()
+    {
+        using var rig = await CreateAsync();
+        var close = rig.Service.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing));
+        rig.Service.GetCurrentStatusSnapshot().IsStartPending.Should().BeTrue();
+
+        (await rig.Service.ShutdownAsync(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        await rig.AdvanceAsync(Delay + TimeSpan.FromMilliseconds(200));
+
+        (await Within(close)).IsSuccessful.Should().BeFalse();
+        rig.DirectionOnWrites(2).Should().Be(0, "a waiting Close never energizes a direction relay once shutdown is asked for");
+        rig.Hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
     public async Task NoDelay_StartsAtOnce()
     {
         using var rig = await CreateAsync(TimeSpan.Zero);

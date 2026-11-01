@@ -469,6 +469,15 @@ public partial class RoofControllerServiceV4
     /// <inheritdoc />
     public async Task<Result<RoofStatusResponse>> ShutdownAsync(CancellationToken cancellationToken)
     {
+        // The intent and the relay fence go up before shutdown waits for the lock (#220, PR #230 rereview F11): a start
+        // that passed its checks and holds the lock never energizes, and nothing new is admitted meanwhile.
+        var firstCall = !_shuttingDown;
+        if (!_disposed)
+        {
+            _shuttingDown = true;
+            FenceRelaysOff();
+        }
+
         Task<bool> retry;
         lock (_syncLock)
         {
@@ -487,7 +496,6 @@ public partial class RoofControllerServiceV4
             }
             else
             {
-                var firstCall = !_shuttingDown;
                 _shuttingDown = true;
                 _clearFaultCts?.Cancel();
                 CancelPendingStart_NoLock("The controller is shutting down; nothing moved for this start.");

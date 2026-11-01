@@ -178,6 +178,33 @@ public class RoofControllerCommandFencingTests
     }
 
     [TestMethod]
+    public async Task AShutdownBetweenTheChecksAndTheRelay_FencesAtOnce_AndNoDirectionRelayEnergizes()
+    {
+        // PR #230 rereview F11 and §15 U1: shutdown's intent and fence go up before it waits for the lock a start holds.
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        Task<HVO.Core.Results.Result<RoofStatusResponse>>? shutdown = null;
+        var fenced = false;
+        service.BeforeEnergizeHook = () =>
+        {
+            service.BeforeEnergizeHook = null;
+            var admitted = service.CommandGeneration;
+            shutdown = Task.Run(() => service.ShutdownAsync(CancellationToken.None));
+            fenced = SpinWait.SpinUntil(() => service.CommandGeneration > admitted, TimeSpan.FromSeconds(1));
+        };
+        hat.ClearRelayWriteLog();
+
+        var close = service.Close();
+        (await shutdown!.WaitAsync(TimeSpan.FromSeconds(10))).IsSuccessful.Should().BeTrue();
+
+        fenced.Should().BeTrue("the shutdown raised the fence while the start still held the lock");
+        close.IsSuccessful.Should().BeFalse("the start is refused at its relay");
+        hat.RelayWriteLog.Should().NotContain(write => write.Register == RelaySetRegister, "no relay was switched on after the shutdown was asked for");
+        hat.RelayMask.Should().Be(0x00);
+        service.IsShuttingDown.Should().BeTrue();
+    }
+
+    [TestMethod]
     public async Task WatchdogBetweenTheChecksAndTheRelay_StopsAndLatches()
     {
         var (service, hat) = await CreateAsync();
