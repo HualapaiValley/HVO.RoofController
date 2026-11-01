@@ -97,6 +97,47 @@ public class RoofControllerWaitingStartTests
         ((IRoofControllerServiceV4)rig.Service).GetStartDelay(RoofMotionDirection.Closing).Should().Be(Delay - TimeSpan.FromMilliseconds(500), "what is left after the stop");
     }
 
+    /// <summary>An Alpaca admission whose re-check at the continuation throws (a failing safety source, an alert handler).</summary>
+    private sealed class ThrowingRecheck : IRoofCommandAdmission
+    {
+        public RoofControllerException? CheckGate() => null;
+
+        public RoofControllerException? CheckHumanControl() => null;
+
+        public RoofControllerException? CheckDeadline(TimeSpan wait) => null;
+
+        public void UseGrant()
+        {
+        }
+
+        public RoofControllerException? CheckGeneration(long generation) => null;
+
+        public RoofControllerException? CheckPolicy() => null;
+
+        public RoofControllerException? Recheck() => throw new InvalidOperationException("The re-check failed (test).");
+
+        public void ContinuationRefused(RoofControllerException refusal)
+        {
+        }
+    }
+
+    [TestMethod]
+    public async Task AContinuationThatThrows_StillAnswersEveryCallerThatJoinedIt_AndNothingEnergizes()
+    {
+        // PR #230 review, Opus F6: the waiting start's answer is given even when its continuation throws.
+        using var rig = await CreateAsync();
+        var owner = new RoofMotionOwner(RoofMotionOwnerKind.Alpaca, "alpaca-external");
+        var first = rig.Service.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing) { Owner = owner, Admission = new ThrowingRecheck() });
+        var joined = rig.Service.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing) { Owner = owner, Admission = new ThrowingRecheck() });
+
+        await rig.AdvanceAsync(Delay + TimeSpan.FromMilliseconds(100));
+
+        (await Within(first)).IsSuccessful.Should().BeFalse();
+        (await Within(joined)).IsSuccessful.Should().BeFalse("a caller that joined the waiting start gets its answer, not a wait for good");
+        rig.DirectionOnWrites(2).Should().Be(0);
+        rig.Hat.RelayMask.Should().Be(0x00);
+    }
+
     [TestMethod]
     public async Task NoDelay_StartsAtOnce()
     {

@@ -171,9 +171,28 @@ public partial class RoofControllerServiceV4
                     break;
                 }
 
-                if (Continue_NoLock(pending) is { } outcome)
+                Result<RoofControllerStatus>? outcome;
+                try
                 {
-                    Complete_NoLock(pending, outcome);
+                    outcome = Continue_NoLock(pending);
+                }
+                catch (Exception ex)
+                {
+                    // Every caller that joined the waiting start gets an answer (PR #230 review, Opus F6), and nothing
+                    // it may have started keeps running.
+                    _logger.LogError(ex, "Unexpected error while continuing a waiting {Direction}; it is refused", pending.Direction);
+                    if (_commandedMotion != RoofMotionDirection.None)
+                    {
+                        StopMotion_NoLock(RoofControllerStopReason.EmergencyStop, $"Unexpected error while continuing a waiting {pending.Direction}: {ex.Message}");
+                    }
+
+                    outcome = Result<RoofControllerStatus>.Failure(Rejection_NoLock(RoofControllerErrorCode.Unknown,
+                        $"Unexpected error while continuing a waiting {pending.Direction}; nothing moved for it.", ex));
+                }
+
+                if (outcome is { } done)
+                {
+                    Complete_NoLock(pending, done);
                     break;
                 }
             }
