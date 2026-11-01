@@ -967,7 +967,6 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         return snapshot;
     }
 
-    /// <summary>Every file under the machine's root, as text: for proving a secret is in none of them.</summary>
     /// <summary>
     /// <paramref name="text"/> with the random names in it (this machine's root and the installer's work folders, GUIDs in
     /// hex) replaced, so a check that a short secret is not shown (a 4-digit PIN) never matches one inside them.
@@ -975,9 +974,11 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     public string WithoutRandomNames(string text)
         => InstallerWorkFolder().Replace(text.Replace(Root, "<root>", StringComparison.Ordinal), "hvo-roof-install-<random>");
 
-    [GeneratedRegex("hvo-roof-install-[0-9a-f]{32}")]
+    // A work folder's GUID only: exactly 32 hex digits, not the start of a longer hex run.
+    [GeneratedRegex("hvo-roof-install-[0-9a-f]{32}(?![0-9a-f])")]
     private static partial Regex InstallerWorkFolder();
 
+    /// <summary>Every file under the machine's root, as text: for proving a secret is in none of them.</summary>
     public string AllText()
     {
         var text = new StringBuilder();

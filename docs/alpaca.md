@@ -489,11 +489,11 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
   granting person's own lease ends with it, in every one of their sessions. While the grant lasts their UI takes it back
   only when they do something there, and that drops the grant. A grant the same person makes again while their earlier
   grant is still unused keeps every one of their sessions stepped away. A grant made again while a Close that used the
-  earlier grant is still waiting out the direction-change delay does not: when that Close starts, the next heartbeat
-  from any of their sessions takes the lease back and drops the new grant (nothing moves for it), so grant again once
-  the first Close has started. Once the grant is gone (the Close that used it decided, which may be after it waits out
-  the direction-change delay, or the grant lapsed, revoked or dropped), their UI holds the lease again with its next
-  heartbeat. Another person's lease still refuses the Close.
+  earlier grant is still waiting out the direction-change delay does not: when that Close starts or is refused, the next
+  heartbeat from any of their sessions takes the lease back and drops the new grant (nothing moves for it), so grant
+  again once the first Close has started or been refused. Once the grant is gone (the Close that used it decided, which
+  may be after it waits out the direction-change delay, or the grant lapsed, revoked or dropped), their UI holds the
+  lease again with its next heartbeat. Another person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
 
