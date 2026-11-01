@@ -91,7 +91,7 @@ public sealed class AlpacaCommandsController : ControllerBase
     /// </summary>
     [HttpPost("shutter/close", Name = nameof(AlpacaClose))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AlpacaCommanderPolicy)]
-    [AlpacaCommanderAllowed, AlpacaCommandAuthReport]
+    [AlpacaCommanderAllowed, AlpacaCommandAuthReport(RoofAlpacaCommandKind.Close)]
     [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
@@ -107,7 +107,7 @@ public sealed class AlpacaCommandsController : ControllerBase
     /// </summary>
     [HttpPost("shutter/open", Name = nameof(AlpacaOpen))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AlpacaCommanderPolicy)]
-    [AlpacaCommanderAllowed, AlpacaCommandAuthReport]
+    [AlpacaCommanderAllowed, AlpacaCommandAuthReport(RoofAlpacaCommandKind.Open)]
     [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]

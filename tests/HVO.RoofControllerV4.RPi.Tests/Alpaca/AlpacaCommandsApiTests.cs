@@ -286,6 +286,39 @@ public sealed class AlpacaCommandsApiTests
     }
 
     [TestMethod]
+    [DataRow("shutter/close", true)]
+    [DataRow("shutter/close/", true)]
+    [DataRow("SHUTTER/CLOSE", true)]
+    [DataRow("shutter/close?kind=Open", true)]
+    [DataRow("shutter/open", false)]
+    [DataRow("shutter/open/", false)]
+    [DataRow("shutter/open/?kind=Close", false)]
+    [DataRow("shutter/ticket?kind=Close", true)]
+    [DataRow("shutter/ticket/?kind=Close", true)]
+    [DataRow("shutter/ticket?kind=Open", false)]
+    public async Task AWrongKey_IsAlertedForACloseAndOnlyLoggedForAnOpen_HoweverThePathIsWritten(string path, bool alerted)
+    {
+        // PR #232 review S3: the command is the matched endpoint's, never the path's spelling or a stray query; only the
+        // ticket route reads its kind.
+        using var host = CreateHost();
+        using var wrong = host.CreateApiClient("test-not-the-alpaca-key-not-a-real-secret");
+        wrong.DefaultRequestHeaders.Add(RoofAlpacaContract.ClientAddressHeader, "192.168.1.61");
+
+        var response = await wrong.PostAsJsonAsync($"{Alpaca}/{path}", new RoofAlpacaCommandRequest("t", "i", 1));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "the endpoint matched and refused the key");
+        var alerts = host.Services.GetRequiredService<RoofAlpacaCommands>().Alerts();
+        if (alerted)
+        {
+            alerts.Should().ContainSingle(alert => alert.Kind == "NotAuthorised" && alert.Command == RoofAlpacaCommandKind.Close);
+        }
+        else
+        {
+            alerts.Should().BeEmpty("an Open refused as not authorised is only logged");
+        }
+    }
+
+    [TestMethod]
     public async Task AnAlpacaClose_IsRecordedInTheHistory_WithTheReportedClient_AndNeverTheKey()
     {
         using var logs = new RecordingLoggerProvider();

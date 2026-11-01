@@ -22,8 +22,24 @@ public sealed class AlpacaCommanderAllowedAttribute : Attribute;
 /// (#220, §6, Y3): for a Close (its ticket or itself) it raises the UIs' "not authorised" alert, naming the Alpaca client
 /// the server reported, never the key; for an Open it is only logged.
 /// </summary>
+/// <remarks>
+/// The command is the endpoint's own (<see cref="Command"/>), never taken from the request's path: only the ticket
+/// endpoint, which names none, reads its <c>kind</c> (PR #232 review S3).
+/// </remarks>
 [AttributeUsage(AttributeTargets.Method)]
-public sealed class AlpacaCommandAuthReportAttribute : Attribute;
+public sealed class AlpacaCommandAuthReportAttribute : Attribute
+{
+    /// <summary>The ticket endpoint: the command is the one its <c>kind</c> names.</summary>
+    public AlpacaCommandAuthReportAttribute()
+    {
+    }
+
+    /// <summary>An endpoint for one command, <paramref name="command"/>.</summary>
+    public AlpacaCommandAuthReportAttribute(RoofAlpacaCommandKind command) => Command = command;
+
+    /// <summary>The endpoint's command; null for the ticket endpoint.</summary>
+    public RoofAlpacaCommandKind? Command { get; }
+}
 
 /// <summary>
 /// Deny by default for the External Alpaca account (#220): a request authenticated with its key reaches only the
@@ -86,8 +102,8 @@ public sealed class RoofAlpacaAuthorizationResultHandler(RoofAlpacaCommands alpa
 
     public Task HandleAsync(RequestDelegate next, HttpContext context, AuthorizationPolicy policy, PolicyAuthorizationResult authorizeResult)
     {
-        if (!authorizeResult.Succeeded && context.GetEndpoint()?.Metadata.GetMetadata<AlpacaCommandAuthReportAttribute>() is not null
-            && KindOf(context) is { } kind)
+        if (!authorizeResult.Succeeded && context.GetEndpoint()?.Metadata.GetMetadata<AlpacaCommandAuthReportAttribute>() is { } report
+            && (report.Command ?? TicketKind(context)) is { } kind)
         {
             alpaca.ReportAuthFailure(kind, RoofAlpacaClientMetadata.From(context, options.CurrentValue));
         }
@@ -95,20 +111,9 @@ public sealed class RoofAlpacaAuthorizationResultHandler(RoofAlpacaCommands alpa
         return _default.HandleAsync(next, context, policy, authorizeResult);
     }
 
-    /// <summary>The command a refused request was for: by its route, or a ticket's by its <c>kind</c>; null when it names none.</summary>
-    private static RoofAlpacaCommandKind? KindOf(HttpContext context)
+    /// <summary>The command a refused ticket request named in its <c>kind</c>; null when it names none.</summary>
+    private static RoofAlpacaCommandKind? TicketKind(HttpContext context)
     {
-        var path = context.Request.Path.Value ?? string.Empty;
-        if (path.EndsWith(RoofAlpacaContract.CloseRoute, StringComparison.OrdinalIgnoreCase))
-        {
-            return RoofAlpacaCommandKind.Close;
-        }
-
-        if (path.EndsWith(RoofAlpacaContract.OpenRoute, StringComparison.OrdinalIgnoreCase))
-        {
-            return RoofAlpacaCommandKind.Open;
-        }
-
         var kind = context.Request.Query["kind"].ToString();
         return string.Equals(kind, nameof(RoofAlpacaCommandKind.Close), StringComparison.OrdinalIgnoreCase) ? RoofAlpacaCommandKind.Close
             : string.Equals(kind, nameof(RoofAlpacaCommandKind.Open), StringComparison.OrdinalIgnoreCase) ? RoofAlpacaCommandKind.Open
