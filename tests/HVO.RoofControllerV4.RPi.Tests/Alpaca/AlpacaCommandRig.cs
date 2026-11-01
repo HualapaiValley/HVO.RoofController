@@ -101,7 +101,8 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         TimeProvider? time = null,
         IReadOnlyList<ITelescopeRereadSource>? telescopes = null,
         Action<RoofControllerOptionsV4>? configureController = null,
-        bool initialize = true)
+        bool initialize = true,
+        TimeSpan? readTimeout = null)
     {
         time ??= TimeProvider.System;
         var hat = new FakeRoofHat();
@@ -126,7 +127,7 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         {
             InterlockMode = RoofSafetyInterlockMode.Warn,
             PollInterval = RoofSafetyOptions.MaxPollInterval,
-            ReadTimeout = TimeSpan.FromSeconds(2),
+            ReadTimeout = readTimeout ?? TimeSpan.FromSeconds(2),
             MaxReadingAge = TimeSpan.FromSeconds(60),
             Telescopes = [.. (configuredTelescopes ?? []).Select(name => new RoofSafetyTelescopeOptions { Name = name, Url = "http://192.0.2.1:11111", BlocksRoof = true })]
         });
@@ -240,6 +241,7 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
     private int _reads;
     private int _rereads;
     private readonly Queue<TaskCompletionSource<bool?>> _held = new();
+    private readonly List<CancellationToken> _rereadTokens = [];
 
     public string Name { get; } = name;
 
@@ -273,7 +275,12 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
         get { lock (_gate) { return _held.Count; } }
     }
 
-    /// <summary>Ends the oldest held re-read with <paramref name="parked"/> (null: it fails).</summary>
+    /// <summary>The cancellation token each re-read was given, in the order they came.</summary>
+    public IReadOnlyList<CancellationToken> RereadTokens
+    {
+        get { lock (_gate) { return [.. _rereadTokens]; } }
+    }
+
     /// <summary>Releases every re-read held so far (the oldest first), each answering <paramref name="parked"/>.</summary>
     public void ReleaseAll(bool? parked)
     {
@@ -294,6 +301,7 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
         }
     }
 
+    /// <summary>Ends the oldest held re-read with <paramref name="parked"/> (null: it fails).</summary>
     public void ReleaseOne(bool? parked)
     {
         TaskCompletionSource<bool?> held;
@@ -320,6 +328,11 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
     {
         Interlocked.Increment(ref _reads);
         Interlocked.Increment(ref _rereads);
+        lock (_gate)
+        {
+            _rereadTokens.Add(cancellationToken);
+        }
+
         if (HoldRereads)
         {
             var held = new TaskCompletionSource<bool?>(TaskCreationOptions.RunContinuationsAsynchronously);

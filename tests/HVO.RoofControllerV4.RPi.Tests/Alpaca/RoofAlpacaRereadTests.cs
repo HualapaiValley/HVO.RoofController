@@ -68,6 +68,67 @@ public sealed class RoofAlpacaRereadTests
         // budget ends, so a read that answers after the earlier one's budget still lets the later one close in time.
         var time = new ManualTimeProvider();
         await using var rig = (await AlpacaCommandRig.StartAsync(budgetMs: 1000, time: time)).Ready();
+        var (first, second, shared, advance) = await TwoClosesSharingAReReadAsync(rig, time);
+
+        await advance(850); // 1100 ms: past the first Close's budget, not the second's
+        var early = await first.WaitAsync(TimeSpan.FromSeconds(10));
+        shared.IsCancellationRequested.Should().BeFalse("the shared re-read goes on for the later Close's budget");
+        second.IsCompleted.Should().BeFalse("the shared re-read is still running for the later Close");
+
+        rig.ReleaseHeldRereads(parked: true); // the shared re-read answers: parked
+        var late = await second.WaitAsync(TimeSpan.FromSeconds(10));
+
+        early.Result.IsSuccessful.Should().BeFalse("its budget ended before the read answered");
+        late.Result.IsSuccessful.Should().BeTrue(late.Result.Error?.Message);
+        rig.Scope.Rereads.Should().Be(2, "both Closes waited for one shared re-read");
+        rig.Hat.RelayMask.Should().Be(0x0A);
+    }
+
+    [TestMethod]
+    public async Task ASharedReReadThatNeverAnswers_IsCancelledAtTheLatestJoiningBudget_NeverAtAnEarlierOne()
+    {
+        // PR #230 rereview round 3, Sol O-F9: the re-read's own cancellation token, observed directly.
+        var time = new ManualTimeProvider();
+        await using var rig = (await AlpacaCommandRig.StartAsync(budgetMs: 1000, time: time)).Ready();
+        var (first, second, shared, advance) = await TwoClosesSharingAReReadAsync(rig, time);
+
+        await advance(850); // 1100 ms: the first Close's budget (1050 ms) has ended
+        shared.IsCancellationRequested.Should().BeFalse("an earlier joining budget never cancels the shared re-read");
+        (await first.WaitAsync(TimeSpan.FromSeconds(10))).Result.IsSuccessful.Should().BeFalse();
+        await advance(40); // 1140 ms
+        shared.IsCancellationRequested.Should().BeFalse("the later Close's budget ends at 1150 ms");
+        await advance(20); // 1160 ms
+        shared.IsCancellationRequested.Should().BeTrue("the re-read is cancelled when the latest joining budget ends");
+
+        (await second.WaitAsync(TimeSpan.FromSeconds(10))).Result.IsSuccessful.Should().BeFalse("the re-read never answered");
+        rig.Hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
+    public async Task AReRead_IsCancelledAtTheReadTimeoutFromItsIssue_EvenWhenItsJoiningBudgetsEndLater()
+    {
+        // The read timeout (500 ms here) caps every re-read from its issue, however late a joining budget ends (2 s here).
+        var time = new ManualTimeProvider();
+        await using var rig = (await AlpacaCommandRig.StartAsync(budgetMs: 2000, time: time, readTimeout: TimeSpan.FromMilliseconds(500))).Ready();
+        var (first, second, shared, advance) = await TwoClosesSharingAReReadAsync(rig, time);
+
+        await advance(490); // 740 ms: 490 ms after its issue at 250 ms
+        shared.IsCancellationRequested.Should().BeFalse();
+        await advance(20); // 760 ms: past the read timeout from its issue; the budgets end at 2050 and 2150 ms
+        shared.IsCancellationRequested.Should().BeTrue("the read timeout caps the re-read from its issue");
+
+        (await first.WaitAsync(TimeSpan.FromSeconds(10))).Result.IsSuccessful.Should().BeFalse();
+        (await second.WaitAsync(TimeSpan.FromSeconds(10))).Result.IsSuccessful.Should().BeFalse();
+        rig.Hat.RelayMask.Should().Be(0x00);
+    }
+
+    /// <summary>
+    /// A held re-read issued for nobody at 0 ms, then a Close at 50 ms whose re-read is queued for 250 ms (the spacing) and
+    /// a Close at 150 ms that joins it: returns both Closes, the shared re-read's cancellation token, and a clock step.
+    /// </summary>
+    private static async Task<(Task<RoofAlpacaCommandOutcome> First, Task<RoofAlpacaCommandOutcome> Second, CancellationToken Shared, Func<int, Task> Advance)>
+        TwoClosesSharingAReReadAsync(AlpacaCommandRig rig, ManualTimeProvider time)
+    {
         rig.Scope.HoldRereads = true;
         async Task Advance(int milliseconds)
         {
@@ -79,23 +140,12 @@ public sealed class RoofAlpacaRereadTests
         rig.Ticket(); // a re-read issued now, for nobody below: neither Close may use it
         await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Rereads == 1, "the first re-read");
         await Advance(50);
-        var first = rig.CloseAsync(); // arrives at 50 ms: its re-read is queued for 250 ms (the spacing); budget to 1050 ms
+        var first = rig.CloseAsync(); // arrives at 50 ms: its re-read is queued for 250 ms (the spacing)
         await Advance(100);
-        var second = rig.CloseAsync(); // arrives at 150 ms: joins that queued re-read; budget to 1150 ms
+        var second = rig.CloseAsync(); // arrives at 150 ms: joins that queued re-read
         await Advance(100);
         await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Rereads == 2, "the shared re-read, issued at 250 ms");
-
-        await Advance(850); // 1100 ms: past the first Close's budget, not the second's
-        var early = await first.WaitAsync(TimeSpan.FromSeconds(10));
-        second.IsCompleted.Should().BeFalse("the shared re-read is still running for the later Close");
-
-        rig.ReleaseHeldRereads(parked: true); // the shared re-read answers: parked
-        var late = await second.WaitAsync(TimeSpan.FromSeconds(10));
-
-        early.Result.IsSuccessful.Should().BeFalse("its budget ended before the read answered");
-        late.Result.IsSuccessful.Should().BeTrue(late.Result.Error?.Message);
-        rig.Scope.Rereads.Should().Be(2, "both Closes waited for one shared re-read");
-        rig.Hat.RelayMask.Should().Be(0x0A);
+        return (first, second, rig.Scope.RereadTokens[1], Advance);
     }
 
     [TestMethod]
