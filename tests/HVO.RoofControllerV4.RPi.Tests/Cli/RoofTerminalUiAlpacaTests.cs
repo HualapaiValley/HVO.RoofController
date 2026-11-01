@@ -515,6 +515,13 @@ public sealed class RoofTerminalUiAlpacaTests
             StringComparison.Ordinal));
         page.Alpaca.Items.Should().Contain(item => item.Kind == RoofUiAlpacaItemKind.Grant && item.Grant!.Kind == RoofAlpacaCommandKind.Open);
 
+        // PR #232 rereviews F7 and F12: another person's grant is never promised here (it is dropped once anyone takes the
+        // operator lease).
+        commands.Grant(AlpacaCommandRig.Person("grace", sessionId: "grace-web"),
+            new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-unknown:Main"])).Grant.Should().NotBeNull();
+        tui.WaitIdle("the other person's grant on the page", () => page.Alpaca.Items.Count(item => item.Kind == RoofUiAlpacaItemKind.Grant) == 2);
+        tui.Ui.Banner.Should().Contain("Alpaca may open the roof once in the next").And.NotContain("once each", "the banner names only this person's own grant");
+
         tui.Press(Key.F1);
         tui.WaitIdle("the lease taken back", () => commands.GetStatus().OperatorLease.Held);
         commands.Grants().Should().BeEmpty("taking the lease back drops the grant");

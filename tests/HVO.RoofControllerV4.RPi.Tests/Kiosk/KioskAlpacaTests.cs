@@ -459,6 +459,15 @@ public sealed class KioskAlpacaTests
         await harness.WaitForAsync(view => view.AlpacaSteppedAway is not null && view.Status?.Alpaca?.Grants.Count == 1, "the step away");
         harness.Console.View.AlpacaSteppedAway.Should().Be(
             "You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. Touch anything to take control back; that cancels the grant.");
+
+        // PR #232 rereviews F7 and F12: another person's grant is never promised here (it is dropped once anyone takes the
+        // operator lease).
+        Alpaca(harness).Grant(AlpacaCommandRig.Person("grace", sessionId: "grace-web"),
+            new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-unknown:Main"])).Grant.Should().NotBeNull();
+        await harness.WaitForAsync(view => view.Status?.Alpaca?.Grants.Count == 2, "the other person's grant in the status");
+        harness.Console.View.AlpacaSteppedAway.Should().Be(
+            "You stepped away from the operator lease: Alpaca may open the roof once in the next 5 min. Touch anything to take control back; that cancels the grant.",
+            "the notice names only this person's own grant");
     }
 
     [TestMethod]
