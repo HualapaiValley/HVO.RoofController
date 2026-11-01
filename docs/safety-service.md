@@ -20,6 +20,9 @@ mounts (`Telescope.AtPark`) and weather safety monitors (`SafetyMonitor.IsSafe`)
 "No safety sources configured", so with the default Warn interlock every Open asks for the override. #220 (phase 3):
 an Alpaca client's Close, through the Alpaca server with its own key, is refused unless every blocking telescope, read
 again for that Close, is clear of the roof; the weather never gates it ([docs/alpaca.md](alpaca.md#the-close-rule)).
+#220 (phase 4): an Alpaca client's Open is refused unless every required weather source's latest read succeeded and
+says safe (fresh), and every blocking telescope, read again for that Open, is clear, whatever the interlock's mode; in
+`Block` no override grant opens the roof ([docs/alpaca.md](alpaca.md#the-open-rule)).
 
 - [What it reports](#what-it-reports)
 - [Sources](#sources)
@@ -109,11 +112,14 @@ is refused at every read, so the controller never reads its weather back
 ([docs/alpaca.md](alpaca.md#never-our-own-safetymonitor)). Any other `ITelescopeParkSource` or `IWeatherSafetySource` singleton (the tests'
 simulated ones, [Testing](#testing)) is read too, before the configured ones.
 
-For an Alpaca Close the service also reads the blocking telescopes **again, on demand** (`connected` and `atpark` at
-once, `ITelescopeRereadSource`), outside the controller's lock and within the Close's budget
+For an Alpaca Close or Open the service also reads the blocking telescopes **again, on demand** (`connected` and `atpark` at
+once, `ITelescopeRereadSource`), outside the controller's lock and within the command's budget
 ([The telescopes, read again](alpaca.md#the-telescopes-read-again)). A re-read and the polls share each source's
 reading: each read is numbered when it is sent, and a result older than the reading already kept is discarded, so a
-late "parked" never replaces a newer "not parked". The polls also time each `GET`, for the re-read budget.
+late "parked" never replaces a newer "not parked". The polls also time each `GET`, for the re-read budget. For an
+Alpaca Open it judges the required weather sources more strictly than the conditions do: a source whose latest read
+failed is unknown at once, though its last good reading still counts for the conditions until it is too old
+([The Open rule](alpaca.md#the-open-rule)).
 
 `ObservedUtc` is for a device that dates its observation: an earlier time makes the reading that much older, and a time
 in the future counts as now. Without it, the reading counts from when the read ended.
@@ -146,7 +152,10 @@ whose own `MaxReadingAge` is that short.
 checks, which still apply to every Open it lets through. **An ordinary Close (from a UI, `hvo-roof` or the API) and
 every Stop are never refused for the conditions**, in any mode. A repeated Open while the roof is opening is checked
 like any other Open. An Alpaca client's Close is not an ordinary one: it has its own rule, every blocking telescope
-clear, read again for it, whatever the weather and whatever the mode ([The Close rule](alpaca.md#the-close-rule)).
+clear, read again for it, whatever the weather and whatever the mode ([The Close rule](alpaca.md#the-close-rule)). Nor
+is an Alpaca client's Open: it has its own, stricter rule whatever the mode, fresh and safe weather and every blocking
+telescope clear, read again for it; `overrideSafety` never applies to it, and in `Block` no override grant lets it
+through ([The Open rule](alpaca.md#the-open-rule)).
 
 | Mode | Safe | Unsafe or Unknown |
 |---|---|---|

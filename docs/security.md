@@ -38,14 +38,15 @@ connection's own peer address (401 from anywhere else, even with the right key):
 | Role (`Role` value) | Policy name | Allows |
 |---------------------|-------------|--------|
 | `RoofAlpacaServer`  | `RoofAlpacaServerPolicy` | The Alpaca server's own account: everything `RoofViewer` allows, Stop (for `AbortSlew`, which sets no [human Stop hold](alpaca.md#the-human-stop-hold)), and reporting its own refusals (`POST alpaca/events`). |
-| `RoofAlpacaCommander` | `RoofAlpacaCommanderPolicy` | The External Alpaca account, the key Alpaca clients send with `CloseShutter`: deny by default. It may ask for a ticket and send an Alpaca Close (`alpaca/shutter/ticket`, `alpaca/shutter/close`) and read `RoofControl/Status` and `Safety`; every other route answers 403, Stop, the ordinary Open and Close, the status hub and the settings included. |
+| `RoofAlpacaCommander` | `RoofAlpacaCommanderPolicy` | The External Alpaca account, the key Alpaca clients send with `OpenShutter` and `CloseShutter`: deny by default. It may ask for a ticket and send an Alpaca Close or Open (`alpaca/shutter/ticket`, `alpaca/shutter/close`, `alpaca/shutter/open`) and read `RoofControl/Status` and `Safety`; every other route answers 403, Stop, the ordinary Open and Close, the status hub and the settings included. |
 
 No other key and no person may use the `alpaca/shutter/*` and `alpaca/events` routes. A key with one of these roles is
 stored with the `RoofViewer` role and its account beside it, so an older controller rolled back to reads it as a Viewer
 key. The Alpaca server warns in its log at start when its own key is not a `RoofAlpacaServer` key.
 
-A person's session (never an API key, 403 `CredentialNotAllowed`) is needed to grant an Alpaca Close, to clear the
-human Stop hold, to hold the operator lease and to acknowledge an Alpaca alert ([Alpaca Close](alpaca.md#alpaca-close)).
+A person's session (never an API key, 403 `CredentialNotAllowed`) is needed to grant an Alpaca Close or Open, to clear
+the human Stop hold, to hold the operator lease and to acknowledge an Alpaca alert ([Alpaca Close](alpaca.md#alpaca-close),
+[Alpaca Open](alpaca.md#alpaca-open)).
 
 ## Endpoints
 
@@ -70,11 +71,12 @@ other route refuses such a request with 401, and never falls back to the key.
 | `POST /api/v4.0/RoofControl/ClearFault?pulseMs=250`      | Operator          | 200 `RoofStatusResponse` | 400 (`pulseMs` outside 50-2000), 401, 403, 409, 503 |
 | `GET  /api/v4.0/RoofControl/History?user=&principalId=&mine=&from=&to=&skip=&take=` | Viewer (own commands; Admin: everyone's, or with `mine=true` their own) | 200 `RoofCommandHistoryPage`, newest first ([The command history](#the-command-history)) | 400 (`take` outside 1-500, a negative `skip`, `to` before `from`), 401, 403 (not an admin, and `user` or `principalId` is someone else) |
 | `GET  /api/v4.0/RoofControl/Configuration`               | Admin             | 200 `RoofConfigurationResponse` (includes `version`) | 401, 403 |
-| `POST /api/v4.0/alpaca/shutter/ticket?kind=Close`        | `RoofAlpacaCommander` from a trusted address | 200 `RoofAlpacaTicket` (single use, for one Close, 5 s) | 400, 401, 403 (an Open ticket, any other credential) |
+| `POST /api/v4.0/alpaca/shutter/ticket?kind=Close\|Open` | `RoofAlpacaCommander` from a trusted address | 200 `RoofAlpacaTicket` (single use, for one command of its kind, 5 s) | 400, 401, 403 (any other credential) |
 | `POST /api/v4.0/alpaca/shutter/close`                    | `RoofAlpacaCommander` from a trusted address | 200 `RoofStatusResponse` | 401, 403, 409 (`AlpacaCommandRefused`, `Superseded` and the Close refusals), 503, 500 |
+| `POST /api/v4.0/alpaca/shutter/open`                     | `RoofAlpacaCommander` from a trusted address | 200 `RoofStatusResponse` | 401, 403, 409 (`AlpacaCommandRefused`, `Superseded` and the Open refusals), 503, 500 |
 | `POST /api/v4.0/alpaca/events`                           | `RoofAlpacaServer` from a trusted address | 204 | 400, 401, 403 |
 | `GET  /api/v4.0/alpaca/grants`, `GET /api/v4.0/alpaca/alerts` | Viewer | 200 | 401, 403 |
-| `POST /api/v4.0/alpaca/grants`, `DELETE /api/v4.0/alpaca/grants/{kind}` | a person's session, Operator (`RoofSafety:OverrideRole`) | 201 `RoofOverrideGrant`, 204 | 400, 401, 403 (an API key; an Open grant), 404 |
+| `POST /api/v4.0/alpaca/grants`, `DELETE /api/v4.0/alpaca/grants/{kind}` | a person's session, Operator (`RoofSafety:OverrideRole`) | 201 `RoofOverrideGrant`, 204 | 400, 401, 403 (an API key; an Open grant while `RoofSafety:InterlockMode` is `Block`, `BlockMode`), 404 |
 | `DELETE /api/v4.0/alpaca/hold`                           | a person's session, Operator | 200 `RoofStopHoldState` | 401, 403 (an API key) |
 | `POST /api/v4.0/alpaca/lease[?input=true]`, `DELETE /api/v4.0/alpaca/lease` | a person's session (Operator to hold it) | 200 `RoofOperatorLeaseState`, 204 | 401, 403 (an API key) |
 | `POST /api/v4.0/alpaca/alerts/{id}/acknowledge`          | a person's session | 200 `RoofAlpacaAlert` | 401, 403 (an API key), 404 |
@@ -526,7 +528,7 @@ accepted it only because the caller overrode them; an Open the safety interlock 
 Open accepted while nothing watches the conditions (`RoofSafety:InterlockMode` `Off` and no safety source configured)
 has no `safetyState`: its Unknown says nothing (#216). Unsafe, Unknown from a configured source or in `Warn` or
 `Block`, an override and a refusal keep it. A request refused before it reaches the roof (no credential, or a role too
-low) is not a command and is not recorded. An Alpaca Close (#220) is recorded with the source `Alpaca`: the External
+low) is not a command and is not recorded. An Alpaca Close or Open (#220) is recorded with the source `Alpaca`: the External
 account's key, how the client authenticated (`Basic` or the `X-HVO-Api-Key` header), the client's address, `ClientID`
 and `ClientTransactionID` as the Alpaca server reported them (shown, never matched or trusted for anything else), the
 address the controller saw itself, the override grant it used and the reasons; a grant is recorded with its reasons
@@ -602,7 +604,7 @@ only after a restart (`appliesAfterRestart`), needs a local credential (`localOn
 | `identity` | Admin | `RoofControllerSecurity:Identity`: the session lifetimes, lockouts and the sign-in rate limit |
 | `logging` | Admin | The log levels of the controller and its web server |
 | `ui` | Operator | `RoofControllerUi`: `DefaultCamera` and `KioskScreenTimeout` |
-| `alpaca` | Admin, local credential only | `RoofController:Alpaca`: `AllowCommands` (safety-critical), `OverrideWindowMinutes` and `ScopeRereadBudgetMs`; `RoofController:Lease:OperatorLeaseIdleMinutes` ([Controller settings](alpaca.md#controller-settings)). `ServerAddresses` is a deployment setting, not in the catalogue. |
+| `alpaca` | Admin, local credential only | `RoofController:Alpaca`: `AllowCommands` and `AllowOpenWithoutBlockingScopes` (both safety-critical), `OverrideWindowMinutes` and `ScopeRereadBudgetMs`; `RoofController:Lease:OperatorLeaseIdleMinutes` ([Controller settings](alpaca.md#controller-settings)). `ServerAddresses` is a deployment setting, not in the catalogue. |
 
 Admin covers anything that changes how the roof moves, what is trusted, or who may act. The operator settings are
 limited to presentation. Only admins can read the admin groups; everyone can read `ui`. API keys and people are not
