@@ -224,4 +224,61 @@ public sealed class RoofOperatorLeaseTests
         ada.IdleSecondsRemaining.Should().BeApproximately(30, 1);
         RoofAlpacaText.DescribeIdleWarning(ada, "ada").Should().Contain("lapses in");
     }
+
+    [TestMethod]
+    [DataRow("used")]
+    [DataRow("expired")]
+    [DataRow("revoked")]
+    [DataRow("dropped")]
+    public async Task SteppingAway_EndsWithTheGrant_AndTheNextHeartbeatTakesTheLeaseBack(string end)
+    {
+        // PR #230 review, Opus F4: stepping away was for that one grant; once it is gone, the person's UI holds the lease
+        // again without needing their input.
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        rig.Scope.Parked = false;
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+        rig.Commands.Heartbeat(web, input: false);
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("stepped away while the grant lasts");
+
+        switch (end)
+        {
+            case "used":
+                (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue();
+                break;
+            case "expired":
+                time.Advance(TimeSpan.FromMinutes(6));
+                rig.Commands.Tick();
+                break;
+            case "revoked":
+                rig.Commands.Revoke(RoofAlpacaCommandKind.Close, AlpacaCommandRig.Person("grace")).Should().BeTrue();
+                break;
+            default:
+                rig.Commands.NoteStop(AlpacaCommandRig.Person("grace"), peerTrusted: true);
+                break;
+        }
+
+        rig.Commands.Grants().Should().BeEmpty();
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(web, input: false);
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("ada", "the grant is gone, so the person at the UI holds the lease again");
+    }
+
+    [TestMethod]
+    public async Task AnIdleLapse_IsNotUndoneWhenAGrantEnds()
+    {
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: true);
+        KeepBeating(rig, time, TimeSpan.FromMinutes(10) + Beat, "ada");
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("lapsed for want of input");
+
+        rig.Commands.Grant(AlpacaCommandRig.Person("grace", sessionId: "grace-kiosk"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+        rig.Commands.Revoke(RoofAlpacaCommandKind.Close, AlpacaCommandRig.Person("grace", sessionId: "grace-kiosk"));
+        rig.Commands.Heartbeat(AlpacaCommandRig.Person("ada"), input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("only input takes back a lease that lapsed for want of it");
+    }
 }

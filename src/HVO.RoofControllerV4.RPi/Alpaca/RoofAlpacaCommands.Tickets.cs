@@ -344,7 +344,12 @@ public sealed partial class RoofAlpacaCommands
         {
             lock (owner._gate)
             {
-                if (owner._grants.Remove(RoofAlpacaCommandKind.Close, out var grant) && grant.ExpiresAt > owner._time.GetTimestamp())
+                if (owner._grants.Remove(RoofAlpacaCommandKind.Close, out var grant))
+                {
+                    owner.EndStepAway_NoLock(grant.Id);
+                }
+
+                if (grant is not null && grant.ExpiresAt > owner._time.GetTimestamp())
                 {
                     UsedGrant = new RoofOverrideGrantRecord(grant.Id, grant.ReasonKeys);
                     owner._logger.LogWarning("AUDIT override grant {GrantId} (by {GrantedBy}) used up by an Alpaca Close on ticket {TicketId}, whatever follows",

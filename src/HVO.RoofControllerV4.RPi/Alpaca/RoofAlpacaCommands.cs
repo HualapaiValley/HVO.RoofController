@@ -77,8 +77,12 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     private string? _idleLapsedHolder;
 
     // Sessions whose lease lapsed for want of input, or whose person stepped away by granting: their heartbeats take it
-    // again only with input.
+    // again only with input (a step-away only while its grant lasts).
     private readonly HashSet<string> _idleLapsedSessions = new(StringComparer.Ordinal);
+
+    // The sessions each grant stepped away (by grant id), so they hold the lease again once that grant is gone.
+    private readonly Dictionary<string, string[]> _steppedAwayFor = new(StringComparer.Ordinal);
+
     private readonly Dictionary<RoofAlpacaCommandKind, GrantEntry> _grants = [];
     private readonly List<RoofAlpacaAlert> _alerts = [];
     private long _alertSequence;
@@ -430,8 +434,13 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 _time.GetUtcNow(),
                 now + (long)(TimeSpan.FromMinutes(_window).TotalSeconds * _time.TimestampFrequency));
             var replaced = _grants.Remove(request.Kind, out var previous);
+            if (replaced)
+            {
+                EndStepAway_NoLock(previous!.Id);
+            }
+
             _grants[request.Kind] = grant;
-            var steppedAway = StepAway_NoLock(user);
+            var steppedAway = StepAway_NoLock(user, grant.Id);
             _logger.LogWarning(
                 "AUDIT override grant {GrantId} for one Alpaca {Kind} by {Caller} ({Ui}), {Window} min, lifting {Reasons}{Replaced}; {Leases} operator lease(s) of theirs ended with it",
                 grant.Id, grant.Kind, who, ui, _window, string.Join(", ", keys), replaced ? $"; it replaces grant {previous!.Id}" : string.Empty, steppedAway);
@@ -442,32 +451,59 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// The person who grants steps away: a grant never lifts a person's operator lease, so every lease of theirs ends with
-    /// it (each of their sessions), and each of those sessions, and the one granting, takes it again only with input,
-    /// which drops the grant as any person taking the lease does. Another person's lease is untouched and still refuses.
+    /// The person who grants steps away for as long as the grant lasts: a grant never lifts a person's operator lease, so
+    /// every lease of theirs ends with it (each of their sessions), and each of those sessions, and the one granting,
+    /// takes it again only with input, which drops the grant as any person taking the lease does. Another person's lease
+    /// is untouched and still refuses. Once the grant is gone (used, lapsed, revoked, dropped or replaced), those sessions
+    /// hold the lease again with their next heartbeat (<see cref="EndStepAway_NoLock"/>).
     /// </summary>
-    private int StepAway_NoLock(ClaimsPrincipal user)
+    private int StepAway_NoLock(ClaimsPrincipal user, string grantId)
     {
         var name = user.Identity?.Name;
         var sessions = _leases.Where(entry => string.Equals(entry.Value.Name, name, StringComparison.Ordinal)).Select(entry => entry.Key).ToArray();
+        var away = new List<string>();
         foreach (var session in sessions)
         {
             _leases.Remove(session);
-            NoteAway_NoLock(session);
+            if (NoteAway_NoLock(session))
+            {
+                away.Add(session);
+            }
         }
 
-        NoteAway_NoLock(SessionId(user));
+        if (NoteAway_NoLock(SessionId(user)))
+        {
+            away.Add(SessionId(user));
+        }
+
+        _steppedAwayFor[grantId] = [.. away];
         return sessions.Length;
     }
 
-    private void NoteAway_NoLock(string session)
+    /// <summary>Marks a session to take the lease again only with input; false when it was already so (an idle lapse).</summary>
+    private bool NoteAway_NoLock(string session)
     {
         if (_idleLapsedSessions.Count >= 256)
         {
             _idleLapsedSessions.Clear();
         }
 
-        _idleLapsedSessions.Add(session);
+        return _idleLapsedSessions.Add(session);
+    }
+
+    /// <summary>
+    /// A grant is gone: the sessions it stepped away hold the lease again with their next heartbeat, input or not (#220,
+    /// PR #230 review Opus F4). A session that lapsed for want of input stays so until it has some.
+    /// </summary>
+    private void EndStepAway_NoLock(string grantId)
+    {
+        if (_steppedAwayFor.Remove(grantId, out var sessions))
+        {
+            foreach (var session in sessions)
+            {
+                _idleLapsedSessions.Remove(session);
+            }
+        }
     }
 
     /// <summary>A person revokes the grant of <paramref name="kind"/> (UI sessions only; audit-logged). False when there was none.</summary>
@@ -480,6 +516,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             revoked = _grants.Remove(kind, out var grant);
             if (revoked)
             {
+                EndStepAway_NoLock(grant!.Id);
                 _logger.LogWarning("AUDIT override grant {GrantId} for one Alpaca {Kind} revoked by {Caller}", grant!.Id, kind, RoofPrincipalFactory.DescribeCaller(user));
             }
         }
@@ -524,6 +561,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         foreach (var grant in _grants.Values)
         {
             _logger.LogWarning("Override grant {GrantId} for one Alpaca {Kind} dropped: {Why}", grant.Id, grant.Kind, why);
+            EndStepAway_NoLock(grant.Id);
         }
 
         _grants.Clear();
@@ -834,7 +872,8 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         foreach (var kind in expired)
         {
             _grants.Remove(kind, out var grant);
-            _logger.LogInformation("Override grant {GrantId} for one Alpaca {Kind} lapsed unused", grant!.Id, kind);
+            EndStepAway_NoLock(grant!.Id);
+            _logger.LogInformation("Override grant {GrantId} for one Alpaca {Kind} lapsed unused", grant.Id, kind);
         }
 
         return expired.Length > 0;
