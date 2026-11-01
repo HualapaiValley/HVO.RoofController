@@ -178,11 +178,14 @@ public sealed class AlpacaOpenScenarios
         await setup.ClearHoldAsync();
         setup.Devices.Alpaca.SetSafetyMonitor(0, safe: false);
         await WaitForSafetyAsync(setup, RoofSafetyState.Unsafe, "the unsafe weather");
+        var before = (await setup.Alpaca.GetAsync("shutterstatus", "ClientID=7")).GetProperty("Value").GetInt32();
 
         var answer = await setup.OpenAsync();
 
         Error(answer).Should().Be(AlpacaErrors.InvalidOperation);
         answer.GetProperty("ErrorMessage").GetString().Should().Contain("Weather monitor 'Cloud sensor'");
+        (await setup.Alpaca.GetAsync("shutterstatus", "ClientID=7")).GetProperty("Value").GetInt32().Should().Be(before, "a refused start leaves the status as it was");
+        (await setup.Alpaca.GetAsync("slewing", "ClientID=7")).GetProperty("Value").GetBoolean().Should().BeFalse();
         (await setup.AlpacaStatusAsync()).Alerts.Should().Contain(alert => alert.Kind == "Refused" && alert.Command == RoofAlpacaCommandKind.Open
             && alert.ReasonKeys.Contains("weather-unsafe:Cloud sensor"));
         setup.Devices.Alpaca.SetSafetyMonitor(0, safe: true); // conditions turn safe: nothing was queued

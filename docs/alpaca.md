@@ -542,13 +542,17 @@ while commands are on, when it matters; `hvo-roof`'s commands never), with a hea
 `RoofControllerOptionsV4:DirectionChangeDelay` (0 by default: no wait, as before; at most 10 s; local credential only)
 makes every start, ordinary or Alpaca, wait that long after the relays were last verified off. A start that must wait
 is admitted first (its grant used), then waits **without holding the lock**, so a Stop during the wait answers at
-once, and then runs the checks again (the hold, a person's lease, commands on, the account unchanged, the Close rule
-on the newest readings, its deadline, and nothing having come since) before it energises a relay. If those refuse
-now, the roof stays stopped, the Close is refused and an alert says so. During the wait:
+once, and then runs the checks again (the hold, a person's lease, commands on, the account unchanged, the Close or
+[Open rule](#the-open-rule) on the newest readings, for an Open the interlock's mode too, its deadline, and nothing
+having come since) before it energises a relay. If those refuse now, the roof stays stopped, the command is refused
+and an alert says so. During the wait (a Close's, or an Open's alike):
 
-- a second Alpaca Close joins the waiting one and gets its answer;
-- a person's own Close takes the waiting start over as theirs (under their lease), still waiting out the delay;
-- an Open replaces it, and a Stop cancels it;
+- a second Alpaca command in the same direction joins the waiting one and gets its answer;
+- a person's own command in that direction takes the waiting start over as theirs (under their lease), still waiting
+  out the delay;
+- a command the other way is a reversal of the waiting one: an Alpaca client's is admitted or refused under its own
+  rule (refused, the waiting one goes on; admitted, it replaces it and waits out what is left of the delay), and a
+  person's replaces it; a Stop cancels it;
 - a request refused for its own fault (a bad ticket, the wrong kind) changes nothing.
 
 **A limit asserting refuses a waiting Close (a known limitation).** Every time a limit switch asserts, the controller
@@ -560,7 +564,7 @@ stays where it is, but the Close is refused. The client should send the Close ag
 the weather trigger's next Close). It is tracked for a follow-up.
 
 **Status during the wait** (an exception to "a roof not moving is never reported as moving"): the waiting start reads
-`ShutterStatus` Closing and `Slewing` true, since it has been accepted and will start unless something stops it. A start
+`ShutterStatus` Closing (Opening for an Open) and `Slewing` true, since it has been accepted and will start unless something stops it. A start
 refused when the wait ends reads `ShutterStatus` Error, wherever the roof stands (part way, or at a limit), with why in
 the `status` action, until the next start, Stop (a Stop that had to wait for the controller's lock, once it has run) or
 ClearFault, so a client polling the shutter sees its command failed. The controller's own status, and so every UI, keeps
@@ -569,13 +573,15 @@ the roof's real state (Open at the open limit, say), with the same reason as its
 
 ### Alerts
 
-The web UI, the terminal and the kiosk show an alert for each Alpaca Close refused for its policy, a person's lease,
-the hold or a latched fault; for a Close refused when its wait ended; for a telescope or the weather changing while an Alpaca
-Close moves the roof; and for a Close not authorised (refused by the server or by the controller), naming the client's
-address and `ClientID`, never the key. Alerts of the same kind and reasons are counted together with the last time,
-and a person acknowledges them (audited). The persistent warnings ("Alpaca Close checks no telescope", a re-read
-budget too small for the measured latency) show while commands are on. An Open not authorised, and anything with
-commands off, is only logged.
+The web UI, the terminal and the kiosk show an alert for each Alpaca Close or Open refused for its policy, a person's
+lease, the hold or a latched fault; for one refused when its wait ended; for a telescope changing while an Alpaca Close
+or Open moves the roof, and for the weather changing while an Alpaca Open does; and for a Close not authorised (refused
+by the server or by the controller), naming the client's address and `ClientID`, never the key. Each alert names its
+command (`Close` or `Open`); a grant made from it is of that kind. Alerts of the same kind and reasons are counted
+together with the last time, and a person acknowledges them (audited). The persistent warnings ("Alpaca Close checks no
+telescope", "Alpaca Open checks no telescope" while `AllowOpenWithoutBlockingScopes` lets the weather alone open the
+roof, a re-read budget too small for the measured latency) show while commands are on. An Open not authorised, an Open
+refused under `CloseOnly`, and anything with commands off, are only logged.
 
 The Alpaca server reports its own refusals (a missing or malformed credential) to the controller
 (`POST api/v4.0/alpaca/events`, its own account from a trusted address only): the kind, the client's address,
@@ -583,7 +589,7 @@ The Alpaca server reports its own refusals (a missing or malformed credential) t
 
 ### History
 
-The command history records each Alpaca Close (and each refusal) with the source `Alpaca`: the account and key name,
+The command history records each Alpaca Close and Open (and each refusal) with the source `Alpaca`: the account and key name,
 how the client authenticated (header or Basic), the client's address, `ClientID` and `ClientTransactionID` as the
 Alpaca server reported them (labelled so; never used to authorise), the address the controller itself saw, the grant
 it used and the reasons. Never a key or a Basic header.
@@ -652,8 +658,9 @@ The controller's side, under `RoofController:Alpaca` and `RoofController:Lease`,
 | `RoofControllerOptionsV4:DirectionChangeDelay` | `0` | How long every start waits after the relays were last verified off, 0 to 10 s ([Waiting out the direction-change delay](#waiting-out-the-direction-change-delay)). |
 
 The status (`GET RoofControl/Status`, and every hub snapshot) carries `alpaca`: the mode, the hold, the operator
-lease, the grants, the alerts, the warnings, the number of blocking telescopes, the budget, the window and each
-telescope's latency; and `isStartPending`, `pendingMotion`, `motionOwner` (a person, the Alpaca account, or nobody
+lease, the grants, the alerts, the warnings, the number of blocking telescopes, the budget, the window, each
+telescope's latency, `allowOpenWithoutBlockingScopes`, and `openGrantUnavailable` (why no Open grant can be made now:
+the interlock is `Block`; null otherwise); and `isStartPending`, `pendingMotion`, `motionOwner` (a person, the Alpaca account, or nobody
 in particular) and `isContinuationRefused` (a start refused when its direction-change delay ended, which Dome 0 reports
 as Error).
 

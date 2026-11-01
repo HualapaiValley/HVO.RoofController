@@ -632,9 +632,10 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         {
             return _safetyOptions.CurrentValue.InterlockMode == RoofSafetyInterlockMode.Block;
         }
-        catch (OptionsValidationException)
+        catch (Exception ex) when (ex is OptionsValidationException or InvalidOperationException)
         {
-            // Settings a reload brought that cannot be used: the last good mode, above, stays in force.
+            // Settings a reload brought that cannot be used (invalid, or not of their type): the last good mode, above,
+            // stays in force, as the safety service keeps it.
             return false;
         }
     }
