@@ -118,7 +118,13 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         _safetyOptionsChange = _safetyOptions.OnChange(OnSafetyOptionsChanged);
     }
 
-    /// <summary>Raised (outside any lock) when the state the status shows changed: the broadcaster republishes.</summary>
+    // 1 while a change notification is queued and has not yet started (coalescing).
+    private int _changeQueued;
+
+    /// <summary>
+    /// Raised on the thread pool, outside any lock and never on the thread that made the change, when the state the status
+    /// shows changed: the broadcaster republishes.
+    /// </summary>
     public event Action? Changed;
 
     /// <summary>The commands on now.</summary>
@@ -860,16 +866,32 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             keys, null);
     }
 
+    /// <summary>
+    /// Raises <see cref="Changed"/> on the thread pool, never on the caller's thread: a caller may hold the controller's
+    /// lock (an admission), or be a Stop that must raise its fence without waiting for a subscriber that reads the
+    /// controller's status (#220, PR #230 review F2). Changes that come while one is queued are coalesced: the handlers
+    /// read the state as it is when they run.
+    /// </summary>
     private void NotifyChanged()
     {
-        try
+        if (Interlocked.Exchange(ref _changeQueued, 1) == 1)
         {
-            Changed?.Invoke();
+            return;
         }
-        catch (Exception ex)
+
+        ThreadPool.UnsafeQueueUserWorkItem(static state =>
         {
-            _logger.LogWarning(ex, "An Alpaca state change handler failed");
-        }
+            var owner = (RoofAlpacaCommands)state!;
+            Volatile.Write(ref owner._changeQueued, 0);
+            try
+            {
+                owner.Changed?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                owner._logger.LogWarning(ex, "An Alpaca state change handler failed");
+            }
+        }, this);
     }
 
     #endregion
