@@ -253,7 +253,9 @@ go with their PIN session (the controller refuses the kiosk's device key for eve
   operator lease: Alpaca may close the roof once in the next 5 min. Touch anything to take control back; that cancels
   the grant.` The touches that asked for the grant are not input after it, nor is anything the kiosk does by itself;
   the heartbeats go on without taking the lease back. The person's next touch takes it back as it ends (after the
-  button it pressed has acted), and taking it back cancels the grant. Another person's lease still refuses.
+  button it pressed has acted), and taking it back cancels the grant. Once the grant is gone (the Close that used it
+  decided, or the grant lapsed, revoked or dropped), the next heartbeat takes the lease back by itself. Another person's
+  lease still refuses.
 - **Warnings** from the controller (`Alpaca Close checks no telescope: …`) are on the page, in the summary under the header
   (`Alpaca warning. Readings has details.`), and whole on Readings.
 

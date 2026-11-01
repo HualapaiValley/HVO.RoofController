@@ -191,7 +191,9 @@ the person's role allows.
   `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Click or type on this page to take control back; that cancels the grant.`
   The click (or key) that sent the grant does not count, nor do the page's renders: the heartbeats go on without input
   and the lease stays released. The person's next click or key on any of their pages takes it back, and taking it back
-  drops the grant, as any person taking the lease does. Another person's lease is untouched and still refuses.
+  drops the grant, as any person taking the lease does. Once the grant is gone (the Close that used it decided, or the
+  grant lapsed, revoked or dropped), the next heartbeat takes the lease back by itself. Another person's lease is
+  untouched and still refuses.
 - A refusal of any of these, and what each did, is said under **Command feedback**.
 
 ### Health

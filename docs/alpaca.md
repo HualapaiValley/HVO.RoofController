@@ -284,8 +284,10 @@ the [deploy script](deployment.md) or the [installer](install.md) ([Not yet](#no
    ```
 
    Off, it says so and exits with 0. With settings it cannot use it names them and exits with 1, before it listens.
-4. **Connect a client.** In NINA, choose the dome, and the safety monitor, from the Alpaca devices it discovers, or give
-   it the server's address and port. Then open `http://<address>:11111/setup` in a browser to see what the server sees.
+4. **Connect a client.** In NINA, connect the dome through the ASCOM Alpaca Dynamic Client ([Clients](#clients)): a
+   dome picked from NINA's own Alpaca discovery list reads the roof and stops it, but cannot send a credential, so it
+   can never close it. The safety monitor needs no credential and can come from either. Then open
+   `http://<address>:11111/setup` in a browser to see what the server sees.
 5. **To let clients close the roof** (optional): an admin adds a second key, role `RoofAlpacaCommander` (the External
    Alpaca account; `hvo-roof keys add --role alpaca-commander`), and gives it to each client as its credential
    ([Clients](#clients)); then someone with the local credential sets `RoofController:Alpaca:AllowCommands` to
@@ -485,8 +487,10 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands`.
 - **The person who grants steps away, for as long as the grant lasts.** A grant never lifts a person's lease, so the
   granting person's own lease ends with it, in every one of their sessions. While the grant lasts their UI takes it back
-  only when they do something there, and that drops the grant; once it is used, lapses, is revoked or dropped, their UI
-  holds the lease again with its next heartbeat. Another person's lease still refuses the Close.
+  only when they do something there, and that drops the grant. A grant the same person makes again keeps them stepped
+  away. Once the grant is gone (the Close that used it decided, which may be after it waits out the direction-change
+  delay, or the grant lapsed, revoked or dropped), their UI holds the lease again with its next heartbeat. Another
+  person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
 
@@ -570,18 +574,23 @@ it used and the reasons. Never a key or a Basic header.
 Every command that may start motion carries the controller's **command generation**, which every start and every way
 the relays go off (Stop, a protective stop, shutdown) moves on. A relay write for a start whose generation is older
 than the last relays-off write is dropped, so a start that passed its checks just before a Stop can never energise a
-relay after it. Stop sets that fence first, before anything else, a change notification included, then waits at most
-2 s for the lock; past that it answers `RelayStateUnverified` (`0x504` to an `AbortSlew`) and its relays-off write runs
-as soon as the lock is free. The protective stops wait the same way. A drive-fault edge raises the fence before it waits
-for the lock too, and an input edge that cannot take the lock in time is never dropped: it is applied the moment the
-lock is free.
+relay after it. A person's Stop first sets the human Stop hold, an in-memory change that waits for nothing (its change
+notification runs on its own), so no Alpaca Close is admitted in between; then Stop raises the fence, before it waits
+for anything. Stop has one deadline, 2 s from its start, for its wait for the lock and every HAT access it makes: an
+access gets at most what is left of it, and none is sent once it has passed. Past it Stop answers
+`RelayStateUnverified` (`0x504` to an `AbortSlew`), and its relays-off work runs again as soon as the lock is free. The
+protective stops wait for the lock the same way. A shutdown raises the fence before it waits for the lock, as do a
+drive-fault edge and a limit asserting; an input edge that cannot take the lock in time is never dropped: its own
+level is applied the moment the lock is free, with the motion it came during, and then the inputs are read fresh.
 
-**Every HAT access is bounded.** A relay write, a relay read-back, an input read and an LED write each run on a thread
-of the HAT's own, and the controller waits at most 1.5 s for one, less than Stop's 2 s. One that runs past that fails as
+**Every HAT access the controller makes is bounded.** A relay write, a relay read-back, an input read and an LED write
+each run on a thread of the HAT's own, and the controller waits at most 1.5 s for one, less than Stop's 2 s. (The HAT
+library's own input poll, which raises the input edges, reads outside it.) One that runs past that fails as
 a failed transfer does: the relays count as unverified and the fault latches (`RelayVerificationFailed`), the
 controller's lock is let go, so Stop and the protective stops act at once, and every later access fails at once
-without reaching the HAT until the hanging one has returned. Then every relay is written off and verified; the latch
-stays until a person clears it, and `ClearFault` is refused before that.
+without reaching the HAT until the hanging one has returned. Then, before anything else reaches the HAT, the fence goes
+up and every relay is written off and verified; the latch stays until a person clears it, and `ClearFault` is refused
+before that.
 
 **A late ON.** A relay write the controller gave up on must never land after a Stop that reported success. Until the
 relays are read back off after it, they count as unverified: Stop answers `RelayStateUnverified`, and `ClearFault` is
@@ -642,7 +651,22 @@ A client must send the External key with `CloseShutter`, as HTTP Basic (the key 
   its protocol check's `CloseShutter` included ([Conformance](#conformance)).
 - **NINA**'s own Alpaca client (a dome picked from its Alpaca discovery list) has no place for a user name and
   password, so its `CloseShutter` is refused as not authorised. Connect NINA through the **ASCOM Alpaca Dynamic Client**
-  (Windows, the ASCOM Platform) instead, and give it the External key as both its user name and its password.
+  instead (the owner's decision on #220), on the Windows PC that runs NINA:
+  1. Install the ASCOM Platform (7 or later), which brings the Dynamic Client.
+  2. In NINA's equipment for the dome, open the ASCOM Chooser. From its **Alpaca** menu, either enable discovery and
+     discover now, or create an Alpaca driver by hand (it needs administrator rights) with the Alpaca server's LAN
+     address, port `11111` and device number `0`.
+  3. Choose that Dynamic Client driver (named after the dome, `HVO roll-off roof`), not the dome NINA lists under its own
+     Alpaca discovery, and open its **Properties** (its setup dialog).
+  4. In the setup dialog's authentication settings, enter the External Alpaca account's key as **both** the user name
+     and the password, and save. The Dynamic Client then sends them as HTTP Basic with every request.
+  5. Connect, and check that a `CloseShutter` from that PC is accepted: the server's log says `accepted by the
+     controller`, and the History page shows it with the `Alpaca` source and the `basic` auth method.
+
+  **The key travels in the clear.** HTTP Basic is an encoding, not encryption, and the Alpaca listener is plain HTTP
+  (TLS is not there yet, [Not yet](#not-yet)), so anyone who can watch the observatory's LAN can read the key from a
+  `CloseShutter`. Keep NINA's PC and the Alpaca server on that LAN; the key can only close the roof, and only when the
+  controller would allow it, and rotating it on the People page ends every grant.
 - Any other client: give it the key the same way, then check in the server's log that its `CloseShutter` arrives with
   a credential.
 

@@ -102,10 +102,11 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 - Shutdown: the host requests a verified stop. An unverified one is retried (all-off every 500 ms until verified,
   disposal or 15 s); the host's wait is bounded even if HAT I/O blocks, and disposal stops waiting for a lock held by
   blocked HAT I/O after 2 s, and waits for a HAT access past its limit to return, before its all-off stop.
-- HAT accesses are bounded (#220, AA5): every one runs on the HAT's own access thread, and the controller waits at most
-  1.5 s for it (less than Stop's 2 s). Past that it fails as a failed transfer does (relays unverified, the fault
-  latched), the controller's lock is let go, every later access fails at once until it returns, and then every relay is
-  written off and verified; `ClearFault` is refused meanwhile.
+- HAT accesses are bounded (#220, AA5): every one the controller makes runs on the HAT's own access thread (the HAT
+  library's input poll reads outside it), and the controller waits at most 1.5 s for it (less than Stop's 2 s). Past
+  that it fails as a failed transfer does (relays unverified, the fault latched), the controller's lock is let go,
+  every later access fails at once until it returns, and then, before any other access, the fence goes up and every
+  relay is written off and verified; `ClearFault` is refused meanwhile.
 - The container's supervisor turns every relay off and verifies the register whenever the controller is not running
   (after each exit, before each start, after a failed try while it is not running, and when it stops), with the
   controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. The controller
@@ -130,9 +131,11 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   or commit one ([docs/safety-service.md](docs/safety-service.md), [docs/alpaca.md](docs/alpaca.md)).
 - Stop is bounded and fenced (#220): every command that may start motion carries the controller's command generation,
   which every start and every relays-off path moves on, and a relay ON whose generation is older than the last
-  relays-off write is dropped. Stop sets the fence first, then waits at most 2 s for the lock; past that it answers
-  `RelayStateUnverified` and its relays-off write runs once the lock is free. The protective stops wait the same way; a
-  drive-fault edge fences before it waits, and an edge that cannot take the lock in time is applied once it is free. A
+  relays-off write is dropped. A person's Stop sets the Stop hold, then the fence, before it waits for anything; one
+  2 s deadline covers its wait for the lock and all its relay I/O, and past it Stop answers `RelayStateUnverified` and
+  its relays-off work runs again once the lock is free. The protective stops wait the same way; shutdown, a drive-fault
+  edge and a limit asserting fence before they wait, and an edge that cannot take the lock in time is applied, with its
+  own level and motion, once it is free. A
   relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault`
   refused) until a read-back shows them off: the emulator transport fences a client's older connections at its next
   Hello, and on the Pi each I2C write runs on the HAT's one access thread.

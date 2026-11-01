@@ -348,8 +348,10 @@ rules that only a person changes (#220):
   reasons (a telescope not clear of the roof, or not known) for the override window. A grant never bypasses the fault
   latch, the interlocks, the limits, the motor protections, a person's operator lease or the Stop hold, and a Stop that
   sets the hold, or a newly taken operator lease, drops it. So the person who grants steps away: the controller ends
-  their operator lease in every interface they have open, and only their input there takes it back, which drops the
-  grant. `hvo-roof alpaca grant` holds no lease itself.
+  their operator lease in every interface they have open, and while the grant lasts only their input there takes it
+  back, which drops the grant. Once the grant is gone (the Close that used it decided, or the grant lapsed, revoked or
+  dropped), their interfaces hold the lease again with their next heartbeat. `hvo-roof alpaca grant` holds no lease
+  itself.
 
 | Command | Role | What it does |
 |---------|------|--------------|
@@ -413,8 +415,10 @@ since a grant never lifts a person's lease: the question says so, and the contro
 heartbeat crosses the grant, and the key or click that confirmed it does not count after it. The banner (and the Alpaca
 section) then says
 `You stepped away from the operator lease: Alpaca may close the roof once in the next 5 min. Press any key to take control back; that cancels the grant.`,
-and once the grant is used, lapsed or revoked, that you are still away. The heartbeats go on without taking the lease
-back. Your next key or click takes control back at once, which cancels the grant.
+and once the grant is gone, that you are still away, until the next heartbeat. While the grant lasts the heartbeats go on
+without taking the lease back, and your next key or click takes control back at once, which cancels the grant. Once the
+grant is gone (the Close that used it decided, or the grant lapsed, revoked or dropped), the next heartbeat takes the
+lease back by itself.
 
 It holds no lease with an API key (the controller refuses every key one), with the Viewer role, or in local mode. In
 local mode every request is authorized as a session of its own, while the controller keeps a lease per session, so each
@@ -667,7 +671,8 @@ Nothing here needs the Pi, the HAT or the roof.
   - the Alpaca section and its prompts (`RoofTerminalUiAlpacaTests`): each action sent only from its prompt, an override
     grant with exactly its alert's reasons, F9 withdrawing a prompt, an API key refused, and the operator lease held only
     for a person who may operate, renewed with input only after a key or a click, released on closing, and stepped away
-    from with a grant: heartbeats go on without taking it back, and the next key takes it back and cancels the grant.
+    from with a grant: while it lasts, heartbeats go on without taking it back, and the next key takes it back and
+    cancels the grant.
 - **Scenarios** (`RoofCliScenarios`, `TestCategory=Scenario`) run `hvo-roof open`, `close` and `stop`, and the terminal
   interface, against the emulated roof. The operator lease is 5 s, shorter than the travel, so a motion reaches its
   limit only if the client renews the lease.
