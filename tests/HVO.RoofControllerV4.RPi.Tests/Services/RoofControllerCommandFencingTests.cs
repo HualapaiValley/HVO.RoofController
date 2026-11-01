@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -22,11 +23,14 @@ public class RoofControllerCommandFencingTests
     private const byte RelaySetRegister = 1;
     private const byte RelayClearRegister = 2;
 
-    private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat)> CreateAsync(Action<RoofControllerOptionsV4>? configure = null)
+    private static Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat)> CreateAsync(Action<RoofControllerOptionsV4>? configure = null)
+        => CreateAsync(new ManualTimeProvider(), configure);
+
+    private static async Task<(SimulatedRoofControllerService Service, FakeRoofHat Hat)> CreateAsync(ManualTimeProvider time, Action<RoofControllerOptionsV4>? configure = null)
     {
         var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false); // mid-travel, healthy (NC limits: HIGH = not active)
-        var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), configure);
+        var service = SimulatedRoofControllerService.Create(hat, time, configure);
         (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
         return (service, hat);
     }
@@ -396,6 +400,179 @@ public class RoofControllerCommandFencingTests
 
         SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0x00,
             TimeSpan.FromSeconds(10)).Should().BeTrue();
+    }
+
+    // PR #230 rereview round 3 (Sol S-F4, Opus F19): the Stop's one bound covers the deadline stop it makes first and its
+    // LEDs, and a protective stop has the same bound over all of its I/O.
+    private static readonly TimeSpan BoundMargin = TimeSpan.FromMilliseconds(300);
+
+    [TestMethod]
+    public async Task AStopAfterAMissedWatchdog_WithSlowRelayOffWrites_AnswersWithinItsOneBound()
+    {
+        // Sol's repro: the watchdog's time has passed but its timer has not fired, so the Stop makes the watchdog's stop first.
+        var time = new ManualTimeProvider();
+        var (service, hat) = await CreateAsync(time, o => o.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10));
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        time.SuppressTimerCallbacks = true;
+        time.Advance(TimeSpan.FromSeconds(11));
+        SlowRelayOffWrites(hat, 700);
+
+        var watch = Stopwatch.StartNew();
+        var stop = service.Stop();
+        watch.Stop();
+
+        watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin, "the deadline stop is inside the Stop's one bound");
+        stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified, "its writes had not all been verified by then");
+        service.GetCurrentStatusSnapshot().LastStopReason.Should().Be(RoofControllerStopReason.SafetyWatchdogTimeout);
+        await RelaysVerifiedOffAfterAsync(service, hat);
+    }
+
+    [TestMethod]
+    public async Task AStopAfterAnExpiredLease_WithSlowRelayOffWrites_AnswersWithinItsOneBound()
+    {
+        // Opus P2: the lease expired and supervision has not acted yet.
+        var time = new ManualTimeProvider();
+        var (service, hat) = await CreateAsync(time, o => o.OperatorLeaseTimeout = TimeSpan.FromSeconds(5));
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        time.AdvanceWithoutTimers(TimeSpan.FromSeconds(6));
+        SlowRelayOffWrites(hat, 600);
+
+        var watch = Stopwatch.StartNew();
+        var stop = service.Stop();
+        watch.Stop();
+
+        watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin);
+        stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+        service.GetCurrentStatusSnapshot().LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        await RelaysVerifiedOffAfterAsync(service, hat);
+    }
+
+    [TestMethod]
+    public async Task AStopAfterAnExpiredLease_WhoseDeadlineStopVerifiedTheRelaysOff_Succeeds_WithNoLatch()
+    {
+        // Opus P2: the deadline stop verified every relay off; the Stop has nothing left to write and latches nothing.
+        var time = new ManualTimeProvider();
+        var (service, hat) = await CreateAsync(time, o => o.OperatorLeaseTimeout = TimeSpan.FromSeconds(5));
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        time.AdvanceWithoutTimers(TimeSpan.FromSeconds(6));
+        SlowRelayOffWrites(hat, 450);
+
+        var watch = Stopwatch.StartNew();
+        var stop = service.Stop();
+        watch.Stop();
+        hat.Registers.BeforeRelayWrite = null;
+
+        watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin);
+        stop.IsSuccessful.Should().BeTrue(stop.Error?.Message);
+        var status = service.GetCurrentStatusSnapshot();
+        status.LastStopReason.Should().Be(RoofControllerStopReason.OperatorLeaseExpired);
+        status.IsFaultLatched.Should().BeFalse("the relays were verified off; nothing failed");
+        hat.RelayMask.Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task AStopWithSlowLedWrites_AnswersWithinItsOneBound()
+    {
+        // Opus P1: an LED write failed, so the next update retries it, and each LED write now takes 1.2 s.
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        hat.Registers.FailLedValueWrites = true;
+        hat.SetInputs(true, false, false, false); // the closed limit: the LEDs change, and their write fails
+        service.ForceStatusRefresh();
+        hat.Registers.FailLedValueWrites = false;
+        hat.Registers.BeforeLedWrite = (_, _) => Thread.Sleep(1200);
+
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var stop = service.Stop();
+            watch.Stop();
+
+            watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin, "the LEDs are inside the Stop's one bound");
+            stop.IsSuccessful.Should().BeTrue("the relays were verified off before the LEDs; the LEDs never decide a Stop");
+        }
+        finally
+        {
+            hat.Registers.BeforeLedWrite = null;
+        }
+
+        await RelaysVerifiedOffAfterAsync(service, hat);
+    }
+
+    [TestMethod]
+    [DataRow("drive fault")]
+    [DataRow("watchdog")]
+    [DataRow("lease")]
+    public async Task AProtectiveStop_WithSlowRelayOffWrites_EndsWithinTheSameOneBound(string trigger)
+    {
+        // Sol: an IN3 trip with 700 ms relay-off writes took 2.8 s. A protective stop has the Stop's bound over all its I/O,
+        // and its relays-off work goes on after.
+        var time = new ManualTimeProvider();
+        var (service, hat) = await CreateAsync(time, o =>
+        {
+            o.SafetyWatchdogTimeout = TimeSpan.FromSeconds(10);
+            o.OperatorLeaseTimeout = TimeSpan.FromSeconds(5);
+        });
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        time.AdvanceWithoutTimers(TimeSpan.FromSeconds(trigger == "watchdog" ? 11 : trigger == "lease" ? 6 : 0));
+        SlowRelayOffWrites(hat, 700);
+
+        var watch = Stopwatch.StartNew();
+        switch (trigger)
+        {
+            case "drive fault":
+                hat.SetInputs(true, true, true, false);
+                service.SimFaultRaw(true);
+                break;
+            case "watchdog":
+                InvokeWatchdog(service);
+                break;
+            default:
+                service.RunSupervisionCycle();
+                break;
+        }
+
+        watch.Stop();
+
+        watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + BoundMargin, "the protective stop's I/O has one bound");
+        service.IsMoving.Should().BeFalse();
+        service.GetCurrentStatusSnapshot().LastStopReason.Should().Be(trigger switch
+        {
+            "drive fault" => RoofControllerStopReason.DriveFault,
+            "watchdog" => RoofControllerStopReason.SafetyWatchdogTimeout,
+            _ => RoofControllerStopReason.OperatorLeaseExpired
+        });
+        await RelaysVerifiedOffAfterAsync(service, hat);
+    }
+
+    private static void SlowRelayOffWrites(FakeRoofHat hat, int milliseconds)
+        => hat.Registers.BeforeRelayWrite = (register, _) =>
+        {
+            if (register == RelayClearRegister)
+            {
+                Thread.Sleep(milliseconds);
+            }
+        };
+
+    /// <summary>The relays-off work a bound cut short goes on, and verifies every relay off.</summary>
+    private static async Task RelaysVerifiedOffAfterAsync(RoofControllerServiceV4 service, FakeRoofHat hat)
+    {
+        var verified = await Task.Run(() => SpinWait.SpinUntil(
+            () => !service.IsHatIoOverrun && service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0x00,
+            TimeSpan.FromSeconds(15)));
+        hat.Registers.BeforeRelayWrite = null;
+        verified.Should().BeTrue("the relays-off work goes on after the bound and verifies");
+    }
+
+    /// <summary>Runs the watchdog's timer callback for the current motion, as the timer does.</summary>
+    private static void InvokeWatchdog(RoofControllerServiceV4 service)
+    {
+        var generation = (long)typeof(RoofControllerServiceV4).GetField("_motionGeneration", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        typeof(RoofControllerServiceV4).GetMethod("OnSafetyWatchdogElapsed", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(service, new object[] { generation });
     }
 
     [TestMethod]

@@ -25,6 +25,9 @@ public partial class RoofControllerServiceV4
     /// <summary>This controller's HAT access limit (<see cref="DefaultHatIoLimit"/>; tests may shorten it).</summary>
     internal TimeSpan HatIoLimit { get; set; } = DefaultHatIoLimit;
 
+    /// <summary>True while a HAT access that ran past its limit has not returned (tests).</summary>
+    internal bool IsHatIoOverrun => _hatIo.IsOverrun;
+
     // The command generation (#220): moves with every admitted start or reversal and every relays-off path (Stop, a
     // protective stop, a limit, a timeout, shutdown), never with a refusal, a repeat or a no-op. An Alpaca ticket records
     // it; a waiting start re-checks it; the relay fence compares against it. Read and written without the lock.
@@ -729,12 +732,13 @@ public partial class RoofControllerServiceV4
         // relay never will, and a waiting start is superseded.
         FenceRelaysOff();
 
-        // One deadline for the whole Stop: its wait for the lock and every HAT access it makes (#220, PR #230 rereview
-        // S-F4). Past it the Stop answers that the relays are unverified, and its relays-off work goes on after.
+        // One deadline for the whole Stop: its wait for the lock and every HAT access it makes, the deadline stop it may
+        // make first and the LEDs included (#220, PR #230 rereviews S-F4, F19). Past it the Stop answers that the relays
+        // are unverified, and its relays-off work goes on after (AllRelaysOff_NoLock queues it).
         var deadline = startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency);
-        var overran = false;
         Result<RoofControllerStatus> result;
         var lockTaken = false;
+        var bound = BoundHatIo(deadline);
         try
         {
             Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
@@ -754,26 +758,24 @@ public partial class RoofControllerServiceV4
                 CancelPendingStart_NoLock("A Stop came while this start waited; nothing moved for it.");
 
                 // A deadline that has already passed stops the motion first, so the recorded stop reason (and any latch)
-                // is the deadline's rather than the operator's. The stop below then re-asserts and verifies all-off.
+                // is the deadline's rather than the operator's. When that stop verified every relay off, the Stop has
+                // nothing left to write; otherwise the stop below re-asserts and verifies all-off.
+                var verified = false;
                 if (_commandedMotion != RoofMotionDirection.None)
                 {
                     CheckDeadlines_NoLock(Now);
+                    verified = _commandedMotion == RoofMotionDirection.None
+                        && _relayRegisterState == RoofRelayRegisterState.Verified && _relayRegisterMask == 0;
                 }
 
-                bool verified;
-                t_ioDeadline = deadline;
-                try
+                if (!verified)
                 {
                     verified = _commandedMotion != RoofMotionDirection.None
                         ? StopMotion_NoLock(reason, null)
                         : StopIdle_NoLock(reason);
                 }
-                finally
-                {
-                    t_ioDeadline = null;
-                }
 
-                overran = !verified && Stopwatch.GetTimestamp() >= deadline;
+                var overran = !verified && HasPassed(deadline);
                 FinishMutation_NoLock();
 
                 result = verified
@@ -785,16 +787,11 @@ public partial class RoofControllerServiceV4
         }
         finally
         {
+            bound.Dispose();
             if (lockTaken)
             {
                 Monitor.Exit(_syncLock);
             }
-        }
-
-        if (overran)
-        {
-            // The relays-off work the bound cut short runs again as soon as the lock is free, at each access's own limit.
-            QueueDeferredStop(reason, null, onlyWhileMoving: false);
         }
 
         RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);

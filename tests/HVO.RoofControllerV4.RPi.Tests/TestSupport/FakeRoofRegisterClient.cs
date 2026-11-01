@@ -122,6 +122,12 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
     /// </summary>
     public Action<byte, byte>? BeforeRelayWrite { get; set; }
 
+    /// <summary>
+    /// Invoked (outside the client lock) before each write to an LED register (5-8) with the register and value: a test
+    /// sleeps here to model slow LED writes.
+    /// </summary>
+    public Action<byte, byte>? BeforeLedWrite { get; set; }
+
     /// <summary>Number of digital input register reads attempted.</summary>
     public int InputReadCount
     {
@@ -235,6 +241,10 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
         {
             BeforeRelayWrite?.Invoke(register, value);
         }
+        else if (register is >= LedValueRegister and <= LedModeRegister)
+        {
+            BeforeLedWrite?.Invoke(register, value);
+        }
 
         byte? mask = null;
         Action<byte, byte, byte>? observer;
@@ -296,6 +306,11 @@ internal sealed class FakeRoofRegisterClient : MemoryI2cRegisterClient
 
     public override void WriteBlock(byte register, ReadOnlySpan<byte> data)
     {
+        if (register is >= LedValueRegister and <= LedModeRegister)
+        {
+            BeforeLedWrite?.Invoke(register, data.Length > 0 ? data[0] : (byte)0);
+        }
+
         lock (_gate)
         {
             if (IsRelayRegister(register))

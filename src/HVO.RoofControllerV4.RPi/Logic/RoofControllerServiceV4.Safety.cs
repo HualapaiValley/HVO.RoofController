@@ -22,6 +22,9 @@ public partial class RoofControllerServiceV4
 
     private void OnInputEdge(int input, bool isHigh)
     {
+        // One bound for the edge's wait for the lock and every HAT access its stop makes, as a Stop has.
+        var deadline = StopDeadlineFromNow();
+
         // A protective edge (a drive fault, or a limit asserting) raises its fence before anything waits, so a start that
         // passed its checks while it came never energizes (#220, PR #230 review F3, rereview S-F3).
         var options = _options;
@@ -52,6 +55,7 @@ public partial class RoofControllerServiceV4
                 return;
             }
 
+            using var bound = BoundHatIo(deadline);
             ApplyInputEdge_NoLock(input, isHigh);
         }
         finally
@@ -497,6 +501,8 @@ public partial class RoofControllerServiceV4
     /// </summary>
     protected void OnSafetyWatchdogElapsed(long generation)
     {
+        // One bound for the callback's wait for the lock and every HAT access its stop makes, as a Stop has.
+        var deadline = StopDeadlineFromNow();
         var lockTaken = false;
         try
         {
@@ -523,6 +529,7 @@ public partial class RoofControllerServiceV4
             }
 
             _logger.LogWarning("Safety watchdog TRIGGERED after {Timeout}s of {Direction}; stopping", _options.SafetyWatchdogTimeout.TotalSeconds, _commandedMotion);
+            using var bound = BoundHatIo(deadline);
             StopMotion_NoLock(RoofControllerStopReason.SafetyWatchdogTimeout,
                 $"Safety watchdog stopped motion after {_options.SafetyWatchdogTimeout.TotalSeconds:0.#} s without reaching the destination limit.");
             FinishMutation_NoLock();
@@ -552,11 +559,11 @@ public partial class RoofControllerServiceV4
         var limit = HatIoLimit;
         if (t_ioDeadline is { } deadline)
         {
-            // A Stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereview S-F4).
+            // A stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereviews S-F4, F19).
             var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
             if (left <= TimeSpan.Zero)
             {
-                throw new HatIoOverrunException("The Stop's bound has passed; this access was not sent. The relays-off work goes on after the answer.");
+                throw new HatIoOverrunException("The stop's 2 s bound has passed; this access was not sent. The relays-off work goes on after it.");
             }
 
             if (left < limit)
@@ -568,9 +575,39 @@ public partial class RoofControllerServiceV4
         return _hatIo.Run(access, limit);
     }
 
-    // The Stop deadline (a Stopwatch timestamp) of the HAT I/O running on this thread, or null.
+    // The deadline (a Stopwatch timestamp) bounding the HAT I/O of the stop running on this thread, or null.
     [ThreadStatic]
     private static long? t_ioDeadline;
+
+    /// <summary>
+    /// The deadline of a Stop or a protective stop that starts now: <see cref="StopLockWait"/> from now, for its wait for
+    /// the lock and every HAT access it makes, its LEDs included (#220, PR #230 rereviews S-F4, F19).
+    /// </summary>
+    private static long StopDeadlineFromNow() => Stopwatch.GetTimestamp() + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency);
+
+    /// <summary>True once <paramref name="deadline"/> (a Stopwatch timestamp) has passed.</summary>
+    private static bool HasPassed(long deadline) => Stopwatch.GetTimestamp() >= deadline;
+
+    /// <summary>
+    /// Bounds every HAT access this thread makes, until the scope is disposed, by <paramref name="deadline"/>, or by an
+    /// earlier deadline already set (a Stop's, around the deadline stop it makes first).
+    /// </summary>
+    private static HatIoBound BoundHatIo(long deadline)
+    {
+        var previous = t_ioDeadline;
+        t_ioDeadline = previous is { } outer && outer < deadline ? outer : deadline;
+        return new HatIoBound(previous);
+    }
+
+    /// <summary>Restores the HAT I/O deadline that was set before <see cref="BoundHatIo"/>.</summary>
+    private readonly struct HatIoBound : IDisposable
+    {
+        private readonly long? _previous;
+
+        public HatIoBound(long? previous) => _previous = previous;
+
+        public void Dispose() => t_ioDeadline = _previous;
+    }
 
     /// <summary>
     /// A HAT access that ran past its limit has returned (on the lane's thread). It may have switched a relay late, so
@@ -701,6 +738,13 @@ public partial class RoofControllerServiceV4
 
             var verified = mask == 0;
             RecordRelayState_NoLock(verified, mask);
+            if (!verified && t_ioDeadline is { } deadline && HasPassed(deadline))
+            {
+                // The stop's bound cut its relays-off work short: it goes on as soon as the lock is free, each access at its
+                // own limit, and the relays stay unverified until a read-back shows them off.
+                QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false);
+            }
+
             return verified;
         }
     }
@@ -943,6 +987,9 @@ public partial class RoofControllerServiceV4
                 return;
             }
 
+            // The cycle's HAT I/O, a protective stop's included, is bounded as a Stop's is; its wait for the lock is bounded
+            // above, and past it a protective stop is queued.
+            using var bound = BoundHatIo(StopDeadlineFromNow());
             var now = Now;
 
             if (_relayRegisterState == RoofRelayRegisterState.Unverified && !_clearFaultInProgress && _commandedMotion == RoofMotionDirection.None)
@@ -1066,6 +1113,9 @@ public partial class RoofControllerServiceV4
             CheckDriveStoppedAfterStop_NoLock(now);
             return;
         }
+
+        // A deadline stop is a protective stop: its HAT I/O is bounded as a Stop's is, or by an earlier bound already set.
+        using var bound = BoundHatIo(StopDeadlineFromNow());
 
         if (_watchdogDeadlineUtc is { } watchdogDeadline && now >= watchdogDeadline)
         {

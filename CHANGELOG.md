@@ -96,8 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stop is bounded and fenced (#220): a start that passed its checks can no longer energize a relay after a Stop. A
   person's Stop sets the human Stop hold and then raises that fence before it waits for anything; a shutdown, a drive
   fault and a limit asserting raise it too. A Stop has one 2 s deadline for its wait for the controller's lock and all
-  its relay I/O, and past it answers `RelayStateUnverified`, writing the relays off as soon as it can; the protective
-  stops wait for the lock the same way. An input edge that cannot take the lock in time is applied once it is free,
+  its HAT I/O (a passed watchdog, lease or drive deadline's stop, which it makes first, and the LEDs included), and past
+  it answers `RelayStateUnverified`, writing the relays off as soon as it can; the protective stops have the same bound
+  over their I/O. An input edge that cannot take the lock in time is applied once it is free,
   with its own level and motion, never dropped. A relay write the controller gave up on keeps the relays unverified,
   and `ClearFault` refused, until a read-back shows them off.
 - Every HAT access the controller makes is bounded (#220): relay writes and read-back, input reads and the LEDs run on
