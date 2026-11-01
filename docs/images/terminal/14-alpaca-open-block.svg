@@ -105,7 +105,7 @@
 <rect x="961.20" y="492" width="50.80" height="18.4" fill="#111c2a"/>
 <rect x="1011.60" y="492" width="8.80" height="18.4" fill="#05070d"/>
 <rect x="12.00" y="510" width="8.80" height="18.4" fill="#05070d"/>
-<rect x="20.40" y="510" width="50.80" height="18.4" fill="#111c2a"/>
+<rect x="20.40" y="510" width="8.80" height="18.4" fill="#111c2a"/>
 <rect x="79.20" y="510" width="126.40" height="18.4" fill="#2563eb"/>
 <rect x="961.20" y="510" width="50.80" height="18.4" fill="#111c2a"/>
 <rect x="1011.60" y="510" width="8.80" height="18.4" fill="#05070d"/>
@@ -170,19 +170,21 @@
 <text x="28.80" y="127.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">LIVE:</text>
 <text x="79.20" y="127.50" fill="#f7f9fc" textLength="848.40" lengthAdjust="spacingAndGlyphs">Alert 1 (NEW): An Alpaca Open was refused: Weather monitor 'Sky' reports unsafe weather; no telescope</text>
 <text x="45.60" y="145.50" fill="#98a7bb" textLength="25.20" lengthAdjust="spacingAndGlyphs" opacity="0.6">ALP</text>
-<text x="79.20" y="145.50" fill="#f7f9fc" textLength="831.60" lengthAdjust="spacingAndGlyphs">set to block the roof. (2026-11-01 15:36:54Z) From ClientID 7 at 192.0.2.50 (reported by the Alpaca</text>
+<text x="79.20" y="145.50" fill="#f7f9fc" textLength="831.60" lengthAdjust="spacingAndGlyphs">set to block the roof. (2026-11-01 16:09:48Z) From ClientID 7 at 192.0.2.50 (reported by the Alpaca</text>
 <text x="37.20" y="163.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Alpa</text>
 <text x="79.20" y="163.50" fill="#f7f9fc" textLength="67.20" lengthAdjust="spacingAndGlyphs">server).</text>
 <text x="37.20" y="181.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Alpa</text>
-<text x="79.20" y="181.50" fill="#f7f9fc" textLength="831.60" lengthAdjust="spacingAndGlyphs">Allow this Open once is not available: The safety interlock is Block (RoofSafety:InterlockMode): no</text>
+<text x="79.20" y="181.50" fill="#f7f9fc" textLength="747.60" lengthAdjust="spacingAndGlyphs">Allow this Open once is not available: No grant opens the roof while the safety interlock</text>
 <text x="37.20" y="199.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Oper</text>
-<text x="79.20" y="199.50" fill="#f7f9fc" textLength="529.20" lengthAdjust="spacingAndGlyphs">grant opens the roof, and Alpaca opens it only when it is Safe.</text>
+<text x="79.20" y="199.50" fill="#f7f9fc" textLength="621.60" lengthAdjust="spacingAndGlyphs">(RoofSafety:InterlockMode) is Block: an Alpaca Open needs Safe conditions.</text>
 <text x="37.20" y="217.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Warn</text>
 <text x="37.20" y="235.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">No o</text>
 <text x="37.20" y="253.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Aler</text>
 <text x="37.20" y="271.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">bloc</text>
-<text x="28.80" y="487.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">Close</text>
-<text x="28.80" y="523.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">[ Ope</text>
+<text x="28.80" y="487.50" fill="#98a7bb" textLength="33.60" lengthAdjust="spacingAndGlyphs" opacity="0.6">Open</text>
+<text x="961.20" y="487.50" fill="#98a7bb" textLength="16.80" lengthAdjust="spacingAndGlyphs" opacity="0.6">dy</text>
+<text x="28.80" y="505.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs" opacity="0.6">close</text>
+<text x="28.80" y="523.50" fill="#98a7bb" textLength="42.00" lengthAdjust="spacingAndGlyphs">[ Ope</text>
 <text x="79.20" y="523.50" fill="#f7f9fc" textLength="126.00" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Acknowledge ]</text>
 <text x="213.60" y="523.50" fill="#f7f9fc" textLength="84.00" lengthAdjust="spacingAndGlyphs">[ Cancel ]</text>
 <text x="20.40" y="559.50" fill="#fecaca" textLength="151.20" lengthAdjust="spacingAndGlyphs" font-weight="bold">[ Stop roof (F9) ]</text>
