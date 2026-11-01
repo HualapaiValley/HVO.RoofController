@@ -4,7 +4,8 @@ name: Scenarios
 # hardware is involved, and nothing is pushed or deployed.
 #   scenarios            every [TestCategory("Scenario")] test, the short C14 and kiosk soaks included
 #   browser              the web UI in Chromium with phone, tablet and desktop emulation ([TestCategory("Browser")])
-#   alpaca-conformu      the Alpaca server (#220) checked by a pinned ConformU against the controller and the HAT emulator
+#   alpaca-conformu      the Alpaca server (#220) checked by a pinned ConformU, the scripted Alpaca Close and Open runs,
+#                        and the Alpaca client matrix, against the controller and the HAT emulator
 #                        (tests/alpaca/conformu.sh)
 #   container-scenarios  the Docker lifecycle, the container's supervisor and its two processes, the C12 deploy and
 #                        rollback, the Compose migration, and a deploy of a pulled image
@@ -158,13 +159,15 @@ jobs:
           retention-days: 7
 
   # The Alpaca server (#220) checked by ConformU, ASCOM's conformance checker, pinned by version and SHA-256, in CLI
-  # mode: its Alpaca protocol check and its Dome conformance check, against the server, the controller and the HAT
-  # emulator built here and run on the runner's loopback, behind the chain guard (every URL loopback, the controller on
-  # the HAT emulator). DomeOpenShutter is false and the server refuses Open; the roof starts Closed, so ConformU's
-  # CloseShutter moves nothing. Then the scripted Close runs check the hold, the credential, a blocking mount, a Close
-  # grant and unsafe weather against what the emulated roof did. The script fails if the emulated roof moved under
-  # ConformU, if a log or result holds a run secret (such a file is deleted before the upload), and when ConformU reports
-  # any error or issue, or any message tests/alpaca/conformu-expected.json does not list (docs/alpaca.md, "Conformance").
+  # mode: its Alpaca protocol check and the conformance checks of Dome 0 and SafetyMonitor 0, against the server, the
+  # controller and the HAT emulator built here and run on the runner's loopback, behind the chain guard (every URL
+  # loopback, the controller on the HAT emulator). DomeOpenShutter is true and Alpaca Open and Close are allowed for the
+  # run, so ConformU opens and closes the emulated roof; it must end at rest with every relay off. Then the scripted Close
+  # and Open runs check the hold, the credential, a blocking mount, unsafe and failing weather, grants, Block at runtime,
+  # a reversal and CloseOnly against what the emulated roof and relays did, and the client matrix drives the server with
+  # ASCOM's own Alpaca client library as the Dynamic Client (NINA through it) and as NINA's native client. The script
+  # fails if a log or result holds a run secret (such a file is deleted before the upload), and when ConformU reports any
+  # error or issue, or any message tests/alpaca/conformu-expected.json does not list (docs/alpaca.md, "Conformance").
   alpaca-conformu:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -190,8 +193,9 @@ jobs:
       - name: Build
         working-directory: src
         run: |
-          for project in HVO.RoofControllerV4.Emulator HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Alpaca; do
-            dotnet build "$project/$project.csproj" -c Debug -v minimal -p:ContinuousIntegrationBuild=true
+          for project in HVO.RoofControllerV4.Emulator HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Alpaca \
+            ../tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix; do
+            dotnet build "$project/${project##*/}.csproj" -c Debug -v minimal -p:ContinuousIntegrationBuild=true
           done
 
       - name: ConformU against the emulator
