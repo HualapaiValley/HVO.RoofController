@@ -682,14 +682,20 @@ The controller's routes, under `api/v4.0/alpaca`:
 
 ### Clients
 
-A client must send the External key with `CloseShutter`, as HTTP Basic (the key as user name and password) or the
-`X-HVO-Api-Key` header, and must send it **pre-emptively**: the server answers a Close without a credential with
-`0x40B`, not with an HTTP challenge.
+A client must send the External key with `OpenShutter` and `CloseShutter`, as HTTP Basic (the key as user name and
+password) or the `X-HVO-Api-Key` header, and must send it **pre-emptively**: the server answers a command without a
+credential with `0x40B`, not with an HTTP challenge.
+
+**Its timeout must outlast the controller's answer.** The server answers an Open or a Close within the re-read budget
+(`ScopeRereadBudgetMs`), plus what is left of the direction-change delay, plus 400 ms, and waits for the controller 1 s
+longer than that; with the defaults (600 ms, no delay) that is 2 s. Keep the budget plus the delay plus 1.4 s below the
+client's response timeout: ASCOM's Alpaca client library (the Dynamic Client's) waits 10 s for a member's answer and
+then sends it once more, which the server treats as a new command, admitted afresh.
 
 - **ConformU** 4.5.3 sends HTTP Basic from its settings file (`AccessUserName`, `AccessPassword`) with every request,
-  its protocol check's `CloseShutter` included ([Conformance](#conformance)).
+  its `OpenShutter` and `CloseShutter` included ([Conformance](#conformance)).
 - **NINA**'s own Alpaca client (a dome picked from its Alpaca discovery list) has no place for a user name and
-  password, so its `CloseShutter` is refused as not authorised. Connect NINA through the **ASCOM Alpaca Dynamic Client**
+  password, so its `OpenShutter` and `CloseShutter` are refused as not authorised. Connect NINA through the **ASCOM Alpaca Dynamic Client**
   instead (the owner's decision on #220), on the Windows PC that runs NINA:
   1. Install the ASCOM Platform (7 or later), which brings the Dynamic Client.
   2. In NINA's equipment for the dome, open the ASCOM Chooser. From its **Alpaca** menu, either enable discovery and
@@ -699,17 +705,51 @@ A client must send the External key with `CloseShutter`, as HTTP Basic (the key 
      Alpaca discovery, and open its **Properties** (its setup dialog).
   4. In the setup dialog's authentication settings, enter the External Alpaca account's key as **both** the user name
      and the password, and save. The Dynamic Client then sends them as HTTP Basic with every request.
-  5. Connect, and check that a `CloseShutter` from that PC is accepted: the server's log says `accepted by the
-     controller`, and the History page shows it with the `Alpaca` source and the `basic` auth method.
+  5. Connect, and check that a `CloseShutter` (and, with `OpenAndClose`, an `OpenShutter`) from that PC is accepted:
+     the server's log says `accepted by the controller`, and the History page shows it with the `Alpaca` source and the
+     `basic` auth method.
 
   **The key travels in the clear.** HTTP Basic is an encoding, not encryption, and the Alpaca listener is plain HTTP
   (TLS is not there yet, [Not yet](#not-yet)), so anyone who can watch the observatory's LAN can read the key from a
-  `CloseShutter`. Keep NINA's PC and the Alpaca server on that LAN; the key can only close the roof, and only when the
-  controller would allow it, and rotating it on the People page ends every grant.
-- Any other client: give it the key the same way, then check in the server's log that its `CloseShutter` arrives with
-  a credential.
+  command. Keep NINA's PC and the Alpaca server on that LAN. The key can close the roof, and open it under
+  `OpenAndClose`, only when the controller would allow it; rotating it on the People page ends every grant.
+- Any other client: give it the key the same way, then check in the server's log that its commands arrive with a
+  credential.
 
 Try a client against the [HAT emulator](emulator.md) first, never against the roof.
+
+#### The client matrix
+
+The client matrix ([`tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix`](../tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix),
+run in CI by `tests/alpaca/conformu.sh` after its chain guard) drives the server with ASCOM's own Alpaca client
+library, `ASCOM.Alpaca.Components` 4.1.0, the library the Dynamic Client and NINA's native Alpaca devices are built on,
+with its default timeouts, against the HAT emulator on loopback only. It connects by explicit address (no discovery),
+and each profile goes through a capturing proxy that records what the client sends:
+
+| Profile | What it does | Result |
+|---|---|---|
+| **Dynamic Client** (NINA through it): the External key as user name and password | A NINA-like session: connects; finds the shutter in Error and closes first (NINA's Error recovery); opens, and polls until Open; a refusal while the weather is unsafe (the client gets InvalidOperation with the controller's reason, and nothing moves); a person's Open grant through the session API, then the Open goes; parks the mount, then closes (park-then-close); `AbortSlew` during a motion (stops, reads Error part way); disconnects and connects again. | Passes. Every request carried HTTP Basic, the first (`PUT connected`) included, and none was challenged. Open answered in 160 to 204 ms, Close in 145 to 162 ms, `AbortSlew` in 97 ms, a refused Open in 25 ms, against the controller's 1 s deadline, the server's 2 s wait and the library's 10 s. |
+| **NINA native**: no credential | Reads, `Connected`, `AbortSlew`; then `OpenShutter` and `CloseShutter`. | Passes. No request carried a credential; reads and `AbortSlew` work, and `OpenShutter` and `CloseShutter` answer `0x40B` "Not authorised" with nothing moving. |
+
+No Windows PC, NINA or ASCOM Platform takes part in CI. **Before Alpaca Open is turned on at the observatory**, repeat
+the session with the real NINA and the Dynamic Client on the Windows PC, against a HAT-emulator rig, never the roof:
+
+1. Set up a [rig](emulator.md) on a computer not wired to the roof: its controller with `OpenAndClose`, the emulator's
+   Alpaca mount as a blocking telescope and its safety monitor as a required weather source, and an External key; its
+   Alpaca server on the rig's LAN address, with `Alpaca:Location` "EMULATOR RIG, not the roof" and `AllowedNetworks`
+   narrowed to the PC. Clear the Stop hold in the rig's web UI.
+2. On the PC, open `http://<rig>:11111/setup`: it must show the HAT emulated and the rig's controller.
+3. In NINA, open the ASCOM Chooser, **Alpaca**, **Create Alpaca Driver (Admin)**, named "HVO roof EMULATOR", with the
+   rig's address, port `11111` and device `0`, and the External key as both user name and password (no discovery).
+4. Run the session on the rig: reset the emulator part way (the shutter reads Error), close, then open; connect NINA's
+   mount to the emulator's Alpaca telescope (its control port has no authentication: a test network only), unpark it,
+   park it from NINA and close; make the weather unsafe and open (NINA shows the controller's reason; nothing moves);
+   grant the Open from the rig's alert and open again (it opens); stop the dome during a motion (the shutter reads
+   Error); disconnect, connect again, close.
+5. Check the rig's History: every Open and Close shows the `Alpaca` source, `basic`, the PC's address, and the
+   server's log says `accepted by the controller`.
+6. Optionally, NINA's own discovered Alpaca dome: its Open and Close must be "Not authorised". Connect it only after
+   checking the device it lists is the rig's (its `Location`).
 
 ## Alpaca Open
 
@@ -829,18 +869,22 @@ on the runner's loopback, never against hardware, and never before its chain gua
 - **Pinned.** ConformU 4.5.3, downloaded from its release and checked against its SHA-256 in
   [`tests/alpaca/conformu.sh`](../tests/alpaca/conformu.sh).
 - **Its settings** are [`tests/alpaca/conformu-settings.json`](../tests/alpaca/conformu-settings.json):
-  `DomeOpenShutter` false, and the protocol check's strict mode and URL-structure checks on. The script adds the run's
-  External key as ConformU's HTTP Basic user name and password, in a copy only the run can read.
+  `DomeOpenShutter` true, a 60 s shutter timeout (three times the emulated roof's 20 s travel) and a 3 s stabilisation
+  wait, and the protocol check's strict mode and URL-structure checks on. The script adds the run's External key as
+  ConformU's HTTP Basic user name and password, in a copy only the run can read.
 - **The chain guard** (`tests/alpaca/alpaca-ci.py guard`), before anything may command the roof: the controller's and
   the Alpaca server's URLs are loopback addresses (written as addresses, not names), the controller drives the HAT
   emulator, and the Alpaca server reaches that very controller instance (its `status` action names it). Otherwise the
   run stops before ConformU starts.
 - **Run-only keys and settings.** The script makes the run's keys (the Alpaca server's account, the External account,
-  an admin key that only makes the CI person) and the CI person's password in a directory only its user can read, gives
-  the controller their hashes, and deletes them at the end. `AllowCommands` is `CloseOnly` for the run only, never a
-  shipped default. The CI person (an Operator) clears the Stop hold set at the controller's start through the session
-  API, as a person would in a UI, and holds no operator lease. No log or result kept may hold a run secret: the script
-  fails if one does, and deletes it before CI keeps the results.
+  an admin key that makes the CI person and reads the history) and the CI person's password in a directory only its
+  user can read, gives the controller their hashes, and deletes them at the end. `AllowCommands` `OpenAndClose` and
+  `RoofSafety:InterlockMode` `Warn` are for the run only, never shipped defaults: the script writes them into a run-only
+  copy of the controller's `appsettings.Development.json` (its content root), not the environment, so the Open runs can
+  change them while the controller runs (a configuration reload). The safety sources are read every second. The CI
+  person (an Operator) clears the Stop hold set at the controller's start through the session API, as a person would in
+  a UI, and holds no operator lease. No log or result kept may hold a run secret: the script fails if one does, and
+  deletes it before CI keeps the results.
 - **Four checks**, the Alpaca protocol check and the conformance check of Dome 0 and of SafetyMonitor 0, must report
   **no error and no issue**. The SafetyMonitor's run uses the same settings, its device changed; the controller behind it
   reads the emulator's Alpaca safety monitor as its weather source and lists the server's `UniqueID`s (made by the script
@@ -848,36 +892,48 @@ on the runner's loopback, never against hardware, and never before its chain gua
   ConformU logs some failures, such as the shutter state straight after a command, as issues, so no errors alone is not
   enough. Every information message and configuration alert must be one
   [`tests/alpaca/conformu-expected.json`](../tests/alpaca/conformu-expected.json) lists, with why, and each listed one
-  must be reported. These are the shutter tests ConformU leaves out with `DomeOpenShutter` false (`OpenShutter`
-  among them), and, for both devices, the status codes of the URL-structure checks' malformed URLs.
-- **ConformU never moves the roof.** The roof starts Closed, so ConformU's `CloseShutter` succeeds with nothing to do,
-  and its `OpenShutter` is not sent. The script fails if the emulated roof moved or a relay was left on.
+  must be reported: for both devices, only the status codes of the URL-structure checks' malformed URLs; no
+  configuration alert.
+- **ConformU opens and closes the emulated roof** (the weather safe, the mount parked), through the Alpaca server, with
+  the External key. The script then checks the roof is at rest at a limit with every relay off, no plant violation and
+  no fault, and that the history records ConformU's Opens and Closes with the `Alpaca` source and HTTP Basic.
 - **Then the scripted Close runs** (`alpaca-ci.py close-runs`), each starting the emulated roof part way open through
   the emulator, checking the starting state, and checking the relays and the roof afterwards: the Stop hold left set
   refuses the Close; a missing and a wrong credential are not authorised; an unparked mount refuses it with an alert
   and nothing queued; a Close grant (made through the session API) lets the refused Close go and is used up; a new
   reason after a grant refuses it and the grant is still used; unsafe weather never gates it.
+- **Then the scripted Open runs** (`alpaca-ci.py open-runs`), the same way: a safe Open reads Opening at once and
+  reaches Open with the open relay alone; unsafe weather refuses it (`0x40B`, an alert with `weather-unsafe`) with
+  nothing moving or queued; a weather monitor that stops answering refuses it at once ("its latest read failed") while
+  the ordinary conditions still show its last safe reading; an unparked mount refuses it; an Open grant made through the
+  session API lets the refused Open go and is used up; a grant made in `Warn` is dropped when `InterlockMode` turns
+  `Block` at runtime (the reload checked on the status), `openGrantUnavailable` says why, a new Open grant is refused
+  (403 `BlockMode`) and the Open is refused with nothing moving; an Alpaca Open then an Alpaca Close reverses the roof
+  (the open relay off before the close relay on, never both); and `CloseOnly`, set at runtime, refuses an Open while a
+  Close goes.
+- **Then the client matrix** ([The client matrix](#the-client-matrix)).
 
-Run it locally from the repository root with `tests/alpaca/conformu.sh` (it builds the three programs; `--no-build`
-uses the last build). It uses ports 47210 to 47230 (`HVO_ALPACA_TEST_PORT_BASE` moves them) and keeps its logs and
-ConformU's reports in the directory it names. `tests/alpaca/check-conformu-results.py` has its own tests
-(`python3 -m unittest discover -s tests/alpaca -p 'test_*.py'`).
+Run it locally from the repository root with `tests/alpaca/conformu.sh` (it builds the three programs and the client
+matrix; `--no-build` uses the last build). It uses ports 47210 to 47232 (`HVO_ALPACA_TEST_PORT_BASE` moves them) and
+keeps its logs and ConformU's reports in the directory it names. `tests/alpaca/check-conformu-results.py` and the
+harness's helpers (`test_alpaca_ci.py`: the modes file, the relay-write checks, alert matching and refusing anything but
+loopback) have their own tests (`python3 -m unittest discover -s tests/alpaca -p 'test_*.py'`).
 
-> **Never point ConformU at an Alpaca server in front of the real roof.** `conformu conformance <url>` and
-> `conformu alpacaprotocol <url>` run with `DomeOpenShutter` on, whatever a settings file says, and the protocol check
-> sends `CloseShutter` even with it off. With commands on and the External key, this server closes the roof. Use
-> `conformance-settings` and `alpacaprotocol-settings` with the repository's settings file, against the emulator,
-> through `tests/alpaca/conformu.sh` and its chain guard.
+> **Never point ConformU at an Alpaca server in front of the real roof.** The repository's settings file opens the
+> shutter (`DomeOpenShutter` true), and `conformu conformance <url>` and `conformu alpacaprotocol <url>` run with it on
+> whatever a settings file says. With commands on and the External key, ConformU opens and closes the roof through this
+> server. Run it only through `tests/alpaca/conformu.sh` and its chain guard, against the emulator.
 
 The contract tests in `tests/HVO.RoofControllerV4.RPi.Tests/Alpaca` check the envelope, the parameters, the
 transaction numbers, the error table, connecting, `AbortSlew`, refused commands, an unreachable or silent controller,
 the allowlist, the `Host` and `Origin` checks and the polling limit, against an in-memory controller.
-`AlpacaCloseShutterTests` check the server's `CloseShutter`: the credential (header, Basic, both, mismatched), passing
-it on for the Close alone, the local refusals before any ticket, `OpenShutter` reaching nothing whatever the settings,
-an `AbortSlew` overtaking a Close, no retries, and the failure limit. `RoofAlpaca*Tests` check the controller's rules
-(the order, tickets, re-reads, grants, the hold, waiting starts), `RoofOperatorLeaseTests` the operator lease,, `AlpacaCommandsApiTests` its
-routes (the deny-by-default account, trusted addresses, person-only routes, events, the history, no key anywhere), and
-`AlpacaCloseScenarios` an Alpaca client's Close end to end on the emulated plant.
+`AlpacaCloseShutterTests` check the server's `CloseShutter` and `OpenShutter`: the credential (header, Basic, both,
+mismatched), passing it on for that command alone, the local refusals before any ticket, an `AbortSlew` overtaking a
+command, no retries, and the failure limit. `RoofAlpaca*Tests` check the controller's rules (the order, tickets,
+re-reads, grants, the hold, waiting starts; `RoofAlpacaOpen*Tests` the Open rule, Open grants and Block, and an Open's
+waiting starts and reversals), `RoofOperatorLeaseTests` the operator lease, `AlpacaCommandsApiTests` its routes (the
+deny-by-default account, trusted addresses, person-only routes, events, the history, no key anywhere), and
+`AlpacaCloseScenarios` and `AlpacaOpenScenarios` an Alpaca client's Close and Open end to end on the emulated plant.
 `AlpacaSafetyMonitorTests` check the SafetyMonitor: `IsSafe` as the weather alone (Safe with an unparked mount; false
 for unsafe, unknown or no required weather, an unreachable controller, and a controller that does not list its
 `UniqueID`), its own connection, its members and
