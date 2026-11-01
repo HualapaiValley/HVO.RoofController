@@ -354,6 +354,45 @@ public sealed class RoofAlpacaOpenWaitingStartTests
     }
 
     [TestMethod]
+    public async Task AStopDuringAnOpensHeldReRead_AnswersAtOnce_AndTheOpenIsSuperseded()
+    {
+        // §15 (phase 4 for Open): the re-read runs outside the controller's lock, so Stop is as fast during it.
+        await using var rig = (await AlpacaCommandRig.StartAsync(weatherSafe: true, mode: RoofAlpacaCommandMode.OpenAndClose)).Ready();
+        rig.Scope.HoldRereads = true;
+        var open = rig.OpenAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Rereads >= 1, "the held re-read");
+
+        var watch = Stopwatch.StartNew();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue();
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500), "a re-read never holds the controller's lock");
+
+        rig.Scope.ReleaseOne(true);
+        (await open).Code().Should().Be(RoofControllerErrorCode.Superseded);
+        rig.RelayOnWrites(OpenRelay).Should().Be(0);
+    }
+
+    [TestMethod]
+    public async Task AStopDuringAnAlpacaOpenReversalsDelay_LeavesTheRoofStopped()
+    {
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: Delay, weatherSafe: true, mode: RoofAlpacaCommandMode.OpenAndClose)).Ready();
+        await Task.Delay(Delay);
+        (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue();
+        rig.Hat.ClearRelayWriteLog();
+        var open = rig.OpenAsync();
+        await WaitForThePendingStartAsync(rig);
+        rig.Hat.RelayMask.Should().Be(0x00, "the reversal switched the Close off first");
+
+        var watch = Stopwatch.StartNew();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue(); // the Alpaca server's AbortSlew
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+
+        (await open).Code().Should().Be(RoofControllerErrorCode.Superseded);
+        await Task.Delay(Delay);
+        rig.RelayOnWrites(OpenRelay).Should().Be(0);
+        rig.Hat.RelayMask.Should().Be(0x00);
+    }
+
+    [TestMethod]
     public async Task AnAlpacaCloseDuringAnAlpacaOpensWait_ReplacesIt_AndClosesAfterTheDelay()
     {
         var (rig, writes) = await JustStoppedAsync();
