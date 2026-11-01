@@ -21,13 +21,18 @@ public partial class RoofControllerServiceV4
 
     private void OnInputEdge(int input, bool isHigh)
     {
-        // A drive fault is protective: its fence goes up before anything waits, so a start that passed its checks while the
-        // fault came never energizes (#220, PR #230 review F3).
-        var faultActive = input == 3 && isHigh == _options.FaultInputActiveHigh;
-        if (faultActive && _initialized && !_disposed)
+        // A protective edge (a drive fault, or a limit asserting) raises its fence before anything waits, so a start that
+        // passed its checks while it came never energizes (#220, PR #230 review F3, rereview S-F3).
+        var options = _options;
+        var faultActive = input == 3 && isHigh == options.FaultInputActiveHigh;
+        var limitAsserted = input is 1 or 2 && !options.IgnorePhysicalLimitSwitches && isHigh != options.UseNormallyClosedLimitSwitches;
+        if ((faultActive || limitAsserted) && _initialized && !_disposed)
         {
             FenceRelaysOff();
         }
+
+        // The motion the edge belongs to, so a queued edge is judged with it.
+        var motion = Interlocked.Read(ref _motionGeneration);
 
         // Never blocks the HAT's poll loop for long, and never drops an edge: past StopLockWait it is applied as soon as
         // the lock is free.
@@ -37,7 +42,7 @@ public partial class RoofControllerServiceV4
             Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
             if (!lockTaken)
             {
-                QueueInputEdge(input, isHigh, faultActive);
+                QueueInputEdge(input, isHigh, faultActive, motion);
                 return;
             }
 
@@ -76,10 +81,12 @@ public partial class RoofControllerServiceV4
 
     /// <summary>
     /// An edge that could not take the lock within <see cref="StopLockWait"/> (a HAT access holds it): applied the moment
-    /// the lock is free, from a fresh read of the inputs (the edge's own level when the read fails). A drive fault seen
-    /// on the edge stops any motion and latches, even if the input has cleared by then.
+    /// the lock is free. Its own evidence is applied first, while the motion it came during (<paramref name="motion"/>) is
+    /// still the one commanded, so a limit trip that has cleared again by then still stops the roof (and latches where a
+    /// trip does); then the inputs are read fresh. A drive fault seen on the edge stops any motion and latches, even if
+    /// the input has cleared by then.
     /// </summary>
-    private void QueueInputEdge(int input, bool isHigh, bool faultActive)
+    private void QueueInputEdge(int input, bool isHigh, bool faultActive, long motion)
     {
         _logger.LogWarning("Input IN{Input} edge RawHigh={RawHigh} came while the controller lock was held by a blocked HAT access; it is applied as soon as the lock is free", input, isHigh);
         _ = Task.Run(() =>
@@ -93,14 +100,16 @@ public partial class RoofControllerServiceV4
                         return;
                     }
 
+                    if (Interlocked.Read(ref _motionGeneration) == motion)
+                    {
+                        // The edge's own evidence, with the motion it came during (#220, PR #230 rereview S-F3).
+                        ApplyInputEdge_NoLock(input, isHigh);
+                    }
+
                     if (ReadInputs_NoLock())
                     {
                         Evaluate_NoLock(Now);
                         FinishMutation_NoLock();
-                    }
-                    else
-                    {
-                        ApplyInputEdge_NoLock(input, isHigh);
                     }
 
                     if (faultActive && !(_faultLatched && _latchedFaultReason == RoofControllerStopReason.DriveFault))

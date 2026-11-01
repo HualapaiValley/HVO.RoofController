@@ -124,11 +124,56 @@ public class RoofControllerCommandFencingTests
             Thread.Sleep(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(500));
         };
 
-        service.Close().IsSuccessful.Should().BeTrue();
+        // A limit asserting raises the fence before its edge waits (rereview S-F3): the start is refused at its relay.
+        service.Close().ErrorCode().Should().Be(RoofControllerErrorCode.Superseded);
         await edge!;
 
-        SpinWait.SpinUntil(() => !service.GetCurrentStatusSnapshot().IsMoving, TimeSpan.FromSeconds(5)).Should().BeTrue("the edge was applied as soon as the lock was free");
-        service.GetCurrentStatusSnapshot().LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
+        SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().Status == RoofControllerStatus.Closed, TimeSpan.FromSeconds(5))
+            .Should().BeTrue("the edge was applied as soon as the lock was free");
+        service.GetCurrentStatusSnapshot().IsMoving.Should().BeFalse();
+        hat.RelayWriteLog.Should().NotContain(write => write.Register == RelaySetRegister && write.Value == 2, "the close relay never went on");
+        hat.RelayMask.Should().Be(0x00);
+    }
+
+    /// <summary>Holds the controller's lock on a thread of its own until released (a HAT access that blocks, say).</summary>
+    private static (ManualResetEventSlim Held, ManualResetEventSlim Release, Thread Holder) HoldTheLock(RoofControllerServiceV4 service)
+    {
+        var syncLock = typeof(RoofControllerServiceV4).GetField("_syncLock", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(service)!;
+        var held = new ManualResetEventSlim(false);
+        var release = new ManualResetEventSlim(false);
+        var holder = new Thread(() =>
+        {
+            lock (syncLock)
+            {
+                held.Set();
+                release.Wait(TimeSpan.FromSeconds(30));
+            }
+        }) { IsBackground = true };
+        holder.Start();
+        held.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        return (held, release, holder);
+    }
+
+    [TestMethod]
+    public async Task ALimitTripThatClearsBeforeTheLockIsFree_IsStillProcessed_WithItsMotion()
+    {
+        // PR #230 rereview S-F3 (Sol's repro): the edge's own evidence is kept, so a start limit that reasserts and clears
+        // again while a blocked access holds the lock still stops the roof and latches.
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue(); // from mid-travel: any assertion of the open limit is a reassertion
+        var (_, release, holder) = HoldTheLock(service);
+
+        hat.SetInputs(false, true, false, false); // the open limit (NC: LOW = active)
+        await Task.Run(() => service.SimForwardLimitRaw(false)); // waits for the lock, then is queued
+        hat.SetInputs(true, true, false, false); // and clears before the lock is free
+        release.Set();
+        holder.Join(TimeSpan.FromSeconds(5));
+
+        SpinWait.SpinUntil(() => !service.GetCurrentStatusSnapshot().IsMoving, TimeSpan.FromSeconds(5)).Should().BeTrue("the trip stops the roof though the limit has cleared");
+        var status = service.GetCurrentStatusSnapshot();
+        status.LastStopReason.Should().Be(RoofControllerStopReason.StartLimitReasserted);
+        status.IsFaultLatched.Should().BeTrue();
         hat.RelayMask.Should().Be(0x00);
     }
 
