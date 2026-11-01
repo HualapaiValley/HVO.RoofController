@@ -70,15 +70,18 @@ public sealed class RoofAlpacaTicketTests
     }
 
     [TestMethod]
-    public async Task AnOpenTicket_IsRefused_InThisVersion()
+    public async Task AnOpenTicket_IsIssued_ForAnOpenOnly_AndStartsTheReRead()
     {
-        await using var rig = (await AlpacaCommandRig.StartAsync()).Ready();
+        // Phase 4: Open tickets are issued; whether the Open may go is the controller's admission's to say.
+        await using var rig = (await AlpacaCommandRig.StartAsync(mode: RoofAlpacaCommandMode.CloseOnly)).Ready();
 
         var outcome = rig.Commands.IssueTicket(RoofAlpacaCommandKind.Open, rig.Commander, AlpacaCommandRig.Client);
 
-        outcome.Ticket.Should().BeNull();
-        outcome.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
-        rig.Scope.Rereads.Should().Be(0, "no re-read starts for a refused ticket");
+        outcome.StatusCode.Should().Be(StatusCodes.Status200OK);
+        outcome.Ticket!.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Scope.Rereads == 1, "the re-read the ticket starts");
+        (await rig.CloseAsync(outcome.Ticket)).Rule().Should().Be("TicketMismatch", "a ticket is usable only for its own kind");
+        (await rig.OpenAsync(outcome.Ticket)).Rule().Should().Be("OpenNotAllowed", "CloseOnly refuses it at the controller");
     }
 
     [TestMethod]

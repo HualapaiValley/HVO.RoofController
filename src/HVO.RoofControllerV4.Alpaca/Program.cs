@@ -18,8 +18,9 @@ namespace HVO.RoofControllerV4.Alpaca;
 /// The roof's ASCOM Alpaca server (#220): a process of its own, apart from the controller and the web UI, that serves
 /// the roof as an Alpaca Dome and the weather as an Alpaca SafetyMonitor, and reaches the controller only through the
 /// client library (its REST API and status hub), with its own API key. It is off unless <c>Alpaca:Enabled</c> is true,
-/// listens only on the addresses it is given, and answers only its LAN. It reads the roof and the weather and stops the
-/// roof; it never opens or closes it.
+/// listens only on the addresses it is given, and answers only its LAN. It reads the roof and the weather, stops the roof,
+/// and passes an Alpaca client's Open and Close on to the controller with that client's own key; the controller alone
+/// decides them.
 /// </summary>
 /// <remarks>
 /// <c>--discovery-only</c> runs the discovery responder alone, for a computer whose Alpaca server runs in a container

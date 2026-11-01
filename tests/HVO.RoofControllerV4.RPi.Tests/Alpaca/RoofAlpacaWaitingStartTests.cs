@@ -258,7 +258,7 @@ public sealed class RoofAlpacaWaitingStartTests
         var close = rig.CloseAsync();
         await AlpacaCommandRig.WaitUntilAsync(() => rig.Controller.GetCurrentStatusSnapshot().IsStartPending, "the waiting start");
 
-        rig.Commands.IssueTicket(RoofAlpacaCommandKind.Open, rig.Commander, AlpacaCommandRig.Client).Ticket.Should().BeNull("a wrong kind");
+        (await rig.CloseAsync(rig.Ticket(RoofAlpacaCommandKind.Open))).Rule().Should().Be("TicketMismatch", "a wrong kind");
         (await rig.Commands.CloseAsync(new RoofAlpacaCommandRequest("no-such-ticket", rig.Controller.InstanceId, 1), rig.Commander, AlpacaCommandRig.Client))
             .Rule().Should().Be("TicketUnknown");
 

@@ -13,10 +13,10 @@ using Microsoft.Extensions.Options;
 namespace HVO.RoofControllerV4.RPi.Controllers;
 
 /// <summary>
-/// The controller's Alpaca command surface (#220, phase 3), under <c>api/v4.0/alpaca</c>:
+/// The controller's Alpaca command surface (#220, phases 3 and 4), under <c>api/v4.0/alpaca</c>:
 /// <list type="bullet">
-/// <item>the External Alpaca account's ticket and Close (its role, from a trusted Alpaca server address; every other
-/// account 403). There is no Open route in this version;</item>
+/// <item>the External Alpaca account's ticket, Close and Open (its role, from a trusted Alpaca server address; every other
+/// account 403);</item>
 /// <item>the Alpaca server's own refusals (its own account only);</item>
 /// <item>the person-only routes: override grants, clearing the human Stop hold, the operator lease, acknowledging an
 /// alert (a person's session; every API key 403); and the reads of grants and alerts (Viewer).</item>
@@ -58,19 +58,19 @@ public sealed class AlpacaCommandsController : ControllerBase
 
     /// <summary>
     /// A single-use ticket for one Alpaca command (External Alpaca account): the controller's instance, its command
-    /// generation, and the answer's deadline. The command must carry it within 5 s. An Open ticket is refused (403).
+    /// generation, and the answer's deadline. The command must carry it within 5 s, and only a command of its kind may.
     /// </summary>
-    /// <param name="kind">The command the ticket is for: <c>Close</c>.</param>
+    /// <param name="kind">The command the ticket is for: <c>Close</c> or <c>Open</c>.</param>
     [HttpPost("shutter/ticket", Name = nameof(IssueAlpacaTicket))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AlpacaCommanderPolicy)]
-    [AlpacaCommanderAllowed, AlpacaCloseAuthAlert]
+    [AlpacaCommanderAllowed, AlpacaCommandAuthReport]
     [ProducesResponseType(typeof(RoofAlpacaTicket), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public ActionResult<RoofAlpacaTicket> IssueAlpacaTicket([FromQuery] string? kind)
     {
         if (!Enum.TryParse<RoofAlpacaCommandKind>(kind, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed) || int.TryParse(kind, out _))
         {
-            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, "kind must be Close.");
+            return RoofProblemResults.Create(this, RoofControllerErrorCode.InvalidRequest, "kind must be Close or Open.");
         }
 
         var outcome = _alpaca.IssueTicket(parsed, User, Client());
@@ -91,29 +91,53 @@ public sealed class AlpacaCommandsController : ControllerBase
     /// </summary>
     [HttpPost("shutter/close", Name = nameof(AlpacaClose))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AlpacaCommanderPolicy)]
-    [AlpacaCommanderAllowed, AlpacaCloseAuthAlert]
+    [AlpacaCommanderAllowed, AlpacaCommandAuthReport]
     [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
-    public async Task<ActionResult<RoofStatusResponse>> AlpacaClose([FromBody] RoofAlpacaCommandRequest? request)
+    public Task<ActionResult<RoofStatusResponse>> AlpacaClose([FromBody] RoofAlpacaCommandRequest? request)
+        => CommandAsync(RoofAlpacaCommandKind.Close, request);
+
+    /// <summary>
+    /// An Alpaca client's Open (External Alpaca account; #220, phase 4), carrying its ticket: admitted under the
+    /// controller's lock with the Alpaca rules (commands <c>OpenAndClose</c>, no person holding the operator lease, the
+    /// Stop hold clear, the Open policy: every required weather source's latest read successful, fresh and safe, and every
+    /// blocking telescope clear, whatever <c>InterlockMode</c> is; or an override grant covering every reason, never in
+    /// Block; the controller's own protections). Never queued: a refusal is final, and the client sends a new command.
+    /// </summary>
+    [HttpPost("shutter/open", Name = nameof(AlpacaOpen))]
+    [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.AlpacaCommanderPolicy)]
+    [AlpacaCommanderAllowed, AlpacaCommandAuthReport]
+    [ProducesResponseType(typeof(RoofStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public Task<ActionResult<RoofStatusResponse>> AlpacaOpen([FromBody] RoofAlpacaCommandRequest? request)
+        => CommandAsync(RoofAlpacaCommandKind.Open, request);
+
+    private async Task<ActionResult<RoofStatusResponse>> CommandAsync(RoofAlpacaCommandKind kind, RoofAlpacaCommandRequest? request)
     {
         var client = Client();
         var started = Stopwatch.GetTimestamp();
-        using var activity = RoofControllerTelemetry.StartCommand("alpaca_close");
-        var outcome = await _alpaca.CloseAsync(request ?? new RoofAlpacaCommandRequest(null, null, null), User, client).ConfigureAwait(false);
-        RoofControllerTelemetry.CompleteCommand(activity, "alpaca_close", outcome.Result.IsSuccessful, started);
+        var operation = kind == RoofAlpacaCommandKind.Open ? "alpaca_open" : "alpaca_close";
+        var command = kind == RoofAlpacaCommandKind.Open ? RoofHistoryCommand.Open : RoofHistoryCommand.Close;
+        using var activity = RoofControllerTelemetry.StartCommand(operation);
+        request ??= new RoofAlpacaCommandRequest(null, null, null);
+        var outcome = kind == RoofAlpacaCommandKind.Open
+            ? await _alpaca.OpenAsync(request, User, client).ConfigureAwait(false)
+            : await _alpaca.CloseAsync(request, User, client).ConfigureAwait(false);
+        RoofControllerTelemetry.CompleteCommand(activity, operation, outcome.Result.IsSuccessful, started);
         RoofCommandHistory.NoteAlpaca(HttpContext, new RoofHistoryAlpacaNote(
             "Alpaca", client.ClientId, client.ClientTransactionId, client.Address, client.AuthMethod, outcome.ReasonKeys, outcome.GrantId));
 
         if (outcome.Result.IsSuccessful)
         {
             var status = Decorate(_controller.GetCurrentStatusSnapshot());
-            Record(RoofHistoryCommand.Close, status, null);
+            Record(command, status, null);
             return Ok(status);
         }
 
-        var problem = Problem(outcome.Result.Error, "alpaca_close");
-        Record(RoofHistoryCommand.Close, null, problem.Value as ProblemDetails);
+        var problem = Problem(outcome.Result.Error, operation);
+        Record(command, null, problem.Value as ProblemDetails);
         return problem;
     }
 
@@ -144,7 +168,8 @@ public sealed class AlpacaCommandsController : ControllerBase
     /// <summary>
     /// A person grants an override for one Alpaca command of a kind (a person's session with the override role; every API
     /// key 403). It lifts only the reasons named (the ones the person was shown), lasts the override window, and is used
-    /// up by the next command of that kind. Open grants are refused in this version.
+    /// up by the next command of that kind. An Open grant is refused while the safety interlock is Block (403,
+    /// <c>BlockMode</c>).
     /// </summary>
     [HttpPost("grants", Name = nameof(GrantOverride))]
     [Authorize(AuthenticationSchemes = RoofControllerSecurityDefaults.ApiScheme, Policy = RoofControllerSecurityDefaults.OperatorPolicy)]
@@ -171,7 +196,7 @@ public sealed class AlpacaCommandsController : ControllerBase
             return StatusCode(StatusCodes.Status201Created, grant);
         }
 
-        var problem = Problem(StatusCodeProblem(outcome.StatusCode, outcome.Detail!));
+        var problem = Problem(StatusCodeProblem(outcome.StatusCode, outcome.Detail!, outcome.Rule));
         Record(RoofHistoryCommand.OverrideGrant, null, problem.Value as ProblemDetails);
         return problem;
     }
@@ -262,10 +287,10 @@ public sealed class AlpacaCommandsController : ControllerBase
 
     private RoofStatusResponse Decorate(RoofStatusResponse status) => _alpaca.WithAlpaca(_safety.WithSafety(status));
 
-    private RoofControllerException StatusCodeProblem(int statusCode, string detail)
+    private static RoofControllerException StatusCodeProblem(int statusCode, string detail, string? rule)
         => new(statusCode == StatusCodes.Status403Forbidden ? RoofControllerErrorCode.AlpacaCommandRefused : RoofControllerErrorCode.InvalidRequest, detail)
         {
-            AlpacaRefusal = statusCode == StatusCodes.Status403Forbidden ? "OpenNotAvailable" : null
+            AlpacaRefusal = rule
         };
 
     private ObjectResult Problem(RoofControllerException refusal) => Problem(refusal, "alpaca_grant",

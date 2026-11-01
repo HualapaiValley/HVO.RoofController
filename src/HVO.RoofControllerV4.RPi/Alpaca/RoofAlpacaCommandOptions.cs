@@ -19,10 +19,18 @@ public sealed class RoofAlpacaCommandOptions
     public const int MaxScopeRereadBudgetMs = 2000;
 
     /// <summary>
-    /// Which Alpaca commands the controller accepts: Off (the default) or CloseOnly. OpenAndClose is not accepted until
-    /// phase 4 (the controller refuses to start with it). Safety-critical; any change drops every override grant.
+    /// Which Alpaca commands the controller accepts: Off (the default), CloseOnly, or OpenAndClose (#220, phase 4).
+    /// Safety-critical; any change drops every override grant and never stops a motion in progress.
     /// </summary>
     public RoofAlpacaCommandMode AllowCommands { get; set; } = RoofAlpacaCommandMode.Off;
+
+    /// <summary>
+    /// With no telescope set to block the roof, whether an Alpaca Open may go on the weather alone (#220, Roy's decision):
+    /// false (the default) refuses such an Open unless a person grants it; true lets the weather alone decide, and every
+    /// UI warns while Alpaca Open is on. A configured blocking telescope is always checked, whatever this says.
+    /// Safety-critical; any change drops every override grant.
+    /// </summary>
+    public bool AllowOpenWithoutBlockingScopes { get; set; }
 
     /// <summary>
     /// The Alpaca servers' addresses, besides loopback (always trusted): single host addresses (IPv4 or IPv6), no
@@ -112,11 +120,7 @@ public sealed class RoofAlpacaCommandOptionsValidator : IValidateOptions<RoofAlp
         const string section = RoofAlpacaCommandOptions.SectionName;
         if (!Enum.IsDefined(options.AllowCommands))
         {
-            problems.Add($"{section}:AllowCommands must be Off or CloseOnly.");
-        }
-        else if (options.AllowCommands == RoofAlpacaCommandMode.OpenAndClose)
-        {
-            problems.Add($"{section}:AllowCommands is OpenAndClose, which this version does not accept: Alpaca Open is not available yet. Use CloseOnly or Off.");
+            problems.Add($"{section}:AllowCommands must be Off, CloseOnly or OpenAndClose.");
         }
 
         if (options.OverrideWindowMinutes is < RoofAlpacaCommandOptions.MinOverrideWindowMinutes or > RoofAlpacaCommandOptions.MaxOverrideWindowMinutes)

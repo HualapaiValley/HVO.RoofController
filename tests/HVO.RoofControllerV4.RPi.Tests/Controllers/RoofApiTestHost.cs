@@ -261,9 +261,28 @@ internal static class RoofServiceMock
         mock.Setup(s => s.Open()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Opening));
         mock.Setup(s => s.Close()).Returns(Result<RoofControllerStatus>.Success(RoofControllerStatus.Closing));
         // The API starts motion through StartMotionAsync; it answers as the Open and Close set up (or verified) here.
+        // An Alpaca command's own checks run as the controller runs them, in #220's rule order (with the mock's state: idle,
+        // generation 1, no delay), so the API tests see the Alpaca policy's refusals.
         mock.Setup(s => s.StartMotionAsync(It.IsAny<RoofMotionRequest>(), It.IsAny<CancellationToken>()))
             .Returns((RoofMotionRequest request, CancellationToken _) =>
-                Task.FromResult(request.Direction == RoofMotionDirection.Opening ? mock.Object.Open() : mock.Object.Close()));
+            {
+                if (request.Admission is { } admission)
+                {
+                    var refusal = admission.CheckGate() ?? admission.CheckHumanControl() ?? admission.CheckDeadline(TimeSpan.Zero);
+                    if (refusal is null)
+                    {
+                        admission.UseGrant();
+                        refusal = admission.CheckGeneration(1) ?? admission.CheckPolicy();
+                    }
+
+                    if (refusal is not null)
+                    {
+                        return Task.FromResult(Result<RoofControllerStatus>.Failure(refusal));
+                    }
+                }
+
+                return Task.FromResult(request.Direction == RoofMotionDirection.Opening ? mock.Object.Open() : mock.Object.Close());
+            });
         mock.SetupGet(s => s.InstanceId).Returns("test-instance");
         mock.SetupGet(s => s.CommandGeneration).Returns(1);
         mock.Setup(s => s.GetStartDelay(It.IsAny<RoofMotionDirection>())).Returns(TimeSpan.Zero);

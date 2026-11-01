@@ -22,9 +22,9 @@ public sealed record RoofAlpacaClient(uint? ClientId = null, uint? ClientTransac
 }
 
 /// <summary>
-/// The controller's Alpaca command state (#220, phase 3): which commands are on, the authorization epoch, the human Stop
-/// hold, the operator lease people hold from the UIs, override grants, alerts, and the tickets and admission of Alpaca
-/// commands (<c>RoofAlpacaCommands.Tickets.cs</c>). The controller is the only authority: the Alpaca server refuses on
+/// The controller's Alpaca command state (#220, phases 3 and 4): which commands are on, the authorization epoch, the
+/// human Stop hold, the operator lease people hold from the UIs, override grants, alerts, and the tickets and admission of
+/// Alpaca Opens and Closes (<c>RoofAlpacaCommands.Tickets.cs</c>). The controller is the only authority: the Alpaca server refuses on
 /// its own only for local reasons and forwards everything else here. Everything is in memory: a restart drops every
 /// grant, lease, alert and ticket, and sets the Stop hold again.
 /// </summary>
@@ -49,6 +49,24 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     /// <summary>The warning shown while Alpaca commands are on and no telescope blocks the roof (#220, P4).</summary>
     public const string NoBlockingScopeWarning = "Alpaca Close checks no telescope: no telescope is set to block the roof.";
 
+    /// <summary>
+    /// The warning shown while Alpaca Open is on, no telescope blocks the roof and <c>AllowOpenWithoutBlockingScopes</c>
+    /// lets the weather alone open it (#220, Roy's decision 1).
+    /// </summary>
+    public const string OpenOnWeatherAloneWarning =
+        "Alpaca Open checks no telescope: AllowOpenWithoutBlockingScopes lets Alpaca open the roof on the weather alone.";
+
+    /// <summary>
+    /// The warning shown while Alpaca Open is on and <c>AllowOpenWithoutBlockingScopes</c> is set, though a telescope blocks
+    /// the roof today: should none block it, the weather alone would open it.
+    /// </summary>
+    public const string OpenWithoutBlockingScopesAllowedWarning =
+        "AllowOpenWithoutBlockingScopes is on: should no telescope be set to block the roof, Alpaca could open it on the weather alone.";
+
+    /// <summary>Why no Open grant can be made while the safety interlock is Block (#220, Roy's decision 4).</summary>
+    public const string OpenGrantsBlocked =
+        "No grant opens the roof while the safety interlock (RoofSafety:InterlockMode) is Block: an Alpaca Open needs Safe conditions.";
+
     private readonly object _gate = new();
     private readonly IRoofControllerServiceV4 _controller;
     private readonly RoofSafetyService _safety;
@@ -69,6 +87,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     private string _serverAddresses;
     private int _window;
     private RoofSafetyInterlockMode _interlockMode;
+    private bool _allowOpenWithoutBlockingScopes;
     private string _commanderKeys;
     private long _epoch = 1;
     private long _commandsOnSince;
@@ -114,6 +133,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         _mode = current.AllowCommands;
         _serverAddresses = DescribeAddresses(current);
         _window = current.OverrideWindowMinutes;
+        _allowOpenWithoutBlockingScopes = current.AllowOpenWithoutBlockingScopes;
         _interlockMode = _safetyOptions.CurrentValue.InterlockMode;
         _commanderKeys = CommanderKeys();
         _commandsOnSince = _time.GetTimestamp();
@@ -163,6 +183,14 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             }
         }
 
+        if (options.AllowOpenWithoutBlockingScopes)
+        {
+            // Roy's decision 1: logged at start whatever the commands, so the setting is never on unseen.
+            _logger.LogWarning(
+                "{Section}:AllowOpenWithoutBlockingScopes is on (Alpaca commands {Mode}): with no telescope set to block the roof, an Alpaca Open goes on the weather alone. Blocking telescopes now: {Count}.",
+                RoofAlpacaCommandOptions.SectionName, options.AllowCommands, ConfiguredBlockingScopes().Count);
+        }
+
         _ticker = _time.CreateTimer(_ => Tick(), null, TickInterval, TickInterval);
         return Task.CompletedTask;
     }
@@ -201,6 +229,11 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                     warnings.Add(NoBlockingScopeWarning);
                 }
 
+                if (_mode == RoofAlpacaCommandMode.OpenAndClose && options.AllowOpenWithoutBlockingScopes)
+                {
+                    warnings.Add(blocking.Count == 0 ? OpenOnWeatherAloneWarning : OpenWithoutBlockingScopesAllowedWarning);
+                }
+
                 foreach (var latency in latencies)
                 {
                     if (latency.P99Milliseconds is { } p99 && RoofSafetyService.RereadSpacing.TotalMilliseconds + p99 + 100 > options.ScopeRereadBudgetMs)
@@ -222,7 +255,9 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 BlockingScopes = blocking.Count,
                 RereadBudgetMilliseconds = options.ScopeRereadBudgetMs,
                 OverrideWindowMinutes = options.OverrideWindowMinutes,
-                ScopeLatencies = latencies
+                ScopeLatencies = latencies,
+                AllowOpenWithoutBlockingScopes = options.AllowOpenWithoutBlockingScopes,
+                OpenGrantUnavailable = IsBlock_NoLock() ? OpenGrantsBlocked : null
             };
         }
     }
@@ -408,16 +443,34 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(request);
-        if (request.Kind != RoofAlpacaCommandKind.Close)
+        if (!Enum.IsDefined(request.Kind))
         {
-            return RoofGrantOutcome.Forbidden("Open grants are not available: Alpaca Open is refused in this version.");
+            return RoofGrantOutcome.Invalid("A grant is for one Close or one Open.");
         }
 
         var keys = (request.ReasonKeys ?? []).Select(key => key?.Trim()).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
-        if (keys.Length is 0 or > 32 || keys.Any(key => !IsCloseReasonKey(key)))
+        if (keys.Length is 0 or > 32 || keys.Any(key => !RoofAlpacaContract.IsGrantableReasonKey(request.Kind, key)))
         {
-            return RoofGrantOutcome.Invalid(
-                "A Close grant names the reasons it lifts: 1 to 32 keys, each scope-not-clear:<telescope> or scope-unknown:<telescope>, as the refusal or alert gave them.");
+            return RoofGrantOutcome.Invalid(request.Kind == RoofAlpacaCommandKind.Close
+                ? "A Close grant names the reasons it lifts: 1 to 32 keys, each scope-not-clear:<telescope> or scope-unknown:<telescope>, as the refusal or alert gave them."
+                : "An Open grant names the reasons it lifts: 1 to 32 keys, each scope-not-clear:<telescope>, scope-unknown:<telescope>, weather-unsafe:<monitor>, weather-unknown:<monitor>, "
+                    + $"{RoofAlpacaContract.NoRequiredWeatherKey} or {RoofAlpacaContract.NoBlockingScopesKey}, as the refusal or alert gave them.");
+        }
+
+        if (request.Kind == RoofAlpacaCommandKind.Open)
+        {
+            bool block;
+            lock (_gate)
+            {
+                block = IsBlock_NoLock();
+            }
+
+            if (block)
+            {
+                // Roy's decision 4: no grant opens the roof in Block. The grant route refuses it, not only the UIs.
+                _logger.LogWarning("Refused an Open grant by {Caller}: {Why}", RoofPrincipalFactory.DescribeCaller(user), OpenGrantsBlocked);
+                return RoofGrantOutcome.Forbidden(OpenGrantsBlocked, "BlockMode");
+            }
         }
 
         var who = RoofPrincipalFactory.DescribeCaller(user);
@@ -563,16 +616,27 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
         }
     }
 
-    private static bool IsCloseReasonKey(string key)
+    /// <summary>
+    /// True while the safety interlock is Block (#220, Roy's decision 4): no Open grant is made, and none is honoured. Both
+    /// the mode the last change notification set and the settings' current value count, so the moment between a reload
+    /// and its notification fails safe.
+    /// </summary>
+    private bool IsBlock_NoLock()
     {
-        var colon = key.IndexOf(':', StringComparison.Ordinal);
-        if (colon <= 0 || colon == key.Length - 1 || key.Length > 128)
+        if (_interlockMode == RoofSafetyInterlockMode.Block)
         {
-            return false;
+            return true;
         }
 
-        var kind = key[..colon];
-        return kind is RoofAlpacaContract.ScopeNotClearKind or RoofAlpacaContract.ScopeUnknownKind;
+        try
+        {
+            return _safetyOptions.CurrentValue.InterlockMode == RoofSafetyInterlockMode.Block;
+        }
+        catch (OptionsValidationException)
+        {
+            // Settings a reload brought that cannot be used: the last good mode, above, stays in force.
+            return false;
+        }
     }
 
     private void DropGrants_NoLock(string why)
@@ -791,6 +855,15 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 _window = options.OverrideWindowMinutes;
                 DropGrants_NoLock("the override window changed");
             }
+
+            if (options.AllowOpenWithoutBlockingScopes != _allowOpenWithoutBlockingScopes)
+            {
+                _allowOpenWithoutBlockingScopes = options.AllowOpenWithoutBlockingScopes;
+                _logger.LogWarning("{Section}:AllowOpenWithoutBlockingScopes is now {Value}: with no telescope set to block the roof, an Alpaca Open {Effect}",
+                    RoofAlpacaCommandOptions.SectionName, _allowOpenWithoutBlockingScopes,
+                    _allowOpenWithoutBlockingScopes ? "goes on the weather alone" : "needs a person's grant");
+                DropGrants_NoLock("AllowOpenWithoutBlockingScopes changed");
+            }
         }
 
         NotifyChanged();
@@ -908,29 +981,41 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// While the Alpaca account's Close runs, a blocking telescope that stops being clear (or known) does not stop it: the
-    /// roof continues and the UIs are alerted. The hard stops are the controller's, unchanged.
+    /// While the Alpaca account's Close or Open runs, a blocking telescope that stops being clear (or known), or, for an
+    /// Open, a required weather source that stops being safe (or fresh), does not stop it: the roof continues, nothing
+    /// moves on its own, and the UIs are alerted (#220, Roy's decision; §3). The hard stops are the controller's,
+    /// unchanged.
     /// </summary>
     private void CheckMidMotion(RoofStatusResponse status)
     {
-        if (status is not { IsMoving: true, CommandedMotion: RoofMotionDirection.Closing, MotionOwner.Kind: RoofMotionOwnerKind.Alpaca })
+        if (status is not { IsMoving: true, MotionOwner.Kind: RoofMotionOwnerKind.Alpaca }
+            || status.CommandedMotion is not (RoofMotionDirection.Closing or RoofMotionDirection.Opening))
         {
             return;
         }
 
         var notClear = _safety.GetCurrent().Sources
             .Where(source => source.Kind == RoofSafetySourceKind.TelescopePark && source.Counts && source.State != RoofSafetyState.Safe)
-            .ToArray();
-        if (notClear.Length == 0)
+            .Select(source => (Key: RoofAlpacaContract.ReasonKey(
+                source.State == RoofSafetyState.Unsafe ? RoofAlpacaContract.ScopeNotClearKind : RoofAlpacaContract.ScopeUnknownKind, source.Name), Text: source.Reason))
+            .ToList();
+        var kind = status.CommandedMotion == RoofMotionDirection.Opening ? RoofAlpacaCommandKind.Open : RoofAlpacaCommandKind.Close;
+        if (kind == RoofAlpacaCommandKind.Open)
+        {
+            notClear.AddRange(_safety.JudgeRequiredWeather()
+                .Where(weather => weather.State != RoofSafetyState.Safe)
+                .Select(weather => (RoofAlpacaContract.ReasonKey(
+                    weather.State == RoofSafetyState.Unsafe ? RoofAlpacaContract.WeatherUnsafeKind : RoofAlpacaContract.WeatherUnknownKind, weather.Name), weather.Text)));
+        }
+
+        if (notClear.Count == 0)
         {
             return;
         }
 
-        var keys = notClear.Select(source => RoofAlpacaContract.ReasonKey(
-            source.State == RoofSafetyState.Unsafe ? RoofAlpacaContract.ScopeNotClearKind : RoofAlpacaContract.ScopeUnknownKind, source.Name)).ToArray();
-        RaiseAlert("MidMotion", RoofAlpacaCommandKind.Close,
-            $"While the Alpaca Close runs, {string.Join("; ", notClear.Select(source => source.Reason))}. The roof continues; Stop it if it must not.",
-            keys, null);
+        RaiseAlert("MidMotion", kind,
+            $"While the Alpaca {kind} runs, {string.Join("; ", notClear.Select(reason => reason.Text))}. The roof continues; Stop it if it must not.",
+            [.. notClear.Select(reason => reason.Key)], null);
     }
 
     /// <summary>
@@ -994,11 +1079,15 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
 }
 
 /// <summary>What a grant request came to.</summary>
-public sealed record RoofGrantOutcome(RoofOverrideGrant? Grant, int StatusCode, string? Detail)
+/// <param name="Grant">The grant made, or null.</param>
+/// <param name="StatusCode">The HTTP status for the answer.</param>
+/// <param name="Detail">Why not, when no grant was made.</param>
+/// <param name="Rule">The rule that refused it (<c>BlockMode</c>), for the problem's <c>alpacaRefusal</c>.</param>
+public sealed record RoofGrantOutcome(RoofOverrideGrant? Grant, int StatusCode, string? Detail, string? Rule = null)
 {
     public static RoofGrantOutcome Granted(RoofOverrideGrant grant) => new(grant, StatusCodes.Status201Created, null);
 
-    public static RoofGrantOutcome Forbidden(string detail) => new(null, StatusCodes.Status403Forbidden, detail);
+    public static RoofGrantOutcome Forbidden(string detail, string rule) => new(null, StatusCodes.Status403Forbidden, detail, rule);
 
     public static RoofGrantOutcome Invalid(string detail) => new(null, StatusCodes.Status400BadRequest, detail);
 }

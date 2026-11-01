@@ -2,8 +2,10 @@
 
 The roof's ASCOM Alpaca server (#220): a process of its own that serves the roof as Alpaca Dome 0, and the observatory's
 weather as Alpaca SafetyMonitor 0, to astronomy software, through the controller's REST API and status hub (the
-[client library](../HVO.RoofControllerV4.Client/README.md)) with its own Viewer API key. It is off by default. It reads
-the roof and the weather and stops the roof (`AbortSlew`); it never opens or closes it.
+[client library](../HVO.RoofControllerV4.Client/README.md)) with its own account's API key. It is off by default. It reads
+the roof and the weather and stops the roof (`AbortSlew`); it passes an Alpaca client's `OpenShutter` and `CloseShutter`
+on to the controller with that client's own key, and the controller alone decides them (off until
+`RoofController:Alpaca:AllowCommands` turns them on).
 
 How it behaves, its error numbers, security, settings, discovery and the ConformU check: [docs/alpaca.md](../../docs/alpaca.md).
 

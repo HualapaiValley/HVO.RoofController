@@ -63,6 +63,8 @@ public sealed class RoofClientCoverageTests
             new RoofAlpacaForwarding(1, 2, "192.168.1.50", "header"), TimeSpan.FromSeconds(5))),
         ("Alpaca.Close", client => client.Alpaca.CloseAsync(new RoofAlpacaCommandRequest("ticket", "instance", 1), new RoofApiKeyCredential("alpaca-client-key"),
             new RoofAlpacaForwarding(1, 2, "192.168.1.50", "header"), TimeSpan.FromSeconds(5))),
+        ("Alpaca.Open", client => client.Alpaca.OpenAsync(new RoofAlpacaCommandRequest("ticket", "instance", 1), new RoofApiKeyCredential("alpaca-client-key"),
+            new RoofAlpacaForwarding(1, 2, "192.168.1.50", "header"), TimeSpan.FromSeconds(5))),
         ("Alpaca.ReportEvent", client => client.Alpaca.ReportEventAsync(new RoofAlpacaEvent("Close", "NotAuthorised", "192.168.1.50", 1, 2))),
         ("Stop", client => client.StopAsync()),
         ("Auth.SignIn", client => client.Auth.SignInAsync("alice", "not-a-password")),

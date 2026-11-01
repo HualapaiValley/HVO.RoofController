@@ -17,10 +17,10 @@ public sealed record RoofAlpacaCommandOutcome(Result<RoofControllerStatus> Resul
 /// <summary>What a ticket request came to: the ticket, or why not.</summary>
 public sealed record RoofAlpacaTicketOutcome(RoofAlpacaTicket? Ticket, int StatusCode, RoofControllerException? Refusal);
 
-// Tickets and the Alpaca Close (#220, §2, §10, §16 Y2/Y3, §19 L1, §20 N4): a single-use ticket per command, issued with the
-// controller's instance, generation and authorization epoch on its monotonic clock; the command carries it, is checked
-// against it, and is admitted under the controller's lock (IRoofCommandAdmission). The scope re-read starts at the
-// ticket's issue.
+// Tickets and the Alpaca Close and Open (#220, §2, §10, §16 Y2/Y3, §19 L1, §20 N4): a single-use ticket per command,
+// issued with the controller's instance, generation and authorization epoch on its monotonic clock; the command carries
+// it, is checked against it, and is admitted under the controller's lock (IRoofCommandAdmission). The scope re-read starts
+// at the ticket's issue.
 public sealed partial class RoofAlpacaCommands
 {
     private readonly Dictionary<string, Ticket> _tickets = new(StringComparer.Ordinal);
@@ -28,22 +28,22 @@ public sealed partial class RoofAlpacaCommands
 
     /// <summary>
     /// Issues a ticket for one command of <paramref name="kind"/> by the External Alpaca account's key behind
-    /// <paramref name="user"/>, and starts the last-moment re-read of the blocking telescopes. An Open ticket is refused in
-    /// this version (403).
+    /// <paramref name="user"/>, and starts the last-moment re-read of the blocking telescopes. Whether the command may go
+    /// is decided at its admission (commands on, its policy, ...), never here.
     /// </summary>
     public RoofAlpacaTicketOutcome IssueTicket(RoofAlpacaCommandKind kind, ClaimsPrincipal user, RoofAlpacaClient client)
     {
         ArgumentNullException.ThrowIfNull(user);
-        if (kind != RoofAlpacaCommandKind.Close)
+        if (!Enum.IsDefined(kind))
         {
-            return new RoofAlpacaTicketOutcome(null, StatusCodes.Status403Forbidden,
-                new RoofControllerException(RoofControllerErrorCode.AlpacaCommandRefused, "Alpaca Open is refused in this version: no Open ticket is issued.") { AlpacaRefusal = "OpenNotAvailable" });
+            return new RoofAlpacaTicketOutcome(null, StatusCodes.Status400BadRequest,
+                new RoofControllerException(RoofControllerErrorCode.InvalidRequest, "A ticket is for one Close or one Open."));
         }
 
         var options = _options.CurrentValue;
         var budget = TimeSpan.FromMilliseconds(options.ScopeRereadBudgetMs);
-        // Only the delay this Close would really wait counts (§20 N1/N4): what is left of it, or none.
-        var delay = _controller.GetStartDelay(RoofMotionDirection.Closing);
+        // Only the delay this command would really wait counts (§20 N1/N4): what is left of it, or none.
+        var delay = _controller.GetStartDelay(DirectionOf(kind));
         var deadline = budget + delay + RoofAlpacaContract.AnswerMargin;
         var arrival = _safety.Timestamp();
         var id = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -88,13 +88,28 @@ public sealed partial class RoofAlpacaCommands
             null);
     }
 
+    /// <summary>The roof's motion for a command of <paramref name="kind"/>.</summary>
+    internal static RoofMotionDirection DirectionOf(RoofAlpacaCommandKind kind)
+        => kind == RoofAlpacaCommandKind.Open ? RoofMotionDirection.Opening : RoofMotionDirection.Closing;
+
     /// <summary>
     /// An Alpaca Close: its ticket checked (fields, identity and kind, then a used ticket's stored answer, an in-progress
     /// one's answer, then expiry), the re-read waited for within the budget, then the controller's admission under its
     /// lock with the Alpaca rules. A duplicate of a ticket already used gets the first request's answer, never a second
     /// admission.
     /// </summary>
-    public async Task<RoofAlpacaCommandOutcome> CloseAsync(RoofAlpacaCommandRequest request, ClaimsPrincipal user, RoofAlpacaClient client)
+    public Task<RoofAlpacaCommandOutcome> CloseAsync(RoofAlpacaCommandRequest request, ClaimsPrincipal user, RoofAlpacaClient client)
+        => CommandAsync(RoofAlpacaCommandKind.Close, request, user, client);
+
+    /// <summary>
+    /// An Alpaca Open (#220, phase 4), checked and admitted as <see cref="CloseAsync"/> is, under the Open policy: every
+    /// required weather source fresh and safe (its latest read succeeded), at least one of them, and every blocking
+    /// telescope clear from a read made after the Open arrived, whatever <c>InterlockMode</c> is.
+    /// </summary>
+    public Task<RoofAlpacaCommandOutcome> OpenAsync(RoofAlpacaCommandRequest request, ClaimsPrincipal user, RoofAlpacaClient client)
+        => CommandAsync(RoofAlpacaCommandKind.Open, request, user, client);
+
+    private async Task<RoofAlpacaCommandOutcome> CommandAsync(RoofAlpacaCommandKind kind, RoofAlpacaCommandRequest request, ClaimsPrincipal user, RoofAlpacaClient client)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(user);
@@ -122,7 +137,7 @@ public sealed partial class RoofAlpacaCommands
             else if (!string.Equals(ticket.InstanceId, _controller.InstanceId, StringComparison.Ordinal)
                 || !string.Equals(request.InstanceId, ticket.InstanceId, StringComparison.Ordinal)
                 || request.Generation != ticket.Generation
-                || ticket.Kind != RoofAlpacaCommandKind.Close
+                || ticket.Kind != kind
                 || !string.Equals(ticket.KeyId, RoofPrincipalFactory.GetCredentialId(user) ?? string.Empty, StringComparison.Ordinal))
             {
                 refusal = ("TicketMismatch", "The ticket does not match the command: another kind, another controller instance or generation, or another key.");
@@ -157,20 +172,20 @@ public sealed partial class RoofAlpacaCommands
         RoofAlpacaCommandOutcome outcome;
         try
         {
-            outcome = await AdmitCloseAsync(ticket!, client).ConfigureAwait(false);
+            outcome = await AdmitAsync(ticket!, client).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "The Alpaca Close on ticket {TicketId} failed unexpectedly", ticket!.Id);
+            _logger.LogError(ex, "The Alpaca {Kind} on ticket {TicketId} failed unexpectedly", kind, ticket!.Id);
             outcome = new RoofAlpacaCommandOutcome(Result<RoofControllerStatus>.Failure(
-                new RoofControllerException(RoofControllerErrorCode.Unknown, "The Alpaca Close failed unexpectedly. See the controller log.", innerException: ex)), [], null);
+                new RoofControllerException(RoofControllerErrorCode.Unknown, $"The Alpaca {kind} failed unexpectedly. See the controller log.", innerException: ex)), [], null);
         }
 
         mine!.TrySetResult(outcome);
         return outcome;
     }
 
-    private async Task<RoofAlpacaCommandOutcome> AdmitCloseAsync(Ticket ticket, RoofAlpacaClient client)
+    private async Task<RoofAlpacaCommandOutcome> AdmitAsync(Ticket ticket, RoofAlpacaClient client)
     {
         // The re-read (started at the ticket's issue) is waited for outside the lock, within the budget.
         if (ConfiguredBlockingScopes().Count > 0)
@@ -182,7 +197,7 @@ public sealed partial class RoofAlpacaCommands
         Result<RoofControllerStatus> result;
         try
         {
-            result = await _controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing)
+            result = await _controller.StartMotionAsync(new RoofMotionRequest(DirectionOf(ticket.Kind))
             {
                 Owner = new RoofMotionOwner(RoofMotionOwnerKind.Alpaca, ticket.Account),
                 Admission = admission
@@ -198,13 +213,13 @@ public sealed partial class RoofAlpacaCommands
 
         if (result.IsSuccessful)
         {
-            _logger.LogInformation("Alpaca Close accepted on ticket {TicketId} (ClientID {ClientId} at {ClientAddress}, reported){Grant}",
-                ticket.Id, client.ClientId, client.Address, admission.UsedGrant is { } used ? $" with override grant {used.Id}" : string.Empty);
+            _logger.LogInformation("Alpaca {Kind} accepted on ticket {TicketId} (ClientID {ClientId} at {ClientAddress}, reported){Grant}",
+                ticket.Kind, ticket.Id, client.ClientId, client.Address, admission.UsedGrant is { } used ? $" with override grant {used.Id}" : string.Empty);
         }
         else if (result.Error is RoofControllerException { Code: RoofControllerErrorCode.FaultLatched })
         {
-            // A latch refuses every Close; the UIs say so beside the latch itself (§6).
-            RaiseAlert("Refused", RoofAlpacaCommandKind.Close, "An Alpaca Close was refused: a safety fault is latched; a person clears it after checking the roof.", ["fault-latched"], client);
+            // A latch refuses every Alpaca command; the UIs say so beside the latch itself (§6).
+            RaiseAlert("Refused", ticket.Kind, $"An Alpaca {ticket.Kind} was refused: a safety fault is latched; a person clears it after checking the roof.", ["fault-latched"], client);
         }
 
         return new RoofAlpacaCommandOutcome(result, admission.Reasons, admission.UsedGrant?.Id);
@@ -279,8 +294,8 @@ public sealed partial class RoofAlpacaCommands
     }
 
     /// <summary>
-    /// One Alpaca Close's checks under the controller's lock (#220's rule order), with access to the command state through
-    /// the gate (taken briefly, never calling back into the controller).
+    /// One Alpaca command's checks under the controller's lock (#220's rule order), with access to the command state
+    /// through the gate (taken briefly, never calling back into the controller). Its kind is its ticket's.
     /// </summary>
     private sealed class Admission(RoofAlpacaCommands owner, Ticket ticket, RoofAlpacaClient client) : IRoofCommandAdmission
     {
@@ -302,6 +317,12 @@ public sealed partial class RoofAlpacaCommands
                 {
                     // Log-only: no alert while commands are off.
                     return Refusal("CommandsOff", "Alpaca commands are off on this controller (RoofController:Alpaca:AllowCommands is Off).");
+                }
+
+                if (ticket.Kind == RoofAlpacaCommandKind.Open && owner._mode != RoofAlpacaCommandMode.OpenAndClose)
+                {
+                    // Log-only too: the setting, not a condition a person can grant past.
+                    return Refusal("OpenNotAllowed", $"Alpaca Open is off on this controller (RoofController:Alpaca:AllowCommands is {owner._mode}): an Alpaca client may only close the roof.");
                 }
 
                 if (owner._epoch != ticket.Epoch)
@@ -328,14 +349,14 @@ public sealed partial class RoofAlpacaCommands
             if (holder is not null)
             {
                 var refusal = Refusal("LeaseHeld", $"Operator lease held by {holder}: Alpaca commands wait until they release it or it lapses.");
-                owner.RaiseAlert("Refused", RoofAlpacaCommandKind.Close, $"An Alpaca Close was refused: the operator lease is held by {holder}.", ["lease-held:" + holder], client);
+                owner.RaiseAlert("Refused", ticket.Kind, $"An Alpaca {ticket.Kind} was refused: the operator lease is held by {holder}.", ["lease-held:" + holder], client);
                 return refusal;
             }
 
             if (hold.Held)
             {
                 var refusal = Refusal("StopHold", $"The human Stop hold is set (by {hold.SetBy}): a person clears it in the web UI, the terminal or the kiosk.");
-                owner.RaiseAlert("Refused", RoofAlpacaCommandKind.Close, $"An Alpaca Close was refused: the human Stop hold is set (by {hold.SetBy}).", ["stop-hold"], client);
+                owner.RaiseAlert("Refused", ticket.Kind, $"An Alpaca {ticket.Kind} was refused: the human Stop hold is set (by {hold.SetBy}).", ["stop-hold"], client);
                 return refusal;
             }
 
@@ -355,8 +376,8 @@ public sealed partial class RoofAlpacaCommands
         {
             lock (owner._gate)
             {
-                // The granter's step-away lasts until this Close is decided (AdmitCloseAsync), not just its use-up.
-                owner._grants.Remove(RoofAlpacaCommandKind.Close, out var grant);
+                // The granter's step-away lasts until this command is decided (AdmitAsync), not just its use-up.
+                owner._grants.Remove(ticket.Kind, out var grant);
                 if (grant is not null && grant.ExpiresAt <= owner._time.GetTimestamp())
                 {
                     owner.EndStepAway_NoLock(grant.Id);
@@ -364,8 +385,8 @@ public sealed partial class RoofAlpacaCommands
                 else if (grant is not null)
                 {
                     UsedGrant = new RoofOverrideGrantRecord(grant.Id, grant.ReasonKeys);
-                    owner._logger.LogWarning("AUDIT override grant {GrantId} (by {GrantedBy}) used up by an Alpaca Close on ticket {TicketId}, whatever follows",
-                        grant.Id, grant.GrantedBy, ticket.Id);
+                    owner._logger.LogWarning("AUDIT override grant {GrantId} (by {GrantedBy}) used up by an Alpaca {Kind} on ticket {TicketId}, whatever follows",
+                        grant.Id, grant.GrantedBy, ticket.Kind, ticket.Id);
                 }
             }
 
@@ -387,16 +408,19 @@ public sealed partial class RoofAlpacaCommands
             => CheckGate() ?? CheckHumanControl() ?? CheckDeadline(TimeSpan.Zero) ?? Judge(continuation: true);
 
         public void ContinuationRefused(RoofControllerException refusal)
-            => owner.RaiseAlert("ContinuationRefused", RoofAlpacaCommandKind.Close,
-                $"An admitted Alpaca Close was refused before its relay, after the direction-change delay: {refusal.Message} The roof stays stopped.",
+            => owner.RaiseAlert("ContinuationRefused", ticket.Kind,
+                $"An admitted Alpaca {ticket.Kind} was refused before its relay, after the direction-change delay: {refusal.Message} The roof stays stopped.",
                 refusal.ReasonKeys, client);
+
+        private RoofControllerException? Judge(bool continuation)
+            => ticket.Kind == RoofAlpacaCommandKind.Open ? JudgeOpen(continuation) : JudgeClose(continuation);
 
         /// <summary>
         /// The fresh-evidence guard, then the Close policy judged now: every configured blocking telescope clear, from a
         /// read issued after the command arrived. Otherwise the grant used must cover every reason. Weather never gates
         /// Close.
         /// </summary>
-        private RoofControllerException? Judge(bool continuation)
+        private RoofControllerException? JudgeClose(bool continuation)
         {
             var configured = owner.ConfiguredBlockingScopes();
             if (configured.Count == 0)
@@ -431,6 +455,80 @@ public sealed partial class RoofAlpacaCommands
                 ? $"Not safe to close: {text}. A person may grant an override in the web UI, the terminal or the kiosk."
                 : $"Not safe to close: {text}. The override grant used covered other reasons; a new grant is needed.";
             owner.RaiseAlert("Refused", RoofAlpacaCommandKind.Close, $"An Alpaca Close was refused: {text}.", Reasons, client);
+            return new RoofControllerException(RoofControllerErrorCode.AlpacaCommandRefused, why) { AlpacaRefusal = "NotSafe", ReasonKeys = Reasons };
+        }
+
+        /// <summary>
+        /// The Open policy judged now (#220, §3; Roy's decisions 1 to 4), whatever <c>InterlockMode</c> is: every configured
+        /// blocking telescope clear, from a read issued after the command arrived (the fresh-evidence guard as for a
+        /// Close), or, with none configured, <c>AllowOpenWithoutBlockingScopes</c>; and at least one required weather
+        /// source, each with a successful latest read that is fresh and says safe. Otherwise the grant used must cover
+        /// every reason; in Block no grant does.
+        /// </summary>
+        private RoofControllerException? JudgeOpen(bool continuation)
+        {
+            var reasons = new List<(string Key, string Text)>();
+            var configured = owner.ConfiguredBlockingScopes();
+            if (configured.Count == 0)
+            {
+                if (!owner._options.CurrentValue.AllowOpenWithoutBlockingScopes)
+                {
+                    reasons.Add((RoofAlpacaContract.NoBlockingScopesKey,
+                        $"no telescope is set to block the roof, and {RoofAlpacaCommandOptions.SectionName}:AllowOpenWithoutBlockingScopes is off"));
+                }
+            }
+            else
+            {
+                var judgements = owner._safety.JudgeBlockingScopes(ticket.Arrival, configured);
+                if (!continuation && judgements.Any(judgement => !judgement.IssuedAfterArrival))
+                {
+                    return Refusal("NoFreshEvidence", "No read of every blocking telescope was made after the command arrived; nothing moved.");
+                }
+
+                reasons.AddRange(judgements.Where(judgement => judgement.Clearance != RoofScopeClearance.Clear).Select(judgement => (RoofAlpacaContract.ReasonKey(
+                    judgement.Clearance == RoofScopeClearance.NotClear ? RoofAlpacaContract.ScopeNotClearKind : RoofAlpacaContract.ScopeUnknownKind, judgement.Name), judgement.Text)));
+            }
+
+            var weather = owner._safety.JudgeRequiredWeather();
+            if (weather.Count == 0)
+            {
+                reasons.Add((RoofAlpacaContract.NoRequiredWeatherKey, "no weather source is set Required, so nothing says the weather is safe"));
+            }
+
+            reasons.AddRange(weather.Where(judgement => judgement.State != RoofSafetyState.Safe).Select(judgement => (RoofAlpacaContract.ReasonKey(
+                judgement.State == RoofSafetyState.Unsafe ? RoofAlpacaContract.WeatherUnsafeKind : RoofAlpacaContract.WeatherUnknownKind, judgement.Name), judgement.Text)));
+
+            Reasons = [.. reasons.Select(reason => reason.Key)];
+            if (reasons.Count == 0)
+            {
+                return null;
+            }
+
+            var text = string.Join("; ", reasons.Select(reason => reason.Text));
+            bool block;
+            lock (owner._gate)
+            {
+                block = owner.IsBlock_NoLock();
+            }
+
+            if (block)
+            {
+                // Roy's decision 4: in Block no grant opens the roof, whatever was granted or however it got here.
+                owner.RaiseAlert("Refused", RoofAlpacaCommandKind.Open, $"An Alpaca Open was refused: {text}. The safety interlock is Block: no grant opens the roof.", Reasons, client);
+                return new RoofControllerException(RoofControllerErrorCode.AlpacaCommandRefused,
+                    $"Not safe to open: {text}. The safety interlock is Block: only Safe conditions open the roof, and no grant does.") { AlpacaRefusal = "NotSafe", ReasonKeys = Reasons };
+            }
+
+            if (UsedGrant is { } grant && Reasons.All(reason => grant.ReasonKeys.Contains(reason, StringComparer.Ordinal)))
+            {
+                owner._logger.LogWarning("AUDIT Alpaca Open on ticket {TicketId} goes ahead under override grant {GrantId}, which lifts: {Reasons}", ticket.Id, grant.Id, text);
+                return null;
+            }
+
+            var why = UsedGrant is null
+                ? $"Not safe to open: {text}. A person may grant an override in the web UI, the terminal or the kiosk."
+                : $"Not safe to open: {text}. The override grant used covered other reasons; a new grant is needed.";
+            owner.RaiseAlert("Refused", RoofAlpacaCommandKind.Open, $"An Alpaca Open was refused: {text}.", Reasons, client);
             return new RoofControllerException(RoofControllerErrorCode.AlpacaCommandRefused, why) { AlpacaRefusal = "NotSafe", ReasonKeys = Reasons };
         }
 

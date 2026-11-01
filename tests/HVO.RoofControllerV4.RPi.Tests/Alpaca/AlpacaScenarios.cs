@@ -47,7 +47,7 @@ public sealed class AlpacaScenarios
         (await alpaca.PutAsync("openshutter")).GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.InvalidOperation);
         (await alpaca.PutAsync("closeshutter")).GetProperty("ErrorNumber").GetInt32().Should().Be(AlpacaErrors.InvalidOperation);
         await Task.Delay(TimeSpan.FromSeconds(1));
-        rig.Plant.PositionMeters.Should().BeApproximately(position, 0.001, "neither OpenShutter nor CloseShutter moves the roof");
+        rig.Plant.PositionMeters.Should().BeApproximately(position, 0.001, "neither OpenShutter nor CloseShutter without the External key moves the roof");
         rig.Controller.GetCurrentStatusSnapshot().IsMoving.Should().BeFalse();
     }
 

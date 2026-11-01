@@ -245,9 +245,13 @@ internal static class RoofSettingsCatalogue
         var alpaca = new Alpaca.RoofAlpacaCommandOptions();
         const string alpacaSection = Alpaca.RoofAlpacaCommandOptions.SectionName + ":";
         Add(alpacaSection + nameof(alpaca.AllowCommands), RoofSettingsContract.AlpacaGroup, RoofSettingType.Enum,
-            "Which Alpaca commands the controller accepts: Off, or CloseOnly. Any change drops every override grant.",
-            nameof(RoofAlpacaCommandMode.Off), allowed: [nameof(RoofAlpacaCommandMode.Off), nameof(RoofAlpacaCommandMode.CloseOnly)],
+            "Which Alpaca commands the controller accepts: Off, CloseOnly, or OpenAndClose. Any change drops every override grant.",
+            nameof(RoofAlpacaCommandMode.Off),
+            allowed: [nameof(RoofAlpacaCommandMode.Off), nameof(RoofAlpacaCommandMode.CloseOnly), nameof(RoofAlpacaCommandMode.OpenAndClose)],
             safety: RoofSettingSafety.Always, localOnly: true);
+        Add(alpacaSection + nameof(alpaca.AllowOpenWithoutBlockingScopes), RoofSettingsContract.AlpacaGroup, RoofSettingType.Boolean,
+            "With no telescope set to block the roof, whether an Alpaca Open may go on the weather alone (otherwise it needs a person's grant). Every UI warns while it is on. Any change drops every override grant.",
+            alpaca.AllowOpenWithoutBlockingScopes, safety: RoofSettingSafety.Always, localOnly: true);
         Add(alpacaSection + nameof(alpaca.OverrideWindowMinutes), RoofSettingsContract.AlpacaGroup, RoofSettingType.Integer,
             "How long an override grant lasts, in minutes. Any change drops every grant.", alpaca.OverrideWindowMinutes,
             min: Alpaca.RoofAlpacaCommandOptions.MinOverrideWindowMinutes, max: Alpaca.RoofAlpacaCommandOptions.MaxOverrideWindowMinutes, unit: "min", localOnly: true);
