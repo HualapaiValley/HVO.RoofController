@@ -169,7 +169,8 @@ public static partial class RoofCli
         {
             var command = new Command(
                 "alerts",
-                "The Alpaca alerts, newest first: refused Alpaca commands, refusals as not authorised and warnings, with the client the Alpaca server reported.");
+                "The Alpaca alerts, newest first: refused Alpaca commands, refusals as not authorised and warnings, with the client the "
+                + "Alpaca server reported, and whether a grant can be made from each now.");
             SetAction(command, async (context, _, cancellationToken) =>
             {
                 using var client = context.Connect();
@@ -186,10 +187,20 @@ public static partial class RoofCli
                     return (int)RoofExitCode.Success;
                 }
 
-                RoofCliFormat.WriteTable(context.Out, RoofCliAlpaca.AlertHeaders, alerts.Select(RoofCliAlpaca.AlertRow));
-                if (alerts.Any(RoofAlpacaText.CanGrantFrom))
+                // Whether a grant can be made now is the status's, as for grant: no Open grant in Block mode.
+                var alpaca = (await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false)).Alpaca;
+                RoofCliFormat.WriteTable(context.Out, RoofCliAlpaca.AlertHeaders, alerts.Select(alert => RoofCliAlpaca.AlertRow(alert, alpaca)));
+                if (alerts.Any(alert => RoofAlpacaText.CanGrantFrom(alert) && RoofAlpacaText.GrantUnavailable(alert, alpaca) is null))
                 {
                     context.Out.WriteLine(RoofCliAlpaca.GrantHint);
+                }
+
+                foreach (var unavailable in alerts.Where(RoofAlpacaText.CanGrantFrom)
+                    .Select(alert => RoofAlpacaText.GrantUnavailable(alert, alpaca) is { } reason ? RoofAlpacaText.DescribeGrantUnavailable(alert.Command ?? RoofAlpacaCommandKind.Close, reason) : null)
+                    .OfType<string>()
+                    .Distinct(StringComparer.Ordinal))
+                {
+                    context.Out.WriteLine(unavailable);
                 }
 
                 return (int)RoofExitCode.Success;
@@ -364,11 +375,16 @@ internal static class RoofCliAlpaca
     public static string DescribeAlertState(RoofAlpacaAlert alert)
         => !alert.Acknowledged ? "NEW" : alert.AcknowledgedBy is { Length: > 0 } by ? $"acknowledged by {by}" : "acknowledged";
 
-    public static IReadOnlyList<string> AlertRow(RoofAlpacaAlert alert) =>
+    /// <summary>
+    /// An alert as a row of <c>alpaca alerts</c>: its ID, whether it is new, whether a grant can be made from it (<c>yes</c>,
+    /// <c>no</c>, or <c>unavailable</c> for one <paramref name="alpaca"/> says cannot be made now: a refused Open's in Block
+    /// mode), and the shared sentence.
+    /// </summary>
+    public static IReadOnlyList<string> AlertRow(RoofAlpacaAlert alert, RoofAlpacaStatus? alpaca) =>
     [
         alert.Id,
         DescribeAlertState(alert),
-        RoofAlpacaText.CanGrantFrom(alert) ? "yes" : "no",
+        !RoofAlpacaText.CanGrantFrom(alert) ? "no" : RoofAlpacaText.GrantUnavailable(alert, alpaca) is null ? "yes" : "unavailable",
         RoofAlpacaText.DescribeAlert(alert)
     ];
 }

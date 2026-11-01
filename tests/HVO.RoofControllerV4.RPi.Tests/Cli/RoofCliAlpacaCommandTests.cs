@@ -453,6 +453,31 @@ public sealed class RoofCliAlpacaCommandTests
     }
 
     [TestMethod]
+    public async Task Alerts_InBlockMode_SayARefusedOpensGrantIsUnavailable_AndWhy_WhileACloseCanStillBeGranted()
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose(block: true));
+        var refusedOpen = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unknown:Sky");
+        var refusedClose = AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+
+        var result = await rig.RunAsync("alpaca", "alerts");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        var lines = result.Out.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        lines[0].Should().MatchRegex("^ID +STATE +GRANT +ALERT$");
+        lines[1].Should().MatchRegex($@"^{refusedClose.Id} +NEW +yes +{System.Text.RegularExpressions.Regex.Escape(RoofAlpacaText.DescribeAlert(refusedClose))}$");
+        lines[2].Should().MatchRegex($@"^{refusedOpen.Id} +NEW +unavailable +{System.Text.RegularExpressions.Regex.Escape(RoofAlpacaText.DescribeAlert(refusedOpen))}$");
+        lines[3].Should().Be(RoofCliAlpaca.GrantHint);
+        lines[4].Should().Be(RoofAlpacaText.DescribeGrantUnavailable(RoofAlpacaCommandKind.Open, RoofAlpacaCommands.OpenGrantsBlocked));
+        lines.Should().HaveCount(5);
+
+        var json = await rig.RunAsync("alpaca", "alerts", "--json");
+        json.Code.Should().Be(RoofExitCode.Success, json.ToString());
+        json.Json.EnumerateArray().Select(entry => entry.GetProperty("id").GetString()).Should().Equal(refusedClose.Id, refusedOpen.Id);
+    }
+
+    [TestMethod]
     public async Task Alerts_AreListedNewestFirst_WithWhetherAGrantCanLiftThem()
     {
         using var host = AlpacaCliSupport.CreateHost();
