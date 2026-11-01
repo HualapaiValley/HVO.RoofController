@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.RPi.Logic;
@@ -546,7 +547,30 @@ public partial class RoofControllerServiceV4
     /// <see cref="HatIoOverrunException"/> as a failed transfer does, and every later access fails at once until it has
     /// returned (<see cref="OnHatIoRecovered"/>).
     /// </summary>
-    private T HatCall<T>(Func<T> access) => _hatIo.Run(access, HatIoLimit);
+    private T HatCall<T>(Func<T> access)
+    {
+        var limit = HatIoLimit;
+        if (t_ioDeadline is { } deadline)
+        {
+            // A Stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereview S-F4).
+            var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
+            if (left <= TimeSpan.Zero)
+            {
+                throw new HatIoOverrunException("The Stop's bound has passed; this access was not sent. The relays-off work goes on after the answer.");
+            }
+
+            if (left < limit)
+            {
+                limit = left;
+            }
+        }
+
+        return _hatIo.Run(access, limit);
+    }
+
+    // The Stop deadline (a Stopwatch timestamp) of the HAT I/O running on this thread, or null.
+    [ThreadStatic]
+    private static long? t_ioDeadline;
 
     /// <summary>
     /// A HAT access that ran past its limit has returned (on the lane's thread). It may have switched a relay late, so

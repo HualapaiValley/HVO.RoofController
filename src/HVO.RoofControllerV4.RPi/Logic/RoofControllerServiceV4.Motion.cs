@@ -724,6 +724,10 @@ public partial class RoofControllerServiceV4
         // relay never will, and a waiting start is superseded.
         FenceRelaysOff();
 
+        // One deadline for the whole Stop: its wait for the lock and every HAT access it makes (#220, PR #230 rereview
+        // S-F4). Past it the Stop answers that the relays are unverified, and its relays-off work goes on after.
+        var deadline = startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency);
+        var overran = false;
         Result<RoofControllerStatus> result;
         var lockTaken = false;
         try
@@ -750,15 +754,27 @@ public partial class RoofControllerServiceV4
                     CheckDeadlines_NoLock(Now);
                 }
 
-                var verified = _commandedMotion != RoofMotionDirection.None
-                    ? StopMotion_NoLock(reason, null)
-                    : StopIdle_NoLock(reason);
+                bool verified;
+                t_ioDeadline = deadline;
+                try
+                {
+                    verified = _commandedMotion != RoofMotionDirection.None
+                        ? StopMotion_NoLock(reason, null)
+                        : StopIdle_NoLock(reason);
+                }
+                finally
+                {
+                    t_ioDeadline = null;
+                }
+
+                overran = !verified && Stopwatch.GetTimestamp() >= deadline;
                 FinishMutation_NoLock();
 
                 result = verified
                     ? Result<RoofControllerStatus>.Success(_status)
-                    : Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.RelayStateUnverified,
-                        "Stop could not verify the relay register all-off state. Use the independent hardware stop.");
+                    : Reject_NoLock<RoofControllerStatus>(RoofControllerErrorCode.RelayStateUnverified, overran
+                        ? "Stop could not verify the relay register all-off state within its 2 s bound; the relays-off work goes on. Use the independent hardware stop."
+                        : "Stop could not verify the relay register all-off state. Use the independent hardware stop.");
             }
         }
         finally
@@ -767,6 +783,12 @@ public partial class RoofControllerServiceV4
             {
                 Monitor.Exit(_syncLock);
             }
+        }
+
+        if (overran)
+        {
+            // The relays-off work the bound cut short runs again as soon as the lock is free, at each access's own limit.
+            QueueDeferredStop(reason, null, onlyWhileMoving: false);
         }
 
         RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);

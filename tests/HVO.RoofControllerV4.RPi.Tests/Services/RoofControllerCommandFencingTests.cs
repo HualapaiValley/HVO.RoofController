@@ -299,6 +299,76 @@ public class RoofControllerCommandFencingTests
     }
 
     [TestMethod]
+    public async Task SeveralSlowRelayOffWrites_StillAnswerAStopWithinItsOneBound()
+    {
+        // PR #230 rereview S-F4: one deadline for the whole Stop, its wait for the lock and all of its relay I/O.
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        hat.Registers.BeforeRelayWrite = (register, _) =>
+        {
+            if (register == RelayClearRegister)
+            {
+                Thread.Sleep(700); // every relays-off write is slow, none hangs
+            }
+        };
+
+        var watch = Stopwatch.StartNew();
+        var stop = service.Stop();
+        watch.Stop();
+
+        watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(300), "the Stop answers within its one bound");
+        stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified, "its writes had not all been verified by then");
+        hat.Registers.BeforeRelayWrite = null;
+        SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0x00,
+            TimeSpan.FromSeconds(10)).Should().BeTrue("the relays-off work goes on after the answer and verifies");
+        service.IsMoving.Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task ASlowWriteThenAHangingWrite_StillAnswerAStopWithinItsOneBound_AndLatch()
+    {
+        var (service, hat) = await CreateAsync();
+        using var _ = service;
+        service.Close().IsSuccessful.Should().BeTrue();
+        using var release = new ManualResetEventSlim(false);
+        var writes = 0;
+        hat.Registers.BeforeRelayWrite = (register, _) =>
+        {
+            if (register != RelayClearRegister)
+            {
+                return;
+            }
+
+            if (Interlocked.Increment(ref writes) == 1)
+            {
+                Thread.Sleep(900);
+            }
+            else
+            {
+                release.Wait(TimeSpan.FromSeconds(30));
+            }
+        };
+
+        try
+        {
+            var watch = Stopwatch.StartNew();
+            var stop = await Task.Run(() => service.Stop()).WaitAsync(TimeSpan.FromSeconds(5));
+            watch.Elapsed.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(300));
+            stop.ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+            service.GetCurrentStatusSnapshot().LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed);
+        }
+        finally
+        {
+            hat.Registers.BeforeRelayWrite = null;
+            release.Set();
+        }
+
+        SpinWait.SpinUntil(() => service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0x00,
+            TimeSpan.FromSeconds(10)).Should().BeTrue();
+    }
+
+    [TestMethod]
     public async Task Generation_MovesWithStartsAndStops_NeverWithRefusalsRepeatsOrNoOps()
     {
         var (service, hat) = await CreateAsync();
