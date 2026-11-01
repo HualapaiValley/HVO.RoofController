@@ -78,6 +78,37 @@ public sealed class HttpStopFencingTests
         alpaca.GetStatus().Hold.Held.Should().BeTrue("a person's Stop sets the human Stop hold");
     }
 
+    [TestMethod]
+    public async Task AWebCloseRightAfterAStop_WaitsWithoutTheLock_AndAStopDuringTheWaitAnswersAtOnce()
+    {
+        // §21.1: a web-UI Close right after a Stop waits out the direction-change delay without holding the controller's
+        // lock, so a Stop during the wait answers at once and nothing energizes.
+        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production(plant => plant with { InitialPosition = 0.15 },
+            new Dictionary<string, string?> { ["RoofControllerOptionsV4:DirectionChangeDelay"] = "00:00:02" }) with
+        {
+            InitialStatus = null,
+            RemoteAddress = IPAddress.Loopback
+        });
+        using var http = rig.CreateApiClient(TestApiKeys.Operator);
+        await Task.Delay(TimeSpan.FromSeconds(2)); // the delay since the controller's start
+        (await http.PostAsync("api/v4.0/RoofControl/Close", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await http.PostAsync("api/v4.0/RoofControl/Stop", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var relayClosesBefore = RelayContactsClosed(rig);
+
+        var close = http.PostAsync("api/v4.0/RoofControl/Close", null);
+        await rig.WaitForControllerAsync(status => status.IsStartPending, "the Close to wait out the delay");
+        var watch = Stopwatch.StartNew();
+        using var stop = await http.PostAsync("api/v4.0/RoofControl/Stop", null);
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(500), "the waiting Close holds no lock");
+        stop.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var closeResponse = await close;
+        closeResponse.IsSuccessStatusCode.Should().BeFalse("the Stop superseded the waiting Close");
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        RelayContactsClosed(rig).Should().Be(relayClosesBefore, "no relay closed after the Stop");
+        rig.Plant.RelayRegister.Should().Be(0);
+    }
+
     private static int RelayContactsClosed(EmulatedRoofRig rig)
         => rig.Session.Plant.History.Count(e => e.Kind == PlantEventKind.Relay && e.Detail.EndsWith("closed", StringComparison.Ordinal));
 }

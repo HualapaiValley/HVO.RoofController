@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -231,11 +232,23 @@ public sealed class AlpacaCloseScenarios
         await Task.Delay(TimeSpan.FromSeconds(1));
 
         Error(await setup.Alpaca.PutAsync("abortslew", "ClientID=8")).Should().Be(0);
-        Error(await setup.CloseAsync()).Should().Be(0);
+
+        // During the wait a Close with a wrong key is refused at once and changes nothing (§19 M2, §20 N2).
+        var answered = Stopwatch.StartNew();
+        var close = setup.CloseAsync();
+        await setup.Rig.WaitForControllerAsync(status => status.IsStartPending, "the Close to wait out the delay");
+        Error(await setup.Alpaca.PutAsync("closeshutter", "ClientID=8&ClientTransactionID=1", setup.Basic("not-the-external-key-at-all-000000"))).Should().Be(0x40B);
+        Error(await close).Should().Be(0);
+        answered.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(600) + TimeSpan.FromSeconds(1.5) + TimeSpan.FromMilliseconds(400),
+            "the answer comes within the budget, the delay and 400 ms");
 
         var off = setup.Rig.ContactChanges(1).Last(change => !change.Closed).At;
         await setup.Rig.WaitForControllerAsync(status => status.CommandedMotion == RoofMotionDirection.Closing, "the Close to start");
         var on = setup.Rig.ContactChanges(2).First(change => change.Closed).At;
         (on - off).Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(1.4), "the close relay waits out the direction-change delay");
+
+        // And the roof closes, all the way.
+        await setup.Rig.WaitForControllerAsync(status => status.Status == RoofControllerStatus.Closed && !status.IsMoving, TimeSpan.FromSeconds(30), "the roof to close");
+        DomeShutter.StateOf(await setup.Rig.WaitForControllerAsync(status => status.Status == RoofControllerStatus.Closed, "Closed")).Should().Be(DomeShutterState.Closed);
     }
 }
