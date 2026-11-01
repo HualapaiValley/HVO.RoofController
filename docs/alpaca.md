@@ -501,13 +501,11 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands`.
 - **The person who grants steps away, for as long as the grant lasts.** A grant never lifts a person's lease, so the
   granting person's own lease ends with it, in every one of their sessions. While the grant lasts their UI takes it back
-  only when they do something there, and that drops the grant. A grant the same person makes again while their earlier
-  grant is still unused keeps every one of their sessions stepped away. A grant made again while a Close that used the
-  earlier grant is still waiting out the direction-change delay does not: when that Close starts or is refused, the next
-  heartbeat from any of their sessions takes the lease back and drops the new grant (nothing moves for it), so grant
-  again once the first Close has started or been refused. Once the grant is gone (the Close that used it decided, which
-  may be after it waits out the direction-change delay, or the grant lapsed, revoked or dropped), their UI holds the
-  lease again with its next heartbeat. Another person's lease still refuses the Close.
+  only when they do something there, and that drops the grant. A grant the same person makes again keeps every one of
+  their sessions stepped away, also while a Close that used the earlier grant is still waiting out the direction-change
+  delay: the new grant holds them away once that Close starts or is refused. Once every grant of theirs is gone (the
+  Close that used it decided, which may be after it waits out the direction-change delay, or the grant lapsed, revoked
+  or dropped), their UI holds the lease again with its next heartbeat. Another person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
 
@@ -858,14 +856,15 @@ one Alpaca Open?"), with what the grant lifts and that the roof stays open if th
 
 ### Known limitations
 
-Both of phase 3's [known limitations](#waiting-out-the-direction-change-delay) apply to an Open as to a Close, and
-fail safe the same way:
+Phase 3's [known limitation](#waiting-out-the-direction-change-delay) of a limit switch applies to an Open as to a
+Close, and fails safe the same way:
 
 - **A limit asserting refuses a waiting Open.** An Open waiting out the direction-change delay (after an `AbortSlew`
   stopped a Close just short of the closed limit, say, the roof coasting onto it) is cancelled (`Superseded`) when a
   limit asserts, and so is an Open whose ticket came before it. Nothing moves; the client sends the Open again.
-- **A grant made again while a used grant's Open is still waiting out the delay is dropped** when that Open starts or
-  is refused. Nothing moves for it; grant again once the first Open has started or been refused.
+
+(Phase 3's other one, a grant made again while a used grant's command waits out the delay being dropped when that
+command was decided, is gone for both kinds: the grant made again holds the person away too.)
 
 ## Conformance
 

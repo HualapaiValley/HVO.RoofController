@@ -445,6 +445,32 @@ public sealed class RoofOperatorLeaseTests
     }
 
     [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Open)]
+    public async Task AGrantMadeAgain_WhileTheUsedGrantsCommandWaitsOutTheDelay_SurvivesThatCommandStarting(RoofAlpacaCommandKind kind)
+    {
+        // PR #232 rereview S5: phase 3's known limitation (Opus F21, a re-grant dropped once the used grant's command was
+        // decided) is gone with the S2 fix: the new grant holds the person's sessions too, so they stay away after it.
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: TimeSpan.FromMilliseconds(900), parked: false,
+            weatherSafe: true, mode: RoofAlpacaCommandMode.OpenAndClose)).Ready();
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(kind == RoofAlpacaCommandKind.Open ? RoofMotionDirection.Closing : RoofMotionDirection.Opening)))
+            .IsSuccessful.Should().BeTrue();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue(); // the AbortSlew: the next start waits out the delay
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(kind, ["scope-not-clear:Main"])).Grant.Should().NotBeNull();
+
+        var command = kind == RoofAlpacaCommandKind.Open ? rig.OpenAsync() : rig.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Controller.GetCurrentStatusSnapshot().IsStartPending, "the granted command to wait");
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(kind, ["scope-not-clear:Main"])).Grant.Should().NotBeNull("granted again during the wait");
+        (await command).Result.IsSuccessful.Should().BeTrue();
+        rig.Commands.Heartbeat(web, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("the new grant still holds the person away");
+        rig.Commands.Grants().Should().ContainSingle(grant => grant.Kind == kind, "the grant made again survives");
+    }
+
+    [TestMethod]
     public async Task AnotherPersonsGrant_ReplacingOne_ReleasesTheFirstGrantersStepAway()
     {
         var (rig, time) = await StartAsync();
