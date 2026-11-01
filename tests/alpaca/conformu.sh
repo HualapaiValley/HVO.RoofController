@@ -18,7 +18,8 @@
 # roof and relays did: the Close runs (alpaca-ci.py close-runs: the hold, the credential, an unparked mount, a Close
 # grant, a new reason after a grant, unsafe weather) and the Open runs (alpaca-ci.py open-runs: a safe Open, unsafe and
 # failing weather, an unparked mount, an Open grant, a grant dropped when the interlock turns Block at runtime, an Alpaca
-# reversal, CloseOnly).
+# reversal, CloseOnly). Then the client matrix (tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix) drives the server
+# with ASCOM's own Alpaca client library, as the ASCOM Dynamic Client (NINA through it) and as NINA's native client do.
 #
 # The controller runs with its content root in a run-only directory holding copies of its appsettings files, so the Open
 # runs can switch RoofSafety:InterlockMode to Block and back in that copy of appsettings.Development.json, a configuration
@@ -38,7 +39,8 @@
 # Usage: tests/alpaca/conformu.sh [--no-build]
 # Environment:
 #   HVO_ALPACA_TEST_PORT_BASE  the first of the ports used, default 47200: +10 the emulator's control API, +11 its
-#                              registers, +20 the controller, +30 the Alpaca server
+#                              registers, +20 the controller, +30 the Alpaca server, +31 and +32 the client matrix's
+#                              capturing proxies
 #   HVO_ALPACA_TEST_DIR        where the logs, settings and results go (default: a new temporary directory, kept)
 #   HVO_CONFORMU_DIR           a ConformU already unpacked (default: downloaded and checked against its SHA-256)
 #   CONFIGURATION              Debug (default) or Release
@@ -55,6 +57,7 @@ control_port=$((base + 10))
 register_port=$((base + 11))
 controller_port=$((base + 20))
 alpaca_port=$((base + 30))
+proxy_ports=($((base + 31)) $((base + 32)))
 build=true
 if [[ "${1:-}" == "--no-build" ]]; then
   build=false
@@ -109,18 +112,20 @@ wait_for() {
   done
 }
 
-for port in "${control_port}" "${register_port}" "${controller_port}" "${alpaca_port}"; do
+for port in "${control_port}" "${register_port}" "${controller_port}" "${alpaca_port}" "${proxy_ports[@]}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
     fail "Port ${port} is in use; set HVO_ALPACA_TEST_PORT_BASE to a free range"
   fi
 done
 
 if [[ "${build}" == true ]]; then
-  (cd "${repo}/src" && for project in HVO.RoofControllerV4.Emulator HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Alpaca; do
-    dotnet build "${project}/${project}.csproj" -c "${configuration}" -v quiet -nologo || exit 1
+  (cd "${repo}/src" && for project in HVO.RoofControllerV4.Emulator HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Alpaca \
+    ../tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix; do
+    dotnet build "${project}/${project##*/}.csproj" -c "${configuration}" -v quiet -nologo || exit 1
   done)
 fi
 output() { echo "${repo}/src/$1/bin/${configuration}/net10.0"; }
+matrix="${repo}/tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix/bin/${configuration}/net10.0/HVO.RoofControllerV4.AlpacaClientMatrix.dll"
 ci=(python3 "${repo}/tests/alpaca/alpaca-ci.py")
 
 # ConformU, pinned and checked.
@@ -289,4 +294,13 @@ python3 "${repo}/tests/alpaca/check-conformu-results.py" \
 "${ci[@]}" open-runs --controller "${controller}" --alpaca "${alpaca}" --emulator "${emulator}" \
   --token "${private}/session" --external-key "${private}/external-key" \
   --settings-file "${controller_root}/appsettings.Development.json"
+"${ci[@]}" no-secret "${secret_args[@]}" "${work}"/*.log "${work}"/*.json "${work}"/*.txt
+
+# The client matrix: ASCOM's own Alpaca client library as the Dynamic Client (NINA through it, the External key as its user
+# name and password) and as NINA's native client (no credential), each through a capturing proxy on loopback.
+echo "The Alpaca client matrix (proxies ${proxy_ports[*]})"
+dotnet "${matrix}" --alpaca "${alpaca}" --controller "${controller}" --emulator "${emulator}" \
+  --token "${private}/session" --external-key "${private}/external-key" \
+  --proxy-port "${proxy_ports[0]}" --proxy-port "${proxy_ports[1]}" --results "${work}/client-matrix.json" 2>&1 \
+  | tee "${work}/client-matrix.log"
 "${ci[@]}" no-secret "${secret_args[@]}" "${work}"/*.log "${work}"/*.json "${work}"/*.txt

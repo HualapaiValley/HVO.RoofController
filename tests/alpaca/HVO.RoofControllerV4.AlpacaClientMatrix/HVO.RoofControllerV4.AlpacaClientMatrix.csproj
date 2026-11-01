@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Alpaca client matrix (#220): the roof's Alpaca server driven by ASCOM's own Alpaca client library, as the ASCOM
+    Alpaca Dynamic Client (NINA through it) and NINA's native Alpaca client use it, against the HAT emulator only
+    (tests/alpaca/conformu.sh runs it). Not in the solution: it is a test program, built by that script and by CI.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+    <!-- The repository's package sources, as the solution's projects restore from them (src/NuGet.config). -->
+    <RestoreConfigFile>$(MSBuildThisFileDirectory)../../../src/NuGet.config</RestoreConfigFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="ASCOM.Alpaca.Components" />
+  </ItemGroup>
+
+</Project>

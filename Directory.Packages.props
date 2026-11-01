@@ -49,6 +49,8 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.16.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.16.0" />
     <!-- Testing -->
+    <!-- ASCOM's Alpaca client library (MIT), for the Alpaca client matrix only (tests/alpaca). -->
+    <PackageVersion Include="ASCOM.Alpaca.Components" Version="4.1.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="MSTest" Version="4.3.3" />
     <PackageVersion Include="FluentAssertions" Version="8.10.0" />
