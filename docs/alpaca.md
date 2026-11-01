@@ -466,9 +466,9 @@ poll last saw the mount unparked.
 
 ### Override grants
 
-A person may let **one** refused Close through: a **grant**, made in the web UI, the terminal or the kiosk from the
-refusal's alert, by a person with the Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
-with an API key (403).
+A person may let **one** refused Close through: a **grant**, made in the web UI, the terminal (or `hvo-roof alpaca
+grant`, which asks at a terminal and cannot be scripted) or the kiosk from the refusal's alert, by a person with the
+Operator role (on the kiosk with their own PIN). Never through Alpaca, and never with an API key (403).
 
 - **It lifts only the reasons it was given**, by key (`scope-not-clear:<telescope>`, `scope-unknown:<telescope>`; a
   re-read that timed out is `scope-unknown`). A Close refused for any other reason (say a second telescope unparked
@@ -483,9 +483,10 @@ with an API key (403).
   `InterlockMode` changes, the External account's keys change (added, rotated, revoked or re-roled), a person takes
   the operator lease, or a Stop sets the [hold](#the-human-stop-hold).
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands`.
-- **The person who grants steps away.** A grant never lifts a person's lease, so the granting person's own lease ends
-  with it, in every one of their sessions. Their UI takes it back only when they do something there again, and that
-  drops the grant. Another person's lease still refuses the Close.
+- **The person who grants steps away, for as long as the grant lasts.** A grant never lifts a person's lease, so the
+  granting person's own lease ends with it, in every one of their sessions. While the grant lasts their UI takes it back
+  only when they do something there, and that drops the grant; once it is used, lapses, is revoked or dropped, their UI
+  holds the lease again with its next heartbeat. Another person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
 
@@ -510,6 +511,8 @@ holds it while it is open with an Operator's session (the web UI and the termina
 while commands are on, when it matters; `hvo-roof`'s commands never), with a heartbeat every 10 s
 (`POST api/v4.0/alpaca/lease`); it ends when the UI closes or signs out, or its heartbeats stop for 30 s.
 
+- **Who holds it**: an Operator's session, so `hvo-roof`'s terminal interface run with the local credential on the
+  controller itself (no person's session) holds none; nor do API keys.
 - **Idle**: while commands are on, a person's lease lapses after `OperatorLeaseIdleMinutes` (10 by default, 1 to 120)
   with no input from them. Heartbeats alone never keep it, and the idle clock starts no earlier than commands going
   on. Each UI warns a minute before, then shows "Alpaca may now move the roof"; the person's next input takes the lease
@@ -564,9 +567,18 @@ it used and the reasons. Never a key or a Basic header.
 Every command that may start motion carries the controller's **command generation**, which every start and every way
 the relays go off (Stop, a protective stop, shutdown) moves on. A relay write for a start whose generation is older
 than the last relays-off write is dropped, so a start that passed its checks just before a Stop can never energise a
-relay after it. Stop sets that fence first, then waits at most 2 s for the lock; past that it answers
-`RelayStateUnverified` (`0x504` to an `AbortSlew`) and its relays-off write runs as soon as the lock is free. The
-protective stops wait the same way.
+relay after it. Stop sets that fence first, before anything else, a change notification included, then waits at most
+2 s for the lock; past that it answers `RelayStateUnverified` (`0x504` to an `AbortSlew`) and its relays-off write runs
+as soon as the lock is free. The protective stops wait the same way. A drive-fault edge raises the fence before it waits
+for the lock too, and an input edge that cannot take the lock in time is never dropped: it is applied the moment the
+lock is free.
+
+**Every HAT access is bounded.** A relay write, a relay read-back, an input read and an LED write each run on a thread
+of the HAT's own, and the controller waits at most 1.5 s for one, less than Stop's 2 s. One that runs past that fails as
+a failed transfer does: the relays count as unverified and the fault latches (`RelayVerificationFailed`), the
+controller's lock is let go, so Stop and the protective stops act at once, and every later access fails at once
+without reaching the HAT until the hanging one has returned. Then every relay is written off and verified; the latch
+stays until a person clears it, and `ClearFault` is refused before that.
 
 **A late ON.** A relay write the controller gave up on must never land after a Stop that reported success. Until the
 relays are read back off after it, they count as unverified: Stop answers `RelayStateUnverified`, and `ClearFault` is
@@ -575,10 +587,10 @@ refused. What proves a given-up write can no longer land depends on the transpor
 - **The HAT emulator**: each access ends within `HatEmulator:RequestTimeout` (1 s by default), and once the client's
   next connection is answered the emulator runs no request of an older one (the
   [client-tagged Hello](emulator.md#settings)), so the first access that succeeds after it settles the write either way.
-- **The Pi's HAT**: each relay write is a synchronous I2C transfer made in the controller's own process while it holds
-  its lock, so no later relays-off write can run before an earlier write has returned. A transfer that does not return
-  holds the lock: Stop then answers `RelayStateUnverified` after its 2 s wait and writes the relays off once the
-  transfer returns.
+- **The Pi's HAT**: each relay write is a synchronous I2C transfer on the HAT's own access thread, one at a time, so no
+  later relays-off write can reach the bus before an earlier write has returned. A transfer that does not return fails
+  at the 1.5 s limit: Stop then answers `RelayStateUnverified` at once, and the relays are written off and verified as
+  soon as the transfer returns.
 
 The supervision cycle reads the relay register back every second while the roof is idle, and at least every second
 while it moves. A register that does not match what was commanded (a late ON among them) stops the motion, or, idle,

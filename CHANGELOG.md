@@ -70,9 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (never through Alpaca or an API key): it lifts only the telescope reasons shown, lasts
   `RoofController:Alpaca:OverrideWindowMinutes` (5, from 1 to 15), is used up by the next Close that gets past the
   controller's own checks, and is dropped on a Stop, a person taking the lease, a restart, and a change to
-  `AllowCommands`, `ServerAddresses`, the window, `RoofSafety:InterlockMode` or the External account's keys. The person who grants steps away from the operator lease.
-- The human Stop hold (#220): every Stop except the Alpaca server's own `AbortSlew` (and every controller start) keeps
-  Alpaca commands refused until a person clears it in the web UI, the terminal or the kiosk.
+  `AllowCommands`, `ServerAddresses`, the window, `RoofSafety:InterlockMode` or the External account's keys. The
+  person who grants steps away from the operator lease while the grant lasts. `hvo-roof alpaca grant` asks at a
+  terminal and cannot be scripted (no `--yes`, no `--reason`; refused without a terminal or with `--json`).
+- The human Stop hold (#220): every Stop except the Alpaca server's own `AbortSlew` (and every controller start, and
+  turning Alpaca commands on) keeps Alpaca commands refused until a person clears it in the web UI, the terminal or
+  the kiosk.
 - The operator lease a person's UI holds while open (#220): while anyone holds it, Alpaca commands are refused. With
   commands on it lapses after `RoofController:Lease:OperatorLeaseIdleMinutes` (10) without input, with a warning a
   minute before; it never stops a motion. Not a maintenance lock-out: use Stop, `AllowCommands` `Off` or the isolator.
@@ -90,10 +93,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Stop is bounded and fenced (#220): a start that passed its checks can no longer energize a relay after a Stop; Stop
-  waits at most 2 s for the controller's lock and otherwise answers `RelayStateUnverified`, writing the relays off as
-  soon as it can, and the protective stops wait the same way. A relay write the controller gave up on keeps the relays
-  unverified, and `ClearFault` refused, until a read-back shows them off.
+- Stop is bounded and fenced (#220): a start that passed its checks can no longer energize a relay after a Stop, a
+  person's Stop raises that fence before anything else runs, and a drive-fault edge raises it too; Stop waits at most
+  2 s for the controller's lock and otherwise answers `RelayStateUnverified`, writing the relays off as soon as it can,
+  and the protective stops wait the same way. An input edge that cannot take the lock in time is applied once it is
+  free, never dropped. A relay write the controller gave up on keeps the relays unverified, and `ClearFault` refused,
+  until a read-back shows them off.
+- Every HAT access is bounded (#220): relay writes and read-back, input reads and the LEDs run on the HAT's own access
+  thread, and the controller waits at most 1.5 s for each. One that runs longer fails as a failed transfer does
+  (relays unverified, `RelayVerificationFailed` latched), lets the controller's lock go, and holds off every later
+  access until it returns; then every relay is written off and verified.
 - Every Stop but the Alpaca server's own `AbortSlew` now sets the human Stop hold and drops any Alpaca grant; the
   External Alpaca account's key may not send Stop (403).
 - The Alpaca server reaches the controller with a `RoofAlpacaServer` key. A phase 1 server's Viewer key still reads

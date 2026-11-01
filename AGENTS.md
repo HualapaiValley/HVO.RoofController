@@ -101,7 +101,11 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   deadlines before renewing; a repeat never revives an expired lease.
 - Shutdown: the host requests a verified stop. An unverified one is retried (all-off every 500 ms until verified,
   disposal or 15 s); the host's wait is bounded even if HAT I/O blocks, and disposal stops waiting for a lock held by
-  blocked HAT I/O after 2 s, deferring its all-off stop until that call returns.
+  blocked HAT I/O after 2 s, and waits for a HAT access past its limit to return, before its all-off stop.
+- HAT accesses are bounded (#220, AA5): every one runs on the HAT's own access thread, and the controller waits at most
+  1.5 s for it (less than Stop's 2 s). Past that it fails as a failed transfer does (relays unverified, the fault
+  latched), the controller's lock is let go, every later access fails at once until it returns, and then every relay is
+  written off and verified; `ClearFault` is refused meanwhile.
 - The container's supervisor turns every relay off and verifies the register whenever the controller is not running
   (after each exit, before each start, after a failed try while it is not running, and when it stops), with the
   controller's own `--relays-off`; it never turns a relay on and never runs while a controller does. The controller
@@ -127,10 +131,11 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 - Stop is bounded and fenced (#220): every command that may start motion carries the controller's command generation,
   which every start and every relays-off path moves on, and a relay ON whose generation is older than the last
   relays-off write is dropped. Stop sets the fence first, then waits at most 2 s for the lock; past that it answers
-  `RelayStateUnverified` and its relays-off write runs once the lock is free. The protective stops wait the same way. A
+  `RelayStateUnverified` and its relays-off write runs once the lock is free. The protective stops wait the same way; a
+  drive-fault edge fences before it waits, and an edge that cannot take the lock in time is applied once it is free. A
   relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault`
   refused) until a read-back shows them off: the emulator transport fences a client's older connections at its next
-  Hello, and on the Pi each I2C write runs under the lock.
+  Hello, and on the Pi each I2C write runs on the HAT's one access thread.
 - `DirectionChangeDelay` (0 to 10 s, default 0: no wait; local-only): every start waits that long after the relays were
   last verified off, admitted first and then waiting without the lock, and runs its checks again before it energizes a
   relay ([docs/alpaca.md](docs/alpaca.md#waiting-out-the-direction-change-delay)).
@@ -138,8 +143,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   value): an Alpaca client's `CloseShutter` reaches the controller only with the External Alpaca account's key
   (`RoofAlpacaCommander`, deny by default, accepted only from loopback and `ServerAddresses`) and a single-use ticket,
   and the controller alone decides it under its lock, with every check an ordinary Close has. It is refused while the
-  human Stop hold is set (every Stop but the Alpaca server's own `AbortSlew` sets it, and so does the controller's start;
-  only a person's UI session clears it), while a person holds the operator lease (a UI's, lapsing after
+  human Stop hold is set (every Stop but the Alpaca server's own `AbortSlew` sets it, and so do the controller's start and
+  turning commands on; only a person's UI session clears it), while a person holds the operator lease (a UI's, lapsing after
   `OperatorLeaseIdleMinutes` without input only while commands are on, never stopping a motion), and unless every
   blocking telescope, read again for that Close within `ScopeRereadBudgetMs`, is clear (the weather never gates it).
   A person's UI grant (one Close, 1 to 15 min, the reasons shown) lifts only a telescope refusal, never the hold, a
