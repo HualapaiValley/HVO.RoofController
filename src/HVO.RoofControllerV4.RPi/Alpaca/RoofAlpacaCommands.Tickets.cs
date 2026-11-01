@@ -179,11 +179,22 @@ public sealed partial class RoofAlpacaCommands
         }
 
         var admission = new Admission(this, ticket, client);
-        var result = await _controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing)
+        Result<RoofControllerStatus> result;
+        try
         {
-            Owner = new RoofMotionOwner(RoofMotionOwnerKind.Alpaca, ticket.Account),
-            Admission = admission
-        }).ConfigureAwait(false);
+            result = await _controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing)
+            {
+                Owner = new RoofMotionOwner(RoofMotionOwnerKind.Alpaca, ticket.Account),
+                Admission = admission
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (admission.UsedGrant is { } used)
+            {
+                EndStepAwayOfUsedGrant(used.Id);
+            }
+        }
 
         if (result.IsSuccessful)
         {
@@ -344,12 +355,13 @@ public sealed partial class RoofAlpacaCommands
         {
             lock (owner._gate)
             {
-                if (owner._grants.Remove(RoofAlpacaCommandKind.Close, out var grant))
+                // The granter's step-away lasts until this Close is decided (AdmitCloseAsync), not just its use-up.
+                owner._grants.Remove(RoofAlpacaCommandKind.Close, out var grant);
+                if (grant is not null && grant.ExpiresAt <= owner._time.GetTimestamp())
                 {
                     owner.EndStepAway_NoLock(grant.Id);
                 }
-
-                if (grant is not null && grant.ExpiresAt > owner._time.GetTimestamp())
+                else if (grant is not null)
                 {
                     UsedGrant = new RoofOverrideGrantRecord(grant.Id, grant.ReasonKeys);
                     owner._logger.LogWarning("AUDIT override grant {GrantId} (by {GrantedBy}) used up by an Alpaca Close on ticket {TicketId}, whatever follows",

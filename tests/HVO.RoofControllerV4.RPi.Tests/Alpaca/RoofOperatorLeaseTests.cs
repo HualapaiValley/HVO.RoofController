@@ -281,4 +281,68 @@ public sealed class RoofOperatorLeaseTests
 
         rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse("only input takes back a lease that lapsed for want of it");
     }
+
+    [TestMethod]
+    public async Task AGrantedCloseThatWaitsOutTheDelay_IsNotRefusedByTheGrantersOwnHeartbeat()
+    {
+        // PR #230 rereview, Opus F11: the step-away lasts until the granted Close is decided, not just until its grant is
+        // used, so a routine no-input heartbeat during the wait does not take the lease back and refuse it.
+        await using var rig = (await AlpacaCommandRig.StartAsync(directionChangeDelay: TimeSpan.FromSeconds(1), parked: false)).Ready();
+        (await rig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Opening))).IsSuccessful.Should().BeTrue();
+        rig.Controller.Stop().IsSuccessful.Should().BeTrue(); // the AbortSlew
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+
+        var close = rig.CloseAsync();
+        await AlpacaCommandRig.WaitUntilAsync(() => rig.Controller.GetCurrentStatusSnapshot().IsStartPending, "the granted Close to wait");
+        rig.Commands.Heartbeat(web, input: false); // the UI's routine heartbeat during the wait
+
+        var outcome = await close;
+        outcome.Result.IsSuccessful.Should().BeTrue(outcome.Result.Error?.Message);
+        rig.Hat.RelayMask.Should().Be(0x0A);
+
+        rig.Commands.Heartbeat(web, input: false);
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("ada", "once the granted Close is decided, the UI holds the lease again");
+    }
+
+    [TestMethod]
+    public async Task GrantingAgain_KeepsTheGrantersOtherSessionsSteppedAway()
+    {
+        // PR #230 rereview, Opus F12: a grant made again replaces the first, and the person stays stepped away in every
+        // session, so their other UI's heartbeat does not take the lease back and drop the new grant.
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        rig.Scope.Parked = false;
+        var web = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        var kiosk = AlpacaCommandRig.Person("ada", pin: true, sessionId: "ada-kiosk");
+        rig.Commands.Heartbeat(web, input: true);
+        rig.Commands.Heartbeat(kiosk, input: true);
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+
+        rig.Commands.Grant(web, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(kiosk, input: false);
+        rig.Commands.Heartbeat(web, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Held.Should().BeFalse();
+        rig.Commands.Grants().Should().ContainSingle("the new grant stands");
+        (await rig.CloseAsync()).Result.IsSuccessful.Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task AnotherPersonsGrant_ReplacingOne_ReleasesTheFirstGrantersStepAway()
+    {
+        var (rig, time) = await StartAsync();
+        await using var _ = rig;
+        var ada = AlpacaCommandRig.Person("ada", sessionId: "ada-web");
+        rig.Commands.Heartbeat(ada, input: true);
+        rig.Commands.Grant(ada, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+
+        rig.Commands.Grant(AlpacaCommandRig.Person("grace", sessionId: "grace-kiosk"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-not-clear:Main"]));
+        time.Advance(Beat);
+        rig.Commands.Heartbeat(ada, input: false);
+
+        rig.Commands.GetStatus().OperatorLease.Holder.Should().Be("ada", "ada's grant is gone, so her step-away is over");
+    }
 }

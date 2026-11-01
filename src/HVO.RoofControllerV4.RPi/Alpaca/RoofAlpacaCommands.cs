@@ -80,8 +80,9 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     // again only with input (a step-away only while its grant lasts).
     private readonly HashSet<string> _idleLapsedSessions = new(StringComparer.Ordinal);
 
-    // The sessions each grant stepped away (by grant id), so they hold the lease again once that grant is gone.
-    private readonly Dictionary<string, string[]> _steppedAwayFor = new(StringComparer.Ordinal);
+    // The person and sessions each grant stepped away (by grant id), so they hold the lease again once that grant is gone
+    // (or, for a grant a Close used, once that Close is decided).
+    private readonly Dictionary<string, (string? Person, string[] Sessions)> _steppedAwayFor = new(StringComparer.Ordinal);
 
     private readonly Dictionary<RoofAlpacaCommandKind, GrantEntry> _grants = [];
     private readonly List<RoofAlpacaAlert> _alerts = [];
@@ -434,13 +435,23 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
                 _time.GetUtcNow(),
                 now + (long)(TimeSpan.FromMinutes(_window).TotalSeconds * _time.TimestampFrequency));
             var replaced = _grants.Remove(request.Kind, out var previous);
-            if (replaced)
+            string[] carried = [];
+            if (replaced && _steppedAwayFor.TryGetValue(previous!.Id, out var before))
             {
-                EndStepAway_NoLock(previous!.Id);
+                if (string.Equals(before.Person, user.Identity?.Name, StringComparison.Ordinal))
+                {
+                    // The same person grants again: they stay stepped away in every session (PR #230 rereview, Opus F12).
+                    _steppedAwayFor.Remove(previous.Id);
+                    carried = before.Sessions;
+                }
+                else
+                {
+                    EndStepAway_NoLock(previous.Id);
+                }
             }
 
             _grants[request.Kind] = grant;
-            var steppedAway = StepAway_NoLock(user, grant.Id);
+            var steppedAway = StepAway_NoLock(user, grant.Id, carried);
             _logger.LogWarning(
                 "AUDIT override grant {GrantId} for one Alpaca {Kind} by {Caller} ({Ui}), {Window} min, lifting {Reasons}{Replaced}; {Leases} operator lease(s) of theirs ended with it",
                 grant.Id, grant.Kind, who, ui, _window, string.Join(", ", keys), replaced ? $"; it replaces grant {previous!.Id}" : string.Empty, steppedAway);
@@ -457,7 +468,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     /// is untouched and still refuses. Once the grant is gone (used, lapsed, revoked, dropped or replaced), those sessions
     /// hold the lease again with their next heartbeat (<see cref="EndStepAway_NoLock"/>).
     /// </summary>
-    private int StepAway_NoLock(ClaimsPrincipal user, string grantId)
+    private int StepAway_NoLock(ClaimsPrincipal user, string grantId, string[] carried)
     {
         var name = user.Identity?.Name;
         var sessions = _leases.Where(entry => string.Equals(entry.Value.Name, name, StringComparison.Ordinal)).Select(entry => entry.Key).ToArray();
@@ -476,7 +487,7 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
             away.Add(SessionId(user));
         }
 
-        _steppedAwayFor[grantId] = [.. away];
+        _steppedAwayFor[grantId] = (name, [.. carried.Union(away, StringComparer.Ordinal)]);
         return sessions.Length;
     }
 
@@ -497,12 +508,25 @@ public sealed partial class RoofAlpacaCommands : IHostedService, IDisposable
     /// </summary>
     private void EndStepAway_NoLock(string grantId)
     {
-        if (_steppedAwayFor.Remove(grantId, out var sessions))
+        if (_steppedAwayFor.Remove(grantId, out var away))
         {
-            foreach (var session in sessions)
+            foreach (var session in away.Sessions)
             {
                 _idleLapsedSessions.Remove(session);
             }
+        }
+    }
+
+    /// <summary>
+    /// The Close that used grant <paramref name="grantId"/> is decided (started, refused or superseded): its granter's
+    /// step-away ends now, not at the use-up point, so a routine heartbeat while the Close waits out the direction-change
+    /// delay does not take the lease back and refuse it (PR #230 rereview, Opus F11).
+    /// </summary>
+    private void EndStepAwayOfUsedGrant(string grantId)
+    {
+        lock (_gate)
+        {
+            EndStepAway_NoLock(grantId);
         }
     }
 
