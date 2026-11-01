@@ -118,7 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   what the grant lifts and that the roof stays open if the weather turns, and sends an Open grant with exactly the
   alert's reasons. While the safety interlock is `Block`, the Open grant is shown disabled with the controller's reason
   (the terminal says why in its place, and `hvo-roof alpaca grant` refuses before asking, exit 7). The stepped-away
-  notice names every grant in force, and `hvo-roof alpaca revoke --kind Open` revokes an Open grant.
+  notice names every grant in force, and `hvo-roof alpaca revoke --kind Open` revokes an Open grant. `hvo-roof alpaca
+  alerts` says `GRANT unavailable`, with the reason, for a refused Open while the safety interlock is `Block`.
 
 ### Changed
 
