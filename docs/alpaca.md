@@ -298,6 +298,12 @@ the [deploy script](deployment.md) or the [installer](install.md) ([Not yet](#no
    ([Clients](#clients)); then someone with the local credential sets `RoofController:Alpaca:AllowCommands` to
    `CloseOnly` ([Controller settings](#controller-settings)). Measure the telescopes' latency first and size
    `ScopeRereadBudgetMs` from it.
+6. **To let clients open the roof too** (optional, once Close has worked for a while): check that at least one weather
+   source is `Required` and every telescope that can reach the roof's path is configured with `BlocksRoof` (or decide
+   deliberately to set `AllowOpenWithoutBlockingScopes`, [The Open rule](#the-open-rule)), run the client against the
+   [HAT emulator](emulator.md) first ([Clients](#clients)), then set `AllowCommands` to `OpenAndClose` with the local
+   credential. (Turning commands on from `Off` sets the human Stop hold: a person clears it before the first Alpaca
+   command. Going from `CloseOnly` to `OpenAndClose` leaves the hold as it is, and drops every grant.)
 
 ## Server settings
 
