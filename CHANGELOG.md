@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and preserves the IDs in backup/restore. System/About and `hvo-roof alpaca status` report the server's port, IDs and
   client counts. Default upgrades start no Alpaca process or listener, and `AllowCommands` stays `Off`.
 
+### Fixed
+
+- `hvo-roof alpaca grant` now checks for a controlling foreground terminal with all three standard streams on the
+  same tty, rejects known automation markers, and requires the command kind plus a fresh displayed value for both
+  Open and Close grants (#231 item 1). The CLI and Alpaca docs describe what these checks cannot prevent.
+- `hvo-roof alpaca revoke` without `--kind` now revokes an Open grant when it is the only grant in force; with both
+  kinds in force it continues to revoke only Close (#233 item 3).
+
 ## [4.4.0] - 2026-11-01
 
 ### Added
