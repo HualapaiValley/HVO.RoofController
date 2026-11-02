@@ -17,7 +17,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
 /// <summary>
 /// <c>hvo-roof alpaca</c> (#220) against the controller in process with Alpaca Close on: the state, clearing the Stop hold,
-/// override grants (by alert, with exactly its reasons, or by reason for scripts), revoking, alerts and acknowledging,
+/// override grants (by alert, with exactly its reasons and a fresh typed confirmation), revoking, alerts and acknowledging,
 /// their JSON, and the refusal of an API key for everything only a person may do, before anything is sent. And
 /// <c>keys add|set</c> taking the Alpaca accounts' roles.
 /// </summary>
@@ -148,7 +148,7 @@ public sealed class RoofCliAlpacaCommandTests
         var alert = AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main", "scope-not-clear:Guide");
         using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
-        rig.Input.Enqueue("y");
+        rig.AnswerPrompt = AnswerGrant;
 
         var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
 
@@ -158,7 +158,7 @@ public sealed class RoofCliAlpacaCommandTests
             result.Error.Should().Contain(line);
         }
 
-        rig.Prompts.Should().ContainSingle().Which.Should().Be(($"{RoofAlpacaText.GrantCloseLabel}? [y/N] ", false));
+        rig.Prompts.Should().ContainSingle().Which.Prompt.Should().MatchRegex(@"^Allow this Close once\? Type 'Close [0-9]{6}' to confirm: $");
         var grant = AlpacaCliSupport.Commands(host).Grants().Should().ContainSingle().Subject;
         grant.Kind.Should().Be(RoofAlpacaCommandKind.Close);
         grant.ReasonKeys.Should().Equal(alert.ReasonKeys);
@@ -267,6 +267,173 @@ public sealed class RoofCliAlpacaCommandTests
     }
 
     [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Open)]
+    public async Task Grant_AutomationMarker_RefusesBeforeReadingOrSending(RoofAlpacaCommandKind kind)
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var alert = kind == RoofAlpacaCommandKind.Open
+            ? AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky")
+            : AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host) { Interactive = true, WrapHandler = inner => new RequestLog(inner, requests) };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        requests.Clear();
+        rig.Environment["CI"] = "true";
+        rig.Input.Enqueue("y");
+
+        var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+
+        result.Code.Should().Be(RoofExitCode.ConfirmationRequired, result.ToString());
+        requests.Should().BeEmpty();
+        rig.Prompts.Should().BeEmpty();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Open)]
+    public async Task Grant_AFixedYesDoesNotConfirm(RoofAlpacaCommandKind kind)
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var alert = kind == RoofAlpacaCommandKind.Open
+            ? AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky")
+            : AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        using var rig = new CliRig(host) { Interactive = true };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        rig.Input.Enqueue("y");
+
+        var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+
+        result.Code.Should().Be(RoofExitCode.ConfirmationRequired, result.ToString());
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close, false)]
+    [DataRow(RoofAlpacaCommandKind.Open, false)]
+    [DataRow(RoofAlpacaCommandKind.Close, true)]
+    [DataRow(RoofAlpacaCommandKind.Open, true)]
+    public async Task Grant_RequiresAnEligibleTerminal_BeforeReadsAndAgainAfterConfirmation(RoofAlpacaCommandKind kind, bool loseTerminal)
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var alert = kind == RoofAlpacaCommandKind.Open
+            ? AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky")
+            : AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        var requests = new ConcurrentQueue<string>();
+        var checks = 0;
+        using var rig = new CliRig(host)
+        {
+            Interactive = true,
+            CheckGrantTerminal = () => loseTerminal && ++checks == 1,
+            AnswerPrompt = AnswerGrant,
+            WrapHandler = inner => new RequestLog(inner, requests)
+        };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        requests.Clear();
+
+        var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+
+        result.Code.Should().Be(RoofExitCode.ConfirmationRequired, result.ToString());
+        requests.Should().NotContain(request => request.StartsWith("POST", StringComparison.Ordinal));
+        rig.Prompts.Should().HaveCount(loseTerminal ? 1 : 0);
+        if (!loseTerminal) requests.Should().BeEmpty();
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Open)]
+    public async Task Grant_WrongKindOrMissingConfirmation_SendsNoGrant(RoofAlpacaCommandKind kind)
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var alert = kind == RoofAlpacaCommandKind.Open
+            ? AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky")
+            : AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        using var rig = new CliRig(host) { Interactive = true };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        rig.AnswerPrompt = (prompt, secret) => AnswerGrant(prompt, secret)
+            .Replace(kind.ToString(), kind == RoofAlpacaCommandKind.Open ? "Close" : "Open", StringComparison.Ordinal);
+        var wrongKind = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+        wrongKind.Code.Should().Be(RoofExitCode.ConfirmationRequired, wrongKind.ToString());
+        rig.AnswerPrompt = null;
+        var eof = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+        eof.Code.Should().Be(RoofExitCode.ConfirmationRequired, eof.ToString());
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+    }
+
+    private static string AnswerGrant(string prompt, bool secret)
+    {
+        secret.Should().BeFalse("the challenge is a confirmation, not a credential");
+        var match = System.Text.RegularExpressions.Regex.Match(prompt, @"Type '(Open|Close) ([0-9]{6})' to confirm: $");
+        match.Success.Should().BeTrue("the typed confirmation includes its kind and a fresh displayed value");
+        return $"{match.Groups[1].Value} {match.Groups[2].Value}";
+    }
+
+    [TestMethod]
+    public void Grant_AutomationMarkers_AreRefusedEvenWithTerminalInput()
+    {
+        foreach (var name in RoofGrantTerminal.AutomationMarkers)
+        {
+            RoofGrantTerminal.HasAutomationMarker(key => key == name ? "set" : null).Should().BeTrue(name);
+        }
+        RoofGrantTerminal.HasAutomationMarker(key => key == "TERM" ? "dumb" : null).Should().BeTrue();
+        RoofGrantTerminal.HasAutomationMarker(key => key == "DEBIAN_FRONTEND" ? "noninteractive" : null).Should().BeTrue();
+        RoofGrantTerminal.HasAutomationMarker(_ => null).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task Revoke_WithoutKind_WhenBothGrantsAreInForce_StillRevokesOnlyClose()
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        using var rig = new CliRig(host);
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        var commands = AlpacaCliSupport.Commands(host);
+        commands.Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["weather-unsafe:Sky"]))
+            .Grant.Should().NotBeNull();
+        commands.Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-unknown:Main"]))
+            .Grant.Should().NotBeNull();
+
+        var result = await rig.RunAsync("alpaca", "revoke", "--json");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Json.GetProperty("revoked").GetString().Should().Be("Close");
+        commands.Grants().Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+    }
+
+    [TestMethod]
+    public async Task Revoke_ExplicitClose_DoesNotRevokeAnOpenGrant()
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        using var rig = new CliRig(host);
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        var commands = AlpacaCliSupport.Commands(host);
+        commands.Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["weather-unsafe:Sky"]))
+            .Grant.Should().NotBeNull();
+
+        var result = await rig.RunAsync("alpaca", "revoke", "--kind", "Close");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        commands.Grants().Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+    }
+
+    [TestMethod]
+    public async Task Revoke_WithoutKind_RevokesTheOnlyOpenGrant()
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        using var rig = new CliRig(host);
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        AlpacaCliSupport.Commands(host).Grant(AlpacaCommandRig.Person("ada"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["weather-unsafe:Sky"]))
+            .Grant.Should().NotBeNull();
+
+        var result = await rig.RunAsync("alpaca", "revoke");
+
+        result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+        result.Out.Should().Be("Revoked the Open grant." + Environment.NewLine);
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
     public async Task Revoke_RevokesTheCloseGrant_AndThenSaysThereIsNone()
     {
         using var host = AlpacaCliSupport.CreateHost();
@@ -295,7 +462,7 @@ public sealed class RoofCliAlpacaCommandTests
         var alert = AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky", "scope-unknown:Main", RoofAlpacaContract.NoRequiredWeatherKey);
         using var rig = new CliRig(host) { Interactive = true };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
-        rig.Input.Enqueue("y");
+        rig.AnswerPrompt = AnswerGrant;
 
         var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
 
@@ -306,7 +473,7 @@ public sealed class RoofCliAlpacaCommandTests
         }
 
         result.Error.Should().Contain("Once open, the roof stays open if the weather turns");
-        rig.Prompts.Should().ContainSingle().Which.Should().Be(($"{RoofAlpacaText.GrantOpenLabel}? [y/N] ", false));
+        rig.Prompts.Should().ContainSingle().Which.Prompt.Should().MatchRegex(@"^Allow this Open once\? Type 'Open [0-9]{6}' to confirm: $");
         var grant = AlpacaCliSupport.Commands(host).Grants().Should().ContainSingle().Subject;
         grant.Kind.Should().Be(RoofAlpacaCommandKind.Open);
         grant.ReasonKeys.Should().Equal(alert.ReasonKeys);
@@ -389,7 +556,7 @@ public sealed class RoofCliAlpacaCommandTests
             WrapHandler = inner => new RequestLog(new AlpacaOpenUiSupport.BeforeSending(inner, request => AlpacaOpenUiSupport.BlockBeforeTheGrant(host.Services, request)), requests)
         };
         await AlpacaCliSupport.SignInAsync(host, rig, "ada");
-        rig.Input.Enqueue("y");
+        rig.AnswerPrompt = AnswerGrant;
 
         var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
 
