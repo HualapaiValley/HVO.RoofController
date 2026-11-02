@@ -38,6 +38,84 @@ public sealed class InstallerBackupTests
     private static readonly InstallAnswers ControllerAndKiosk = new() { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AlpacaRestore_AcceptsRetainedRegularIdentities(bool different)
+    {
+        using var pi = await InstalledPiAsync();
+        var path = ControllerLayout.System.AlpacaDevicesFile;
+        const string ids = "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}";
+        pi.Write(path, ids);
+        await BackUpAndPurgeAsync(pi);
+        pi.Write(path, different ? ids.Replace("0001", "0002", StringComparison.Ordinal) : ids);
+
+        var run = await RestoreAsync(pi, Kept, "--replace");
+
+        run.ExitCode.Should().Be(0, run.ToString());
+        pi.Read(path).Should().Be(ids);
+    }
+
+    [TestMethod]
+    [DataRow("symlink")]
+    [DataRow("fifo")]
+    [DataRow("oversized")]
+    [DataRow("directory-link")]
+    public async Task AlpacaRestore_RefusesUnsafeRetainedIdentities_BeforeReadingOrChangingFiles(string kind)
+    {
+        using var pi = await InstalledPiAsync();
+        var path = ControllerLayout.System.AlpacaDevicesFile;
+        const string ids = "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}";
+        pi.Write(path, ids);
+        await BackUpAndPurgeAsync(pi);
+        pi.Folder(ControllerLayout.System.AlpacaData);
+        if (kind == "symlink")
+        {
+            pi.Write("/root/retained.json", ids);
+            File.CreateSymbolicLink(pi.OnDisk(path), pi.OnDisk("/root/retained.json"));
+        }
+        else if (kind == "directory-link")
+        {
+            Directory.Delete(pi.OnDisk(ControllerLayout.System.AlpacaData));
+            pi.Write("/root/retained/alpaca-devices.json", ids);
+            Directory.CreateSymbolicLink(pi.OnDisk(ControllerLayout.System.AlpacaData), pi.OnDisk("/root/retained"));
+        }
+        else if (kind == "oversized") pi.Write(path, new string(' ', 4097) + ids);
+        else mkfifo(pi.OnDisk(path), 0b110_000_000).Should().Be(0);
+        pi.Ran.Clear();
+
+        var restoring = Task.Run(() => RestoreAsync(pi, Kept, "--replace"));
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var released = 0;
+        // Release a regressed blocking FIFO open, so the red test fails instead of hanging the test host.
+        while (await Task.WhenAny(restoring, Task.Delay(50)) != restoring)
+        {
+            if (kind == "fifo" && elapsed.Elapsed > TimeSpan.FromSeconds(1)
+                && open(pi.OnDisk(path), OperatingSystem.IsMacOS() ? 0x5 : 0x801) is var writer and >= 0)
+            {
+                released++;
+                close(writer);
+            }
+            if (elapsed.Elapsed > TimeSpan.FromSeconds(15)) Assert.Fail("Restore did not refuse the unsafe identity destination.");
+        }
+        var run = await restoring;
+
+        released.Should().Be(0, "restore must reject the FIFO without opening a blocking reader");
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain("Alpaca device identities");
+        pi.Exists("/etc/hvo-roof").Should().BeFalse("all destination checks precede restoration writes");
+        pi.Ran.Should().NotContain(command => command.Program == "chown");
+    }
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int mkfifo(string path, uint mode);
+
+    [DllImport("libc", SetLastError = true, CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    private static extern int open(string path, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int close(int descriptor);
+
+    [TestMethod]
     [DataRow("1655:1655")]
     [DataRow("UNKNOWN:UNKNOWN")]
     [DataRow("alpaca:alpaca")]

@@ -822,6 +822,19 @@ internal static class BackupCommands
 
     private static StepChange ChangeFor(InstallerMachine machine, BackupEntry entry)
     {
+        if (entry.Path == ControllerLayout.System.AlpacaData)
+        {
+            try
+            {
+                var attributes = File.GetAttributes(machine.OnDisk(entry.Path));
+                if ((attributes & FileAttributes.ReparsePoint) != 0 || (attributes & FileAttributes.Directory) == 0)
+                    throw new InstallerRefusedException("The retained Alpaca device identities directory must be a directory itself, never a link or another file type. Nothing was restored.");
+            }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return StepChange.Create;
+            }
+        }
         if (entry.Type == BackupEntry.Folder)
         {
             return machine.FileExists(entry.Path) ? StepChange.Blocked
@@ -835,7 +848,20 @@ internal static class BackupCommands
             return StepChange.Blocked;
         }
 
-        if (machine.ReadBytes(entry.Path) is not { } current)
+        byte[]? current;
+        try
+        {
+            current = entry.Path == ControllerLayout.System.AlpacaDevicesFile
+                ? machine.ReadRegularBytes(entry.Path, noFollow: true, maxBytes: 4096)
+                : machine.ReadBytes(entry.Path);
+        }
+        catch (Exception error) when (entry.Path == ControllerLayout.System.AlpacaDevicesFile
+            && error is IOException or UnauthorizedAccessException)
+        {
+            throw new InstallerRefusedException("The retained Alpaca device identities must be a readable regular file of at most 4096 bytes, never a link or special file. Nothing was restored.");
+        }
+
+        if (current is null)
         {
             return StepChange.Create;
         }

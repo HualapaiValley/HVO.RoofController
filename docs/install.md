@@ -1562,7 +1562,9 @@ would: one a restore could not read is not kept, and the backup fails.
 - The Alpaca identity directory is the sole narrow exception to root-owned folders: it may belong to UID/GID `1655`,
   mode `0755`. Only its regular `alpaca-devices.json` is read without following links, capped at 4 KiB and validated
   as the GUID-only identity dictionary. No lock file or other Alpaca-owned content enters the archive. Restore writes
-  these public identities as `0644` in the `0755` directory; older backups with no Alpaca file still restore.
+  these public identities as `0644` in the `0755` directory; older backups with no Alpaca file still restore. When
+  comparing retained identities, restore also uses the bounded no-follow reader and refuses links, special files
+  and a linked identity directory before writing restored files or changing ownership.
 - Every other folder it reads must be root's, with only root writing to it: whoever else could change one could put a file of
   theirs in place of another as it is read. Such a folder is refused, with the `chown` and `chmod` that fix it, and
   nothing is written.

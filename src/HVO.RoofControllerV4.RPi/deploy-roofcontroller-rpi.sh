@@ -2608,6 +2608,25 @@ check_loaded_image() {
 read_alpaca_metadata() {
   local id=$1 metadata
   metadata=$(dockerc inspect --format '{{json .Config.Env}}' "${id}") || return 1
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "${metadata}" | jq -nr '
+      ["Alpaca__Enabled","HVO_ALPACA_LAN_ADDRESS","Alpaca__Discovery__AdvertisedPort",
+       "HVO_ALPACA_API_KEY_FILE","HVO_ALPACA_DATA_DIR","HVO_ALPACA_DISCOVERY_PORT"] | map(ascii_downcase) as $keys
+      | input | if type != "array" or any(.[]; type != "string") then error("invalid environment") else . end
+      | reduce .[] as $entry ({};
+          ($entry | index("=")) as $at
+          | if $at == null then . else
+              ($entry[:$at] | gsub(":";"__") | ascii_downcase) as $name
+              | $entry[$at+1:] as $value
+              | if ($keys | index($name)) == null then .
+                elif has($name) or ($value | contains("\n") or contains("\r")) then error("ambiguous environment")
+                else .[$name] = $value end
+            end)
+      | . as $data | $keys[] | $data[.] // ""
+    ' 2>/dev/null
+    return $?
+  fi
+  command -v python3 >/dev/null 2>&1 || return 1
   printf '%s' "${metadata}" | python3 -c '
 import json,sys
 entries=json.load(sys.stdin); data={}
@@ -2625,6 +2644,23 @@ for key in keys:
     if "\n" in value or "\r" in value: sys.exit(1)
     print(value)
 ' 2>/dev/null
+}
+
+# The responder gets the server's network restrictions, using either supported JSON parser.
+alpaca_discovery_environment() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -j '.[] | select(test("^(Alpaca__AllowedNetworks__[0-9]+|Alpaca__Discovery__IPv6)="; "i")) | . + "\u0000"'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json,re,sys
+for entry in json.load(sys.stdin):
+    key,sep,value=entry.partition("=")
+    if sep and (re.fullmatch(r"Alpaca__AllowedNetworks__[0-9]+", key, re.I) or key.lower()=="alpaca__discovery__ipv6"):
+        sys.stdout.buffer.write(entry.encode()+b"\0")
+'
+  else
+    return 1
+  fi
 }
 
 # A successfully running controller does not prove its optional third process started. Check both supervision
@@ -2709,13 +2745,7 @@ sync_discovery() {
     --env Alpaca__Enabled=true --env "Alpaca__PublishedAddress=${address}" --env "Alpaca__Discovery__Port=${discovery_port}"
     --env "Alpaca__Discovery__AdvertisedPort=${port}" --env Alpaca__Discovery__ReadyFilePath=/tmp/alpaca-discovery-ready)
   local entry filter_file="${WORK_DIR}/discovery-network.env"
-  if ! dockerc inspect --format '{{json .Config.Env}}' "${id}" | python3 -c '
-import json,re,sys
-for entry in json.load(sys.stdin):
-    key,sep,value=entry.partition("=")
-    if sep and (re.fullmatch(r"Alpaca__AllowedNetworks__[0-9]+", key, re.I) or key.lower()=="alpaca__discovery__ipv6"):
-        sys.stdout.buffer.write(entry.encode()+b"\0")
-' >"${filter_file}"; then return 1; fi
+  if ! dockerc inspect --format '{{json .Config.Env}}' "${id}" | alpaca_discovery_environment >"${filter_file}"; then return 1; fi
   while IFS= read -r -d '' entry; do discovery_args+=(--env "${entry}"); done <"${filter_file}"
   dockerc run -d --name "${DISCOVERY_CONTAINER_NAME}" --restart unless-stopped --stop-timeout 3 \
     --label "${DISCOVERY_OWNER_LABEL}=${CONTAINER_NAME}" --pull never --health-cmd 'test -f /tmp/alpaca-discovery-ready' --health-interval 5s --health-timeout 2s --health-retries 3 \

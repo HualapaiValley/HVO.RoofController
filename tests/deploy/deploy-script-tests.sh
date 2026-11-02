@@ -5124,6 +5124,24 @@ test_rollback_without_current_controller_is_undone_on_failed_start() {
 
 ALPACA_ENV=(ALPACA_ENABLED=true ALPACA_LAN_ADDRESS=192.168.1.20 ALPACA_API_KEY_FILE=/etc/hvo-roof/secrets/alpaca-server-key)
 
+test_alpaca_fresh_deployment_with_jq_only_keeps_default_off_and_supports_opt_in() {
+  local enabled
+  for enabled in false true; do
+    local -a alpaca=()
+    [[ "${enabled}" == false ]] || alpaca=("${ALPACA_ENV[@]}")
+    # Bash functions hide Python only from the deploy script; the external fake Docker can still use its interpreter.
+    # shellcheck disable=SC2016
+    deploy "${HTTPS_ENV[@]}" ${alpaca[@]+"${alpaca[@]}"} \
+      'BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = python3 ]; then return 1; fi; builtin command "$@"; }' \
+      'BASH_FUNC_python3%%=() { return 127; }'
+    assert_status 0
+    assert_container roof-controller new true unless-stopped
+    [[ "$(docker_calls stop | jq -s length)" == 0 ]] || fail_test "a fresh jq-only deployment entered recovery"
+    [[ "${enabled}" == false ]] || assert_container roof-controller-discovery new true unless-stopped
+    setup_fresh_state
+  done
+}
+
 test_alpaca_default_publishes_nothing_and_starts_no_discovery() {
   deploy "${HTTPS_ENV[@]}"
   assert_status 0

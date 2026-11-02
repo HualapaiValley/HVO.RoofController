@@ -225,6 +225,9 @@ The Alpaca API has no real authentication, so the server keeps itself small and 
 - **Off by default, LAN-only.** It starts nothing unless `Alpaca:Enabled` is true, and listens only on the
   `ListenAddresses` it is given. A public address is refused. Use this computer's LAN address, or `127.0.0.1`.
 - **An address allowlist.** Only clients within `AllowedNetworks` are answered (403 otherwise), discovery included.
+  Deployment's `GET /management/apiversions` probe is also answered from loopback when a LAN-only allowlist excludes
+  it. That exception exposes only protocol versions; device routes, commands and the configured-device list still
+  require an allowed address. The Host and Origin checks also apply to the probe.
   By default these are loopback and the private ranges (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10),
   not carrier-grade NAT (100.64/10, which overlay VPNs use). A network beyond them is refused. Narrow it to the site's
   LAN, for example `192.168.1.0/24`. Behind Docker's NAT every client can look like the gateway, so the allowlist is
@@ -369,7 +372,7 @@ does not hold them.
 | `Port` | `11111` | The Alpaca port. |
 | `PublishedAddress` | none | When supplied by deployment, one private IPv4 LAN address on which Docker publishes TCP. Wildcard, loopback, public and overlay addresses are refused before listening. |
 | `StatusFilePath` | none | Optional sanitized server heartbeat for the controller; the supervisor sets `/run/hvo-roof/alpaca-status/status.json`. |
-| `AllowedNetworks` | loopback and the private ranges | The networks (CIDR) it answers, discovery included. Each must lie within loopback and the private ranges. |
+| `AllowedNetworks` | loopback and the private ranges | The networks (CIDR) it answers, discovery included. Each must lie within loopback and the private ranges. The read-only loopback `GET /management/apiversions` deployment probe remains available with a LAN-only list. |
 | `AllowedHosts` | none | Host names a request may name, besides IP addresses, `localhost` and this computer's name. |
 | `ControllerUrl` | `http://localhost:8080` | The controller's API. |
 | `ControllerApiKeyFile` | none (required) | The file holding the server's own account's key (`RoofAlpacaServer`), on one line, readable only by its owner. It never holds the External account's key: clients send that. |

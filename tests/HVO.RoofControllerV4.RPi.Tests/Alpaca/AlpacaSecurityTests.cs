@@ -16,6 +16,33 @@ namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
 public sealed class AlpacaSecurityTests
 {
     [TestMethod]
+    [DataRow("127.0.0.1")]
+    [DataRow("::1")]
+    [DataRow("::ffff:127.0.0.1")]
+    public async Task ALanOnlyAllowlist_AllowsOnlyTheLocalDeploymentVersionProbe(string address)
+    {
+        var settings = new Dictionary<string, string?> { ["Alpaca:AllowedNetworks:0"] = "192.168.7.0/24" };
+        var roof = RoofServiceMock.Create();
+        await using var alpaca = await AlpacaTestHost.StartAsync(RoofClientApiTests.CreateHost(roof), settings,
+            IPAddress.Parse(address), waitForStatus: false);
+
+        (await alpaca.Http.GetAsync("/management/apiversions")).StatusCode.Should().Be(HttpStatusCode.OK,
+            "deployment must verify the listener without widening the device allowlist");
+        (await alpaca.Http.GetAsync("/management/v1/configureddevices")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await alpaca.Http.GetAsync("/api/v1/dome/0/name")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await alpaca.PutRawAsync("abortslew", "ClientID=1")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await alpaca.Http.PutAsync("/management/apiversions", new StringContent(""))).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        using var origin = new HttpRequestMessage(HttpMethod.Get, "/management/apiversions");
+        origin.Headers.Add("Origin", "http://attacker.example.com");
+        (await alpaca.Http.SendAsync(origin)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        using var host = new HttpRequestMessage(HttpMethod.Get, "/management/apiversions");
+        host.Headers.Host = "attacker.example.com";
+        (await alpaca.Http.SendAsync(host)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        roof.Verify(service => service.Stop(It.IsAny<RoofControllerStopReason>()), Times.Never());
+    }
+
+    [TestMethod]
     [DataRow("203.0.113.9", DisplayName = "a public address")]
     [DataRow("100.64.1.2", DisplayName = "carrier-grade NAT (overlay VPNs)")]
     public async Task AClientOutsideTheAllowedNetworks_IsRefused_BeforeAnythingElse(string address)
