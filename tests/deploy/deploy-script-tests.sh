@@ -323,12 +323,14 @@ call_index() {
   echo "${line:-0}"
 }
 
+# Consume the complete log before choosing one call: head can close early and trip pipefail when multiple
+# application/discovery runs produce enough output to exceed the pipe buffer.
 preflight_args() {
-  docker_calls run | jq -c 'select(index("--rm"))' | head -n 1
+  docker_calls run | jq -cs 'map(select(index("--rm"))) | .[0] // empty'
 }
 
 controller_run_args() {
-  docker_calls run | jq -c 'select(index("-d"))' | head -n 1
+  docker_calls run | jq -cs 'map(select(index("-d"))) | .[0] // empty'
 }
 
 sha256_hex() {
