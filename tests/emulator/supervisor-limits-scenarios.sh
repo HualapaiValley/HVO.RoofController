@@ -141,8 +141,10 @@ with socket.socket() as tcp, socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as 
     tcp.bind((sys.argv[1],47680))
     udp.bind(('',47681))
 PY
+  # The installer creates the bind source before invoking deploy; reproduce that setup in this real-Docker fixture.
+  as_root install -d -m 0755 -o 0 -g 0 "${work}/alpaca-data"
   deploy ALPACA_ENABLED=true "ALPACA_LAN_ADDRESS=${address}" ALPACA_PORT=47680 ALPACA_DISCOVERY_PORT=47681 \
-    "ALPACA_API_KEY_FILE=${work}/secrets/RoofControllerSecurity__ApiKeys__0__Key"
+    "ALPACA_API_KEY_FILE=${work}/secrets/RoofControllerSecurity__ApiKeys__0__Key" "ALPACA_DATA_DIR=${work}/alpaca-data"
   (( DEPLOY_STATUS == 0 )) || fail "the installer-style Alpaca key could not be mounted or validated"
   [[ "$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/alpaca/controller-key)" == 'alpaca:alpaca 400' ]] \
     || fail "the deployed Alpaca key is not a private copy"
