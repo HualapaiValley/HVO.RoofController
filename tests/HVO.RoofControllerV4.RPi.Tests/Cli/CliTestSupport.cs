@@ -71,6 +71,10 @@ internal sealed class CliRig : IDisposable
     /// <summary>Whether the input is a terminal (a person can answer prompts).</summary>
     public bool Interactive { get; set; }
 
+    public Func<bool>? CheckGrantTerminal { get; set; }
+
+    public Func<string, bool, string?>? AnswerPrompt { get; set; }
+
     public Func<string, CancellationToken, Task<string>>? ObtainLocalAssertion { get; set; }
 
     public TimeProvider Time { get; set; } = TimeProvider.System;
@@ -100,10 +104,11 @@ internal sealed class CliRig : IDisposable
             lock (Prompts)
             {
                 Prompts.Add((prompt, secret));
-                return Input.Count > 0 ? Input.Dequeue() : null;
+                return AnswerPrompt is { } answer ? answer(prompt, secret) : Input.Count > 0 ? Input.Dequeue() : null;
             }
         },
         IsInteractive = Interactive,
+        CheckGrantTerminal = CheckGrantTerminal ?? (() => Interactive),
         Time = Time,
         ObtainLocalAssertion = ObtainLocalAssertion ?? RoofCliLocalAuthority.ObtainAsync,
         CreateHandler = _server is null ? null : () => (WrapHandler ?? (handler => handler))(ClientTestSupport.CreateHandler(_server)),

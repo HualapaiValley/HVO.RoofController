@@ -482,9 +482,10 @@ poll last saw the mount unparked.
 
 ### Override grants
 
-A person may let **one** refused Close through: a **grant**, made in the web UI, the terminal (or `hvo-roof alpaca
-grant`, which asks at a terminal and cannot be scripted) or the kiosk from the refusal's alert, by a person with the
-Operator role (on the kiosk with their own PIN). Never through Alpaca, and never with an API key (403).
+A person may let **one** refused Close through: a **grant**, made in the web UI, the terminal (or
+`hvo-roof alpaca grant`, which requires a controlling foreground terminal and a fresh typed confirmation) or the
+kiosk from the refusal's alert, by a person with the Operator role (on the kiosk with their own PIN). Never through
+Alpaca, and never with an API key (403).
 
 - **It lifts only the reasons it was given**, by key (`scope-not-clear:<telescope>`, `scope-unknown:<telescope>`; a
   re-read that timed out is `scope-unknown`). A Close refused for any other reason (say a second telescope unparked
@@ -508,6 +509,13 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
   or dropped), their UI holds the lease again with its next heartbeat. Another person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
+
+`hvo-roof alpaca grant` uses the same terminal and confirmation checks for **Open and Close** grants: all standard
+streams on the same controlling foreground tty, Linux tty/session matching, no known automation environment marker,
+then typing the command kind and a fresh displayed six-digit value. Redirected answers, common detached/background pty wrappers and
+fixed `yes` answers are refused. These are practical checks, not proof of human presence: a program that obtains a
+controlling foreground pty, hides its markers and reads the challenge can still answer it; a determined local root
+user can always script a pty. The [CLI grant rules and their limits](cli.md#alpaca) describe the checks.
 
 A Close grant lifts only a Close's reasons; an Open has grants of its own ([Open grants](#open-grants)).
 
@@ -845,9 +853,10 @@ monitor trigger, say) sends its own `CloseShutter`, which the weather never gate
 ### Open grants
 
 A person may let **one** refused Open through, as for a Close ([Override grants](#override-grants)): from the refused
-Open's alert ("Allow this Open once") in the web UI, the terminal (or `hvo-roof alpaca grant`, interactive only) or the
-kiosk, by a person with the override role, never through Alpaca or with an API key (403). Each UI asks first ("Allow
-one Alpaca Open?"), with what the grant lifts and that the roof stays open if the weather turns.
+Open's alert ("Allow this Open once") in the web UI, the terminal (or `hvo-roof alpaca grant`, with the same terminal
+checks and typed confirmation as a Close) or the kiosk, by a person with the override role, never through Alpaca or
+with an API key (403). Each UI asks first ("Allow one Alpaca Open?"), with what the grant lifts and that the roof stays
+open if the weather turns.
 
 - **Its own kind.** An Open grant lifts only an Open's reasons, and a Close grant only a Close's: one of each may be in
   force at once, each used up by one command of its kind.

@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Globalization;
+using System.Security.Cryptography;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 
@@ -76,7 +77,7 @@ public static partial class RoofCli
                 "grant",
                 $"{RoofAlpacaText.GrantCloseLabel} or {RoofAlpacaText.GrantOpenLabel}: an override grant for one Alpaca Close (or Open) "
                 + "despite a refused Close's (or Open's) reasons, for the controller's override window (operator; a person's session, "
-                + "at a terminal: it asks first, and cannot be scripted). It never bypasses the fault latch, the interlocks, the limits, "
+                + "at a controlling foreground terminal: it asks for a fresh typed confirmation). It never bypasses the fault latch, the interlocks, the limits, "
                 + "the motor protections, a person's operator lease or the Stop hold. No Open grant can be made while the safety "
                 + "interlock is Block.")
             {
@@ -86,12 +87,8 @@ public static partial class RoofCli
             {
                 using var client = ConnectPerson(context);
 
-                // An override is a person's decision, asked and answered at a terminal (Roy's decision on PR #230): no
-                // script, scheduled job or answers file grants one. Refused before anything is read or sent.
-                if (!context.Host.IsInteractive || context.Json)
-                {
-                    throw new RoofCliRefusedException(RoofCliAlpaca.GrantNeedsATerminal, RoofExitCode.ConfirmationRequired);
-                }
+                // Refuse common automation before any controller request; a pty alone does not prove a person.
+                RequireGrantTerminal(context);
 
                 var status = await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
                 var alpaca = status.Alpaca ?? throw new RoofCliRefusedException(RoofCliAlpaca.NoState, RoofExitCode.Failed);
@@ -118,10 +115,15 @@ public static partial class RoofCli
                     context.Host.Error.WriteLine(line);
                 }
 
-                if (!Confirm(context, $"{RoofAlpacaText.GrantLabel(kind)}?"))
+                var confirmation = $"{kind} {RandomNumberGenerator.GetInt32(100000, 1000000).ToString(CultureInfo.InvariantCulture)}";
+                var answer = context.Host.ReadLine($"{RoofAlpacaText.GrantLabel(kind)}? Type '{confirmation}' to confirm: ", false);
+                if (!string.Equals(answer?.Trim(), confirmation, StringComparison.Ordinal))
                 {
+                    context.Host.Error.WriteLine("Not confirmed; nothing was sent.");
                     return (int)RoofExitCode.ConfirmationRequired;
                 }
+
+                RequireGrantTerminal(context);
 
                 // Exactly the reasons shown: the alert's own keys.
                 var grant = await PersonOnlyAsync(() => client.Alpaca.GrantAsync(kind, [.. question.ReasonKeys], cancellationToken))
@@ -133,10 +135,9 @@ public static partial class RoofCli
 
         private Command CreateAlpacaRevokeCommand()
         {
-            var kind = new Option<RoofAlpacaCommandKind>("--kind")
+            var kind = new Option<RoofAlpacaCommandKind?>("--kind")
             {
-                Description = "The grant's command: Close (the default) or Open.",
-                DefaultValueFactory = _ => RoofAlpacaCommandKind.Close,
+                Description = "The grant's command: Close or Open. Without it, revoke the only grant in force, or Close when both are in force.",
                 CustomParser = result =>
                 {
                     var text = result.Tokens.Count == 0 ? string.Empty : result.Tokens[0].Value;
@@ -155,14 +156,29 @@ public static partial class RoofCli
             {
                 var which = parseResult.GetValue(kind);
                 using var client = ConnectPerson(context);
+                if (which is null)
+                {
+                    var grants = await client.Alpaca.GetGrantsAsync(cancellationToken).ConfigureAwait(false);
+                    which = grants.Count == 1 ? grants[0].Kind : RoofAlpacaCommandKind.Close;
+                }
                 await PersonOnlyAsync(async () =>
                 {
-                    await client.Alpaca.RevokeAsync(which, cancellationToken).ConfigureAwait(false);
+                    await client.Alpaca.RevokeAsync(which.Value, cancellationToken).ConfigureAwait(false);
                     return true;
                 }).ConfigureAwait(false);
                 return ReportDone(context, new { revoked = which.ToString() }, $"Revoked the {which} grant.");
             });
             return command;
+        }
+
+        private static void RequireGrantTerminal(RoofCliContext context)
+        {
+            if (!context.Host.IsInteractive || context.Json
+                || RoofGrantTerminal.HasAutomationMarker(context.Host.GetEnvironmentVariable)
+                || !context.Host.CheckGrantTerminal())
+            {
+                throw new RoofCliRefusedException(RoofCliAlpaca.GrantNeedsATerminal, RoofExitCode.ConfirmationRequired);
+            }
         }
 
         private Command CreateAlpacaAlertsCommand()
@@ -309,10 +325,11 @@ internal static class RoofCliAlpaca
         return RoofAlpacaText.DescribeSteppedAway(grants, RoofAlpacaText.KeyToTakeBack);
     }
 
-    /// <summary>Why a grant is refused without a terminal (or with --json): it is a person's decision, never scripted.</summary>
+    /// <summary>Why a grant is refused without an eligible terminal (or with --json).</summary>
     public const string GrantNeedsATerminal =
         "A grant is a person's decision, asked and answered at a terminal: run 'hvo-roof alpaca grant --alert ID' "
-        + "interactively, without --json. It cannot be scripted. Nothing was sent.";
+        + "in the controlling foreground terminal, with stdin, stdout and stderr on that same terminal, without --json "
+        + "or automation environment markers. Nothing was sent.";
 
     /// <summary>Whose lease lapsed for want of input, while nobody holds one.</summary>
     public static string LeaseLapsed(string holder) => $"No operator lease: {holder}'s lapsed after no input, so Alpaca may move the roof.";

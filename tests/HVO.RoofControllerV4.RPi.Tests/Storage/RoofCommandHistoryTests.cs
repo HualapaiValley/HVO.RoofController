@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Text.Json;
 using FluentAssertions;
@@ -14,6 +15,7 @@ using ManualTimeProvider = HVO.RoofControllerV4.RPi.Tests.TestSupport.ManualTime
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Storage;
@@ -26,6 +28,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Storage;
 public sealed class RoofCommandHistoryTests
 {
     private static readonly DateTimeOffset Start = new(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
+
+    public TestContext TestContext { get; set; } = null!;
 
     // ---- What is kept and returned --------------------------------------------------------------------------------
 
@@ -108,6 +112,30 @@ public sealed class RoofCommandHistoryTests
     }
 
     // ---- Retention ------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    [DoNotParallelize]
+    public void OrdinaryCommands_RetainAtMost640BytesPerEntry_AtTheDefaultLimit()
+    {
+        // Measure the store's retained heap, including its list and per-request strings, rather than allocation
+        // traffic or serialized JSON. Warm the same path first so JIT/one-time caches do not count as entry storage.
+        WarmHistoryMemoryMeasurement();
+        using var history = Create(new ManualTimeProvider(Start), logger: NullLogger<RoofCommandHistory>.Instance);
+        var entries = RoofCommandHistoryContract.DefaultMaximumEntries;
+        var before = C14ManagedHeap.Read().LiveBytes;
+
+        RecordOrdinaryCommands(history, entries);
+
+        var retained = C14ManagedHeap.Read().LiveBytes - before;
+        GC.KeepAlive(history);
+        history.Count.Should().Be(entries);
+        var bytesPerEntry = (double)retained / entries;
+        TestContext.WriteLine($"{entries} ordinary command entries retain {retained:N0} bytes ({bytesPerEntry:N1} bytes/entry).");
+        // About 485 bytes/entry today (4–5 MB at 10,000). Allow modest runtime/layout growth, but fail well before
+        // history could grow by megabytes unnoticed. This is an ordinary-command budget, not a worst-case text bound.
+        bytesPerEntry.Should().BeInRange(256, 640,
+            "a default-size history should retain a measurable 4–5 MB, with a ceiling of 6.4 MB (#233 item 5)");
+    }
 
     [TestMethod]
     public void TheOldestEntries_GoBeyondTheMaximum()
@@ -747,6 +775,29 @@ public sealed class RoofCommandHistoryTests
     }
 
     // ---- Support --------------------------------------------------------------------------------------------------
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void WarmHistoryMemoryMeasurement()
+    {
+        using var history = Create(new ManualTimeProvider(Start), logger: NullLogger<RoofCommandHistory>.Instance);
+        RecordOrdinaryCommands(history, 128);
+        _ = C14ManagedHeap.Read();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RecordOrdinaryCommands(RoofCommandHistory history, int count)
+    {
+        // Reuse what a server reuses (identity and status), while Describe creates each request's retained strings.
+        // The helper's stack ends before collection: neither the last request nor its input entry stays rooted.
+        var user = Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.OperatorRole);
+        user.Identities.Single().AddClaim(new Claim(RoofPrincipalFactory.PrincipalIdClaimType, "00112233445566778899aabbccddeeff"));
+        var status = Snapshot(RoofControllerStatus.Stopped);
+        for (var i = 0; i < count; i++)
+        {
+            var context = Context(user, IPAddress.Parse("192.0.2.10"), "hvo-roof/4.4.0");
+            history.Record(history.Describe(context, RoofHistoryCommand.Stop, status, null));
+        }
+    }
 
     internal static RoofCommandHistory Create(
         TimeProvider clock,

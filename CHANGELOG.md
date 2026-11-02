@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   escalates to that reason. All-off work continues until verified, and the latch then requires explicit ClearFault.
   Recovery logs no longer claim the normal 1.5 s limit was exceeded when the stop bound cut an access sooner.
 
+- `hvo-roof alpaca grant` now checks for a controlling foreground terminal with all three standard streams on the
+  same tty, rejects known automation markers, and requires the command kind plus a fresh displayed value for both
+  Open and Close grants (#231 item 1). The CLI and Alpaca docs describe what these checks cannot prevent.
+- `hvo-roof alpaca revoke` without `--kind` now revokes an Open grant when it is the only grant in force; with both
+  kinds in force it continues to revoke only Close (#233 item 3).
+
 ## [4.4.0] - 2026-11-01
 
 ### Added
