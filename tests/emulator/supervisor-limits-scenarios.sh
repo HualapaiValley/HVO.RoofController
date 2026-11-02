@@ -7,6 +7,7 @@ run_limits_scenarios() {
   current_check="Limits: build and deploy the emulated seed controller"
   deploy
   (( DEPLOY_STATUS == 0 )) || fail "the seed deploy failed"
+  run_alpaca_installer_mount_scenario
   # The env file can include generated test credentials: private, never printed, and removed with work's fixtures.
   (umask 077; docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${controller}" >"${work}/limits.env")
   local probe="${controller}-swap" mode code
@@ -127,6 +128,29 @@ run_limits_scenarios() {
   # Leave the seed controller available to subsequent scenario groups.
   docker start "${controller}" >/dev/null
   wait_for "seed controller ready again" 120 controller_ready
+}
+
+run_alpaca_installer_mount_scenario() {
+  current_check="Alpaca: real deploy with an installer-style key filename and read-only secrets directory"
+  local address
+  # This disposable Docker network is the emulator rig's LAN; no host interface or route is changed.
+  address=$(docker network inspect "${network}" --format '{{(index .IPAM.Config 0).Gateway}}')
+  python3 - "${address}" <<'PY' >/dev/null 2>&1 || fail "the Alpaca scenario's TCP or UDP port is occupied"
+import socket,sys
+with socket.socket() as tcp, socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp:
+    tcp.bind((sys.argv[1],47680))
+    udp.bind(('',47681))
+PY
+  deploy ALPACA_ENABLED=true "ALPACA_LAN_ADDRESS=${address}" ALPACA_PORT=47680 ALPACA_DISCOVERY_PORT=47681 \
+    "ALPACA_API_KEY_FILE=${work}/secrets/RoofControllerSecurity__ApiKeys__0__Key"
+  (( DEPLOY_STATUS == 0 )) || fail "the installer-style Alpaca key could not be mounted or validated"
+  [[ "$(docker exec "${controller}" stat -c '%U:%G %a' /run/hvo-roof/alpaca/controller-key)" == 'alpaca:alpaca 400' ]] \
+    || fail "the deployed Alpaca key is not a private copy"
+  docker exec -u alpaca "${controller}" test -s /var/lib/hvo-roof-alpaca/alpaca-devices.json \
+    || fail "the deployed Alpaca process did not persist its identities"
+  pass "production deploy and preflight mount the allocated key without nesting below read-only secrets"
+  deploy ALPACA_ENABLED=false
+  (( DEPLOY_STATUS == 0 )) || fail "the scenario could not return to default-off deployment"
 }
 
 probe_stopped() {

@@ -8,7 +8,7 @@ x-alpaca-environment: &alpaca-environment
   Alpaca__PublishedAddress: ${HVO_ALPACA_LAN_ADDRESS:?Set HVO_ALPACA_LAN_ADDRESS to one private IPv4 LAN address}
   Alpaca__Port: "11111"
   Alpaca__ControllerUrl: http://localhost:8080
-  Alpaca__ControllerApiKeyFile: /run/secrets/alpaca-server-key
+  Alpaca__ControllerApiKeyFile: /run/alpaca-server-key
   Alpaca__DataPath: /var/lib/hvo-roof-alpaca
   Alpaca__Discovery__Enabled: "false"
   Alpaca__Discovery__AdvertisedPort: ${HVO_ALPACA_PORT:-11111}
@@ -16,7 +16,7 @@ x-alpaca-environment: &alpaca-environment
 x-alpaca-volumes: &alpaca-volumes
   - type: bind
     source: ${HVO_ALPACA_API_KEY_FILE:-/etc/hvo-roof/secrets/alpaca-server-key}
-    target: /run/secrets/alpaca-server-key
+    target: /run/alpaca-server-key
     read_only: true
     bind:
       create_host_path: false

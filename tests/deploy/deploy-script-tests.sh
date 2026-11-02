@@ -5124,6 +5124,31 @@ test_rollback_without_current_controller_is_undone_on_failed_start() {
 
 ALPACA_ENV=(ALPACA_ENABLED=true ALPACA_LAN_ADDRESS=192.168.1.20 ALPACA_API_KEY_FILE=/etc/hvo-roof/secrets/alpaca-server-key)
 
+test_alpaca_installer_key_never_nests_a_mount_below_readonly_secrets() {
+  local source=/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__7__Key call
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "ALPACA_API_KEY_FILE=${source}"
+  assert_status 0
+  for call in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e --arg mount "type=bind,src=${source},dst=/run/alpaca-server-key,readonly" '
+      index($mount) and index("Alpaca__ControllerApiKeyFile=/run/alpaca-server-key")
+      and (any(.[]; startswith("type=bind,") and contains("dst=/run/secrets/")) | not)
+    ' <<<"${call}" >/dev/null || fail_test "installer key uses a nested mount below read-only secrets"
+  done
+}
+
+test_alpaca_discovery_failure_during_rollback_keeps_the_recovery_controller() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  local recovered
+  recovered=$(container_field roof-controller id)
+  deploy "${HTTPS_ENV[@]}" ALPACA_ENABLED=false
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" FAKE_DISCOVERY_READY=false -- --rollback
+  assert_status 0
+  [[ "$(container_field roof-controller id)" == "${recovered}" ]] || fail_test "optional discovery undid the rollback"
+  assert_output_contains "WARNING: the rolled-back controller is kept running"
+}
+
 test_alpaca_fresh_deployment_with_jq_only_keeps_default_off_and_supports_opt_in() {
   local enabled
   for enabled in false true; do
@@ -5260,7 +5285,8 @@ test_alpaca_failed_discovery_cleanup_never_blocks_controller_recovery() {
 
 test_alpaca_cannot_bypass_lan_binding_through_extra_args() {
   local extra
-  for extra in '--network host' '--network=host' '--net=host' '--env Alpaca__Enabled=false' '--env Alpaca__Port=8080'; do
+  for extra in '--network host' '--network=host' '--net=host' '--env Alpaca__Enabled=false' '--env Alpaca__Port=8080' \
+    '--env=Alpaca__Enabled=true' '-eAlpaca__Enabled=true' '--env=ALPACA:PORT=12345'; do
     setup_fresh_state
     deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "EXTRA_DOCKER_ARGS=${extra}"
     assert_status 1

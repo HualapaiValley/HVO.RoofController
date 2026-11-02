@@ -1836,6 +1836,9 @@ source "${TESTS_DIR}/supervisor-cgroup-tests.sh"
 # shellcheck source=tests/container/supervisor-alpaca-tests.sh
 source "${TESTS_DIR}/supervisor-alpaca-tests.sh"
 
+# shellcheck source=tests/container/supervisor-wait-budget-tests.sh
+source "${TESTS_DIR}/supervisor-wait-budget-tests.sh"
+
 # shellcheck source=tests/container/supervisor-stop-boundary-tests.sh
 source "${TESTS_DIR}/supervisor-stop-boundary-tests.sh"
 

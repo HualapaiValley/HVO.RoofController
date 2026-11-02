@@ -1,4 +1,5 @@
 using System.Text.Json;
+using HVO.RoofControllerV4.Common.IO;
 
 namespace HVO.RoofControllerV4.Alpaca.Devices;
 
@@ -139,7 +140,7 @@ public sealed class AlpacaDeviceIds
     // The identities kept: the Dome's always (a file without it is refused), the SafetyMonitor's when the file has it.
     private static (string? Dome, string? SafetyMonitor) Read(string path)
     {
-        var ids = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path));
+        var ids = JsonSerializer.Deserialize<Dictionary<string, string>>(UnixRegularFileReader.ReadAllText(path));
         if (ids is null || !ids.TryGetValue(DomeKey, out var dome) || !Guid.TryParse(dome, out _))
         {
             throw new AlpacaSettingsException(

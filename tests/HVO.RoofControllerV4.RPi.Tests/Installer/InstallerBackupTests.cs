@@ -38,6 +38,21 @@ public sealed class InstallerBackupTests
     private static readonly InstallAnswers ControllerAndKiosk = new() { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
 
     [TestMethod]
+    public async Task AlpacaDisabled_BackupKeepsTheLegacyAbsenceContract()
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Folder("/srv/keep");
+        var run = await pi.RunAsync("backup", "--output", Kept);
+        run.ExitCode.Should().Be(0, run.ToString());
+
+        var manifest = JsonNode.Parse(Entries(pi, Kept)[0].Content!)!;
+        manifest["schema"]!.GetValue<int>().Should().Be(1);
+        manifest["absent"]!.AsArray().Select(item => item!.GetValue<string>())
+            .Should().NotContain(ControllerLayout.System.AlpacaDevicesFile,
+                "the old installer rejects unknown state-contract absence entries, even with Alpaca off");
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task AlpacaRestore_AcceptsRetainedRegularIdentities(bool different)
@@ -214,8 +229,8 @@ public sealed class InstallerBackupTests
         var entries = Entries(pi, Kept);
         var manifest = JsonNode.Parse(entries[0].Content!)!;
         var absent = manifest["absent"]!.AsArray();
-        var alpaca = absent.Single(item => item!.GetValue<string>() == "/var/lib/hvo-roof-alpaca/alpaca-devices.json");
-        absent.Remove(alpaca);
+        var alpaca = absent.SingleOrDefault(item => item!.GetValue<string>() == "/var/lib/hvo-roof-alpaca/alpaca-devices.json");
+        if (alpaca is not null) absent.Remove(alpaca);
         entries[0] = entries[0] with { Content = Encoding.UTF8.GetBytes(manifest.ToJsonString()) };
         Write(pi, Kept, entries);
 

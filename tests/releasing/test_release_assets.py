@@ -609,6 +609,13 @@ class AnotherRegistry(ReleaseTestCase):
 
 
 class TheUpgradeNotes(ReleaseTestCase):
+    def test_repository_notes_are_valid_for_final_and_candidate_releases(self):
+        for version in ('4.5.0', '4.5.0-rc.1'):
+            with self.subTest(version=version):
+                notes = release_assets.upgrade_notes(REPOSITORY / 'docs/upgrade-notes', version)
+                self.assertTrue(notes)
+                self.assertTrue(all(note['version'] != 'Unreleased' for note in notes))
+
     def notes(self, **files):
         """docs/upgrade-notes, with each X_Y_Z keyword's text (or bytes) as X.Y.Z.md."""
         folder = self.release.root / "upgrade-notes"

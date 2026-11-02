@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using HVO.RoofControllerV4.Common.Models;
+using HVO.RoofControllerV4.Common.IO;
 using Microsoft.Extensions.Configuration;
 
 namespace HVO.RoofControllerV4.RPi.Services;
@@ -17,7 +18,7 @@ public sealed class RoofAlpacaServerStatus(IConfiguration configuration, TimePro
     /// <summary>The deployed server's state, with stale counts withheld and only validated identities returned.</summary>
     public AlpacaServerSummary Read()
     {
-        if (!bool.TryParse(configuration["Alpaca:Enabled"], out var enabled) || !enabled)
+        if (!string.Equals(configuration["Alpaca:Enabled"], "true", StringComparison.Ordinal))
         {
             return new AlpacaServerSummary();
         }
@@ -28,9 +29,8 @@ public sealed class RoofAlpacaServerStatus(IConfiguration configuration, TimePro
         var path = configuration["Alpaca:StatusFilePath"] ?? AlpacaServerHeartbeat.DefaultPath;
         try
         {
-            // A corrupt or unrelated file cannot grow the response, or contribute untrusted strings to a UI.
-            if (new FileInfo(path) is not { Exists: true, Length: > 0 and <= 4096 }) return summary;
-            var heartbeat = JsonSerializer.Deserialize<AlpacaServerHeartbeat>(File.ReadAllText(path), Json);
+            // One no-follow, nonblocking descriptor is checked and read within 4096 bytes, even if the path changes.
+            var heartbeat = JsonSerializer.Deserialize<AlpacaServerHeartbeat>(UnixRegularFileReader.ReadAllText(path), Json);
             if (heartbeat is null || !Guid.TryParse(heartbeat.DomeUniqueId, out var dome)
                 || !Guid.TryParse(heartbeat.SafetyMonitorUniqueId, out var weather)) return summary;
             summary = summary with { DomeUniqueId = dome.ToString("D"), SafetyMonitorUniqueId = weather.ToString("D") };

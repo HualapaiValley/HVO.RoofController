@@ -224,6 +224,7 @@ scripts have their own tests, which CI runs; run the ones for what you change, f
 
 ```bash
 python3 -m unittest discover -s tests/<docs|releasing|security|cli|mac|alpaca> -p 'test_*.py'
+python3 -m unittest discover -s tests/deploy -p 'test_*.py'  # optional Alpaca Compose overlay
 tests/alpaca/conformu.sh          # the Alpaca server under a pinned ConformU and the scripted Close runs, behind a chain guard, against the HAT emulator
 tests/versioning/version-tests.sh
 tests/deploy/deploy-script-tests.sh

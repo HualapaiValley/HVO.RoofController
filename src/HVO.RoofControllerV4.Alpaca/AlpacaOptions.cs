@@ -125,7 +125,8 @@ public sealed class AlpacaOptions
         {
             var address = IPAddress.TryParse(PublishedAddress, out var parsed) ? parsed : null;
             var bytes = address?.GetAddressBytes();
-            if (bytes is not { Length: 4 } || !(bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
+            if (bytes is not { Length: 4 } || !string.Equals(PublishedAddress, address?.ToString(), StringComparison.Ordinal)
+                || !(bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
                 || (bytes[0] == 192 && bytes[1] == 168)))
             {
                 problems.Add($"{SectionName}:PublishedAddress must name a private IPv4 LAN address.");

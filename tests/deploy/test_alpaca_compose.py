@@ -43,6 +43,12 @@ class AlpacaComposeTests(unittest.TestCase):
             self.assertEqual('true', server['environment']['Alpaca__Enabled'])
             self.assertEqual('false', server['environment']['Alpaca__Discovery__Enabled'])
             self.assertTrue(any(v['target'] == '/var/lib/hvo-roof-alpaca' for v in server['volumes']))
+            key_target = server['environment']['Alpaca__ControllerApiKeyFile']
+            self.assertTrue(any(v['target'] == key_target and v.get('read_only') for v in server['volumes']))
+            for mount in server['volumes']:
+                if mount.get('read_only') and mount['target'] != key_target:
+                    self.assertFalse(key_target.startswith(mount['target'].rstrip('/') + '/'),
+                                     'the key mountpoint cannot be created inside a read-only parent mount')
             responder = services['alpaca-discovery']
             self.assertEqual('host', responder['network_mode'])
             self.assertIn('--discovery-only', responder['command'])

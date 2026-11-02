@@ -122,7 +122,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     fc-cache -f && \
     groupadd --gid 1655 alpaca && \
-    useradd --uid 1655 --gid 1655 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin alpaca
+    useradd --uid 1655 --gid 1655 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin alpaca && \
+    install -m 0600 /dev/null /run/alpaca-server-key
 
 # Copy the published binaries from the build stage, and the supervisor and health check
 # (docs/deployment.md, "The container's application processes")

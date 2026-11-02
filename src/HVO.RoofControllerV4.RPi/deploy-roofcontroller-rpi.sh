@@ -499,7 +499,9 @@ EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and A
 RELEASE_IMAGE_SETTING="the script sets it on a controller it loads from IMAGE_ARCHIVE, once it has checked the image, and the installer reads the release the controller runs from it."
 
 refuse_emulator_setting() {
-  local setting=${1%%=*}
+  local argument=$1 setting
+  case "${argument}" in --env=*) argument=${argument#--env=} ;; -e*) argument=${argument#-e} ;; esac
+  setting=${argument%%=*}
   setting=$(printf '%s' "${setting}" | tr '[:upper:]' '[:lower:]')
   setting=${setting//:/__}
   case "${setting}" in
@@ -3316,7 +3318,9 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   echo "[rollback] Starting ${CONTAINER_NAME}"
   dockerc start "${CONTAINER_NAME}" >/dev/null \
     || abort_switch "Could not start the rolled-back controller ${CONTAINER_NAME}"
-  sync_discovery "${PREVIOUS_ID}" || abort_switch "Could not start the rolled-back discovery responder"
+  if ! sync_discovery "${PREVIOUS_ID}"; then
+    log_err "[rollback] WARNING: the rolled-back controller is kept running, but its optional discovery responder could not be restored. Check the discovery port and redeploy after recovery."
+  fi
   # Started: whatever the checks say, it is left running (run --rollback again to swap back), with this run's limits.
   RESTORE_MODE=""
   LIMITS_RESTORE_ID=""
@@ -3425,12 +3429,12 @@ container_args=(
 if [[ "${ALPACA_ENABLED}" == true ]]; then
   container_args+=(
     --env Alpaca__Enabled=true --env "Alpaca__PublishedAddress=${ALPACA_LAN_ADDRESS}" --env Alpaca__ListenAddresses__0=0.0.0.0 --env Alpaca__Port=11111
-    --env Alpaca__ControllerUrl=http://localhost:8080 --env Alpaca__ControllerApiKeyFile=/run/secrets/alpaca-server-key
+    --env Alpaca__ControllerUrl=http://localhost:8080 --env Alpaca__ControllerApiKeyFile=/run/alpaca-server-key
     --env Alpaca__DataPath=/var/lib/hvo-roof-alpaca --env Alpaca__Discovery__Enabled=false
     --env "Alpaca__Discovery__AdvertisedPort=${ALPACA_PORT}"
     --env "HVO_ALPACA_LAN_ADDRESS=${ALPACA_LAN_ADDRESS}" --env "HVO_ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE}"
     --env "HVO_ALPACA_DATA_DIR=${ALPACA_DATA_DIR}" --env "HVO_ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT}"
-    --mount "type=bind,src=${ALPACA_API_KEY_FILE},dst=/run/secrets/alpaca-server-key,readonly"
+    --mount "type=bind,src=${ALPACA_API_KEY_FILE},dst=/run/alpaca-server-key,readonly"
     --mount "type=bind,src=${ALPACA_DATA_DIR},dst=/var/lib/hvo-roof-alpaca"
   )
 else

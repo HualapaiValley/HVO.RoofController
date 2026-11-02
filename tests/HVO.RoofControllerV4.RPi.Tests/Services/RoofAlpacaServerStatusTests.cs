@@ -10,6 +10,24 @@ namespace HVO.RoofControllerV4.RPi.Tests.Services;
 public sealed class RoofAlpacaServerStatusTests
 {
     [TestMethod]
+    [DataRow("true", true)]
+    [DataRow("True", false)]
+    [DataRow("TRUE", false)]
+    [DataRow("false", false)]
+    [DataRow("", false)]
+    [DataRow(null, false)]
+    public void Enabled_MatchesTheSupervisorsLiteralOptIn(string? flag, bool enabled)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Alpaca:Enabled"] = flag,
+            ["Alpaca:StatusFilePath"] = Path.Combine(Path.GetTempPath(), "t3-q229c-missing-" + Guid.NewGuid().ToString("N"))
+        }).Build();
+
+        new RoofAlpacaServerStatus(config, TimeProvider.System).Read().Enabled.Should().Be(enabled);
+    }
+
+    [TestMethod]
     [DataRow("malformed")]
     [DataRow("oversized")]
     [DataRow("future")]

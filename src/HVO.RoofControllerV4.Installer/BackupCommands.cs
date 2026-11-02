@@ -414,7 +414,7 @@ internal static class BackupCommands
     /// manifest names each that was not (<c>absent</c>), so a rollback that puts a store back never takes a file the
     /// backup left out for one that was never saved.
     /// </summary>
-    internal static IReadOnlyList<string> StoreFiles { get; } = [.. StateContractGuard.Files(ControllerLayout.System).SelectMany(store => store.Files), ControllerLayout.System.AlpacaDevicesFile];
+    internal static IReadOnlyList<string> StoreFiles { get; } = [.. StateContractGuard.Files(ControllerLayout.System).SelectMany(store => store.Files)];
 
     /// <summary>
     /// Why an upgrade cannot back up <paramref name="store"/>, one of <see cref="StoreFiles"/>: it is there, but a backup

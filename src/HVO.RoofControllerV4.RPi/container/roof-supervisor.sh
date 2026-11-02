@@ -389,6 +389,8 @@ require_whole_number HVO_SUPERVISOR_CRASH_WINDOW_SECONDS "${CRASH_WINDOW_SECONDS
 require_whole_number HVO_SUPERVISOR_BACKOFF_MAX_SECONDS "${BACKOFF_MAX_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS "${FORCE_RESTART_MIN_SECONDS}" 0
 require_whole_number HVO_SUPERVISOR_UI_PREPARE_SECONDS "${UI_PREPARE_SECONDS}" 1
+STOP_AFTER_SECONDS=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
+(( ! ALPACA_ENABLED || STOP_AFTER_SECONDS >= ALPACA_STOP_SECONDS )) || STOP_AFTER_SECONDS=${ALPACA_STOP_SECONDS}
 if [[ ! "${TICK_SECONDS}" =~ ^([0-9]+|[0-9]*\.[0-9]+)$ ]]; then
   log "HVO_SUPERVISOR_TICK_SECONDS must be a number of seconds such as 1 or 0.2, got '${TICK_SECONDS}'."
   exit 2
@@ -627,63 +629,53 @@ tasks_free() {
 }
 
 # Room for the relay-off helper outside a stop (tasks_free). At the container's process limit a fork would wait about
-# 15 s and then end the supervisor, leaving the relays as they are. So the web UI and its preparation are killed first,
-# which frees their tasks (never the relay-off; the controller is not running then), and are started again later with
-# the backoff; then it waits at most 1 s for the room. Returns 1 when there is still none: the relays then stay
+# 15 s and then end the supervisor, leaving the relays as they are. So the web UI, Alpaca and their preparations are
+# killed together (never the relay-off; the controller is not running then), and are started again later with the
+# backoff. One shared second covers reaping all of them and waiting for room. Returns 1 when there is still none: the relays then stay
 # unverified, so the controller stays stopped (start_with_unverified_relays), and the relay-off is tried again later.
 room_for_relays_off() {
-  local until
+  local name until
+  local -a killed=()
   tasks_free && return 0
-  log "WARNING: the container is at its process limit (${TASKS_TEXT}): killing the web UI to make room for the relay-off"
-  (( ! ALPACA_ENABLED )) || log "Killing the Alpaca server and its preparation too, to free their tasks for relay-off"
-  stop_ui_preparation
-  if [[ -n "${UI_PREPARE_PID}" ]]; then
-    stamp
-    reap_within "${UI_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))"
-    UI_PREPARE_PID=""
-  fi
-  if is_running ui; then
-    kill -KILL "${PID[ui]}" 2>/dev/null
-    stamp
-    reap_within "${PID[ui]}" "$(( NOW_US + KILL_WAIT_US ))"
-    LAST_EXIT_CODE[ui]=137
-    LAST_EXIT_REASON[ui]="killed to make room for the relay-off"
-    iso_now
-    LAST_EXIT_AT[ui]=${ISO_NOW}
-  fi
-  if [[ "${STATE[ui]}" == running || "${STATE[ui]}" == starting ]]; then
-    PID[ui]=""
-    record_crash ui
-    backoff_seconds ui
-    stamp
-    START_DUE[ui]=$(( NOW_US + BACKOFF_SECONDS * 1000000 ))
-    STATE[ui]=restarting
-  fi
-  stop_alpaca_preparation
-  if [[ -n "${ALPACA_PREPARE_PID}" ]]; then
-    stamp
-    reap_within "${ALPACA_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))"
-    ALPACA_PREPARE_PID=""
-  fi
-  if is_running alpaca; then
-    kill -KILL "${PID[alpaca]}" 2>/dev/null
-    stamp
-    reap_within "${PID[alpaca]}" "$(( NOW_US + KILL_WAIT_US ))"
-    LAST_EXIT_CODE[alpaca]=137
-    LAST_EXIT_REASON[alpaca]="killed to make room for the relay-off"
-    iso_now
-    LAST_EXIT_AT[alpaca]=${ISO_NOW}
-  fi
-  if [[ "${STATE[alpaca]}" == running || "${STATE[alpaca]}" == starting ]]; then
-    PID[alpaca]=""
-    record_crash alpaca
-    backoff_seconds alpaca
-    stamp
-    START_DUE[alpaca]=$(( NOW_US + BACKOFF_SECONDS * 1000000 ))
-    STATE[alpaca]=restarting
-  fi
   stamp
   until=$(( NOW_US + KILL_WAIT_US ))
+  log "WARNING: the container is at its process limit (${TASKS_TEXT}): killing the web UI to make room for the relay-off"
+  (( ! ALPACA_ENABLED )) || log "Killing the Alpaca server and its preparation too, to free their tasks for relay-off"
+  # Signal every task holder before waiting for any one: a kernel-stuck process cannot delay the other kills.
+  stop_ui_preparation
+  stop_alpaca_preparation
+  for name in ui alpaca; do
+    if is_running "${name}"; then
+      kill -KILL "${PID[${name}]}" 2>/dev/null
+      killed+=("${name}")
+    fi
+  done
+  # One allowance covers every reap and waiting for room, even when every process remains stuck in the kernel.
+  if [[ -n "${UI_PREPARE_PID}" ]]; then
+    reap_within "${UI_PREPARE_PID}" "${until}"
+    UI_PREPARE_PID=""
+  fi
+  if [[ -n "${ALPACA_PREPARE_PID}" ]]; then
+    reap_within "${ALPACA_PREPARE_PID}" "${until}"
+    ALPACA_PREPARE_PID=""
+  fi
+  for name in "${killed[@]}"; do
+    reap_within "${PID[${name}]}" "${until}"
+    LAST_EXIT_CODE[${name}]=137
+    LAST_EXIT_REASON[${name}]="killed to make room for the relay-off"
+    iso_now
+    LAST_EXIT_AT[${name}]=${ISO_NOW}
+  done
+  for name in ui alpaca; do
+    if [[ "${STATE[${name}]}" == running || "${STATE[${name}]}" == starting ]]; then
+      PID[${name}]=""
+      record_crash "${name}"
+      backoff_seconds "${name}"
+      stamp
+      START_DUE[${name}]=$(( NOW_US + BACKOFF_SECONDS * 1000000 ))
+      STATE[${name}]=restarting
+    fi
+  done
   until tasks_free; do
     stamp
     (( NOW_US < until )) || return 1
@@ -1417,16 +1409,13 @@ sleep_tick() {
 }
 
 # Notes when the stop was asked for (the first time only, at the signal: a builtin, no fork) and when it must be done by:
-# the controller's wait, then the longer of the relay-off's and the web UI's (27 s with the defaults). The container's
+# the controller's wait, then the longest of relay-off, web UI and enabled Alpaca (27 s with the defaults). The container's
 # stop timeout (Docker's grace period, at least 30 s) is longer.
 note_stop() {
-  local after
   (( STOP_AT_US == 0 )) || return 0
-  after=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
-  (( ! ALPACA_ENABLED || after >= ALPACA_STOP_SECONDS )) || after=${ALPACA_STOP_SECONDS}
   stamp
   STOP_AT_US=${NOW_US}
-  STOP_BY_US=$(( STOP_AT_US + (CONTROLLER_STOP_SECONDS + after) * 1000000 ))
+  STOP_BY_US=$(( STOP_AT_US + (CONTROLLER_STOP_SECONDS + STOP_AFTER_SECONDS) * 1000000 ))
 }
 
 # seconds_until <microseconds> <at most>: the seconds from now to that time, to the millisecond, at most the second
@@ -1489,51 +1478,52 @@ finish_stop() {
 }
 
 # docker stop, or any other end: with no fork until every process that holds tasks has ended, so that it works, and in
-# time, also at the container's process limit (#139 review F6). The web UI's preparation is killed (on_signal has
-# already done so). The controller (whose shutdown stops the roof) and the web UI are sent SIGTERM at once, and each is
-# killed (SIGKILL) when its own wait runs out: the web UI's after HVO_SUPERVISOR_UI_STOP_SECONDS, the controller's early
+# time, also at the container's process limit (#139 review F6). The controller (whose shutdown stops the roof), web UI
+# and enabled Alpaca are sent SIGTERM before any wait. Their preparations are killed together and reaped within one
+# shared second. Each application is killed (SIGKILL) when its own wait runs out; the controller's deadline is early
 # enough to leave the last relay-off its time before the stop's deadline (note_stop, counted from the signal). Only
 # then, with their tasks freed, does it start the last relay-off, with the time left, and write its state. Also run by
 # on_exit, so it may run twice: what is already stopped is left as it is, and the relays are turned off again.
 shutdown() {
-  local relays_by stop_until
+  local relays_by stop_until prepare_by applications="the controller and the web UI"
   STOP_REQUESTED=1
   note_stop
   SUPERVISOR_STATE=stopping
-  log "Stopping: the controller and the web UI, then the relays off, all within" \
+  (( ! ALPACA_ENABLED )) || applications="the controller, web UI and Alpaca server"
+  log "Stopping: ${applications}, then the relays off, all within" \
     "$(( (STOP_BY_US - STOP_AT_US) / 1000000 ))s of the stop request"
-  # The web UI's preparation, if it runs, is abandoned (on_signal has already killed it): nothing starts after it.
-  if [[ -n "${UI_PREPARE_PID}" ]]; then
-    stop_ui_preparation
-    stamp
-    reap_within "${UI_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))" \
-      || log "WARNING: the web UI's preparation (pid ${UI_PREPARE_PID}) has not ended 1s after SIGKILL"
-    log "Abandoned the web UI's preparation: the web UI is not started"
-    UI_PREPARE_PID=""
-    STATE[ui]=stopped
-  fi
-  if [[ -n "${ALPACA_PREPARE_PID}" ]]; then
-    stop_alpaca_preparation
-    stamp
-    reap_within "${ALPACA_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))" \
-      || log "WARNING: the Alpaca server's preparation has not ended 1s after SIGKILL"
-    log "Abandoned the Alpaca server's preparation: the Alpaca server is not started"
-    ALPACA_PREPARE_PID=""
-    STATE[alpaca]=stopped
-  fi
-  # A relay-off still running (begun before the signal, or on_exit in the middle of one) ends first, within its time.
-  [[ -z "${RELAYS_OFF_PID}" ]] || wait "${RELAYS_OFF_PID}" 2>/dev/null
-  # Both stopped at once; the latest either may run is when the last relay-off must begin to have its whole time.
+  # Tell the applications immediately, before any preparation reap or wait for a relay-off already running. The
+  # controller keeps its full shutdown allowance from the signal even when both preparations are stuck in the kernel.
   relays_by=$(( STOP_BY_US - RELAYS_OFF_SECONDS * 1000000 ))
-  stamp
-  stop_until=$(( NOW_US + CONTROLLER_STOP_SECONDS * 1000000 ))
+  stop_until=$(( STOP_AT_US + CONTROLLER_STOP_SECONDS * 1000000 ))
   begin_stop controller "$(( stop_until < relays_by ? stop_until : relays_by ))" "the controller"
-  stop_until=$(( NOW_US + UI_STOP_SECONDS * 1000000 ))
+  stop_until=$(( STOP_AT_US + UI_STOP_SECONDS * 1000000 ))
   begin_stop ui "$(( stop_until < relays_by ? stop_until : relays_by ))" "the web UI"
   if (( ALPACA_ENABLED )); then
-    stop_until=$(( NOW_US + ALPACA_STOP_SECONDS * 1000000 ))
+    stop_until=$(( STOP_AT_US + ALPACA_STOP_SECONDS * 1000000 ))
     begin_stop alpaca "$(( stop_until < relays_by ? stop_until : relays_by ))" "the Alpaca server"
   fi
+  # Abandon both preparations together, using one shared second for their reaps (on_signal may have killed them).
+  stamp
+  prepare_by=$(( NOW_US + KILL_WAIT_US ))
+  stop_ui_preparation
+  stop_alpaca_preparation
+  if [[ -n "${UI_PREPARE_PID}" ]]; then
+    reap_within "${UI_PREPARE_PID}" "${prepare_by}" \
+      || log "WARNING: the web UI's preparation (pid ${UI_PREPARE_PID}) has not ended within the shared 1s after SIGKILL"
+    log "Abandoned the web UI's preparation: the web UI is not started"
+    UI_PREPARE_PID=""
+    [[ "${STATE[ui]}" == stopping ]] || STATE[ui]=stopped
+  fi
+  if [[ -n "${ALPACA_PREPARE_PID}" ]]; then
+    reap_within "${ALPACA_PREPARE_PID}" "${prepare_by}" \
+      || log "WARNING: the Alpaca server's preparation has not ended within the shared 1s after SIGKILL"
+    log "Abandoned the Alpaca server's preparation: the Alpaca server is not started"
+    ALPACA_PREPARE_PID=""
+    [[ "${STATE[alpaca]}" == stopping ]] || STATE[alpaca]=stopped
+  fi
+  # A relay-off begun before the signal counts against the same deadline and ends within its own bounded timeout.
+  [[ -z "${RELAYS_OFF_PID}" ]] || wait "${RELAYS_OFF_PID}" 2>/dev/null
   # Each is killed at its own deadline, earliest first, with builtins only at the process limit.
   local name next label
   while :; do
@@ -1623,11 +1613,17 @@ prepare_run_dir
 if ! check_compose_limits || ! check_effective_limits; then
   refuse_limits
 fi
-log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
+START_APPLICATIONS="the controller and the web UI"
+START_STOP_CLIENTS="with ${UI_STOP_SECONDS}s for the web UI"
+if (( ALPACA_ENABLED )); then
+  START_APPLICATIONS="the controller, web UI and Alpaca server"
+  START_STOP_CLIENTS+=" and ${ALPACA_STOP_SECONDS}s for the Alpaca server"
+fi
+log "Starting ${START_APPLICATIONS} (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
   "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running; a stop ends within" \
-  "$(( CONTROLLER_STOP_SECONDS + (RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS) ))s of" \
-  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, with ${UI_STOP_SECONDS}s for the web UI at the same" \
+  "$(( CONTROLLER_STOP_SECONDS + STOP_AFTER_SECONDS ))s of" \
+  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, ${START_STOP_CLIENTS} at the same" \
   "time, then up to ${RELAYS_OFF_SECONDS}s for the relays off)"
 start_controller
 start_ui
