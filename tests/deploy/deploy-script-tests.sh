@@ -5134,7 +5134,7 @@ test_alpaca_enabled_is_lan_bound_and_discovery_has_no_credentials() {
   assert_status 0
   controller_run_args | jq -e 'index("192.168.1.20:11112:11111") and index("Alpaca__Enabled=true")
     and index("Alpaca__Discovery__Enabled=false") and index("Alpaca__DataPath=/var/lib/hvo-roof-alpaca")
-    and index("type=bind,src=/var/lib/hvo-roof/alpaca,dst=/var/lib/hvo-roof-alpaca")' >/dev/null \
+    and index("type=bind,src=/var/lib/hvo-roof-alpaca,dst=/var/lib/hvo-roof-alpaca")' >/dev/null \
     || fail_test "enabled server is not published safely or its identity directory is not durable"
   docker_calls run | jq -se '[.[] | select(index("--discovery-only"))] | length == 1 and all(.[];
     index("host") and index("--read-only") and index("--user") and index("1655:1655")
@@ -5268,6 +5268,31 @@ test_alpaca_checks_the_listener_once_after_slow_metadata() {
   deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_NEW_ALPACA_METADATA_DELAY=1.1
   assert_status 0
   assert_output_contains "Alpaca management listener and supervised process: OK"
+}
+
+test_alpaca_running_discovery_without_a_bound_socket_rolls_back() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_DISCOVERY_READY=false
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-discovery missing false
+}
+
+test_alpaca_discovery_waits_until_its_socket_is_ready() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_DISCOVERY_READY_AFTER=3 READY_TIMEOUT_SECONDS=3
+  assert_status 0
+  docker_calls exec | jq -se '[.[] | select(index("/tmp/alpaca-discovery-ready"))] | length >= 3' >/dev/null \
+    || fail_test "deployment did not wait for the bound-socket marker"
+}
+
+test_alpaca_removes_its_private_discovery_scratch() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  assert_output_not_contains "holds more than this script put there"
+  local cidfile folder
+  cidfile=$(controller_run_args | jq -r '.[index("--cidfile") + 1]')
+  folder=${cidfile%/*}
+  [[ ! -e "${folder}" ]] || fail_test "the discovery configuration scratch directory was left behind"
 }
 
 # --- Harness ----------------------------------------------------------------------------------------------------------

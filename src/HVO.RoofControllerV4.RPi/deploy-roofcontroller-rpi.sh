@@ -339,7 +339,7 @@ check_alpaca_settings() {
       ALPACA_PORT=${ALPACA_PORT:-11111}
       ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT:-32227}
       ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE:-/etc/hvo-roof/secrets/alpaca-server-key}
-      ALPACA_DATA_DIR=${ALPACA_DATA_DIR:-/var/lib/hvo-roof/alpaca}
+      ALPACA_DATA_DIR=${ALPACA_DATA_DIR:-/var/lib/hvo-roof-alpaca}
       require_number ALPACA_PORT 1 65535
       require_number ALPACA_DISCOVERY_PORT 1 65535
       local pattern='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$' a b c d
@@ -2367,7 +2367,7 @@ remove_work_dir() {
     log_err "[deploy] WARNING: ${folder} is no longer the work folder this script made (a folder of this user's, mode 0700), so it was left as it is."
     return 1
   fi
-  rm -f -- "${folder}/new-controller.cid" "${folder}/image.tar" "${folder}/identity-schema-check.json" 2>/dev/null || true
+  rm -f -- "${folder}/new-controller.cid" "${folder}/image.tar" "${folder}/identity-schema-check.json" "${folder}/discovery-network.env" 2>/dev/null || true
   rm -rf -- "${folder}/identity-schema-secrets" 2>/dev/null || true
   if ! rmdir -- "${folder}" 2>/dev/null; then
     log_err "[deploy] WARNING: ${folder} holds more than this script put there, so it was left as it is."
@@ -2707,7 +2707,7 @@ sync_discovery() {
   discovery_args=(--read-only --tmpfs /tmp:size=16m --cap-drop ALL --security-opt no-new-privileges
     --user 1655:1655 --network host --pids-limit 64 --cpus 0.25 --memory 128m --memory-swap 128m
     --env Alpaca__Enabled=true --env "Alpaca__PublishedAddress=${address}" --env "Alpaca__Discovery__Port=${discovery_port}"
-    --env "Alpaca__Discovery__AdvertisedPort=${port}")
+    --env "Alpaca__Discovery__AdvertisedPort=${port}" --env Alpaca__Discovery__ReadyFilePath=/tmp/alpaca-discovery-ready)
   local entry filter_file="${WORK_DIR}/discovery-network.env"
   if ! dockerc inspect --format '{{json .Config.Env}}' "${id}" | python3 -c '
 import json,re,sys
@@ -2718,13 +2718,20 @@ for entry in json.load(sys.stdin):
 ' >"${filter_file}"; then return 1; fi
   while IFS= read -r -d '' entry; do discovery_args+=(--env "${entry}"); done <"${filter_file}"
   dockerc run -d --name "${DISCOVERY_CONTAINER_NAME}" --restart unless-stopped --stop-timeout 3 \
-    --label "${DISCOVERY_OWNER_LABEL}=${CONTAINER_NAME}" --pull never --no-healthcheck \
+    --label "${DISCOVERY_OWNER_LABEL}=${CONTAINER_NAME}" --pull never --health-cmd 'test -f /tmp/alpaca-discovery-ready' --health-interval 5s --health-timeout 2s --health-retries 3 \
     --log-driver local --log-opt max-size=10m --log-opt max-file=5 \
     "${discovery_args[@]}" --entrypoint dotnet "${image}" /app/alpaca/HVO.RoofControllerV4.Alpaca.dll --discovery-only >/dev/null \
     || return 1
-  local state
-  state=$(container_restarts "${DISCOVERY_CONTAINER_NAME}") || return 1
-  [[ "${state}" == 'running 0' ]]
+  local state deadline=$((SECONDS + READY_TIMEOUT_SECONDS))
+  while :; do
+    state=$(container_restarts "${DISCOVERY_CONTAINER_NAME}") || return 1
+    [[ "${state}" == 'running 0' ]] || return 1
+    if dockerc exec "${DISCOVERY_CONTAINER_NAME}" test -f /tmp/alpaca-discovery-ready >/dev/null 2>&1; then
+      return 0
+    fi
+    (( SECONDS < deadline )) || return 1
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
 }
 
 # The ID of the container this deploy created: from `docker run -d`, or from the cidfile docker writes on creation

@@ -37,10 +37,11 @@ internal static class BackupCommands
     private const long MaxManifestBytes = 4L * 1024 * 1024;
 
     /// <summary>
-    /// The folders a backup holds, whole: the controller's configuration (settings, secrets, certificate, CA and the install
-    /// record), its data (people, managed API keys, managed secrets) and the kiosk's device key.
+    /// The roots a backup visits: the controller's configuration (settings, secrets, certificate, CA and the install
+    /// record), its data (people, managed API keys, managed secrets), the kiosk's device key, and the Alpaca identity
+    /// directory. Only alpaca-devices.json is collected from the Alpaca root; its other files are never included.
     /// </summary>
-    public static IReadOnlyList<string> Folders { get; } = [ControllerLayout.System.Configuration, ControllerLayout.System.Data, KioskSteps.ConfigurationFolder, KioskCommissioningClaimStep.ClaimDirectory];
+    public static IReadOnlyList<string> Folders { get; } = [ControllerLayout.System.Configuration, ControllerLayout.System.Data, ControllerLayout.System.AlpacaData, KioskSteps.ConfigurationFolder, KioskCommissioningClaimStep.ClaimDirectory];
 
     /// <summary>The files a backup holds on their own: the kiosk's settings (its program comes from the release).</summary>
     public static IReadOnlyList<string> Files { get; } = [KioskSteps.SettingsFile];
@@ -636,7 +637,9 @@ internal static class BackupCommands
         => path == root || path.StartsWith(root + "/", StringComparison.Ordinal);
 
     private static bool IsAllowed(string path)
-        => Files.Contains(path, StringComparer.Ordinal) || Folders.Any(folder => Within(path, folder));
+        => path == ControllerLayout.System.AlpacaData || path == ControllerLayout.System.AlpacaDevicesFile
+            || Files.Contains(path, StringComparer.Ordinal)
+            || Folders.Where(folder => folder != ControllerLayout.System.AlpacaData).Any(folder => Within(path, folder));
 
     private static void NeedsRootOnLinux(InstallerMachine machine, string command)
     {

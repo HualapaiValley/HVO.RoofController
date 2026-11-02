@@ -44,7 +44,7 @@ public sealed class InstallerBackupTests
     public async Task AlpacaDeviceIdentities_AreBackedUpAndRestored_FromOnlyTheDedicatedFile(string hostOwner)
     {
         using var pi = await InstalledPiAsync();
-        const string folder = "/var/lib/hvo-roof/alpaca";
+        const string folder = "/var/lib/hvo-roof-alpaca";
         const string file = folder + "/alpaca-devices.json";
         var ids = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { ["dome/0"] = Guid.NewGuid().ToString("D"), ["safetymonitor/0"] = Guid.NewGuid().ToString("D") });
         pi.Write(file, ids).Write(folder + "/unrelated.txt", "must not be backed up");
@@ -73,7 +73,7 @@ public sealed class InstallerBackupTests
     public async Task AlpacaBackup_RefusesAnythingButDeviceIdentities_WithoutKeepingAnArchive(string content)
     {
         using var pi = await InstalledPiAsync();
-        pi.Write("/var/lib/hvo-roof/alpaca/alpaca-devices.json", content).Folder("/srv/keep");
+        pi.Write("/var/lib/hvo-roof-alpaca/alpaca-devices.json", content).Folder("/srv/keep");
 
         var run = await pi.RunAsync("backup", "--output", Kept);
 
@@ -87,7 +87,7 @@ public sealed class InstallerBackupTests
     public async Task AlpacaBackup_RefusesASymbolicLink_AndNeverReadsItsTarget()
     {
         using var pi = await InstalledPiAsync();
-        const string file = "/var/lib/hvo-roof/alpaca/alpaca-devices.json";
+        const string file = "/var/lib/hvo-roof-alpaca/alpaca-devices.json";
         pi.Write("/root/private.txt", "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}").Folder(Path.GetDirectoryName(file)!).Folder("/srv/keep");
         File.CreateSymbolicLink(pi.OnDisk(file), pi.OnDisk("/root/private.txt"));
 
@@ -103,7 +103,7 @@ public sealed class InstallerBackupTests
     public async Task AlpacaBackup_RefusesAWritableDirectory_WithoutReadingOtherFiles()
     {
         using var pi = await InstalledPiAsync();
-        const string folder = "/var/lib/hvo-roof/alpaca";
+        const string folder = "/var/lib/hvo-roof-alpaca";
         pi.Write(folder + "/alpaca-devices.json", "{}").Folder("/srv/keep");
         File.SetUnixFileMode(pi.OnDisk(folder), Modes.Folder | UnixFileMode.GroupWrite);
 
@@ -115,6 +115,20 @@ public sealed class InstallerBackupTests
     }
 
     [TestMethod]
+    public async Task ABackup_RefusesAnOutputInsideTheDedicatedLinuxAlpacaRoot()
+    {
+        using var pi = await InstalledPiAsync();
+        const string output = "/var/lib/hvo-roof-alpaca/backup.tar.gz";
+        pi.Folder(Path.GetDirectoryName(output)!);
+
+        var run = await pi.RunAsync("backup", "--output", output);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain("which the backup holds or uninstall --purge removes");
+        pi.Exists(output).Should().BeFalse();
+    }
+
+    [TestMethod]
     public async Task ARestore_ReadsALegacyBackupWithNoAlpacaIdentityOrAbsenceEntry()
     {
         using var pi = await InstalledPiAsync();
@@ -122,7 +136,7 @@ public sealed class InstallerBackupTests
         var entries = Entries(pi, Kept);
         var manifest = JsonNode.Parse(entries[0].Content!)!;
         var absent = manifest["absent"]!.AsArray();
-        var alpaca = absent.Single(item => item!.GetValue<string>() == "/var/lib/hvo-roof/alpaca/alpaca-devices.json");
+        var alpaca = absent.Single(item => item!.GetValue<string>() == "/var/lib/hvo-roof-alpaca/alpaca-devices.json");
         absent.Remove(alpaca);
         entries[0] = entries[0] with { Content = Encoding.UTF8.GetBytes(manifest.ToJsonString()) };
         Write(pi, Kept, entries);
@@ -130,7 +144,7 @@ public sealed class InstallerBackupTests
         var run = await RestoreAsync(pi, Kept);
 
         run.ExitCode.Should().Be(0, run.ToString());
-        pi.Exists("/var/lib/hvo-roof/alpaca/alpaca-devices.json").Should().BeFalse();
+        pi.Exists("/var/lib/hvo-roof-alpaca/alpaca-devices.json").Should().BeFalse();
         pi.Unexpected.Should().BeEmpty();
     }
 
@@ -138,7 +152,7 @@ public sealed class InstallerBackupTests
     public async Task ARestore_RefusesInvalidAlpacaIdentities_EvenWithAMatchingArchiveHash_BeforeWritingAnything()
     {
         using var pi = await InstalledPiAsync();
-        const string path = "/var/lib/hvo-roof/alpaca/alpaca-devices.json";
+        const string path = "/var/lib/hvo-roof-alpaca/alpaca-devices.json";
         pi.Write(path, "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}");
         await BackUpAndPurgeAsync(pi);
         var entries = Entries(pi, Kept);
@@ -155,6 +169,33 @@ public sealed class InstallerBackupTests
 
         run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
         run.Error.Should().Contain("Alpaca device identities");
+        pi.Exists("/etc/hvo-roof").Should().BeFalse();
+    }
+
+    [TestMethod]
+    public async Task ARestore_RefusesOtherFilesInTheAlpacaRoot_EvenWhenTheManifestListsThem()
+    {
+        using var pi = await InstalledPiAsync();
+        var folder = ControllerLayout.System.AlpacaData;
+        pi.Write(ControllerLayout.System.AlpacaDevicesFile, "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}");
+        await BackUpAndPurgeAsync(pi);
+        var entries = Entries(pi, Kept);
+        var manifest = JsonNode.Parse(entries[0].Content!)!;
+        var path = folder + "/unrelated.txt";
+        var bytes = Encoding.UTF8.GetBytes("outside the identity contract");
+        manifest["entries"]!.AsArray().Add(new JsonObject
+        {
+            ["path"] = path, ["type"] = BackupEntry.File, ["mode"] = "0644", ["owner"] = "1655:1655",
+            ["size"] = bytes.Length, ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(bytes))
+        });
+        entries.Add(new ArchiveEntry(path.TrimStart('/'), TarEntryType.RegularFile, Modes.File, bytes));
+        entries[0] = entries[0] with { Content = Encoding.UTF8.GetBytes(manifest.ToJsonString()) };
+        Write(pi, Kept, entries);
+
+        var run = await RestoreAsync(pi, Kept);
+
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        run.Error.Should().Contain("which a backup does not hold");
         pi.Exists("/etc/hvo-roof").Should().BeFalse();
     }
 
@@ -435,6 +476,7 @@ public sealed class InstallerBackupTests
         purge.ExitCode.Should().Be(0, purge.ToString());
         atStop.Should().BeTrue("the backup is on disk before the controller is stopped and the data removed");
         pi.Exists("/var/lib/hvo-roof").Should().BeFalse();
+        pi.Exists(ControllerLayout.System.AlpacaData).Should().BeFalse();
         pi.PowerLoss();
         pi.Exists(Kept).Should().BeTrue();
     }
@@ -483,6 +525,7 @@ public sealed class InstallerBackupTests
         run.Output.Should().NotContain("Put back");
         pi.Exists("/etc/hvo-roof").Should().BeFalse("nothing was put back");
         pi.Exists("/var/lib/hvo-roof").Should().BeFalse();
+        pi.Exists(ControllerLayout.System.AlpacaData).Should().BeFalse();
         pi.Exists(KioskSteps.DeviceKeyFile).Should().BeFalse();
         pi.Deploys.Should().HaveCount(deploys);
     }
@@ -811,6 +854,7 @@ public sealed class InstallerBackupTests
         purge.ExitCode.Should().Be(0, purge.ToString());
         pi.Exists("/etc/hvo-roof").Should().BeFalse();
         pi.Exists("/var/lib/hvo-roof").Should().BeFalse();
+        pi.Exists(ControllerLayout.System.AlpacaData).Should().BeFalse();
         pi.Exists(KioskSteps.DeviceKeyFile).Should().BeFalse();
         pi.Exists(KioskSteps.SettingsFile).Should().BeFalse();
     }

@@ -248,6 +248,12 @@ public sealed class AlpacaDiscoveryOptions
     /// </summary>
     public int? AdvertisedPort { get; set; }
 
+    /// <summary>
+    /// Optional absolute path to a readiness marker for a supervised discovery-only deployment. It is present only
+    /// after the discovery sockets have bound, and removed at startup and shutdown. Null leaves no marker.
+    /// </summary>
+    public string? ReadyFilePath { get; set; }
+
     /// <summary>Whether to answer IPv6 discovery (multicast ff12::a1:9aca) as well as IPv4 broadcasts. Default false.</summary>
     public bool IPv6 { get; set; }
 
@@ -256,6 +262,11 @@ public sealed class AlpacaDiscoveryOptions
         if (Port is < 1 or > 65535)
         {
             problems.Add($"{AlpacaOptions.SectionName}:Discovery:Port must be between 1 and 65535, got {Port}.");
+        }
+
+        if (ReadyFilePath is not null && !Path.IsPathFullyQualified(ReadyFilePath))
+        {
+            problems.Add($"{AlpacaOptions.SectionName}:Discovery:ReadyFilePath must be an absolute path.");
         }
 
         if (AdvertisedPort is < 1 or > 65535)

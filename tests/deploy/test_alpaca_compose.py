@@ -47,6 +47,8 @@ class AlpacaComposeTests(unittest.TestCase):
             self.assertEqual('host', responder['network_mode'])
             self.assertIn('--discovery-only', responder['command'])
             self.assertEqual('11112', responder['environment']['Alpaca__Discovery__AdvertisedPort'])
+            self.assertEqual('/tmp/alpaca-discovery-ready', responder['environment']['Alpaca__Discovery__ReadyFilePath'])
+            self.assertEqual(['CMD', 'test', '-f', '/tmp/alpaca-discovery-ready'], responder['healthcheck']['test'])
             self.assertEqual('1655:1655', responder['user'])
             self.assertTrue(responder['read_only'])
             self.assertEqual(['ALL'], responder['cap_drop'])

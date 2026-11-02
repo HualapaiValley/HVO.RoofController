@@ -261,12 +261,12 @@ Enabling the server leaves `RoofController:Alpaca:AllowCommands=Off`: deployment
 
 The installer's **Alpaca server** option is off by default. When enabled, give this host's private IPv4 LAN address
 and the published TCP port (default `11111`). It creates a separate `RoofAlpacaServer` key without displaying it,
-keeps the device identities in `/var/lib/hvo-roof/alpaca/alpaca-devices.json`, and includes them in backup and restore.
+keeps the device identities in `/var/lib/hvo-roof-alpaca/alpaca-devices.json`, and includes them in backup and restore.
 An upgrade keeps an existing opt-in; an explicit disable removes the listener and discovery responder.
 
 For the deploy script, provision the dedicated server key as described below and set `ALPACA_ENABLED=true`,
 `ALPACA_LAN_ADDRESS` to the host's private IPv4 LAN address, and `ALPACA_API_KEY_FILE` to the root-readable key file
-on that host. `ALPACA_PORT` defaults to `11111`; `ALPACA_DATA_DIR` defaults to `/var/lib/hvo-roof/alpaca` and must
+on that host. `ALPACA_PORT` defaults to `11111`; `ALPACA_DATA_DIR` defaults to `/var/lib/hvo-roof-alpaca` and must
 already exist. The directory is mounted read-write at `/var/lib/hvo-roof-alpaca`; keep it across replacements.
 `ALPACA_DISCOVERY_PORT` defaults to UDP `32227`. Never bind the TCP port to `0.0.0.0`, a public address or an overlay
 address. Deployment validates Alpaca's settings and existing identities before stopping the previous controller,
@@ -293,7 +293,8 @@ Inside the controller container, the supervisor starts Alpaca only with `Alpaca_
 unprivileged user (`alpaca`, UID/GID `1655`). It copies the account key into a root-controlled private runtime
 directory, gives that process only `Alpaca__*` configuration and general runtime variables, and preserves its device
 identities on the data mount. Those GUIDs are public (`0644`, directory `0755`); the account key stays private.
-A server crash restarts that process alone. Its preparation and shutdown have their own deadlines; a hang cannot
+Deployment also waits for the host discovery responder to bind its UDP socket; a process that is alive without
+answering discovery fails verification. A server crash restarts that process alone. Its preparation and shutdown have their own deadlines; a hang cannot
 hold up relay-off after a controller exit or extend the container's 27-second stop bound. The host-network process
 runs `--discovery-only`, with no controller key, data mount or HAT access, advertising the published TCP port.
 
@@ -378,6 +379,7 @@ does not hold them.
 | `RequestsPerSecondPerAddress` | `100` | The polling limit per client address. |
 | `MaxConnectedClients`, `ConnectionIdleMinutes` | `32`, `60` | How many clients may be connected, and how long an idle one stays so. |
 | `Discovery:Enabled` | `true` | Whether to answer discovery (only while the server is enabled). |
+| `Discovery:ReadyFilePath` | none | Optional absolute path for the host responder's bound-socket marker; deployment sets `/tmp/alpaca-discovery-ready` and waits for it. It contains no addresses or credentials. |
 | `Discovery:Port` | `32227` | The UDP port discovery listens on. |
 | `Discovery:AdvertisedPort` | `Port` | The port discovery tells clients, when it differs from `Port` (a container's published port). |
 | `Discovery:IPv6` | `false` | Whether to answer IPv6 discovery (multicast `ff12::a1:9aca`) too. |

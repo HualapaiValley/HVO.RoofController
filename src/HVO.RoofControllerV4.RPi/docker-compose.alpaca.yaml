@@ -21,7 +21,7 @@ x-alpaca-volumes: &alpaca-volumes
     bind:
       create_host_path: false
   - type: bind
-    source: ${HVO_ALPACA_DATA_DIR:-/var/lib/hvo-roof/alpaca}
+    source: ${HVO_ALPACA_DATA_DIR:-/var/lib/hvo-roof-alpaca}
     target: /var/lib/hvo-roof-alpaca
     bind:
       create_host_path: false
@@ -63,6 +63,7 @@ services:
       Alpaca__PublishedAddress: ${HVO_ALPACA_LAN_ADDRESS:?Set HVO_ALPACA_LAN_ADDRESS to one private IPv4 LAN address}
       Alpaca__Discovery__AdvertisedPort: ${HVO_ALPACA_PORT:-11111}
       Alpaca__Discovery__Port: ${HVO_ALPACA_DISCOVERY_PORT:-32227}
+      Alpaca__Discovery__ReadyFilePath: /tmp/alpaca-discovery-ready
     depends_on:
       roof-controller:
         condition: service_healthy
@@ -84,7 +85,10 @@ services:
     restart: unless-stopped
     stop_grace_period: 3s
     healthcheck:
-      disable: true
+      test: [ "CMD", "test", "-f", "/tmp/alpaca-discovery-ready" ]
+      interval: 5s
+      timeout: 2s
+      retries: 3
     logging:
       driver: local
       options:

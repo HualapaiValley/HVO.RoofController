@@ -102,7 +102,7 @@ public sealed class InstallerAlpacaTests
             ["ALPACA_LAN_ADDRESS"] = "192.168.1.50",
             ["ALPACA_PORT"] = "11111",
             ["ALPACA_API_KEY_FILE"] = ApiKeyFiles.KeyFile(ControllerLayout.System.Secrets, key.Index),
-            ["ALPACA_DATA_DIR"] = "/var/lib/hvo-roof/alpaca"
+            ["ALPACA_DATA_DIR"] = "/var/lib/hvo-roof-alpaca"
         });
         deployment.Keys.Should().NotContain(name => name.Contains("AllowCommands", StringComparison.Ordinal));
         InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).ToAnswers().ToJson().Should().Contain("\"alpaca\"").And.Contain("\"enabled\": true");
@@ -154,7 +154,7 @@ public sealed class InstallerAlpacaTests
         using var pi = new FakeMachine().WithPi();
         var enabled = InstallAnswers.Parse(EnabledAnswers);
         (await pi.RunAsync("--answers", pi.WriteAnswers(enabled))).ExitCode.Should().Be(0);
-        pi.Write("/var/lib/hvo-roof/alpaca/alpaca-devices.json", "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}");
+        pi.Write("/var/lib/hvo-roof-alpaca/alpaca-devices.json", "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}");
         var keys = pi.ApiKeyValues().ToArray();
 
         var disabled = enabled with { Controller = enabled.Controller! with { Alpaca = enabled.Controller.Alpaca! with { Enabled = false } } };
@@ -163,7 +163,7 @@ public sealed class InstallerAlpacaTests
         run.ExitCode.Should().Be(0, run.ToString());
         pi.Deploys.Last()["ALPACA_ENABLED"].Should().Be("false");
         pi.ApiKeyValues().Should().BeEquivalentTo(keys);
-        pi.Read("/var/lib/hvo-roof/alpaca/alpaca-devices.json").Should().Contain("00000000-0000-0000-0000-000000000001");
+        pi.Read("/var/lib/hvo-roof-alpaca/alpaca-devices.json").Should().Contain("00000000-0000-0000-0000-000000000001");
     }
 
     [TestMethod]
@@ -172,7 +172,7 @@ public sealed class InstallerAlpacaTests
         using var pi = new FakeMachine().WithPi();
         var enabled = InstallAnswers.Parse(EnabledAnswers);
         (await pi.RunAsync("--answers", pi.WriteAnswers(enabled))).ExitCode.Should().Be(0);
-        const string path = "/var/lib/hvo-roof/alpaca/alpaca-devices.json";
+        const string path = "/var/lib/hvo-roof-alpaca/alpaca-devices.json";
         var ids = "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\",\"safetymonitor/0\":\"00000000-0000-0000-0000-000000000002\"}";
         pi.Write(path, ids);
         pi.Owners[ControllerLayout.System.AlpacaData] = "1655:1655";
@@ -190,6 +190,89 @@ public sealed class InstallerAlpacaTests
         pi.Owners[ControllerLayout.System.AlpacaData].Should().Be("1655:1655");
         InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Controller!.Alpaca.Should().Be(enabled.Controller!.Alpaca);
         InstallerLifecycleTests.ShowsNoSecret(pi, run);
+    }
+
+    [TestMethod]
+    public async Task AfterAlpacaRollback_TheLegacyBackupRequiredBeforeInstallerHandoverStillWorks()
+    {
+        using var pi = new FakeMachine().WithPi();
+        (await pi.RunAsync("--answers", pi.WriteAnswers(new InstallAnswers { Roles = [InstallRole.Controller] }))).ExitCode.Should().Be(0);
+        pi.WithRelease("4.0.1", latest: true);
+        pi.InstallerVersion = "4.0.1";
+        var install = await pi.RunAsync("--answers", pi.WriteAnswers(InstallAnswers.Parse(EnabledAnswers)));
+        install.ExitCode.Should().Be(0, install.ToString());
+        var directory = ControllerLayout.System.AlpacaData;
+        pi.Write(ControllerLayout.System.AlpacaDevicesFile, "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}");
+        pi.Owners[directory] = "1655:1655";
+        pi.NumericOwners[directory] = "1655:1655";
+
+        var rollback = await pi.RunAsync("rollback");
+
+        rollback.ExitCode.Should().Be(0, rollback.ToString());
+        InstallRecord.Parse(pi.Read(InstallPaths.SystemRecord)).Version.Should().Be("4.0.0");
+        pi.Exists(ControllerLayout.System.AlpacaDevicesFile).Should().BeTrue("rollback preserves the new feature's device identities");
+        Func<Task> legacyBackup = () => Legacy44OwnershipWalkAsync(pi, "/var/lib/hvo-roof");
+        await legacyBackup.Should().NotThrowAsync("the old installer backs up this tree before handing over to the next installer");
+    }
+
+    [TestMethod]
+    public async Task ThePinnedLegacyBackupWalk_RejectsAnUnprivilegedDirectoryInsideItsDataTree()
+    {
+        using var pi = new FakeMachine().WithPi();
+        const string directory = "/var/lib/hvo-roof/unprivileged";
+        pi.Folder(directory);
+        pi.Owners[directory] = "1655:1655";
+
+        Func<Task> legacyBackup = () => Legacy44OwnershipWalkAsync(pi, "/var/lib/hvo-roof");
+
+        await legacyBackup.Should().ThrowAsync<InvalidOperationException>().WithMessage("*legacy 4.4.0 backup*unprivileged*");
+    }
+
+    [TestMethod]
+    public async Task NormalUninstall_KeepsAlpacaIdentities_AndPurgeRemovesTheDedicatedDirectory()
+    {
+        using var pi = new FakeMachine().WithPi();
+        var install = await pi.RunAsync("--answers", pi.WriteAnswers(InstallAnswers.Parse(EnabledAnswers)));
+        install.ExitCode.Should().Be(0, install.ToString());
+        var directory = ControllerLayout.System.AlpacaData;
+        var file = ControllerLayout.System.AlpacaDevicesFile;
+        const string ids = "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}";
+        pi.Write(file, ids);
+        pi.Owners[directory] = "1655:1655";
+        pi.NumericOwners[directory] = "1655:1655";
+
+        var uninstall = await pi.RunAsync("uninstall", "--yes");
+
+        uninstall.ExitCode.Should().Be(0, uninstall.ToString());
+        pi.Read(file).Should().Be(ids);
+        pi.Owners[directory].Should().Be("1655:1655");
+        var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+        purge.ExitCode.Should().Be(0, purge.ToString());
+        pi.Exists(directory).Should().BeFalse();
+    }
+
+    [TestMethod]
+    public void AMacRig_KeepsItsAlpacaIdentitiesInItsExistingApplicationSupportRoot()
+    {
+        var layout = ControllerLayout.MacRig("/Users/observer");
+
+        layout.AlpacaData.Should().Be("/Users/observer/Library/Application Support/HVO Roof Rig/alpaca");
+        layout.AlpacaData.Should().StartWith(layout.Configuration + "/");
+    }
+
+    // The directory ownership contract in v4.4.0 (27fb45fc5dd086936e3941413fa99b962102a339),
+    // BackupCommands.CollectAsync/OnlyRootChanges. Keep the old data root independent of the current layout:
+    // old installers recursively visit every directory here before upgrade hands over to a newer installer.
+    private static async Task Legacy44OwnershipWalkAsync(FakeMachine machine, string path)
+    {
+        if (await BackupCommands.StatAsync(machine.Machine, path, CancellationToken.None) is not { Kind: "directory" } entry)
+            return;
+        if (entry.Owner?.StartsWith("root:", StringComparison.Ordinal) != true
+            || machine.Machine.GetMode(path) is not { } mode
+            || (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            throw new InvalidOperationException($"The legacy 4.4.0 backup refuses {path}: a directory only root may change is required.");
+        foreach (var name in machine.Machine.ListNames(path))
+            await Legacy44OwnershipWalkAsync(machine, Path.Join(path, name));
     }
 
     [TestMethod]

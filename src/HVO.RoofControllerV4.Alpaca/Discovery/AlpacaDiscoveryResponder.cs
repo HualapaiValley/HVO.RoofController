@@ -63,8 +63,9 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
         Socket? v6 = null;
         try
         {
+            ClearReadyMarker();
+            stoppingToken.ThrowIfCancellationRequested();
             v4 = Open(AddressFamily.InterNetwork, IPAddress.Any);
-            _bound.TrySetResult(((IPEndPoint)v4.LocalEndPoint!).Port);
             if (_options.Discovery.IPv6)
             {
                 try
@@ -78,12 +79,25 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
                 }
             }
 
+            stoppingToken.ThrowIfCancellationRequested();
+            PublishReadyMarker();
+            _bound.TrySetResult(((IPEndPoint)v4.LocalEndPoint!).Port);
             _logger.LogInformation(
                 "Answering Alpaca discovery on UDP port {DiscoveryPort}{IPv6} with port {AdvertisedPort}",
                 ((IPEndPoint)v4.LocalEndPoint!).Port, v6 is null ? string.Empty : " (IPv4 and IPv6)", _options.AdvertisedPort);
             await Task.WhenAll(
                 AnswerAsync(v4, new IPEndPoint(IPAddress.Any, 0), stoppingToken),
                 v6 is null ? Task.CompletedTask : AnswerAsync(v6, new IPEndPoint(IPAddress.IPv6Any, 0), stoppingToken)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // File exceptions can include configuration text in their path; do not log or rethrow those details.
+            _bound.TrySetException(new IOException("The Alpaca discovery readiness marker could not be updated."));
+            _logger.LogError("The Alpaca discovery readiness marker could not be updated ({ErrorType})", ex.GetType().Name);
+            throw new AlpacaSettingsException("The Alpaca discovery readiness marker could not be updated.");
         }
         catch (SocketException ex)
         {
@@ -93,9 +107,32 @@ public sealed class AlpacaDiscoveryResponder : BackgroundService
         finally
         {
             _bound.TrySetCanceled(CancellationToken.None);
+            try { ClearReadyMarker(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogError("The Alpaca discovery readiness marker could not be removed ({ErrorType})", ex.GetType().Name);
+            }
             v4?.Dispose();
             v6?.Dispose();
         }
+    }
+
+    private void ClearReadyMarker()
+    {
+        if (_options.Discovery.ReadyFilePath is { } path) File.Delete(path);
+    }
+
+    private void PublishReadyMarker()
+    {
+        if (_options.Discovery.ReadyFilePath is not { } path) return;
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                stream.Write("ready\n"u8);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { File.Delete(temporary); }
     }
 
     private Socket Open(AddressFamily family, IPAddress any)

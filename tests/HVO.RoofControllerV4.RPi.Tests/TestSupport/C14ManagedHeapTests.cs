@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using FluentAssertions;
@@ -157,9 +158,65 @@ public sealed class C14ManagedHeapTests
         C14SoakScenarios.GrewLessThanTheLimit(growth, trend).Should().BeFalse("the live bytes now grow over 10%");
     }
 
+    private const string IsolatedHeapFlag = "HVO_C14_ISOLATED_HEAP_TEST";
+    private const string IsolatedHeapResult = "HVO_C14_ISOLATED_HEAP_RESULT";
+
     [TestMethod]
     [DoNotParallelize]
-    public void TheLiveBytes_FollowWhatTheProcessKeeps()
+    public async Task TheLiveBytes_FollowWhatTheProcessKeeps()
+    {
+        // Other tests can leave background work and cached objects that disappear between full collections even
+        // with DoNotParallelize. A fresh test host keeps the original allocation/release assertions meaningful.
+        if (Environment.GetEnvironmentVariable(IsolatedHeapFlag) == "1")
+        {
+            AssertLiveBytesFollowKeptObjects();
+            File.WriteAllText(Environment.GetEnvironmentVariable(IsolatedHeapResult)!, "passed");
+            return;
+        }
+
+        var folder = Path.Join(Path.GetTempPath(), "hvo-c14-heap-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var result = Path.Join(folder, "result");
+            var start = new ProcessStartInfo("dotnet")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+            start.ArgumentList.Add("vstest");
+            start.ArgumentList.Add(typeof(C14ManagedHeapTests).Assembly.Location);
+            start.ArgumentList.Add("/TestCaseFilter:FullyQualifiedName=" + typeof(C14ManagedHeapTests).FullName + "." + nameof(TheLiveBytes_FollowWhatTheProcessKeeps));
+            start.Environment[IsolatedHeapFlag] = "1";
+            start.Environment[IsolatedHeapResult] = result;
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try
+            {
+                await process.WaitForExitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                process.Kill(entireProcessTree: true);
+                using var killed = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await process.WaitForExitAsync(killed.Token);
+                Assert.Fail("The isolated C14 heap test did not finish within 30 seconds.");
+            }
+
+            process.ExitCode.Should().Be(0, (await output) + (await error));
+            File.Exists(result).Should().BeTrue("the isolated test must execute, rather than pass with no matching tests");
+            File.ReadAllText(result).Should().Be("passed");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    private static void AssertLiveBytesFollowKeptObjects()
     {
         const long Kept = KeptArrays * 1_048L; // 1,024 bytes of data and a 24-byte header each
         var before = C14ManagedHeap.Read();

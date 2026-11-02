@@ -275,7 +275,7 @@ service that the controller depends on. The `emulator` profile, a test rig, does
 Alpaca is off for a new deployment unless `ALPACA_ENABLED=true`; an unset choice preserves an existing opt-in.
 Use `ALPACA_LAN_ADDRESS` for one private IPv4 LAN address (never wildcard, public, loopback or overlay),
 `ALPACA_PORT` for its published TCP port (default `11111`), `ALPACA_API_KEY_FILE` for the dedicated account key on
-that host, and `ALPACA_DATA_DIR` for the persistent device ID directory (default `/var/lib/hvo-roof/alpaca`).
+that host, and `ALPACA_DATA_DIR` for the persistent device ID directory (default `/var/lib/hvo-roof-alpaca`).
 `ALPACA_DISCOVERY_PORT` defaults to UDP `32227`. The script creates `<container-name>-discovery` on the host network,
 with no controller key, no mounted data or devices, and `Discovery:AdvertisedPort` set to the published TCP port.
 It preflights the server before replacement and verifies its management listener afterward. Stop, upgrade failure

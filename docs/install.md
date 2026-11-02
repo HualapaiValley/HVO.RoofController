@@ -1542,7 +1542,8 @@ before it changes anything: [State contracts](#state-contracts)):
 - `/var/lib/hvo-roof`: the people, the API keys, the settings set through the API, and the roof command history
   (`identity/command-history.jsonl`, about 4 MB at its default 10,000 commands and at most about 30 MB, so a backup
   stays well inside the 64 MB it takes in all: [The command history](security.md#the-command-history));
-- `/var/lib/hvo-roof/alpaca/alpaca-devices.json`, when present: the public Dome and SafetyMonitor GUIDs, so restored
+- `/var/lib/hvo-roof-alpaca/alpaca-devices.json`, when present: a dedicated sibling volume outside the controller's
+  legacy root-owned backup tree; the public Dome and SafetyMonitor GUIDs, so restored
   clients recognise the same devices; the dedicated server key is already in the controller's secrets backup;
 - `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
 

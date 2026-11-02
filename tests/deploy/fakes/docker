@@ -625,6 +625,12 @@ def exec_curl(state, ref, curl_args, stdin_text):
         c.setdefault("log", []).extend(stdin_text.splitlines())
         save(state)
         return
+    if curl_args == ["test", "-f", "/tmp/alpaca-discovery-ready"]:
+        c["discovery_ready_probes"] = c.get("discovery_ready_probes", 0) + 1
+        save(state)
+        ready = os.environ.get("FAKE_DISCOVERY_READY", "true") == "true"
+        after = int(os.environ.get("FAKE_DISCOVERY_READY_AFTER", "1"))
+        sys.exit(0 if ready and c["discovery_ready_probes"] >= after else 1)
     url = curl_args[-1]
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
 

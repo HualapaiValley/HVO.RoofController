@@ -57,8 +57,11 @@ public sealed record ControllerLayout(
     /// <summary>The controller's identity store: its people and managed API keys, as hashes.</summary>
     public string IdentityFile => Path.Join(Identity, "identity.json");
 
-    /// <summary>The Alpaca volume on the host: its stable device identities.</summary>
-    public string AlpacaData => Path.Join(Data, "alpaca");
+    /// <summary>
+    /// The Alpaca volume on the host: outside the Linux controller's root-owned tree, so an older installer still backs
+    /// up and upgrades after rollback. A Mac rig keeps it in its existing Application Support root for Time Machine.
+    /// </summary>
+    public string AlpacaData => Data == System.Data ? "/var/lib/hvo-roof-alpaca" : Path.Join(Data, "alpaca");
 
     /// <summary>The stable public Alpaca device identities, included in backup and restore.</summary>
     public string AlpacaDevicesFile => Path.Join(AlpacaData, "alpaca-devices.json");
@@ -498,6 +501,14 @@ public static class PlanBuilder
         if (controller && layout.Data != layout.Configuration)
         {
             folders.Add((layout.Data, "the controller's data: people, API keys and settings set through the API"));
+        }
+
+        // The dedicated Linux bind source is retained on uninstall/rollback and removed only by a purge. Omitted when
+        // absent, so a default-off installation retains its established purge plan; Mac rigs' root already covers it.
+        if (controller && machine.Os == InstallerOs.Linux
+            && (machine.DirectoryExists(layout.AlpacaData) || machine.FileExists(layout.AlpacaData)))
+        {
+            folders.Add((layout.AlpacaData, "the Alpaca device identities"));
         }
 
         if (record.Scope == InstallScope.System && (record.Roles.Contains(InstallRole.Kiosk) || record.Kiosk is not null))

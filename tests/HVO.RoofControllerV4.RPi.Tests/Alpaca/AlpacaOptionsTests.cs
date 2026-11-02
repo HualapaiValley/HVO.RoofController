@@ -23,6 +23,29 @@ public sealed class AlpacaOptionsTests
     };
 
     [TestMethod]
+    [DataRow("")]
+    [DataRow("relative-ready")]
+    [DataRow("relative/ready")]
+    public void DiscoveryReadyFile_RequiresAnAbsolutePath(string path)
+    {
+        var options = Valid();
+        options.Discovery.ReadyFilePath = path;
+        foreach (var discoveryOnly in new[] { false, true })
+            options.Validate(discoveryOnly).Should().ContainSingle().Which.Should().Contain("Discovery:ReadyFilePath");
+    }
+
+    [TestMethod]
+    public void DiscoveryReadyFile_IsOptional_AndAnAbsolutePathIsAccepted()
+    {
+        var options = Valid();
+        options.Discovery.ReadyFilePath.Should().BeNull();
+        options.Validate().Should().BeEmpty();
+        options.Discovery.ReadyFilePath = Path.Combine(Path.GetTempPath(), "alpaca-discovery-ready");
+        options.Validate().Should().BeEmpty();
+        options.Validate(discoveryOnly: true).Should().BeEmpty();
+    }
+
+    [TestMethod]
     public void TheServer_IsOffByDefault()
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
