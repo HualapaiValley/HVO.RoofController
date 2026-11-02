@@ -514,7 +514,8 @@ public sealed class KioskPanelTests
         system.Information.Should().BeEmpty("the host's details are an admin's");
         system.Self.Should().Be(("This kiosk", RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly)),
             "everyone may see the kiosk's own version");
-        system.Summary.Select(row => row.Label).Should().Equal("Controller", "Web UI", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+        system.Summary.Select(row => row.Label).Should().Equal("Controller", "Web UI", "Alpaca server", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+        system.Summary.Single(row => row.Label == "Alpaca server").Value.Should().Be("Off");
         system.SummaryProblem.Should().BeNull("every role reads the controller's summary (#209)");
         system.Message!.Text.Should().Be($"Health: {system.Health}.");
 

@@ -52,11 +52,12 @@ public sealed class SystemPageTests
         var cut = Loaded(context);
 
         cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
-            .Should().Equal("Controller", "Web UI", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
+            .Should().Equal("Controller", "Web UI", "Alpaca server", "Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
         cut.FindAll("[data-testid=system-information] [data-testid=system-fact]").Select(fact => fact.GetAttribute("data-label")).ToList()
             .Should().Equal("Application", "Host", "System", "Runtime", "Started", "Memory", "CPU");
         Fact(cut, SystemPage.WebUiLabel).Should().Be(RoofProductVersion.Describe(typeof(RoofWebOptions).Assembly));
         Fact(cut, "Controller").Should().Be(RoofProductVersion.Describe(typeof(Program).Assembly));
+        Fact(cut, "Alpaca server").Should().Be("Off");
         Fact(cut, "Application").Should().StartWith($"HVO.RoofControllerV4.RPi {RoofProductVersion.Describe(typeof(Program).Assembly)}")
             .And.EndWith("(Development)");
         Detail(cut, "Memory").Should().MatchRegex(@"^\d+\.\d (KiB|MiB) working set, \d+\.\d (KiB|MiB) managed$");
@@ -287,9 +288,10 @@ public sealed class SystemPageTests
 
         var cut = context.Render<SystemPage>();
 
-        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().HaveCount(8,
+        cut.WaitForAssertion(() => cut.FindAll("[data-testid=system-summary] [data-testid=system-fact]").Should().HaveCount(9,
             cut.FindAll("[data-testid=page-message]").FirstOrDefault()?.TextContent ?? "the summary to be read"));
         Fact(cut, "Controller").Should().Be(RoofProductVersion.Describe(typeof(Program).Assembly));
+        Fact(cut, "Alpaca server").Should().Be("Off");
         cut.FindAll("[data-testid=page-message]").Should().BeEmpty("the summary needs no admin");
         cut.FindAll("[data-testid=system-information]").Should().BeEmpty();
         cut.FindAll("[data-testid=restart]").Should().BeEmpty();

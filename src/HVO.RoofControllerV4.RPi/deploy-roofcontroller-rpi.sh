@@ -2611,13 +2611,16 @@ read_alpaca_metadata() {
   printf '%s' "${metadata}" | python3 -c '
 import json,sys
 entries=json.load(sys.stdin); data={}
+keys=("Alpaca__Enabled","HVO_ALPACA_LAN_ADDRESS","Alpaca__Discovery__AdvertisedPort",
+      "HVO_ALPACA_API_KEY_FILE","HVO_ALPACA_DATA_DIR","HVO_ALPACA_DISCOVERY_PORT")
+wanted={key.lower():key for key in keys}
 for entry in entries:
     key,sep,value=entry.partition("=")
-    if sep:
-        if key in data: sys.exit(1)
-        data[key]=value
-for key in ("Alpaca__Enabled","HVO_ALPACA_LAN_ADDRESS","Alpaca__Discovery__AdvertisedPort",
-            "HVO_ALPACA_API_KEY_FILE","HVO_ALPACA_DATA_DIR","HVO_ALPACA_DISCOVERY_PORT"):
+    canonical=wanted.get(key.replace(":","__").lower())
+    if sep and canonical:
+        if canonical in data: sys.exit(1)
+        data[canonical]=value
+for key in keys:
     value=data.get(key, "")
     if "\n" in value or "\r" in value: sys.exit(1)
     print(value)

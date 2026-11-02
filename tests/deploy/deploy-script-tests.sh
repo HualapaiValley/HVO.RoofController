@@ -1769,7 +1769,7 @@ test_web_ui_unreachable_from_this_machine_rolls_back() {
 
 test_unreadable_environment_also_prevents_unsafe_automatic_recovery() {
   seed_container roof-controller old true 8080:8080
-  deploy "${HTTPS_ENV[@]}" FAKE_FAIL=.Config.Env
+  deploy "${HTTPS_ENV[@]}" ALPACA_ENABLED=false FAKE_FAIL=.Config.Env
 
   assert_status_is 1
   assert_output_contains "could not read the environment of roof-controller from Docker to find its web UI"
@@ -4853,8 +4853,8 @@ test_context_that_prompts_fails_before_anything_changes() {
 
 test_state_query_failure_after_preflight_changes_nothing() {
   seed_container roof-controller old true 8443:8443
-  # Queries 1 and 2 read roof-controller and roof-controller-previous; query 3 reads them again after the pre-flight.
-  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="ps -a --no-trunc@3"
+  # Fail the controller's second query, after preflight, independent of companion ownership queries.
+  deploy "${HTTPS_ENV[@]}" 'FAKE_FAIL=ps -a --no-trunc --filter name=^/roof-controller$@2'
 
   assert_status 1
   assert_output_contains "Could not read the state of roof-controller from Docker"
@@ -5262,6 +5262,12 @@ test_alpaca_discovery_uses_the_servers_network_allowlist() {
   assert_status 0
   docker_calls run | jq -se 'any(.[]; index("--discovery-only") and index("Alpaca__AllowedNetworks__0=192.168.1.0/24"))' >/dev/null \
     || fail_test "discovery ignores server network allowlist"
+}
+
+test_alpaca_checks_the_listener_once_after_slow_metadata() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_NEW_ALPACA_METADATA_DELAY=1.1
+  assert_status 0
+  assert_output_contains "Alpaca management listener and supervised process: OK"
 }
 
 # --- Harness ----------------------------------------------------------------------------------------------------------

@@ -288,6 +288,11 @@ def inspect(state, args):
         die(f"fake docker: unsupported inspect format: {fmt}")
     for ref in refs:
         _, c = container(state, ref)
+        delay = float(behaviour(c["kind"], "ALPACA_METADATA_DELAY", "0"))
+        if fmt == "{{json .Config.Env}}" and delay and not c.get("alpaca_metadata_delayed"):
+            c["alpaca_metadata_delayed"] = True
+            save(state)
+            time.sleep(delay)
         if fmt == HOST_CONFIG_FORMAT:
             out(host_config(c))
         elif fmt == "{{.Image}}":
