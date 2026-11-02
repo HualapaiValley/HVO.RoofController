@@ -179,12 +179,12 @@ public sealed partial class InstallerRealHatTests
         ("ALPACA_ENABLED=true",
         [
             "--env Alpaca__Enabled=true --env \"Alpaca__PublishedAddress=${ALPACA_LAN_ADDRESS}\" --env Alpaca__ListenAddresses__0=0.0.0.0 --env Alpaca__Port=11111",
-            "--env Alpaca__ControllerUrl=http://localhost:8080 --env Alpaca__ControllerApiKeyFile=/run/secrets/alpaca-server-key",
+            "--env Alpaca__ControllerUrl=http://localhost:8080 --env Alpaca__ControllerApiKeyFile=/run/alpaca-server-key",
             "--env Alpaca__DataPath=/var/lib/hvo-roof-alpaca --env Alpaca__Discovery__Enabled=false",
             "--env \"Alpaca__Discovery__AdvertisedPort=${ALPACA_PORT}\"",
             "--env \"HVO_ALPACA_LAN_ADDRESS=${ALPACA_LAN_ADDRESS}\" --env \"HVO_ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE}\"",
             "--env \"HVO_ALPACA_DATA_DIR=${ALPACA_DATA_DIR}\" --env \"HVO_ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT}\"",
-            "--mount \"type=bind,src=${ALPACA_API_KEY_FILE},dst=/run/secrets/alpaca-server-key,readonly\"",
+            "--mount \"type=bind,src=${ALPACA_API_KEY_FILE},dst=/run/alpaca-server-key,readonly\"",
             "--mount \"type=bind,src=${ALPACA_DATA_DIR},dst=/var/lib/hvo-roof-alpaca\""
         ]),
         ("ALPACA_ENABLED=false", ["--env Alpaca__Enabled=false"]),
