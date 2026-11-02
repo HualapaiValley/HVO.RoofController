@@ -81,8 +81,7 @@ internal static class RegularFiles
 
     private static SafeFileHandle? Open(string onDisk, string path, bool noFollow)
     {
-        var flags = OperatingSystem.IsMacOS() ? MacFlags : LinuxFlags;
-        if (noFollow) flags |= OperatingSystem.IsMacOS() ? 0x100 : 0x20000;
+        var flags = FlagsForOpen(OperatingSystem.IsMacOS(), RuntimeInformation.ProcessArchitecture, noFollow);
         int descriptor;
         int error;
         do
@@ -123,6 +122,17 @@ internal static class RegularFiles
             handle.Dispose();
             throw;
         }
+    }
+
+    /// <summary>The native open flags for the process ABI, which can differ between Linux architectures.</summary>
+    internal static int FlagsForOpen(bool isMacOS, Architecture architecture, bool noFollow)
+    {
+        var flags = isMacOS ? MacFlags : LinuxFlags;
+        // ARM64 retains a distinct O_NOFOLLOW value for AArch32 compatibility: octal 0100000.
+        // x64's octal 00400000 means O_LARGEFILE on ARM64 and would silently follow the link.
+        // https://github.com/torvalds/linux/blob/v6.8/arch/arm64/include/uapi/asm/fcntl.h
+        var noFollowFlag = isMacOS ? 0x100 : architecture == Architecture.Arm64 ? 0x8000 : 0x20000;
+        return noFollow ? flags | noFollowFlag : flags;
     }
 
     /// <summary>Translates a failed native open, retaining physical paths for I/O errors and logical paths for file kinds.</summary>
