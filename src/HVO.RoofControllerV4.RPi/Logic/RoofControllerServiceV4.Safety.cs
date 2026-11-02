@@ -565,12 +565,18 @@ public partial class RoofControllerServiceV4
     /// <see cref="HatIoOverrunException"/> as a failed transfer does, and every later access fails at once until it has
     /// returned (<see cref="OnHatIoRecovered"/>).
     /// </summary>
-    private T HatCall<T>(Func<T> access)
+    private T HatCall<T>(Func<T> access, bool protectiveRelayOff = false)
     {
         BoundPendingFence();
         var limit = HatIoLimit;
         var bounded = false;
-        if ((t_ioDeadline ?? t_foreignFenceDeadline) is { } deadline)
+        var accessDeadline = t_ioDeadline;
+        if ((!protectiveRelayOff || accessDeadline is null) && t_foreignFenceDeadline is { } foreign)
+        {
+            accessDeadline = accessDeadline is { } own ? Math.Min(own, foreign) : foreign;
+        }
+
+        if (accessDeadline is { } deadline)
         {
             // A stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereviews S-F4, F19).
             var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
@@ -628,8 +634,8 @@ public partial class RoofControllerServiceV4
     [ThreadStatic]
     private static bool t_fencePending;
 
-    // Routine work yields to this deadline. A stop decided by this caller uses t_ioDeadline instead: another
-    // request must not refuse the very relays-off writes and read-back it is waiting for (#231, Opus R2 F7).
+    // Routine work yields to this deadline. A stop decided by this caller uses t_ioDeadline for its all-off writes
+    // and read-back: another request must not refuse the very work it is waiting for (#231, Opus R2 F7).
     [ThreadStatic]
     private static long? t_foreignFenceDeadline;
 
@@ -835,11 +841,11 @@ public partial class RoofControllerServiceV4
         return TryWriteRelay_NoLock(relayId, true) ? RelayWriteOutcome.Verified : RelayWriteOutcome.Failed;
     }
 
-    private bool TryWriteRelay_NoLock(int relayId, bool on)
+    private bool TryWriteRelay_NoLock(int relayId, bool on, bool protectiveStop = false)
     {
         try
         {
-            var result = HatCall(() => _hat.SetRelay(relayId, on));
+            var result = HatCall(() => _hat.SetRelay(relayId, on), protectiveRelayOff: protectiveStop && !on);
             if (result.IsSuccessful)
             {
                 return true;
@@ -856,12 +862,12 @@ public partial class RoofControllerServiceV4
     }
 
     /// <summary>Reads the relay register (bits 0-3). Updates relay-read freshness tracking; never throws.</summary>
-    private int? TryReadRelayMask_NoLock()
+    private int? TryReadRelayMask_NoLock(bool protectiveStop = false)
     {
         Exception? error = null;
         try
         {
-            var result = HatCall(_hat.GetRelaysMask);
+            var result = HatCall(_hat.GetRelaysMask, protectiveRelayOff: protectiveStop);
             if (result.IsSuccessful)
             {
                 _lastSuccessfulRelayReadUtc = Now;
@@ -903,18 +909,19 @@ public partial class RoofControllerServiceV4
         CancelPendingStart_NoLock("The relays were driven off while this start waited; nothing moved for it.");
         lock (_hatTransactionLock)
         {
-            TryWriteRelay_NoLock(_options.OpenRelayId, false);
-            TryWriteRelay_NoLock(_options.CloseRelayId, false);
-            TryWriteRelay_NoLock(_options.StopRelayId, false);
-            TryWriteRelay_NoLock(_options.ClearFaultRelayId, false);
+            var protectiveStop = t_ioDeadline is not null;
+            TryWriteRelay_NoLock(_options.OpenRelayId, false, protectiveStop);
+            TryWriteRelay_NoLock(_options.CloseRelayId, false, protectiveStop);
+            TryWriteRelay_NoLock(_options.StopRelayId, false, protectiveStop);
+            TryWriteRelay_NoLock(_options.ClearFaultRelayId, false, protectiveStop);
 
-            var mask = TryReadRelayMask_NoLock();
+            var mask = TryReadRelayMask_NoLock(protectiveStop);
             if (mask != 0)
             {
                 _logger.LogWarning("All-off read-back was {Mask}; writing the whole relay register to zero", FormatMask(mask));
                 try
                 {
-                    var result = HatCall(() => _hat.SetRelaysMask(0));
+                    var result = HatCall(() => _hat.SetRelaysMask(0), protectiveRelayOff: protectiveStop);
                     if (!result.IsSuccessful)
                     {
                         _logger.LogWarning(result.Error, "Relay register zero write failed");
@@ -925,7 +932,7 @@ public partial class RoofControllerServiceV4
                     _logger.LogWarning(ex, "Relay register zero write threw");
                 }
 
-                mask = TryReadRelayMask_NoLock();
+                mask = TryReadRelayMask_NoLock(protectiveStop);
             }
 
             var verified = mask == 0;

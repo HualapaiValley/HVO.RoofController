@@ -20,6 +20,40 @@ public class RoofControllerProtectiveTimingTests
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
+    public async Task AStopDecision_DoesNotExemptRoutineLedsFromAnOverdueForeignDeadline()
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", flags)!.GetValue(service)!;
+        var stop = new Thread(() => service.Stop());
+        try
+        {
+            lock (sync)
+            {
+                stop.Start();
+                stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+                // Pause a caller after it decided a stop and after UpdateIndicatorLeds checked for waiting work.
+                // An overdue foreign request is now visible at HatCall; the cosmetic transfer still must yield.
+                using var section = (IDisposable)typeof(RoofControllerServiceV4).GetMethod("BoundedSection", flags)!
+                    .Invoke(service, [null, true, null])!;
+                var writes = 0;
+                hat.Registers.BeforeLedWrite = (_, _) => writes++;
+                typeof(RoofControllerServiceV4).GetMethod("ApplyIndicatorLedModes_NoLock", flags)!.Invoke(service, null);
+                writes.Should().Be(0, "only protective relay-off transfers may retain the caller's own deadline");
+            }
+        }
+        finally
+        {
+            hat.Registers.BeforeLedWrite = null;
+            if (stop.ThreadState != System.Threading.ThreadState.Unstarted) stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
+        }
+    }
+
+    [TestMethod]
     [DataRow("Stop", "limit")]
     [DataRow("Stop", "drive fault")]
     [DataRow("edge", "limit")]
