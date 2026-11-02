@@ -5286,7 +5286,8 @@ test_alpaca_failed_discovery_cleanup_never_blocks_controller_recovery() {
 test_alpaca_cannot_bypass_lan_binding_through_extra_args() {
   local extra
   for extra in '--network host' '--network=host' '--net=host' '--env Alpaca__Enabled=false' '--env Alpaca__Port=8080' \
-    '--env=Alpaca__Enabled=true' '-eAlpaca__Enabled=true' '--env=ALPACA:PORT=12345'; do
+    '--env=Alpaca__Enabled=true' '-eAlpaca__Enabled=true' '--env=ALPACA:PORT=12345' \
+    '-e=Alpaca__Enabled=true' '-ieAlpaca__Enabled=true' '-ie=Alpaca__Enabled=true' '-tieAlpaca__Port=1'; do
     setup_fresh_state
     deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "EXTRA_DOCKER_ARGS=${extra}"
     assert_status 1

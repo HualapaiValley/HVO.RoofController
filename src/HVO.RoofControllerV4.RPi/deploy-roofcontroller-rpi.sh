@@ -500,7 +500,12 @@ RELEASE_IMAGE_SETTING="the script sets it on a controller it loads from IMAGE_AR
 
 refuse_emulator_setting() {
   local argument=$1 setting
-  case "${argument}" in --env=*) argument=${argument#--env=} ;; -e*) argument=${argument#-e} ;; esac
+  if [[ "${argument}" == --env=* ]]; then
+    argument=${argument#--env=}
+  elif [[ "${argument}" =~ ^-[ditPq]*e(.*)$ ]]; then
+    # Docker accepts -eVALUE, -e=VALUE and a value on the last combined short option (-ieVALUE).
+    argument=${BASH_REMATCH[1]#=}
+  fi
   setting=${argument%%=*}
   setting=$(printf '%s' "${setting}" | tr '[:upper:]' '[:lower:]')
   setting=${setting//:/__}
