@@ -361,17 +361,36 @@ When the controller accepts Alpaca commands (`RoofController:Alpaca:AllowCommand
 | `alpaca status` | viewer | Which Alpaca commands are on, the Stop hold, the operator lease, the warnings, the grants, the alerts (newest first), how many telescopes block the roof and the override window. `--json` writes the status's `alpaca` object (`mode`, `hold`, `operatorLease`, `grants`, `alerts`, `warnings`, `blockingScopes`, `rereadBudgetMilliseconds`, `overrideWindowMinutes`, `scopeLatencies`, `allowOpenWithoutBlockingScopes`, `openGrantUnavailable`). A controller without it is exit 1. |
 | `alpaca clear-hold` | operator, a person's session | **Allow Alpaca again**: clears the Stop hold. With `--json`, the hold as the controller then has it. |
 | `alpaca grant --alert ID` | operator, a person's session, at a terminal | **Allow this Close once** or **Allow this Open once**, as the alert's refused command was: writes on standard error what the grant lifts, for which client, for how long and what it never bypasses (and, for an Open, that the roof stays open if the weather turns), then asks. It sends a grant of that kind with exactly that alert's reasons. An alert a grant cannot lift (acknowledged, not a refused Close or Open, or a reason no grant of its kind lifts) is refused, exit 7, and nothing is sent; so is a refused Open's while the controller says no Open grant can be made (the safety interlock is `Block`), with its reason: `Allow this Open once is not available: ...`. A grant the controller refuses (a 403 in Block mode, say) is exit 6, in its words. |
-| `alpaca revoke [--kind Close\|Open]` | operator, a person's session | Revokes the grant of that kind in force (Close by default). Exit 7 when there is none. |
+| `alpaca revoke [--kind Close\|Open]` | operator, a person's session | With `--kind`, revokes that kind only. Without it, revokes the only grant in force; if both are in force, revokes only Close, as before. Exit 7 when the selected kind has no grant (including when neither is in force). A grant consumed, expired or revoked after the list is read can still give exit 7; retry to read the current list. |
 | `alpaca alerts` | viewer | The alerts, newest first, with their ID, whether they are acknowledged, whether a grant can be made from them (`GRANT yes`; `unavailable` for a refused Open's while the status says no Open grant can be made, the safety interlock being `Block`, with why under the table), and the client the Alpaca server reported. `--json` writes the controller's list. |
 | `alpaca ack ID` | a person's session | Acknowledges an alert; the controller records who. |
 
-An override is a person's decision, asked and answered at a terminal (the owner's decision on #220): `grant` has no
-`--yes` and no way to name reasons itself, so no script, scheduled job or answers file can grant one. Without a
-terminal, or with `--json`, it refuses before anything is read or sent (exit 10):
+An override is a person's decision, asked and answered at a terminal (the owner's decision on #220). For both
+Open and Close, `grant` has no `--yes`, no answers-file option and no way to name reasons itself. It refuses without
+an eligible terminal, with `--json`, or with a known automation environment marker, before reading controller state
+or sending a grant (exit 10):
 
 ```text
-A grant is a person's decision, asked and answered at a terminal: run 'hvo-roof alpaca grant --alert ID' interactively, without --json. It cannot be scripted. Nothing was sent.
+A grant is a person's decision, asked and answered at a terminal: run 'hvo-roof alpaca grant --alert ID' in the controlling foreground terminal, with stdin, stdout and stderr on that same terminal, without --json or automation environment markers. Nothing was sent.
 ```
+
+On Linux, all three standard streams must be the same tty, the process must be in its foreground process group,
+and the tty's session must be the process's own session. On macOS, the same-tty and controlling foreground process
+group checks are implemented, but remain untested on macOS; the real-pty regression suite currently runs on Linux
+only. Failed or unavailable terminal checks refuse the grant. Output redirection and piping through `tee` therefore
+refuse it too. The checks run again after confirmation, immediately before sending the grant.
+
+A nonempty `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `TF_BUILD`, `JENKINS_URL`, `TEAMCITY_VERSION`, `EXPECT`,
+`EXPECT_SCRIPT`, `PEXPECT`, `AUTOMATION` or `NONINTERACTIVE` refuses a grant, as do `TERM=dumb` and
+`DEBIAN_FRONTEND=noninteractive`. The person must then type the command kind (`Open` or `Close`) and a fresh
+six-digit value displayed in the prompt, exactly as shown. A fixed `y`/`yes`, the wrong kind or value, or end of input
+sends no grant (exit 10).
+
+These checks stop redirected answers, detached or background ptys, split terminal streams, marked automation and
+fixed-answer wrappers. They cannot prove a human is present: an automation tool can acquire a controlling foreground
+pty, hide its environment markers, read the displayed challenge and answer it. A determined local root user can
+always script a pty. This is a practical barrier against unattended grants, not a security boundary against a local
+user who controls the terminal or machine. Use the same precautions for Open and Close grants.
 
 Where the controller lets only admins override (`RoofSafety:OverrideRole`), it refuses anyone else's grant.
 
@@ -670,6 +689,10 @@ Nothing here needs the Pi, the HAT or the roof.
 - **Commands** run in the test process against the controller's API with a mocked roof. The tests check their output,
   `--json` and exit codes (`tests/HVO.RoofControllerV4.RPi.Tests/Cli`), with a virtual clock for the stale status, the
   REST reads while live status is not connected, and the grace periods after a signal (`RoofCliTerminationTests`).
+- **Grant terminal admission** ([test_grant_terminal.py](../tests/cli/test_grant_terminal.py)) runs the built CLI
+  through real Linux ptys, covering the controlling terminal, foreground process group, all three standard streams
+  and automation markers. It is Linux-only and needs the Debug CLI build, or `HVO_ROOF_CLI` set to a built executable
+  or DLL. `ci.yml` runs it explicitly after the Debug build; script-only jobs skip it when no CLI build is available.
 - **The terminal interface** is drawn on Terminal.Gui's in-memory driver with a virtual clock (`RoofTerminalUiTests`).
   The tests check:
   - Stop on every page and over a prompt;

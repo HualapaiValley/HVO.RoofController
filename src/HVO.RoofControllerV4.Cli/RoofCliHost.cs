@@ -31,6 +31,12 @@ public sealed class RoofCliHost
     /// <summary>True when a person can answer a prompt (the input is a terminal).</summary>
     public bool IsInteractive { get; init; }
 
+    /// <summary>
+    /// Rechecks whether all standard streams belong to the controlling foreground terminal for an Alpaca grant.
+    /// Hosts without this check cannot grant. Other prompts use <see cref="IsInteractive"/>.
+    /// </summary>
+    public Func<bool> CheckGrantTerminal { get; init; } = () => false;
+
     /// <summary>Native local authorization. Tests replace it; the real implementation uses the fixed sudo helper.</summary>
     public Func<string, CancellationToken, Task<string>> ObtainLocalAssertion { get; init; } = RoofCliLocalAuthority.ObtainAsync;
 
@@ -76,6 +82,7 @@ public sealed class RoofCliHost
         Out = new RoofCliConsoleWriter(Console.IsOutputRedirected ? Console.Out : new TerminalOutputWriter(Console.Out, TerminalCapabilities.Detect(Environment.GetEnvironmentVariable))),
         Error = new RoofCliConsoleWriter(Console.IsErrorRedirected ? Console.Error : new TerminalOutputWriter(Console.Error, TerminalCapabilities.Detect(Environment.GetEnvironmentVariable))),
         IsInteractive = !Console.IsInputRedirected,
+        CheckGrantTerminal = RoofGrantTerminal.Check,
         ReadLine = ReadConsoleLine,
         Termination = termination
     };
