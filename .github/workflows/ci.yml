@@ -111,6 +111,11 @@ jobs:
       - name: Build (Debug)
         run: dotnet build HVO.RoofController.sln --no-restore -c Debug -v minimal -p:ContinuousIntegrationBuild=true
 
+      - name: CLI grant terminal checks (real Linux ptys)
+        env:
+          HVO_ROOF_CLI: HVO.RoofControllerV4.Cli/bin/Debug/net10.0/hvo-roof.dll
+        run: python3 -m unittest discover -s ../tests/cli -p 'test_grant_terminal.py' -v
+
       # Every unit and API test, including the WebApplicationFactory API tests, runs here. The
       # emulated commissioning scenarios, the browser tests and the soak run in scenarios.yml.
       # TreatNoTestsAsError fails the step if discovery finds nothing. The render tests save each screen, as the kiosk's
