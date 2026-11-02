@@ -60,11 +60,12 @@ public sealed class C5ClearFaultPulseScenarios
         });
 
         TripIdle(harness);
-        // The default is only 50 ms below the drive's minimum. On a real-time host, register round trips and a
-        // delayed continuation can make that pulse long enough to reset the drive. Keep this duration boundary on
-        // the harness's manual clock; the other C5 scenarios exercise the HTTP host and its real-time pulses.
+        // The requested 250 ms delay is 50 ms below the drive's minimum, but its timer starts after RLY3's
+        // write/read-back. The measured contact pulse is about 283 ms here, leaving about 17 ms of margin.
+        // A real-time host's scheduling can consume that margin. Keep this boundary on the manual clock;
+        // the other C5 scenarios exercise the HTTP host and its real-time pulses.
         var shortPulse = harness.Controller.ClearFault();
-        await Task.Delay(150); // A scheduling pause beyond that margin must not advance the emulated pulse.
+        await Task.Delay(150); // A scheduling pause beyond the contact pulse's margin must not advance it.
         harness.RunFor(TimeSpan.FromMilliseconds(RoofControllerLimits.DefaultClearFaultPulseMilliseconds));
         // The final bus transaction can carry time past the timer's deadline without firing it.
         harness.Time.Advance(TimeSpan.Zero);
