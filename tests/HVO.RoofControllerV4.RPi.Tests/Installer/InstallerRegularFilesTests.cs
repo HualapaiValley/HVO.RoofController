@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using FluentAssertions;
 using HVO.RoofControllerV4.Installer.Machine;
@@ -11,6 +12,47 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 [UnsupportedOSPlatform("windows")]
 public sealed class InstallerRegularFilesTests
 {
+    /// <summary>Native flag values follow the target ABI even when this test runs on another architecture.</summary>
+    [TestMethod]
+    [DataRow(false, Architecture.X64, false, 0x80800)]
+    [DataRow(false, Architecture.X64, true, 0xA0800)]
+    [DataRow(false, Architecture.Arm64, false, 0x80800)]
+    [DataRow(false, Architecture.Arm64, true, 0x88800)]
+    [DataRow(true, Architecture.Arm64, false, 0x1000004)]
+    [DataRow(true, Architecture.Arm64, true, 0x1000104)]
+    public void OpenFlags_UseTheOperatingSystemAndProcessAbi(bool isMacOS, Architecture architecture, bool noFollow, int expected)
+    {
+        // Linux arm64/include/uapi/asm/fcntl.h defines O_NOFOLLOW as octal 0100000 (0x8000),
+        // unlike x64's asm-generic/fcntl.h octal 00400000 (0x20000). On ARM64 the latter means O_LARGEFILE.
+        // https://github.com/torvalds/linux/blob/v6.8/arch/arm64/include/uapi/asm/fcntl.h
+        // Darwin's XNU bsd/sys/fcntl.h defines O_NOFOLLOW as 0x100.
+        RegularFiles.FlagsForOpen(isMacOS, architecture, noFollow).Should().Be(expected);
+    }
+
+    /// <summary>A real symlink to readable regular data is refused rather than followed by the native open.</summary>
+    [TestMethod]
+    public void ARealSymbolicLink_IsRefusedBeforeReadingItsRegularTarget()
+    {
+        var folder = Path.Join(Path.GetTempPath(), "hvo-regular-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder, Modes.PrivateFolder);
+        try
+        {
+            var target = Path.Join(folder, "target.json");
+            var link = Path.Join(folder, "link.json");
+            File.WriteAllText(target, "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\"}");
+            File.CreateSymbolicLink(link, target);
+
+            Action read = () => RegularFiles.Read(link, "/logical/alpaca-devices.json", noFollow: true);
+
+            read.Should().ThrowExactly<NotARegularFileException>().Which.Kind.Should().Be("a symbolic link");
+            RegularFiles.Read(target, "/logical/target.json", noFollow: true).Should().Equal(File.ReadAllBytes(target));
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     /// <summary>Darwin's distinct socket error and existing unsupported-file errors identify the logical store.</summary>
     [TestMethod]
     [DataRow(102, true)]

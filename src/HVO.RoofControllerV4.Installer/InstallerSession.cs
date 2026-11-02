@@ -133,6 +133,9 @@ public sealed class InstallerSession
         Resources = ResourcesOverride?.Apply(null) ?? new ContainerResources(),
         Connection = Survey.Certificate is { Problem: null, IsTheirs: true } ? ConnectionMode.OwnCertificate : ConnectionMode.PrivateCa,
         TelemetryEndpoint = Survey.Controller?.TelemetryEndpoint is { Length: > 0 } endpoint ? endpoint : null,
+        Alpaca = Survey.Controller is { AlpacaEnabled: true } alpaca
+            ? new AlpacaInstallSettings { Enabled = true, LanAddress = alpaca.AlpacaLanAddress ?? string.Empty, Port = alpaca.AlpacaPort ?? 11111 }
+            : null,
         Rig = new RigSettings
         {
             TimeScale = Number(Survey.HatEmulator?.EmulatorTimeScale) ?? RigSettings.DefaultTimeScale,

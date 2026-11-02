@@ -131,6 +131,12 @@ public sealed partial class InstallerRealHatTests
     private static readonly (string Name, string Default, bool OrEmpty)[] ScriptDefaults =
     [
         ("EXTRA_DOCKER_ARGS", "", true),
+        ("ALPACA_ENABLED", "", false),
+        ("ALPACA_LAN_ADDRESS", "", false),
+        ("ALPACA_PORT", "", false),
+        ("ALPACA_API_KEY_FILE", "", false),
+        ("ALPACA_DATA_DIR", "", false),
+        ("ALPACA_DISCOVERY_PORT", "", false),
         ("HVO_FORCE_RASPBERRY_PI", "true", true),
         ("IGNORE_PHYSICAL_LIMIT_SWITCHES", "false", true),
         ("OTEL_SERVICE_NAME", "hvo-roof-controller", true),
@@ -170,6 +176,18 @@ public sealed partial class InstallerRealHatTests
             "--env \"OTEL_METRIC_EXPORT_INTERVAL=${OTEL_METRIC_EXPORT_INTERVAL}\"",
             "--mount \"type=bind,src=${SECRETS_DIR},dst=/run/secrets,readonly\""
         ]),
+        ("ALPACA_ENABLED=true",
+        [
+            "--env Alpaca__Enabled=true --env \"Alpaca__PublishedAddress=${ALPACA_LAN_ADDRESS}\" --env Alpaca__ListenAddresses__0=0.0.0.0 --env Alpaca__Port=11111",
+            "--env Alpaca__ControllerUrl=http://localhost:8080 --env Alpaca__ControllerApiKeyFile=/run/alpaca-server-key",
+            "--env Alpaca__DataPath=/var/lib/hvo-roof-alpaca --env Alpaca__Discovery__Enabled=false",
+            "--env \"Alpaca__Discovery__AdvertisedPort=${ALPACA_PORT}\"",
+            "--env \"HVO_ALPACA_LAN_ADDRESS=${ALPACA_LAN_ADDRESS}\" --env \"HVO_ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE}\"",
+            "--env \"HVO_ALPACA_DATA_DIR=${ALPACA_DATA_DIR}\" --env \"HVO_ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT}\"",
+            "--mount \"type=bind,src=${ALPACA_API_KEY_FILE},dst=/run/alpaca-server-key,readonly\"",
+            "--mount \"type=bind,src=${ALPACA_DATA_DIR},dst=/var/lib/hvo-roof-alpaca\""
+        ]),
+        ("ALPACA_ENABLED=false", ["--env Alpaca__Enabled=false"]),
         ("IDENTITY_DIR",
         [
             "--mount \"type=bind,src=${IDENTITY_DIR},dst=/var/lib/hvo-roof/identity\"",
@@ -339,6 +357,7 @@ public sealed partial class InstallerRealHatTests
             ["ALLOWED_HOSTS"] = "roofpi;roofpi.local;roofpi.observatory.example;roof;roof.local;roof.observatory.example;localhost;192.168.1.50;127.0.0.1;[::1]",
             ["ALLOW_EMULATED_HAT"] = "false",
             ["ALLOW_INSECURE_HTTP"] = "false",
+            ["ALPACA_ENABLED"] = "false",
             ["BUILD_PLATFORM"] = "linux/arm64",
             ["CONFIG_DIR"] = "/etc/hvo-roof/config",
             ["CONTAINER_CPUS"] = "",
@@ -461,10 +480,10 @@ public sealed partial class InstallerRealHatTests
             .Should().Equal(ContainerArgs.SelectMany(group => group.Lines), "the check is run with the script's container arguments, in its order");
         foreach (var name in ContainerArgs.Select(group => group.When).OfType<string>().Where(when => !when.StartsWith('!')))
         {
-            if (name == "LINUX_AUTH_ENABLED=true")
+            if (name is "LINUX_AUTH_ENABLED=true" or "ALPACA_ENABLED=true" or "ALPACA_ENABLED=false")
             {
-                script.Should().Contain("if [[ \"${LINUX_AUTH_ENABLED}\" == true ]]; then",
-                    "native authentication arguments are given only for the exact value true");
+                script.Should().Contain($"if [[ \"${{{name.Split('=')[0]}}}\" == true ]]; then",
+                    "optional process arguments are gated by an exact enable value");
             }
             else
             {
@@ -485,7 +504,7 @@ public sealed partial class InstallerRealHatTests
         File.ReadAllText(Path.Combine(Root, "src", "HVO.RoofControllerV4.RPi", "Dockerfile")).Should()
             .Contain("\nFROM mcr.microsoft.com/dotnet/aspnet:")
             .And.Contain("\nENV ASPNETCORE_URLS=http://+:8080 \\\n    ASPNETCORE_ENVIRONMENT=Production \\\n    TZ=UTC \\\n")
-            .And.Contain("\n    RoofWeb__Urls=http://+:8088\n");
+            .And.Contain("\n    RoofWeb__Urls=http://+:8088");
         File.Exists(Path.Combine(Path.GetDirectoryName(ProductionOptions.AppSettingsPath)!, "appsettings.Production.json"))
             .Should().BeFalse("the check reads appsettings.json alone in Production");
     }
@@ -573,6 +592,8 @@ public sealed partial class InstallerRealHatTests
                 {
                     null => true,
                     "LINUX_AUTH_ENABLED=true" => variables["LINUX_AUTH_ENABLED"] == "true",
+                    "ALPACA_ENABLED=true" => variables["ALPACA_ENABLED"] == "true",
+                    "ALPACA_ENABLED=false" => variables["ALPACA_ENABLED"] != "true",
                     var condition => (variables[condition.TrimStart('!')].Length == 0) == condition.StartsWith('!')
                 })
                 .SelectMany(group => group.Lines)

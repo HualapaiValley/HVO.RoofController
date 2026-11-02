@@ -16,6 +16,9 @@ namespace HVO.RoofControllerV4.Common.Models;
 /// <param name="GeneratedAtUtc">When the controller read these values.</param>
 public sealed record SystemSummaryResponse(string ApplicationVersion, double UptimeSeconds, DateTimeOffset GeneratedAtUtc)
 {
+    /// <summary>The separately deployed Alpaca server; null for controllers older than its deployment support.</summary>
+    public AlpacaServerSummary? AlpacaServer { get; init; }
+
     /// <summary>How long the machine has run (<c>/proc/uptime</c>; in a container, the host's).</summary>
     public double? HostUptimeSeconds { get; init; }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The roof controller container's supervisor: the controller and the web UI, two processes in one container
-# (docs/deployment.md, "The container's two processes").
+# The roof controller container's supervisor: the controller, web UI and opt-in Alpaca server in one container
+# (docs/deployment.md, "The container's application processes").
 #
 # tini is PID 1. It reaps orphans and passes SIGTERM and SIGINT to this script, which:
 # - whenever the controller is not running: turns every relay on the HAT off and verifies the register by reading it
@@ -69,6 +69,13 @@
 # that protect its sign-in cookie in HVO_SUPERVISOR_UI_DATA_DIR/keys, or in RoofWeb__DataProtectionPath when that is set,
 # so the people signed in stay signed in when the web UI or the container restarts.
 #
+# Alpaca starts only with Alpaca__Enabled=true, as its own unprivileged alpaca user. Its independently bounded
+# preparation copies its API key into a root-owned private directory and prepares its persistent identities and
+# sanitized status directories. Its environment contains only Alpaca__* settings and the same general runtime
+# variables as the web UI. A crash restarts only Alpaca; its preparation and shutdown never hold up a controller
+# exit's relay-off or the container's stop. At the process limit, Alpaca and its preparation are killed alongside the
+# web UI to release tasks for relay-off. All three applications receive SIGTERM concurrently at a stop.
+#
 # Times are kept in microseconds (EPOCHREALTIME), so every wait is as long as configured, not up to a second shorter.
 #
 # Forks and the container's process limit (#139 review F6). At the container's limit (pids.max: 512 tasks by default), a
@@ -92,6 +99,8 @@ umask 022
 readonly RESTART_EXIT_CODE=75
 # The web UI's data directory when none is set, in directories only root can change (see prepare_ui_data_protection).
 readonly DEFAULT_UI_DATA_DIR=/var/lib/hvo-roof-web
+readonly DEFAULT_ALPACA_DATA_DIR=/var/lib/hvo-roof-alpaca
+readonly ALPACA_OOM_SCORE_RAISE=500
 # How far the controller's and the web UI's oom_score_adj are raised above the supervisor's (see raise_oom_score_adj).
 readonly CONTROLLER_OOM_SCORE_RAISE=100
 readonly UI_OOM_SCORE_RAISE=500
@@ -109,6 +118,12 @@ APP_DIR=${HVO_SUPERVISOR_APP_DIR:-/app}
 RUN_DIR=${HVO_SUPERVISOR_RUN_DIR:-/run/hvo-roof}
 SECRETS_DIR=${HVO_SUPERVISOR_SECRETS_DIR:-/run/secrets}
 UI_USER=${HVO_SUPERVISOR_UI_USER-app}
+ALPACA_USER=${HVO_SUPERVISOR_ALPACA_USER-alpaca}
+ALPACA_DATA_DIR=${HVO_SUPERVISOR_ALPACA_DATA_DIR:-${DEFAULT_ALPACA_DATA_DIR}}
+ALPACA_ENABLED=0
+[[ "${Alpaca__Enabled:-false}" == true ]] && ALPACA_ENABLED=1
+ALPACA_STOP_SECONDS=${HVO_SUPERVISOR_ALPACA_STOP_SECONDS:-2}
+ALPACA_PREPARE_SECONDS=${HVO_SUPERVISOR_ALPACA_PREPARE_SECONDS:-10}
 UI_DATA_DIR=${HVO_SUPERVISOR_UI_DATA_DIR:-${DEFAULT_UI_DATA_DIR}}
 CONTROLLER_STOP_SECONDS=${HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS:-22}
 UI_STOP_SECONDS=${HVO_SUPERVISOR_UI_STOP_SECONDS:-2}
@@ -134,6 +149,11 @@ if [[ -n "${HVO_SUPERVISOR_UI_EXEC:-}" ]]; then
 else
   UI_EXEC=(dotnet "${APP_DIR}/web/HVO.RoofControllerV4.Web.dll")
 fi
+if [[ -n "${HVO_SUPERVISOR_ALPACA_EXEC:-}" ]]; then
+  ALPACA_EXEC=("${HVO_SUPERVISOR_ALPACA_EXEC}")
+else
+  ALPACA_EXEC=(dotnet "${APP_DIR}/alpaca/HVO.RoofControllerV4.Alpaca.dll")
+fi
 if [[ -n "${HVO_SUPERVISOR_RELAYS_OFF_EXEC:-}" ]]; then
   RELAYS_OFF_EXEC=("${HVO_SUPERVISOR_RELAYS_OFF_EXEC}")
 else
@@ -144,6 +164,10 @@ STATE_FILE="${RUN_DIR}/supervisor.json"
 CONTROL_DIR="${RUN_DIR}/control"
 FORCE_RESTART_REQUEST="${CONTROL_DIR}/force-restart-controller"
 UI_PRIVATE_DIR="${RUN_DIR}/web"
+ALPACA_PRIVATE_DIR="${RUN_DIR}/alpaca"
+ALPACA_STATUS_DIR="${RUN_DIR}/alpaca-status"
+ALPACA_SETTINGS_FILE="${RUN_DIR}/alpaca-settings"
+ALPACA_PREPARE_PID=""
 
 log() {
   printf '[supervisor] %s\n' "$*" >&2
@@ -322,6 +346,7 @@ refuse_limits() {
   log 'To fix memory cgroups on a Raspberry Pi, append " cgroup_enable=memory" to the single line in /boot/firmware/cmdline.txt and reboot with the roof idle. On another host enable the cpu, memory and pids cgroup v2 controllers; recreate the container with the configured limits. See docs/deployment.md.'
   STATE[controller]=relays-unverified
   STATE[ui]=stopped
+  STATE[alpaca]=stopped
   de_energize_relays "resource limits refused: neither application may start"
   while (( ! STOP_REQUESTED )) && [[ "${RELAYS_STATE}" != off ]]; do
     stamp
@@ -337,20 +362,35 @@ refuse_limits() {
 
 # With arguments this is the deployment check (or another one-shot run of the controller): nothing is supervised.
 # --prepare-ui is the web UI's preparation, run near the end of this script.
-if (( $# > 0 )) && [[ "$1" != --prepare-ui ]]; then
+if (( $# > 0 )) && [[ "$1" != --prepare-ui && "$1" != --prepare-alpaca ]]; then
   check_compose_limits || exit 2
   cd "${APP_DIR}" || exit 1
+  if [[ "$1" == --validate-deployment ]] && (( ALPACA_ENABLED )); then
+    "${CONTROLLER_EXEC[@]}" "$@" || exit $?
+    # The Alpaca preflight reads source files as root; it makes no copies, directories, listeners or controller calls.
+    # This branch runs before user lookups and every supervised initialization, so it cannot touch the HAT.
+    declare -a alpaca_check_env=("PATH=${PATH}" "TZ=${TZ:-UTC}" "Alpaca__DataPath=${ALPACA_DATA_DIR}")
+    while IFS= read -r -d '' entry; do
+      name=${entry%%=*}
+      case "${name}" in Alpaca__*|DOTNET_*|ASPNETCORE_ENVIRONMENT|LANG|LC_*) alpaca_check_env+=("${entry}") ;; esac
+    done < <(env -0)
+    exec env -i "${alpaca_check_env[@]}" "${ALPACA_EXEC[@]}" --validate-settings
+  fi
   exec "${CONTROLLER_EXEC[@]}" "$@"
 fi
 
 require_whole_number HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS "${CONTROLLER_STOP_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_UI_STOP_SECONDS "${UI_STOP_SECONDS}" 1
+require_whole_number HVO_SUPERVISOR_ALPACA_STOP_SECONDS "${ALPACA_STOP_SECONDS}" 1
+require_whole_number HVO_SUPERVISOR_ALPACA_PREPARE_SECONDS "${ALPACA_PREPARE_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_RELAYS_OFF_SECONDS "${RELAYS_OFF_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_CRASH_LIMIT "${CRASH_LIMIT}" 1
 require_whole_number HVO_SUPERVISOR_CRASH_WINDOW_SECONDS "${CRASH_WINDOW_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_BACKOFF_MAX_SECONDS "${BACKOFF_MAX_SECONDS}" 1
 require_whole_number HVO_SUPERVISOR_FORCE_RESTART_MIN_SECONDS "${FORCE_RESTART_MIN_SECONDS}" 0
 require_whole_number HVO_SUPERVISOR_UI_PREPARE_SECONDS "${UI_PREPARE_SECONDS}" 1
+STOP_AFTER_SECONDS=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
+(( ! ALPACA_ENABLED || STOP_AFTER_SECONDS >= ALPACA_STOP_SECONDS )) || STOP_AFTER_SECONDS=${ALPACA_STOP_SECONDS}
 if [[ ! "${TICK_SECONDS}" =~ ^([0-9]+|[0-9]*\.[0-9]+)$ ]]; then
   log "HVO_SUPERVISOR_TICK_SECONDS must be a number of seconds such as 1 or 0.2, got '${TICK_SECONDS}'."
   exit 2
@@ -368,20 +408,27 @@ if [[ -n "${UI_USER}" ]]; then
   UI_HOME=$(getent passwd "${UI_USER}" | cut -d: -f6)
 fi
 
-# The state of each process: starting (the web UI only, while it is prepared), running, restarting (waiting to start
+ALPACA_GROUP=""
+ALPACA_HOME=""
+if (( ALPACA_ENABLED )) && [[ -n "${ALPACA_USER}" ]]; then
+  ALPACA_GROUP=$(id -gn "${ALPACA_USER}" 2>/dev/null) || { log "HVO_SUPERVISOR_ALPACA_USER names no user."; exit 2; }
+  ALPACA_HOME=$(getent passwd "${ALPACA_USER}" | cut -d: -f6)
+fi
+
+# The state of each process: starting (a client application while it is prepared), running, restarting (waiting to start
 # again), crash-loop (left stopped: controller only), relays-unverified (held stopped until the relays are verified off:
 # controller only), stopping or stopped.
-declare -A STATE=([controller]=starting [ui]=starting)
-declare -A PID=([controller]="" [ui]="")
+declare -A STATE=([controller]=starting [ui]=starting [alpaca]=disabled)
+declare -A PID=([controller]="" [ui]="" [alpaca]="")
 # Microseconds since the epoch.
-declare -A STARTED_AT=([controller]=0 [ui]=0)
-declare -A START_DUE=([controller]=0 [ui]=0)
-declare -A STARTS=([controller]=0 [ui]=0)
-declare -A LAST_EXIT_CODE=([controller]="" [ui]="")
-declare -A LAST_EXIT_REASON=([controller]="" [ui]="")
-declare -A LAST_EXIT_AT=([controller]="" [ui]="")
+declare -A STARTED_AT=([controller]=0 [ui]=0 [alpaca]=0)
+declare -A START_DUE=([controller]=0 [ui]=0 [alpaca]=0)
+declare -A STARTS=([controller]=0 [ui]=0 [alpaca]=0)
+declare -A LAST_EXIT_CODE=([controller]="" [ui]="" [alpaca]="")
+declare -A LAST_EXIT_REASON=([controller]="" [ui]="" [alpaca]="")
+declare -A LAST_EXIT_AT=([controller]="" [ui]="" [alpaca]="")
 # Crash times (epoch seconds, space-separated) within the crash window.
-declare -A CRASHES=([controller]="" [ui]="")
+declare -A CRASHES=([controller]="" [ui]="" [alpaca]="")
 SUPERVISOR_STATE=running
 STOP_REQUESTED=0
 # What the builtin helpers hand back (stamp, iso_now, describe_exit, crash_count, relays_retry_seconds, backoff_seconds,
@@ -396,7 +443,7 @@ SECONDS_LEFT=1
 TASKS_TEXT=""
 NAP_SINK=""
 # The processes a start waits for room for (start_later), so that the wait is logged once.
-declare -A WAITING_FOR_ROOM=([controller]="" [ui]="")
+declare -A WAITING_FOR_ROOM=([controller]="" [ui]="" [alpaca]="")
 # The last forced restart request: when it was handled, and whether the controller was restarted or the request ignored.
 FORCED_RESTART_AT=""
 FORCED_RESTART_OUTCOME=""
@@ -409,8 +456,8 @@ RELAYS_REASON=""
 RELAYS_FAILURES=0
 RELAYS_RETRY_DUE=0
 # When each process's wait for its stop ends (microseconds), from begin_stop, and how long that wait was, for the log.
-declare -A STOP_DEADLINE=([controller]=0 [ui]=0)
-declare -A STOP_WAIT=([controller]="" [ui]="")
+declare -A STOP_DEADLINE=([controller]=0 [ui]=0 [alpaca]=0)
+declare -A STOP_WAIT=([controller]="" [ui]="" [alpaca]="")
 SHUTDOWN_DONE=0
 # The signals the traps have had, when the stop was asked for, and when it must be done by (microseconds: note_stop).
 SIGNALS=0
@@ -469,15 +516,16 @@ relays_json() {
 # half of it; or, when the container has no room for mv's process (tasks_free), over it in place, which a reader may then
 # find half written for a moment. Its text is made with builtins.
 write_state() {
-  local temp="${STATE_FILE}.tmp" text _forced _relays _controller _ui
+  local temp="${STATE_FILE}.tmp" text _forced _relays _controller _ui _alpaca
   iso_now
   forced_restart_json _forced
   relays_json _relays
   process_json _controller controller
   process_json _ui ui
+  process_json _alpaca alpaca
   printf -v text '{"supervisor":"%s","updatedAt":"%s","crashLimit":%s,"crashWindowSeconds":%s,"forceRestartMinSeconds":%s,%s}\n' \
     "${SUPERVISOR_STATE}" "${ISO_NOW}" "${CRASH_LIMIT}" "${CRASH_WINDOW_SECONDS}" "${FORCE_RESTART_MIN_SECONDS}" \
-    "\"lastForcedRestart\":${_forced},\"relays\":${_relays},\"controller\":${_controller},\"ui\":${_ui}"
+    "\"lastForcedRestart\":${_forced},\"relays\":${_relays},\"controller\":${_controller},\"ui\":${_ui},\"alpaca\":${_alpaca}"
   if tasks_free; then
     printf '%s' "${text}" >"${temp}" && mv -f "${temp}" "${STATE_FILE}" && return 0
   else
@@ -495,7 +543,7 @@ write_state() {
 prepare_run_dir() {
   mkdir -p "${RUN_DIR}" || { log "cannot create ${RUN_DIR}"; exit 1; }
   chmod 0755 "${RUN_DIR}"
-  rm -rf "${CONTROL_DIR}" "${UI_PRIVATE_DIR}"
+  rm -rf "${CONTROL_DIR}" "${UI_PRIVATE_DIR}" "${ALPACA_PRIVATE_DIR}" "${ALPACA_STATUS_DIR}"
   if [[ -n "${UI_USER}" ]]; then
     if ! install -d -m 0770 -g "${UI_GROUP}" "${CONTROL_DIR}" \
       || ! install -d -m 0750 -g "${UI_GROUP}" "${UI_PRIVATE_DIR}"; then
@@ -504,6 +552,15 @@ prepare_run_dir() {
     fi
   else
     install -d -m 0700 "${CONTROL_DIR}" "${UI_PRIVATE_DIR}" || { log "cannot create ${CONTROL_DIR}"; exit 1; }
+  fi
+  if (( ALPACA_ENABLED )); then
+    if [[ -n "${ALPACA_USER}" ]]; then
+      install -d -m 0750 -g "${ALPACA_GROUP}" "${ALPACA_PRIVATE_DIR}" &&
+        install -d -m 0755 "${ALPACA_STATUS_DIR}" &&
+        chown -h "${ALPACA_USER}:${ALPACA_GROUP}" "${ALPACA_STATUS_DIR}" || exit 1
+    else
+      install -d -m 0700 "${ALPACA_PRIVATE_DIR}" "${ALPACA_STATUS_DIR}" || exit 1
+    fi
   fi
 }
 
@@ -572,39 +629,53 @@ tasks_free() {
 }
 
 # Room for the relay-off helper outside a stop (tasks_free). At the container's process limit a fork would wait about
-# 15 s and then end the supervisor, leaving the relays as they are. So the web UI and its preparation are killed first,
-# which frees their tasks (never the relay-off; the controller is not running then), and are started again later with
-# the backoff; then it waits at most 1 s for the room. Returns 1 when there is still none: the relays then stay
+# 15 s and then end the supervisor, leaving the relays as they are. So the web UI, Alpaca and their preparations are
+# killed together (never the relay-off; the controller is not running then), and are started again later with the
+# backoff. One shared second covers reaping all of them and waiting for room. Returns 1 when there is still none: the relays then stay
 # unverified, so the controller stays stopped (start_with_unverified_relays), and the relay-off is tried again later.
 room_for_relays_off() {
-  local until
+  local name until
+  local -a killed=()
   tasks_free && return 0
-  log "WARNING: the container is at its process limit (${TASKS_TEXT}): killing the web UI to make room for the relay-off"
-  stop_ui_preparation
-  if [[ -n "${UI_PREPARE_PID}" ]]; then
-    stamp
-    reap_within "${UI_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))"
-    UI_PREPARE_PID=""
-  fi
-  if is_running ui; then
-    kill -KILL "${PID[ui]}" 2>/dev/null
-    stamp
-    reap_within "${PID[ui]}" "$(( NOW_US + KILL_WAIT_US ))"
-    LAST_EXIT_CODE[ui]=137
-    LAST_EXIT_REASON[ui]="killed to make room for the relay-off"
-    iso_now
-    LAST_EXIT_AT[ui]=${ISO_NOW}
-  fi
-  if [[ "${STATE[ui]}" == running || "${STATE[ui]}" == starting ]]; then
-    PID[ui]=""
-    record_crash ui
-    backoff_seconds ui
-    stamp
-    START_DUE[ui]=$(( NOW_US + BACKOFF_SECONDS * 1000000 ))
-    STATE[ui]=restarting
-  fi
   stamp
   until=$(( NOW_US + KILL_WAIT_US ))
+  log "WARNING: the container is at its process limit (${TASKS_TEXT}): killing the web UI to make room for the relay-off"
+  (( ! ALPACA_ENABLED )) || log "Killing the Alpaca server and its preparation too, to free their tasks for relay-off"
+  # Signal every task holder before waiting for any one: a kernel-stuck process cannot delay the other kills.
+  stop_ui_preparation
+  stop_alpaca_preparation
+  for name in ui alpaca; do
+    if is_running "${name}"; then
+      kill -KILL "${PID[${name}]}" 2>/dev/null
+      killed+=("${name}")
+    fi
+  done
+  # One allowance covers every reap and waiting for room, even when every process remains stuck in the kernel.
+  if [[ -n "${UI_PREPARE_PID}" ]]; then
+    reap_within "${UI_PREPARE_PID}" "${until}"
+    UI_PREPARE_PID=""
+  fi
+  if [[ -n "${ALPACA_PREPARE_PID}" ]]; then
+    reap_within "${ALPACA_PREPARE_PID}" "${until}"
+    ALPACA_PREPARE_PID=""
+  fi
+  for name in "${killed[@]}"; do
+    reap_within "${PID[${name}]}" "${until}"
+    LAST_EXIT_CODE[${name}]=137
+    LAST_EXIT_REASON[${name}]="killed to make room for the relay-off"
+    iso_now
+    LAST_EXIT_AT[${name}]=${ISO_NOW}
+  done
+  for name in ui alpaca; do
+    if [[ "${STATE[${name}]}" == running || "${STATE[${name}]}" == starting ]]; then
+      PID[${name}]=""
+      record_crash "${name}"
+      backoff_seconds "${name}"
+      stamp
+      START_DUE[${name}]=$(( NOW_US + BACKOFF_SECONDS * 1000000 ))
+      STATE[${name}]=restarting
+    fi
+  done
   until tasks_free; do
     stamp
     (( NOW_US < until )) || return 1
@@ -618,6 +689,7 @@ room_for_relays_off() {
 start_later() {
   local label="the controller"
   [[ "$1" == ui ]] && label="the web UI"
+  [[ "$1" == alpaca ]] && label="the Alpaca server"
   stamp
   START_DUE[$1]=$(( NOW_US + 1000000 ))
   STATE[$1]=restarting
@@ -1028,8 +1100,115 @@ launch_ui() {
   write_state
 }
 
+# Alpaca is a client of the controller. Its process gets only its own settings and private copies; no controller
+# or web credentials. Preparation is independently timed and never blocks the supervisor's relay-off or stop.
+alpaca_environment() {
+  local entry name path=${Alpaca__DataPath:-${ALPACA_DATA_DIR}} source=${Alpaca__ControllerApiKeyFile:-}
+  local -a alpaca_env=("PATH=${PATH}" "TZ=${TZ:-UTC}") make=(install -d -m 0755)
+  if [[ -n "${source}" ]]; then
+    install -m 0400 "${source}" "${ALPACA_PRIVATE_DIR}/controller-key" || return 1
+    if [[ -n "${ALPACA_USER}" ]]; then
+      chown -h "${ALPACA_USER}:${ALPACA_GROUP}" "${ALPACA_PRIVATE_DIR}/controller-key" || return 1
+    fi
+    alpaca_env+=("Alpaca__ControllerApiKeyFile=${ALPACA_PRIVATE_DIR}/controller-key")
+  fi
+  # Root creates only the fixed image data directory. An arbitrary path is made with the Alpaca user's rights, so a
+  # directory or symlink that user controls cannot redirect a privileged mkdir/chown into the controller's stores.
+  if [[ "${path}" == "${DEFAULT_ALPACA_DATA_DIR}" ]]; then
+    [[ -L "${path}" ]] && return 1
+    # Mode before ownership: changing an Alpaca-owned directory's mode as root would need CAP_FOWNER, which the
+    # image deliberately lacks. Its fixed parent is root's, so the user cannot swap the directory for a symlink.
+    [[ -d "${path}" ]] || install -d -m 0755 "${path}" || return 1
+    [[ -z "${ALPACA_USER}" ]] || chown -h "${ALPACA_USER}:${ALPACA_GROUP}" "${path}" || return 1
+  fi
+  if [[ -n "${ALPACA_USER}" ]]; then
+    make=(setpriv --reuid="${ALPACA_USER}" --regid="${ALPACA_GROUP}" --init-groups --no-new-privs "${make[@]}")
+  fi
+  "${make[@]}" "${path}" || return 1
+  while IFS= read -r -d '' entry; do
+    name=${entry%%=*}
+    case "${name}" in
+      Alpaca__ControllerApiKeyFile|Alpaca__DataPath|Alpaca__StatusFilePath) ;;
+      Alpaca__*|DOTNET_*|ASPNETCORE_ENVIRONMENT|LANG|LC_*) alpaca_env+=("${entry}") ;;
+    esac
+  done < <(env -0)
+  alpaca_env+=("Alpaca__DataPath=${path}" "Alpaca__StatusFilePath=${Alpaca__StatusFilePath:-${ALPACA_STATUS_DIR}/status.json}")
+  if [[ -n "${ALPACA_USER}" ]]; then
+    alpaca_env+=("HOME=${ALPACA_HOME:-/tmp}" "USER=${ALPACA_USER}")
+  else
+    alpaca_env+=("HOME=${HOME:-/tmp}")
+  fi
+  printf '%s\0' "${alpaca_env[@]}"
+}
+
+start_alpaca() {
+  (( ALPACA_ENABLED && ! STOP_REQUESTED )) || return 1
+  tasks_free || { start_later alpaca; return 1; }
+  (( ! STOP_REQUESTED )) || return 1
+  (umask 077; exec timeout -s KILL "${ALPACA_PREPARE_SECONDS}" "${BASH}" "${SELF}" --prepare-alpaca) &
+  ALPACA_PREPARE_PID=$!
+  STATE[alpaca]=starting
+  write_state
+}
+
+alpaca_preparation_runs() {
+  [[ -n "${ALPACA_PREPARE_PID}" ]] && kill -0 "${ALPACA_PREPARE_PID}" 2>/dev/null
+}
+
+stop_alpaca_preparation() {
+  alpaca_preparation_runs || return 0
+  kill -KILL -- "-${ALPACA_PREPARE_PID}" 2>/dev/null
+  kill -KILL "${ALPACA_PREPARE_PID}" 2>/dev/null
+}
+
+exec_alpaca() {
+  local -a alpaca_env=()
+  (( ! STOP_REQUESTED )) || exit 0
+  mapfile -d '' -t alpaca_env <"${ALPACA_SETTINGS_FILE}" || exit 1
+  cd "${APP_DIR}/alpaca" || exit 1
+  raise_oom_score_adj "${ALPACA_OOM_SCORE_RAISE}" "the Alpaca server"
+  if [[ -n "${ALPACA_USER}" ]]; then
+    exec setpriv --reuid="${ALPACA_USER}" --regid="${ALPACA_GROUP}" --init-groups --no-new-privs \
+      env -i "${alpaca_env[@]}" "${ALPACA_EXEC[@]}"
+  fi
+  exec env -i "${alpaca_env[@]}" "${ALPACA_EXEC[@]}"
+}
+
+launch_alpaca() {
+  local code delay why
+  wait "${ALPACA_PREPARE_PID}" 2>/dev/null
+  code=$?
+  ALPACA_PREPARE_PID=""
+  if (( code != 0 )); then
+    case ${code} in
+      124|137) why="did not finish within ${ALPACA_PREPARE_SECONDS}s and was killed" ;;
+      *) describe_exit "${code}"; why="ended with ${EXIT_TEXT}" ;;
+    esac
+    record_crash alpaca
+    backoff_seconds alpaca
+    delay=${BACKOFF_SECONDS}
+    stamp
+    START_DUE[alpaca]=$(( NOW_US + delay * 1000000 ))
+    STATE[alpaca]=restarting
+    log "WARNING: the Alpaca server's preparation ${why}; preparing it again in ${delay}s"
+    write_state
+    return 1
+  fi
+  tasks_free || { start_later alpaca; return 1; }
+  (( ! STOP_REQUESTED )) || return 1
+  exec_alpaca &
+  PID[alpaca]=$!
+  WAITING_FOR_ROOM[alpaca]=""
+  stamp
+  STARTED_AT[alpaca]=${NOW_US}
+  STARTS[alpaca]=$(( STARTS[alpaca] + 1 ))
+  STATE[alpaca]=running
+  log "Started the Alpaca server (pid ${PID[alpaca]}, start ${STARTS[alpaca]})"
+  write_state
+}
+
 start() {
-  if [[ "$1" == controller ]]; then start_controller; else start_ui; fi
+  case "$1" in controller) start_controller ;; ui) start_ui ;; alpaca) start_alpaca ;; esac
 }
 
 # Records a crash of $1 and prints how many there were within the crash window, this one included.
@@ -1084,6 +1263,7 @@ handle_exit() {
   how=${EXIT_TEXT}
   label="the controller"
   [[ "${name}" == ui ]] && label="the web UI"
+  [[ "${name}" == alpaca ]] && label="the Alpaca server"
 
   # Whatever ended it, the relays first: the HAT holds them as the controller left them, possibly during a move.
   if [[ "${name}" == controller ]]; then
@@ -1184,7 +1364,7 @@ handle_force_restart_request() {
 tick() {
   local name
   handle_force_restart_request
-  for name in controller ui; do
+  for name in controller ui alpaca; do
     # A stop asked for meanwhile (handle_exit turns the relays off, which takes time): the stop comes next.
     (( ! STOP_REQUESTED )) || return 0
     case "${STATE[${name}]}" in
@@ -1198,7 +1378,11 @@ tick() {
         (( NOW_US >= RELAYS_RETRY_DUE )) && retry_held_controller ;;
       starting)
         # The web UI while it is prepared: started once its preparation has ended.
-        [[ "${name}" == ui && -n "${UI_PREPARE_PID}" ]] && ! ui_preparation_runs && launch_ui ;;
+        if [[ "${name}" == ui && -n "${UI_PREPARE_PID}" ]]; then
+          ui_preparation_runs || launch_ui
+        elif [[ "${name}" == alpaca && -n "${ALPACA_PREPARE_PID}" ]]; then
+          alpaca_preparation_runs || launch_alpaca
+        fi ;;
     esac
   done
   retry_relays_off
@@ -1212,10 +1396,11 @@ sleep_tick() {
   stamp
   until=$(( NOW_US + TICK_US ))
   while (( ! STOP_REQUESTED )); do
-    for name in controller ui; do
+    for name in controller ui alpaca; do
       [[ "${STATE[${name}]}" == running ]] && ! is_running "${name}" && return 0
     done
     [[ -n "${UI_PREPARE_PID}" ]] && ! ui_preparation_runs && return 0
+    [[ -n "${ALPACA_PREPARE_PID}" ]] && ! alpaca_preparation_runs && return 0
     stamp
     (( NOW_US < until )) || return 0
     nap "$(( until - NOW_US < NAP_SLICE_US ? until - NOW_US : NAP_SLICE_US ))"
@@ -1224,15 +1409,13 @@ sleep_tick() {
 }
 
 # Notes when the stop was asked for (the first time only, at the signal: a builtin, no fork) and when it must be done by:
-# the controller's wait, then the longer of the relay-off's and the web UI's (27 s with the defaults). The container's
+# the controller's wait, then the longest of relay-off, web UI and enabled Alpaca (27 s with the defaults). The container's
 # stop timeout (Docker's grace period, at least 30 s) is longer.
 note_stop() {
-  local after
   (( STOP_AT_US == 0 )) || return 0
-  after=$(( RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS ))
   stamp
   STOP_AT_US=${NOW_US}
-  STOP_BY_US=$(( STOP_AT_US + (CONTROLLER_STOP_SECONDS + after) * 1000000 ))
+  STOP_BY_US=$(( STOP_AT_US + (CONTROLLER_STOP_SECONDS + STOP_AFTER_SECONDS) * 1000000 ))
 }
 
 # seconds_until <microseconds> <at most>: the seconds from now to that time, to the millisecond, at most the second
@@ -1295,46 +1478,64 @@ finish_stop() {
 }
 
 # docker stop, or any other end: with no fork until every process that holds tasks has ended, so that it works, and in
-# time, also at the container's process limit (#139 review F6). The web UI's preparation is killed (on_signal has
-# already done so). The controller (whose shutdown stops the roof) and the web UI are sent SIGTERM at once, and each is
-# killed (SIGKILL) when its own wait runs out: the web UI's after HVO_SUPERVISOR_UI_STOP_SECONDS, the controller's early
+# time, also at the container's process limit (#139 review F6). The controller (whose shutdown stops the roof), web UI
+# and enabled Alpaca are sent SIGTERM before any wait. Their preparations are killed together and reaped within one
+# shared second. Each application is killed (SIGKILL) when its own wait runs out; the controller's deadline is early
 # enough to leave the last relay-off its time before the stop's deadline (note_stop, counted from the signal). Only
 # then, with their tasks freed, does it start the last relay-off, with the time left, and write its state. Also run by
 # on_exit, so it may run twice: what is already stopped is left as it is, and the relays are turned off again.
 shutdown() {
-  local relays_by stop_until
+  local relays_by stop_until prepare_by applications="the controller and the web UI"
   STOP_REQUESTED=1
   note_stop
   SUPERVISOR_STATE=stopping
-  log "Stopping: the controller and the web UI, then the relays off, all within" \
+  (( ! ALPACA_ENABLED )) || applications="the controller, web UI and Alpaca server"
+  log "Stopping: ${applications}, then the relays off, all within" \
     "$(( (STOP_BY_US - STOP_AT_US) / 1000000 ))s of the stop request"
-  # The web UI's preparation, if it runs, is abandoned (on_signal has already killed it): nothing starts after it.
+  # Tell the applications immediately, before any preparation reap or wait for a relay-off already running. The
+  # controller keeps its full shutdown allowance from the signal even when both preparations are stuck in the kernel.
+  relays_by=$(( STOP_BY_US - RELAYS_OFF_SECONDS * 1000000 ))
+  stop_until=$(( STOP_AT_US + CONTROLLER_STOP_SECONDS * 1000000 ))
+  begin_stop controller "$(( stop_until < relays_by ? stop_until : relays_by ))" "the controller"
+  stop_until=$(( STOP_AT_US + UI_STOP_SECONDS * 1000000 ))
+  begin_stop ui "$(( stop_until < relays_by ? stop_until : relays_by ))" "the web UI"
+  if (( ALPACA_ENABLED )); then
+    stop_until=$(( STOP_AT_US + ALPACA_STOP_SECONDS * 1000000 ))
+    begin_stop alpaca "$(( stop_until < relays_by ? stop_until : relays_by ))" "the Alpaca server"
+  fi
+  # Abandon both preparations together, using one shared second for their reaps (on_signal may have killed them).
+  stamp
+  prepare_by=$(( NOW_US + KILL_WAIT_US ))
+  stop_ui_preparation
+  stop_alpaca_preparation
   if [[ -n "${UI_PREPARE_PID}" ]]; then
-    stop_ui_preparation
-    stamp
-    reap_within "${UI_PREPARE_PID}" "$(( NOW_US + KILL_WAIT_US ))" \
-      || log "WARNING: the web UI's preparation (pid ${UI_PREPARE_PID}) has not ended 1s after SIGKILL"
+    reap_within "${UI_PREPARE_PID}" "${prepare_by}" \
+      || log "WARNING: the web UI's preparation (pid ${UI_PREPARE_PID}) has not ended within the shared 1s after SIGKILL"
     log "Abandoned the web UI's preparation: the web UI is not started"
     UI_PREPARE_PID=""
-    STATE[ui]=stopped
+    [[ "${STATE[ui]}" == stopping ]] || STATE[ui]=stopped
   fi
-  # A relay-off still running (begun before the signal, or on_exit in the middle of one) ends first, within its time.
+  if [[ -n "${ALPACA_PREPARE_PID}" ]]; then
+    reap_within "${ALPACA_PREPARE_PID}" "${prepare_by}" \
+      || log "WARNING: the Alpaca server's preparation has not ended within the shared 1s after SIGKILL"
+    log "Abandoned the Alpaca server's preparation: the Alpaca server is not started"
+    ALPACA_PREPARE_PID=""
+    [[ "${STATE[alpaca]}" == stopping ]] || STATE[alpaca]=stopped
+  fi
+  # A relay-off begun before the signal counts against the same deadline and ends within its own bounded timeout.
   [[ -z "${RELAYS_OFF_PID}" ]] || wait "${RELAYS_OFF_PID}" 2>/dev/null
-  # Both stopped at once; the latest either may run is when the last relay-off must begin to have its whole time.
-  relays_by=$(( STOP_BY_US - RELAYS_OFF_SECONDS * 1000000 ))
-  stamp
-  stop_until=$(( NOW_US + CONTROLLER_STOP_SECONDS * 1000000 ))
-  begin_stop controller "$(( stop_until < relays_by ? stop_until : relays_by ))" "the controller"
-  stop_until=$(( NOW_US + UI_STOP_SECONDS * 1000000 ))
-  begin_stop ui "$(( stop_until < relays_by ? stop_until : relays_by ))" "the web UI"
-  # Each is killed at its own deadline: the earlier one first.
-  if (( STOP_DEADLINE[ui] <= STOP_DEADLINE[controller] )); then
-    finish_stop ui "the web UI"
-    finish_stop controller "the controller"
-  else
-    finish_stop controller "the controller"
-    finish_stop ui "the web UI"
-  fi
+  # Each is killed at its own deadline, earliest first, with builtins only at the process limit.
+  local name next label
+  while :; do
+    next=""
+    for name in controller ui alpaca; do
+      [[ "${STATE[${name}]}" == stopping ]] || continue
+      if [[ -z "${next}" ]] || (( STOP_DEADLINE[${name}] < STOP_DEADLINE[${next}] )); then next=${name}; fi
+    done
+    [[ -n "${next}" ]] || break
+    case "${next}" in controller) label="the controller" ;; ui) label="the web UI" ;; alpaca) label="the Alpaca server" ;; esac
+    finish_stop "${next}" "${label}"
+  done
   # Every process that holds tasks has ended, so there is room for the relay-off's process even at the container's
   # process limit. Should something else hold the tasks, it waits for room while the stop allows: a fork without room
   # would wait about 15 s and then end the supervisor, past the deadline.
@@ -1365,6 +1566,7 @@ on_signal() {
   STOP_REQUESTED=1
   note_stop
   stop_ui_preparation
+  stop_alpaca_preparation
 }
 
 # The supervisor ends some other way: another signal, or an error in this script. Its processes would end with the
@@ -1381,6 +1583,14 @@ on_exit() {
 
 # The web UI's preparation (start_ui runs this script with --prepare-ui, as a process of its own): writes the web UI's
 # environment, with its copies and its keys directory, and ends.
+if [[ "${1:-}" == --prepare-alpaca ]]; then
+  umask 077
+  rm -f "${ALPACA_SETTINGS_FILE}" || exit 1
+  set -o noclobber
+  alpaca_environment >"${ALPACA_SETTINGS_FILE}" || exit 1
+  exit 0
+fi
+
 if [[ "${1:-}" == --prepare-ui ]]; then
   # Owner-only (#139 review F7): this is a new bash, to which the script's umask 022 above would apply. The web UI's
   # environment file is root's, mode 0600: one left by an earlier preparation is removed, and the new one created with
@@ -1403,14 +1613,24 @@ prepare_run_dir
 if ! check_compose_limits || ! check_effective_limits; then
   refuse_limits
 fi
-log "Starting the controller and the web UI (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
+START_APPLICATIONS="the controller and the web UI"
+START_STOP_CLIENTS="with ${UI_STOP_SECONDS}s for the web UI"
+if (( ALPACA_ENABLED )); then
+  START_APPLICATIONS="the controller, web UI and Alpaca server"
+  START_STOP_CLIENTS+=" and ${ALPACA_STOP_SECONDS}s for the Alpaca server"
+fi
+log "Starting ${START_APPLICATIONS} (crash limit ${CRASH_LIMIT} within ${CRASH_WINDOW_SECONDS}s;" \
   "backoff at most ${BACKOFF_MAX_SECONDS}s; forced restarts ignored within ${FORCE_RESTART_MIN_SECONDS}s of a start;" \
   "the relays turned off within ${RELAYS_OFF_SECONDS}s whenever the controller is not running; a stop ends within" \
-  "$(( CONTROLLER_STOP_SECONDS + (RELAYS_OFF_SECONDS > UI_STOP_SECONDS ? RELAYS_OFF_SECONDS : UI_STOP_SECONDS) ))s of" \
-  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, with ${UI_STOP_SECONDS}s for the web UI at the same" \
+  "$(( CONTROLLER_STOP_SECONDS + STOP_AFTER_SECONDS ))s of" \
+  "its request: up to ${CONTROLLER_STOP_SECONDS}s for the controller, ${START_STOP_CLIENTS} at the same" \
   "time, then up to ${RELAYS_OFF_SECONDS}s for the relays off)"
 start_controller
 start_ui
+if (( ALPACA_ENABLED )); then
+  log "Alpaca is enabled: its own unprivileged process, stop wait ${ALPACA_STOP_SECONDS}s alongside the controller and web UI"
+  start_alpaca
+fi
 while (( ! STOP_REQUESTED )); do
   tick
   (( STOP_REQUESTED )) || sleep_tick

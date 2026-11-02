@@ -17,6 +17,76 @@ namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
 public sealed class AlpacaDiscoveryTests
 {
     [TestMethod]
+    public async Task AReadyMarker_IsReplacedOnlyAfterBinding_AndRemovedOnStop()
+    {
+        var directory = Directory.CreateTempSubdirectory("hvo-alpaca-discovery-ready-").FullName;
+        var path = Path.Combine(directory, "ready");
+        try
+        {
+            File.WriteAllText(path, "stale");
+            var options = new AlpacaOptions { ListenAddresses = ["127.0.0.1"], AllowedNetworks = ["127.0.0.0/8"] };
+            options.Discovery.ReadyFilePath = path;
+            await using (var responder = await Responder.StartAsync(options, discoveryOnly: true))
+            {
+                File.ReadAllText(path).Should().Be("ready\n", "readiness is published only after binding, replacing any stale marker");
+                (await responder.AskAsync("alpacadiscovery1")).Should().Be("{\"AlpacaPort\":11111}");
+                Directory.EnumerateFiles(directory).Should().ContainSingle().Which.Should().Be(path,
+                    "atomic publication must leave no temporary file");
+            }
+            File.Exists(path).Should().BeFalse("a stopped responder is not ready");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task AReadyMarkerThatCannotBeWritten_NeverReportsABoundReadyResponder()
+    {
+        var directory = Directory.CreateTempSubdirectory("hvo-alpaca-discovery-unwritable-").FullName;
+        try
+        {
+            var options = new AlpacaOptions { ListenAddresses = ["127.0.0.1"], AllowedNetworks = ["127.0.0.0/8"] };
+            options.Discovery.Port = 0;
+            options.Discovery.ReadyFilePath = Path.Combine(directory, "missing-directory", "ready");
+            using var responder = new AlpacaDiscoveryResponder(options, NullLogger<AlpacaDiscoveryResponder>.Instance, discoveryOnly: true);
+            await responder.StartAsync(CancellationToken.None);
+            try
+            {
+                Func<Task> bound = async () => await responder.Bound.WaitAsync(TimeSpan.FromSeconds(5));
+                await bound.Should().ThrowAsync<IOException>();
+                File.Exists(options.Discovery.ReadyFilePath).Should().BeFalse();
+            }
+            finally { await responder.StopAsync(CancellationToken.None); }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task AnOccupiedDiscoveryPort_RemovesAStaleReadyMarker_AndNeverBecomesReady()
+    {
+        var directory = Directory.CreateTempSubdirectory("hvo-alpaca-discovery-occupied-").FullName;
+        var path = Path.Combine(directory, "ready");
+        try
+        {
+            File.WriteAllText(path, "stale");
+            using var occupied = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { ExclusiveAddressUse = true };
+            occupied.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            var options = new AlpacaOptions { ListenAddresses = ["127.0.0.1"], AllowedNetworks = ["127.0.0.0/8"] };
+            options.Discovery.Port = ((IPEndPoint)occupied.LocalEndPoint!).Port;
+            options.Discovery.ReadyFilePath = path;
+            using var responder = new AlpacaDiscoveryResponder(options, NullLogger<AlpacaDiscoveryResponder>.Instance, discoveryOnly: true);
+            await responder.StartAsync(CancellationToken.None);
+            try
+            {
+                Func<Task> bound = async () => await responder.Bound.WaitAsync(TimeSpan.FromSeconds(5));
+                await bound.Should().ThrowAsync<SocketException>("the other process owns the UDP port exclusively");
+            }
+            finally { await responder.StopAsync(CancellationToken.None); }
+            File.Exists(path).Should().BeFalse("a failed bind must clear readiness left by an earlier process");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
     public async Task ADiscoveryRequest_IsAnsweredWithTheServersPort()
     {
         await using var responder = await Responder.StartAsync(new AlpacaOptions { Port = 11111, ListenAddresses = ["127.0.0.1"] });

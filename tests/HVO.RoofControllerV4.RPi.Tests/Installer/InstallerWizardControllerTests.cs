@@ -31,6 +31,30 @@ public sealed class InstallerWizardControllerTests
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
+    public async Task TheAlpacaOption_DefaultsOff_AndTheWizardKeepsAnExplicitLanListener()
+    {
+        using var pi = InstallerWizardTests.AdoptablePi();
+        using var wizard = await WizardDriver.StartAsync(pi, width: 80, height: 24);
+        wizard.NextTo(1);
+        wizard.Press(Key.Space);
+        wizard.NextTo(3);
+        var page = (ControllerPage)wizard.Page;
+        page.AlpacaEnabled!.Value.Should().Be(CheckState.UnChecked);
+        page.AlpacaPort!.Text.Should().Be("11111");
+        page.AlpacaEnabled.Value = CheckState.Checked;
+        page.AlpacaLanAddress!.Text = "192.168.1.50";
+        page.AlpacaPort.Text = "11112";
+
+        wizard.NextTo(5);
+
+        wizard.Session.Answers.Controller!.Alpaca.Should().Be(new AlpacaInstallSettings { Enabled = true, LanAddress = "192.168.1.50", Port = 11112 });
+        wizard.Press(Key.Esc);
+        page.AlpacaEnabled.Value.Should().Be(CheckState.Checked);
+        page.AlpacaLanAddress.Text.Should().Be("192.168.1.50");
+        page.AlpacaPort.Text.Should().Be("11112");
+    }
+
+    [TestMethod]
     public async Task TheControllerPage_AsksForTheFirstAdmin_TheCamera_Telemetry_AndABackup()
     {
         using var pi = InstallerWizardTests.AdoptablePi();
@@ -82,6 +106,7 @@ public sealed class InstallerWizardControllerTests
         page.Describe().Should().Equal(
             "First admin: roy, with a PIN",
             "Camera: http://192.168.0.4:81 as roof-viewer",
+            "Alpaca: off",
             "Telemetry: http://collector:4318",
             $"Settings from a backup: {Backup}");
     }
@@ -216,7 +241,7 @@ public sealed class InstallerWizardControllerTests
     }
 
     [TestMethod]
-    public async Task TheControllersQuestions_AndThePasswords_FitAn80By24Terminal()
+    public async Task TheControllersQuestions_AndThePasswords_AreReachableOnAn80By24Terminal()
     {
         using var pi = InstallerWizardTests.AdoptablePi();
         using var wizard = await WizardDriver.StartAsync(pi, width: 80, height: 24);
@@ -224,8 +249,9 @@ public sealed class InstallerWizardControllerTests
         wizard.Press(Key.Space);
         wizard.NextTo(3);
         var controller = (ControllerPage)wizard.Page;
-        wizard.Rows.Should().Contain(row => row.Contains("Full path:", StringComparison.Ordinal), "the page's last question is shown")
-            .And.Contain(row => row.Contains("(docs/security.md).", StringComparison.Ordinal), "the camera's reminder is shown whole");
+        wizard.Rows.Should().Contain(row => row.Contains("(docs/security.md).", StringComparison.Ordinal), "the camera's reminder is shown whole");
+        wizard.Press(Key.PageDown);
+        wizard.Rows.Should().Contain(row => row.Contains("Full path:", StringComparison.Ordinal), "Page Down reveals the last field").And.Contain(row => row.Contains("Next", StringComparison.Ordinal));
 
         controller.AdminName!.Text = "roy";
         controller.AdminPin!.Value = CheckState.Checked;
@@ -239,7 +265,7 @@ public sealed class InstallerWizardControllerTests
     }
 
     [TestMethod]
-    public async Task ATestRigsQuestions_FitAn80By24Terminal()
+    public async Task ATestRigsQuestions_AreReachableOnAn80By24Terminal()
     {
         using var bench = new FakeMachine().WithPi(i2c: false);
         using var wizard = await WizardDriver.StartAsync(bench, width: 80, height: 24);
@@ -247,8 +273,9 @@ public sealed class InstallerWizardControllerTests
         ((RolesPage)wizard.Page).Choices[InstallRole.Rig].Value = CheckState.Checked;
         wizard.NextTo(3);
 
-        wizard.Rows.Should().Contain(row => row.Contains("Open to the network", StringComparison.Ordinal))
-            .And.Contain(row => row.Contains("Full path:", StringComparison.Ordinal));
+        wizard.Rows.Should().Contain(row => row.Contains("Open to the network", StringComparison.Ordinal));
+        wizard.Press(Key.PageDown);
+        wizard.Rows.Should().Contain(row => row.Contains("Full path:", StringComparison.Ordinal));
     }
 
     [TestMethod]

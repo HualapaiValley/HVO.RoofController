@@ -2,7 +2,7 @@
 
 The web UI (`HVO.RoofControllerV4.Web`) is the roof controller's browser interface for phones, tablets and desktops. It
 runs in the controller's container as a process of its own, on port 8088
-([The container's two processes](deployment.md#the-containers-two-processes)). It is a client of the controller, like
+([The container's application processes](deployment.md#the-containers-application-processes)). It is a client of the controller, like
 [`hvo-roof`](cli.md): it calls the controller's REST API and follows its live status hub, over the container's
 loopback, and never drives the HAT itself. The controller decides what each person may do. The web UI only uses their
 role to choose what to offer.
@@ -322,7 +322,7 @@ read says `unavailable`; when the controller cannot be reached the page says `Co
   load a pending hand edit shows it, and needs confirming when it is safety-critical.
 - **Forced restart** is for a controller that does not answer, so cannot restart itself. The web UI asks the container's
   supervisor to kill the controller and start it again
-  ([The container's two processes](deployment.md#the-containers-two-processes)). A kill does not stop the roof by
+  ([The container's application processes](deployment.md#the-containers-application-processes)). A kill does not stop the roof by
   itself: the supervisor turns the relays off right after it, and starts the controller again only once they are
   verified off (otherwise it holds it stopped, and the page says so; once the hold has ended, it says the restart was
   held). The page says to use the stop control at the roof

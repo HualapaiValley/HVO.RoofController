@@ -288,6 +288,11 @@ def inspect(state, args):
         die(f"fake docker: unsupported inspect format: {fmt}")
     for ref in refs:
         _, c = container(state, ref)
+        delay = float(behaviour(c["kind"], "ALPACA_METADATA_DELAY", "0"))
+        if fmt == "{{json .Config.Env}}" and delay and not c.get("alpaca_metadata_delayed"):
+            c["alpaca_metadata_delayed"] = True
+            save(state)
+            time.sleep(delay)
         if fmt == HOST_CONFIG_FORMAT:
             out(host_config(c))
         elif fmt == "{{.Image}}":
@@ -571,6 +576,9 @@ def supervisor_json(state, c):
     if view == "absent":
         die("cat: /run/hvo-roof/supervisor.json: No such file or directory")
     processes = {"controller": ["running", 1], "ui": ["running", 1]}
+    if "Alpaca__Enabled=true" in env_of(c):
+        alpaca = behaviour(c["kind"], "ALPACA", "running")
+        processes["alpaca"] = [alpaca if alpaca != "restarted" else "running", 2 if alpaca == "restarted" else 1]
     name = "ui" if view.startswith("ui-") else "controller"
     view = view.removeprefix("ui-")
     if view == "restarting":
@@ -592,7 +600,7 @@ def supervisor_json(state, c):
         document = json.load(sample)
     document["lastForcedRestart"] = None
     for process, (process_state, starts) in processes.items():
-        document[process].update(state=process_state, pid=42 if process_state == "running" else None, starts=starts,
+        document.setdefault(process, {}).update(state=process_state, pid=42 if process_state == "running" else None, starts=starts,
                                  recentCrashes=0, lastExitCode=None, lastExitReason=None, lastExitAt=None)
     out(json.dumps(document, separators=(",", ":")))
 
@@ -617,6 +625,12 @@ def exec_curl(state, ref, curl_args, stdin_text):
         c.setdefault("log", []).extend(stdin_text.splitlines())
         save(state)
         return
+    if curl_args == ["test", "-f", "/tmp/alpaca-discovery-ready"]:
+        c["discovery_ready_probes"] = c.get("discovery_ready_probes", 0) + 1
+        save(state)
+        ready = os.environ.get("FAKE_DISCOVERY_READY", "true") == "true"
+        after = int(os.environ.get("FAKE_DISCOVERY_READY_AFTER", "1"))
+        sys.exit(0 if ready and c["discovery_ready_probes"] >= after else 1)
     url = curl_args[-1]
     method = curl_args[curl_args.index("-X") + 1] if "-X" in curl_args else "GET"
 
@@ -631,6 +645,8 @@ def exec_curl(state, ref, curl_args, stdin_text):
         sys.exit(0 if behaviour(kind, "READY", "true") == "true" else 22)
     if url.endswith("/health/live"):
         sys.exit(0 if behaviour(kind, "WEB_LIVE", "true") == "true" else 22)
+    if url.endswith("/management/apiversions"):
+        sys.exit(0 if behaviour(kind, "ALPACA_LIVE", "true") == "true" else 22)
 
     if "@-" in curl_args and stdin_text.strip() != f"X-Api-Key: {os.environ['FAKE_EXPECTED_KEY']}":
         out('{"error":"unauthorized"}\n401', end="")
@@ -728,6 +744,8 @@ def ps(state, args):
 
 def run(state, args, image):
     image = next((candidate for candidate in [image, *state.get("images", {})] if candidate in args), image)
+    if "--discovery-only" in args:
+        image = args[args.index("--entrypoint") + 2]
     position = args.index(image)
     options, trailing = args[:position], args[position + 1:]
     if "--rm" in options:
@@ -777,6 +795,7 @@ def run(state, args, image):
         "trailing": trailing,
         "options": options,
         "limits": dropped,
+        "labels": dict(value.split("=", 1) for value in option_values(options, "--label")),
         "id": cid,
     }
     if not run_fail and os.environ.get("FAKE_NEW_IDENTITY_DOCUMENT") is not None:
@@ -789,6 +808,8 @@ def run(state, args, image):
     elif os.environ.get("FAKE_NEW_EXITS") == "restarting":
         state["containers"][name]["state"] = "restarting"
     elif os.environ.get("FAKE_NEW_EXITS") == "exited":
+        state["containers"][name]["running"] = False
+    if "--discovery-only" in trailing and os.environ.get("FAKE_DISCOVERY_EXITS") == "true":
         state["containers"][name]["running"] = False
     save(state)
     if cidfile is not None:

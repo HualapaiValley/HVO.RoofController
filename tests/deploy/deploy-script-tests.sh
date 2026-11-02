@@ -323,12 +323,14 @@ call_index() {
   echo "${line:-0}"
 }
 
+# Consume the complete log before choosing one call: head can close early and trip pipefail when multiple
+# application/discovery runs produce enough output to exceed the pipe buffer.
 preflight_args() {
-  docker_calls run | jq -c 'select(index("--rm"))' | head -n 1
+  docker_calls run | jq -cs 'map(select(index("--rm"))) | .[0] // empty'
 }
 
 controller_run_args() {
-  docker_calls run | jq -c 'select(index("-d"))' | head -n 1
+  docker_calls run | jq -cs 'map(select(index("-d"))) | .[0] // empty'
 }
 
 sha256_hex() {
@@ -1769,7 +1771,7 @@ test_web_ui_unreachable_from_this_machine_rolls_back() {
 
 test_unreadable_environment_also_prevents_unsafe_automatic_recovery() {
   seed_container roof-controller old true 8080:8080
-  deploy "${HTTPS_ENV[@]}" FAKE_FAIL=.Config.Env
+  deploy "${HTTPS_ENV[@]}" ALPACA_ENABLED=false FAKE_FAIL=.Config.Env
 
   assert_status_is 1
   assert_output_contains "could not read the environment of roof-controller from Docker to find its web UI"
@@ -4853,8 +4855,8 @@ test_context_that_prompts_fails_before_anything_changes() {
 
 test_state_query_failure_after_preflight_changes_nothing() {
   seed_container roof-controller old true 8443:8443
-  # Queries 1 and 2 read roof-controller and roof-controller-previous; query 3 reads them again after the pre-flight.
-  deploy "${HTTPS_ENV[@]}" FAKE_FAIL="ps -a --no-trunc@3"
+  # Fail the controller's second query, after preflight, independent of companion ownership queries.
+  deploy "${HTTPS_ENV[@]}" 'FAKE_FAIL=ps -a --no-trunc --filter name=^/roof-controller$@2'
 
   assert_status 1
   assert_output_contains "Could not read the state of roof-controller from Docker"
@@ -5116,6 +5118,228 @@ test_rollback_without_current_controller_is_undone_on_failed_start() {
   assert_output_contains "Undone: roof-controller-previous is back, stopped"
   assert_container roof-controller missing false
   assert_container roof-controller-previous old false no
+}
+
+# --- Optional Alpaca server and host discovery -------------------------------------------------------------
+
+ALPACA_ENV=(ALPACA_ENABLED=true ALPACA_LAN_ADDRESS=192.168.1.20 ALPACA_API_KEY_FILE=/etc/hvo-roof/secrets/alpaca-server-key)
+
+test_alpaca_installer_key_never_nests_a_mount_below_readonly_secrets() {
+  local source=/etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__7__Key call
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "ALPACA_API_KEY_FILE=${source}"
+  assert_status 0
+  for call in "$(preflight_args)" "$(controller_run_args)"; do
+    jq -e --arg mount "type=bind,src=${source},dst=/run/alpaca-server-key,readonly" '
+      index($mount) and index("Alpaca__ControllerApiKeyFile=/run/alpaca-server-key")
+      and (any(.[]; startswith("type=bind,") and contains("dst=/run/secrets/")) | not)
+    ' <<<"${call}" >/dev/null || fail_test "installer key uses a nested mount below read-only secrets"
+  done
+}
+
+test_alpaca_discovery_failure_during_rollback_keeps_the_recovery_controller() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  local recovered
+  recovered=$(container_field roof-controller id)
+  deploy "${HTTPS_ENV[@]}" ALPACA_ENABLED=false
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" FAKE_DISCOVERY_READY=false -- --rollback
+  assert_status 0
+  [[ "$(container_field roof-controller id)" == "${recovered}" ]] || fail_test "optional discovery undid the rollback"
+  assert_output_contains "WARNING: the rolled-back controller is kept running"
+}
+
+test_alpaca_fresh_deployment_with_jq_only_keeps_default_off_and_supports_opt_in() {
+  local enabled
+  for enabled in false true; do
+    local -a alpaca=()
+    [[ "${enabled}" == false ]] || alpaca=("${ALPACA_ENV[@]}")
+    # Bash functions hide Python only from the deploy script; the external fake Docker can still use its interpreter.
+    # shellcheck disable=SC2016
+    deploy "${HTTPS_ENV[@]}" ${alpaca[@]+"${alpaca[@]}"} \
+      'BASH_FUNC_command%%=() { if [ "$1" = -v ] && [ "$2" = python3 ]; then return 1; fi; builtin command "$@"; }' \
+      'BASH_FUNC_python3%%=() { return 127; }'
+    assert_status 0
+    assert_container roof-controller new true unless-stopped
+    [[ "$(docker_calls stop | jq -s length)" == 0 ]] || fail_test "a fresh jq-only deployment entered recovery"
+    [[ "${enabled}" == false ]] || assert_container roof-controller-discovery new true unless-stopped
+    setup_fresh_state
+  done
+}
+
+test_alpaca_default_publishes_nothing_and_starts_no_discovery() {
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  [[ "$(docker_calls run | jq -s '[.[] | select(index("--discovery-only"))] | length')" == 0 ]] || fail_test "discovery started by default"
+  [[ "$(controller_run_args | jq '[.[] | select(contains(":11111"))] | length')" == 0 ]] || fail_test "Alpaca published by default"
+}
+
+test_alpaca_enabled_is_lan_bound_and_discovery_has_no_credentials() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" ALPACA_PORT=11112
+  assert_status 0
+  controller_run_args | jq -e 'index("192.168.1.20:11112:11111") and index("Alpaca__Enabled=true")
+    and index("Alpaca__Discovery__Enabled=false") and index("Alpaca__DataPath=/var/lib/hvo-roof-alpaca")
+    and index("type=bind,src=/var/lib/hvo-roof-alpaca,dst=/var/lib/hvo-roof-alpaca")' >/dev/null \
+    || fail_test "enabled server is not published safely or its identity directory is not durable"
+  docker_calls run | jq -se '[.[] | select(index("--discovery-only"))] | length == 1 and all(.[];
+    index("host") and index("--read-only") and index("--user") and index("1655:1655")
+    and index("Alpaca__Discovery__AdvertisedPort=11112") and index("Alpaca__Enabled=true")
+    and (index("/run/secrets") | not) and (any(.[]; contains("ControllerApiKey")) | not)
+    and (any(.[]; contains("/dev/i2c")) | not))' >/dev/null || fail_test "host discovery missing or not isolated"
+  assert_key_never_in_argv
+}
+
+test_alpaca_refuses_non_lan_and_conflicting_ports_before_docker() {
+  local address
+  for address in '' 0.0.0.0 127.0.0.1 100.64.1.2 8.8.8.8 192.168.1.999; do
+    deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "ALPACA_LAN_ADDRESS=${address}"
+    assert_status 1
+    assert_no_docker_calls "unsafe Alpaca address"
+  done
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" ALPACA_PORT=8443
+  assert_status 1
+  assert_no_docker_calls "Alpaca port conflicts with controller"
+}
+
+test_alpaca_discovery_failure_restores_controller() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_FAIL="--discovery-only"
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-discovery missing false
+}
+
+test_alpaca_preserves_opt_in_across_upgrade_and_stops_discovery() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}"
+  assert_status 0
+  controller_run_args | jq -e 'index("Alpaca__Enabled=true") and index("192.168.1.20:11111:11111")' >/dev/null \
+    || fail_test "upgrade lost Alpaca opt-in"
+  deploy "${HTTPS_ENV[@]}" -- --stop
+  assert_status 0
+  assert_container roof-controller-discovery missing false
+}
+
+test_alpaca_explicit_disable_retires_discovery() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" ALPACA_ENABLED=false
+  assert_status 0
+  assert_container roof-controller-discovery missing false
+  [[ "$(controller_run_args | jq '[.[] | select(contains(":11111"))] | length')" == 0 ]] || fail_test "disabled port remains published"
+}
+
+test_alpaca_bad_server_restores_before_discovery() {
+  local behaviour
+  for behaviour in restarting restarted; do
+    setup_fresh_state
+    seed_container roof-controller old true 8443:8443
+    deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "FAKE_NEW_ALPACA=${behaviour}"
+    assert_status 1
+    assert_container roof-controller old true unless-stopped
+    assert_container roof-controller-discovery missing false
+  done
+  setup_fresh_state
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_NEW_ALPACA_LIVE=false
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+}
+
+test_alpaca_foreign_discovery_name_is_never_touched() {
+  seed_container roof-controller-discovery foreign true
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 1
+  assert_container roof-controller-discovery foreign true
+  [[ "$(docker_calls stop | wc -l)" == 0 ]] || fail_test "foreign responder stopped"
+  [[ "$(docker_calls run | wc -l)" == 0 ]] || fail_test "deployment started before discovery ownership check"
+}
+
+test_alpaca_rollback_and_failed_upgrade_restore_paired_discovery() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" ALPACA_ENABLED=false
+  assert_status 0
+  deploy "${HTTPS_ENV[@]}" -- --rollback
+  assert_status 0
+  assert_container roof-controller-discovery new true unless-stopped
+  : > "${FAKE_STATE_DIR}/calls.log"
+  deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
+  assert_status 1
+  assert_container roof-controller-discovery new true unless-stopped
+  docker_calls run | jq -se 'any(.[]; index("--discovery-only") and index("Alpaca__Discovery__AdvertisedPort=11111"))' >/dev/null \
+    || fail_test "original discovery not restored after failed upgrade"
+}
+
+test_alpaca_failed_discovery_cleanup_never_blocks_controller_recovery() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_DISCOVERY_EXITS=true FAKE_FAIL="stop -t 3 "
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  [[ "$(kind_count new)" == 1 ]] || fail_test "failed controller was left behind when discovery cleanup failed"
+  assert_output_contains "discovery responder could not be restored"
+}
+
+test_alpaca_cannot_bypass_lan_binding_through_extra_args() {
+  local extra
+  for extra in '--network host' '--network=host' '--net=host' '--env Alpaca__Enabled=false' '--env Alpaca__Port=8080' \
+    '--env=Alpaca__Enabled=true' '-eAlpaca__Enabled=true' '--env=ALPACA:PORT=12345' \
+    '-e=Alpaca__Enabled=true' '-ieAlpaca__Enabled=true' '-ie=Alpaca__Enabled=true' '-tieAlpaca__Port=1'; do
+    setup_fresh_state
+    deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" "EXTRA_DOCKER_ARGS=${extra}"
+    assert_status 1
+    assert_no_docker_calls "Alpaca binding override"
+  done
+}
+
+test_alpaca_discovery_only_stop_does_not_need_a_roof_key() {
+  seed_container roof-controller-discovery new true
+  seed_label roof-controller-discovery io.hvo.roof.discovery-for roof-controller
+  deploy "${HTTPS_ENV[@]}" ROOF_OPERATOR_API_KEY= -- --stop
+  assert_status 0
+  assert_container roof-controller-discovery missing false
+  [[ "$(docker_calls exec | wc -l)" == 0 ]] || fail_test "controller request made when no controller exists"
+}
+
+test_alpaca_discovery_uses_the_servers_network_allowlist() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" 'EXTRA_DOCKER_ARGS=--env Alpaca__AllowedNetworks__0=192.168.1.0/24'
+  assert_status 0
+  docker_calls run | jq -se 'any(.[]; index("--discovery-only") and index("Alpaca__AllowedNetworks__0=192.168.1.0/24"))' >/dev/null \
+    || fail_test "discovery ignores server network allowlist"
+}
+
+test_alpaca_checks_the_listener_once_after_slow_metadata() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_NEW_ALPACA_METADATA_DELAY=1.1
+  assert_status 0
+  assert_output_contains "Alpaca management listener and supervised process: OK"
+}
+
+test_alpaca_running_discovery_without_a_bound_socket_rolls_back() {
+  seed_container roof-controller old true 8443:8443
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_DISCOVERY_READY=false
+  assert_status 1
+  assert_container roof-controller old true unless-stopped
+  assert_container roof-controller-discovery missing false
+}
+
+test_alpaca_discovery_waits_until_its_socket_is_ready() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}" FAKE_DISCOVERY_READY_AFTER=3 READY_TIMEOUT_SECONDS=3
+  assert_status 0
+  docker_calls exec | jq -se '[.[] | select(index("/tmp/alpaca-discovery-ready"))] | length >= 3' >/dev/null \
+    || fail_test "deployment did not wait for the bound-socket marker"
+}
+
+test_alpaca_removes_its_private_discovery_scratch() {
+  deploy "${HTTPS_ENV[@]}" "${ALPACA_ENV[@]}"
+  assert_status 0
+  assert_output_not_contains "holds more than this script put there"
+  local cidfile folder
+  cidfile=$(controller_run_args | jq -r '.[index("--cidfile") + 1]')
+  folder=${cidfile%/*}
+  [[ ! -e "${folder}" ]] || fail_test "the discovery configuration scratch directory was left behind"
 }
 
 # --- Harness ----------------------------------------------------------------------------------------------------------

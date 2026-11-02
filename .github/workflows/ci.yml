@@ -596,6 +596,9 @@ jobs:
           HVO_TERMINAL_DIST: ${{ runner.temp }}/terminal-dist
         working-directory: src
         run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --filter FullyQualifiedName~TerminalInstalledNoticeTests -- RunConfiguration.TreatNoTestsAsError=true
+      - name: Verify public metadata readers on the host ABI
+        working-directory: src
+        run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "FullyQualifiedName~UnixRegularFileReaderTests|FullyQualifiedName~AlpacaPublicFileSafetyTests|FullyQualifiedName~InstallerRegularFilesTests" -- RunConfiguration.TreatNoTestsAsError=true
       # #176 runs the complete controlled driver catalogue against assemblies from these exact final bundles.
       - name: Exercise final distributed terminal workflows
         working-directory: src
@@ -901,9 +904,10 @@ jobs:
   # (tests/container) and the compose profiles; with the build and release scripts' tests, and the docs' links.
   deploy-script:
     runs-on: ubuntu-latest
-    # About 10 minutes: the deploy script's tests (5) and the supervisor's (3), whose stop tests run with its real
-    # 22/5/2 s times.
-    timeout-minutes: 20
+    # The complete deploy and three-process supervisor suites include real 22/5/2 s stop waits. The expanded
+    # Alpaca regressions exceed the former 20-minute job budget on hosted runners; their individual deadlines stay
+    # enforced by the tests.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1024,6 +1028,9 @@ jobs:
         run: |
           python3 -m unittest discover -s tests/container -p 'test_*.py' -v
           tests/container/supervisor-tests.sh
+
+      - name: Optional Alpaca Compose overlay
+        run: python3 -m unittest discover -s tests/deploy -p 'test_*.py' -v
 
       - name: Compose profiles
         working-directory: src/HVO.RoofControllerV4.RPi

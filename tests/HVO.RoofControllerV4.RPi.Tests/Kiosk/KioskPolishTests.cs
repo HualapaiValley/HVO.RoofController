@@ -223,7 +223,7 @@ public sealed class KioskPolishTests
         {
             screen.Text("about-client-version").Should().Be(HVO.RoofControllerV4.Common.RoofProductVersion.Describe(typeof(KioskSystemPanel).Assembly));
             var info = screen.Shell.AboutPage.Info;
-            info.Controller.Rows.Select(row => row.Label).Should().Equal(["Version", "Web UI"], "where the web UI is comes first after the version");
+            info.Controller.Rows.Select(row => row.Label).Should().Equal(["Version", "Web UI", "Alpaca server"], "where the web UI is comes first after the version, then the separately deployed server");
             screen.Text("about-web-ui").Should().Be("https://192.0.2.10:8088/", "the host's address, not a container's");
             info.Host.Rows.Select(row => row.Label).Should().Equal("Uptime", "CPU", "Temperature", "Memory", "Disk", "Addresses");
             info.Host.Rows.Should().OnlyContain(row => row.IsKnown, "the emulated controller gives every summary figure");

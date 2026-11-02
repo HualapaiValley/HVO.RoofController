@@ -143,6 +143,15 @@ HOST_PORT=${HOST_PORT:-8080}
 HTTPS_HOST_PORT=${HTTPS_HOST_PORT:-8443}
 # The web UI's published port: HTTPS with the controller's certificate, or plain HTTP with ALLOW_INSECURE_HTTP=true.
 WEB_HOST_PORT=${WEB_HOST_PORT:-8088}
+# Alpaca is opt-in. Unset keeps an existing deployment's choice; a new installation stays off.
+ALPACA_ENABLED=${ALPACA_ENABLED-}
+ALPACA_LAN_ADDRESS=${ALPACA_LAN_ADDRESS-}
+ALPACA_PORT=${ALPACA_PORT-}
+ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE-}
+ALPACA_DATA_DIR=${ALPACA_DATA_DIR-}
+ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT-}
+DISCOVERY_CONTAINER_NAME="${CONTAINER_NAME}-discovery"
+DISCOVERY_OWNER_LABEL=io.hvo.roof.discovery-for
 # The host address the ports are published on: empty for every interface, or an IPv4 address such as 127.0.0.1 to
 # keep them to this machine (a test rig that is not open to the network).
 PUBLISH_ADDRESS=${PUBLISH_ADDRESS:-}
@@ -311,6 +320,49 @@ require_number STOP_TIMEOUT_SECONDS 30 86400
 require_number HOST_PORT 1 65535
 require_number HTTPS_HOST_PORT 1 65535
 require_number WEB_HOST_PORT 1 65535
+
+# The Alpaca HTTP port is always bound to one RFC1918 LAN address; never wildcard, public or overlay.
+# Messages name the setting only: a host's actual address stays private.
+check_alpaca_settings() {
+  case "${ALPACA_ENABLED}" in
+    true)
+      local -a transport_args=()
+      local option previous=""
+      read -r -a transport_args <<<"${EXTRA_DOCKER_ARGS}"
+      for option in ${transport_args[@]+"${transport_args[@]}"}; do
+        if [[ "${option}" == --network=host || "${option}" == --net=host \
+            || ( "${option}" == host && ( "${previous}" == --network || "${previous}" == --net ) ) ]]; then
+          fail "Alpaca requires bridge networking so its LAN publish binding is enforced. Nothing was changed."
+        fi
+        previous=${option}
+      done
+      ALPACA_PORT=${ALPACA_PORT:-11111}
+      ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT:-32227}
+      ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE:-/etc/hvo-roof/secrets/alpaca-server-key}
+      ALPACA_DATA_DIR=${ALPACA_DATA_DIR:-/var/lib/hvo-roof-alpaca}
+      require_number ALPACA_PORT 1 65535
+      require_number ALPACA_DISCOVERY_PORT 1 65535
+      local pattern='^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$' a b c d
+      [[ "${ALPACA_LAN_ADDRESS}" =~ ${pattern} ]] || fail "ALPACA_LAN_ADDRESS must be one private IPv4 LAN address. Nothing was changed."
+      a=$((10#${BASH_REMATCH[1]})) b=$((10#${BASH_REMATCH[2]})) c=$((10#${BASH_REMATCH[3]})) d=$((10#${BASH_REMATCH[4]}))
+      if (( b > 255 || c > 255 || d > 255 )) || ! (( a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) )); then
+        fail "ALPACA_LAN_ADDRESS must be one private IPv4 LAN address. Nothing was changed."
+      fi
+      ALPACA_LAN_ADDRESS="${a}.${b}.${c}.${d}"
+      if (( ALPACA_PORT == WEB_HOST_PORT )) || { [[ -n "${HTTPS_CERT_DIR}" ]] && (( ALPACA_PORT == HTTPS_HOST_PORT )); } \
+          || { [[ -z "${HTTPS_CERT_DIR}" ]] && (( ALPACA_PORT == HOST_PORT )); }; then
+        fail "ALPACA_PORT must differ from the API and web UI published ports. Nothing was changed."
+      fi
+      for name in ALPACA_API_KEY_FILE ALPACA_DATA_DIR; do
+        [[ "${!name}" == /* && "${!name}" != *','* && "${!name}" != *$'\n'* && "${!name}" != *$'\r'* ]] \
+          || fail "${name} must be an absolute host path without commas or line breaks. Nothing was changed."
+      done
+      ;;
+    false|'') ;;
+    *) fail "ALPACA_ENABLED must be true or false. Nothing was changed." ;;
+  esac
+}
+check_alpaca_settings
 case "${REQUIRE_IDLE_ROOF}" in
   true|false) ;;
   *) fail "REQUIRE_IDLE_ROOF must be true or false, got '${REQUIRE_IDLE_ROOF}'. Nothing was changed." ;;
@@ -447,6 +499,20 @@ EMULATOR_MODE_SETTING="HAT emulator mode is set with HAT_EMULATOR_ENDPOINT and A
 RELEASE_IMAGE_SETTING="the script sets it on a controller it loads from IMAGE_ARCHIVE, once it has checked the image, and the installer reads the release the controller runs from it."
 
 refuse_emulator_setting() {
+  local argument=$1 setting
+  if [[ "${argument}" == --env=* ]]; then
+    argument=${argument#--env=}
+  elif [[ "${argument}" =~ ^-[ditPq]*e(.*)$ ]]; then
+    # Docker accepts -eVALUE, -e=VALUE and a value on the last combined short option (-ieVALUE).
+    argument=${BASH_REMATCH[1]#=}
+  fi
+  setting=${argument%%=*}
+  setting=$(printf '%s' "${setting}" | tr '[:upper:]' '[:lower:]')
+  setting=${setting//:/__}
+  case "${setting}" in
+    alpaca__enabled|alpaca__publishedaddress|alpaca__port|alpaca__listenaddresses*|alpaca__controllerurl|alpaca__controllerapikeyfile|alpaca__datapath|alpaca__discovery__enabled|alpaca__discovery__port|alpaca__discovery__advertisedport|hvo_alpaca_*|hvo_supervisor_alpaca_*)
+      fail "EXTRA_DOCKER_ARGS must not override deployment-managed Alpaca settings; use ALPACA_* settings. Nothing was changed." ;;
+  esac
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
     *hatemulator__*|*hatemulator:*)
       fail "EXTRA_DOCKER_ARGS must not contain '${2:-$1}': ${EMULATOR_MODE_SETTING}" ;;
@@ -1241,6 +1307,8 @@ verify_controller() {
   else
     echo "[verify] ${name} has no web UI (a version from before it): not checked"
   fi
+
+  verify_alpaca "${name}" || return 1
 
   if [[ "${SKIP_REMOTE_CHECK}" == "true" ]]; then
     log_err "[verify] WARNING: SKIP_REMOTE_CHECK=true: ${REMOTE_BASE_URL} was not checked from this machine. Check it from a client before relying on remote control."
@@ -2306,7 +2374,7 @@ remove_work_dir() {
     log_err "[deploy] WARNING: ${folder} is no longer the work folder this script made (a folder of this user's, mode 0700), so it was left as it is."
     return 1
   fi
-  rm -f -- "${folder}/new-controller.cid" "${folder}/image.tar" "${folder}/identity-schema-check.json" 2>/dev/null || true
+  rm -f -- "${folder}/new-controller.cid" "${folder}/image.tar" "${folder}/identity-schema-check.json" "${folder}/discovery-network.env" 2>/dev/null || true
   rm -rf -- "${folder}/identity-schema-secrets" 2>/dev/null || true
   if ! rmdir -- "${folder}" 2>/dev/null; then
     log_err "[deploy] WARNING: ${folder} holds more than this script put there, so it was left as it is."
@@ -2541,6 +2609,167 @@ check_loaded_image() {
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Restore. Everything here runs without errexit, and every step checks its own result.
+
+# Read only public deployment metadata, with JSON preserving every environment entry as one value.
+# Raw configuration is never logged. Duplicate names are refused instead of choosing an ambiguous setting.
+read_alpaca_metadata() {
+  local id=$1 metadata
+  metadata=$(dockerc inspect --format '{{json .Config.Env}}' "${id}") || return 1
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "${metadata}" | jq -nr '
+      ["Alpaca__Enabled","HVO_ALPACA_LAN_ADDRESS","Alpaca__Discovery__AdvertisedPort",
+       "HVO_ALPACA_API_KEY_FILE","HVO_ALPACA_DATA_DIR","HVO_ALPACA_DISCOVERY_PORT"] | map(ascii_downcase) as $keys
+      | input | if type != "array" or any(.[]; type != "string") then error("invalid environment") else . end
+      | reduce .[] as $entry ({};
+          ($entry | index("=")) as $at
+          | if $at == null then . else
+              ($entry[:$at] | gsub(":";"__") | ascii_downcase) as $name
+              | $entry[$at+1:] as $value
+              | if ($keys | index($name)) == null then .
+                elif has($name) or ($value | contains("\n") or contains("\r")) then error("ambiguous environment")
+                else .[$name] = $value end
+            end)
+      | . as $data | $keys[] | $data[.] // ""
+    ' 2>/dev/null
+    return $?
+  fi
+  command -v python3 >/dev/null 2>&1 || return 1
+  printf '%s' "${metadata}" | python3 -c '
+import json,sys
+entries=json.load(sys.stdin); data={}
+keys=("Alpaca__Enabled","HVO_ALPACA_LAN_ADDRESS","Alpaca__Discovery__AdvertisedPort",
+      "HVO_ALPACA_API_KEY_FILE","HVO_ALPACA_DATA_DIR","HVO_ALPACA_DISCOVERY_PORT")
+wanted={key.lower():key for key in keys}
+for entry in entries:
+    key,sep,value=entry.partition("=")
+    canonical=wanted.get(key.replace(":","__").lower())
+    if sep and canonical:
+        if canonical in data: sys.exit(1)
+        data[canonical]=value
+for key in keys:
+    value=data.get(key, "")
+    if "\n" in value or "\r" in value: sys.exit(1)
+    print(value)
+' 2>/dev/null
+}
+
+# The responder gets the server's network restrictions, using either supported JSON parser.
+alpaca_discovery_environment() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -j '.[] | select(test("^(Alpaca__AllowedNetworks__[0-9]+|Alpaca__Discovery__IPv6)="; "i")) | . + "\u0000"'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import json,re,sys
+for entry in json.load(sys.stdin):
+    key,sep,value=entry.partition("=")
+    if sep and (re.fullmatch(r"Alpaca__AllowedNetworks__[0-9]+", key, re.I) or key.lower()=="alpaca__discovery__ipv6"):
+        sys.stdout.buffer.write(entry.encode()+b"\0")
+'
+  else
+    return 1
+  fi
+}
+
+# A successfully running controller does not prove its optional third process started. Check both supervision
+# and the read-only management listener, with no device command and no credential on the LAN.
+verify_alpaca() {
+  local name=$1 metadata enabled state starts view deadline=$((SECONDS + READY_TIMEOUT_SECONDS))
+  metadata=$(read_alpaca_metadata "${name}") || { FAILURE="could not read Alpaca deployment settings"; return 1; }
+  IFS= read -r enabled <<<"${metadata}"
+  [[ "${enabled}" == true ]] || return 0
+  while :; do
+    if view=$(supervised_process "${name}" alpaca); then
+      read -r state starts <<<"${view}"
+      if (( starts > 1 )) || [[ "${state}" == restarting || "${state}" == crash-loop ]]; then
+        FAILURE="the Alpaca process exited during verification"
+        return 1
+      fi
+      if [[ "${state}" == running ]] && dockerc exec "${name}" curl -fsS --max-time 5 -o /dev/null \
+          http://localhost:11111/management/apiversions >/dev/null 2>&1; then
+        echo "[verify] Alpaca management listener and supervised process: OK"
+        return 0
+      fi
+    fi
+    (( SECONDS < deadline )) || break
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+  FAILURE="the enabled Alpaca process or management listener did not become available"
+  return 1
+}
+
+inherit_alpaca_settings() {
+  local metadata enabled address port key_file data_dir discovery_port
+  if [[ -z "${ALPACA_ENABLED}" && -n "${CURRENT_ID}" ]]; then
+    metadata=$(read_alpaca_metadata "${CURRENT_ID}") || fail "Could not read the existing Alpaca deployment settings. Nothing was changed."
+    { IFS= read -r enabled; IFS= read -r address; IFS= read -r port; IFS= read -r key_file;
+      IFS= read -r data_dir; IFS= read -r discovery_port; } <<<"${metadata}" || true
+    ALPACA_ENABLED=${enabled:-false}
+    ALPACA_LAN_ADDRESS=${ALPACA_LAN_ADDRESS:-${address}}
+    ALPACA_PORT=${ALPACA_PORT:-${port}}
+    ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE:-${key_file}}
+    ALPACA_DATA_DIR=${ALPACA_DATA_DIR:-${data_dir}}
+    ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT:-${discovery_port}}
+  fi
+  ALPACA_ENABLED=${ALPACA_ENABLED:-false}
+  check_alpaca_settings
+}
+
+# Refuse a name taken by anything other than this deploy script's responder. Never retire a foreign container.
+check_discovery_owner() {
+  local owner
+  lookup_container "$(name_filter "${DISCOVERY_CONTAINER_NAME}")" || return 1
+  [[ "${CSTATE}" != missing ]] || return 0
+  owner=$(dockerc ps -a --no-trunc --filter "id=${CID}" --format "{{.Label \"${DISCOVERY_OWNER_LABEL}\"}}") || return 1
+  [[ "${owner}" == "${CONTAINER_NAME}" ]]
+}
+
+retire_discovery() {
+  local id
+  check_discovery_owner || return 1
+  [[ "${CSTATE}" != missing ]] || return 0
+  id=${CID}
+  dockerc stop -t 3 "${id}" >/dev/null || return 1
+  dockerc rm "${id}" >/dev/null || return 1
+}
+
+# Recreate a credential-free responder from the exact controller being restored or deployed.
+# No host directory, device, published TCP port or controller key is exposed on its host network.
+sync_discovery() {
+  local id=$1 metadata enabled address port key_file data_dir discovery_port image
+  local -a discovery_args=()
+  retire_discovery || return 1
+  [[ -n "${id}" ]] || return 0
+  metadata=$(read_alpaca_metadata "${id}") || return 1
+  { IFS= read -r enabled; IFS= read -r address; IFS= read -r port; IFS= read -r key_file;
+    IFS= read -r data_dir; IFS= read -r discovery_port; } <<<"${metadata}" || true
+  [[ "${enabled}" == true ]] || return 0
+  [[ "${port}" =~ ^[0-9]{1,5}$ && "${discovery_port}" =~ ^[0-9]{1,5}$ ]] || return 1
+  image=$(dockerc inspect --format '{{.Image}}' "${id}") || return 1
+  [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  # shellcheck disable=SC2054 # commas belong to Docker's tmpfs option
+  discovery_args=(--read-only --tmpfs /tmp:size=16m --cap-drop ALL --security-opt no-new-privileges
+    --user 1655:1655 --network host --pids-limit 64 --cpus 0.25 --memory 128m --memory-swap 128m
+    --env Alpaca__Enabled=true --env "Alpaca__PublishedAddress=${address}" --env "Alpaca__Discovery__Port=${discovery_port}"
+    --env "Alpaca__Discovery__AdvertisedPort=${port}" --env Alpaca__Discovery__ReadyFilePath=/tmp/alpaca-discovery-ready)
+  local entry filter_file="${WORK_DIR}/discovery-network.env"
+  if ! dockerc inspect --format '{{json .Config.Env}}' "${id}" | alpaca_discovery_environment >"${filter_file}"; then return 1; fi
+  while IFS= read -r -d '' entry; do discovery_args+=(--env "${entry}"); done <"${filter_file}"
+  dockerc run -d --name "${DISCOVERY_CONTAINER_NAME}" --restart unless-stopped --stop-timeout 3 \
+    --label "${DISCOVERY_OWNER_LABEL}=${CONTAINER_NAME}" --pull never --health-cmd 'test -f /tmp/alpaca-discovery-ready' --health-interval 5s --health-timeout 2s --health-retries 3 \
+    --log-driver local --log-opt max-size=10m --log-opt max-file=5 \
+    "${discovery_args[@]}" --entrypoint dotnet "${image}" /app/alpaca/HVO.RoofControllerV4.Alpaca.dll --discovery-only >/dev/null \
+    || return 1
+  local state deadline=$((SECONDS + READY_TIMEOUT_SECONDS))
+  while :; do
+    state=$(container_restarts "${DISCOVERY_CONTAINER_NAME}") || return 1
+    [[ "${state}" == 'running 0' ]] || return 1
+    if dockerc exec "${DISCOVERY_CONTAINER_NAME}" test -f /tmp/alpaca-discovery-ready >/dev/null 2>&1; then
+      return 0
+    fi
+    (( SECONDS < deadline )) || return 1
+    sleep "${POLL_INTERVAL_SECONDS}"
+  done
+}
 
 # The ID of the container this deploy created: from `docker run -d`, or from the cidfile docker writes on creation
 # (a run that failed after creating the container, or was interrupted, prints no ID).
@@ -2835,8 +3064,14 @@ restore_original() {
   log_err "[rollback] ${reason}"
 
   RESTORE_OUTCOME=""
+  # Discovery never drives the roof. Failure to retire it must not prevent stopping the failed controller or
+  # recovering the original; report its independent cleanup failure after the controller is recovered.
+  retire_discovery || log_err "[rollback] WARNING: discovery cleanup failed; continuing controller recovery."
   if retire_switch_container && prepare_original_restore && put_names_back; then
     restart_original "${mode}"
+    if [[ "${mode}" == running ]] && ! sync_discovery "${ORIGINAL_ID}"; then
+      RESTORE_OUTCOME+=" Its discovery responder could not be restored."
+    fi
   fi
 
   show_containers >&2
@@ -2913,8 +3148,11 @@ if ! context_errors=$("${OWN_SESSION[@]}" docker --context "${DOCKER_CONTEXT}" i
   fail "Docker context '${DOCKER_CONTEXT}' is not available without a terminal. Configure it first (e.g. docker context use ${DOCKER_CONTEXT}); it must connect without prompting (for an ssh:// context: an SSH key or ssh-agent, and a known host key). Nothing was changed."
 fi
 
-resolve_operator_key
+[[ "${STOP}" == true ]] || resolve_operator_key
 read_container_states
+if [[ "${STOP}" == true && "${STATE}" == running ]]; then resolve_operator_key; fi
+if [[ "${ROLLBACK}" != true && "${STOP}" != true ]]; then inherit_alpaca_settings; fi
+check_discovery_owner || fail "The discovery container name is occupied or its ownership cannot be verified. Nothing was changed."
 echo "[deploy] Existing container ${CONTAINER_NAME}: ${STATE}; ${PREVIOUS_CONTAINER_NAME}: ${PREVIOUS_STATE}"
 # The limits a deploy or a rollback gives, with any not set kept from the running controller; --stop gives none.
 [[ "${STOP}" == "true" ]] || resolve_limits
@@ -2974,10 +3212,12 @@ refuse_running_previous
 if [[ "${STOP}" == "true" ]]; then
   case "${STATE}" in
     missing)
+      retire_discovery || fail "Could not retire the discovery responder."
       echo "[done] There is no ${CONTAINER_NAME} to stop. Nothing was changed."
       exit 0
       ;;
     stopped)
+      retire_discovery || fail "Could not retire the discovery responder."
       echo "[done] ${CONTAINER_NAME} is already stopped. Nothing was changed."
       exit 0
       ;;
@@ -2986,6 +3226,7 @@ if [[ "${STOP}" == "true" ]]; then
   echo "[stop] Stopping ${CONTAINER_NAME} gracefully (SIGTERM, up to ${STOP_TIMEOUT_SECONDS}s)"
   dockerc stop -t "${STOP_TIMEOUT_SECONDS}" "${CONTAINER_NAME}" >/dev/null \
     || fail "Could not stop ${CONTAINER_NAME} (see above). Check it: docker ps -a --filter name=${CONTAINER_NAME}"
+  retire_discovery || fail "Controller stopped, but its discovery responder could not be retired."
   echo "[done] Stopped ${CONTAINER_NAME} after the roof's stop. It is kept: docker start ${CONTAINER_NAME} runs it again."
   exit 0
 fi
@@ -3063,6 +3304,7 @@ if [[ "${ROLLBACK}" == "true" ]]; then
       || abort_switch "Could not stop ${CONTAINER_NAME}"
   fi
 
+  retire_discovery || abort_switch "Could not stop the discovery responder"
   echo "[rollback] Swapping ${CONTAINER_NAME} and ${PREVIOUS_CONTAINER_NAME}"
   if [[ "${STATE}" != "missing" ]]; then
     dockerc rename "${CONTAINER_NAME}" "${SWAP_CONTAINER_NAME}" \
@@ -3081,6 +3323,9 @@ if [[ "${ROLLBACK}" == "true" ]]; then
   echo "[rollback] Starting ${CONTAINER_NAME}"
   dockerc start "${CONTAINER_NAME}" >/dev/null \
     || abort_switch "Could not start the rolled-back controller ${CONTAINER_NAME}"
+  if ! sync_discovery "${PREVIOUS_ID}"; then
+    log_err "[rollback] WARNING: the rolled-back controller is kept running, but its optional discovery responder could not be restored. Check the discovery port and redeploy after recovery."
+  fi
   # Started: whatever the checks say, it is left running (run --rollback again to swap back), with this run's limits.
   RESTORE_MODE=""
   LIMITS_RESTORE_ID=""
@@ -3185,6 +3430,22 @@ container_args=(
   --mount "type=bind,src=${SECRETS_DIR},dst=/run/secrets,readonly"
 )
 
+# Alpaca keeps its own account key and durable device IDs. Enabling it never enables commands.
+if [[ "${ALPACA_ENABLED}" == true ]]; then
+  container_args+=(
+    --env Alpaca__Enabled=true --env "Alpaca__PublishedAddress=${ALPACA_LAN_ADDRESS}" --env Alpaca__ListenAddresses__0=0.0.0.0 --env Alpaca__Port=11111
+    --env Alpaca__ControllerUrl=http://localhost:8080 --env Alpaca__ControllerApiKeyFile=/run/alpaca-server-key
+    --env Alpaca__DataPath=/var/lib/hvo-roof-alpaca --env Alpaca__Discovery__Enabled=false
+    --env "Alpaca__Discovery__AdvertisedPort=${ALPACA_PORT}"
+    --env "HVO_ALPACA_LAN_ADDRESS=${ALPACA_LAN_ADDRESS}" --env "HVO_ALPACA_API_KEY_FILE=${ALPACA_API_KEY_FILE}"
+    --env "HVO_ALPACA_DATA_DIR=${ALPACA_DATA_DIR}" --env "HVO_ALPACA_DISCOVERY_PORT=${ALPACA_DISCOVERY_PORT}"
+    --mount "type=bind,src=${ALPACA_API_KEY_FILE},dst=/run/alpaca-server-key,readonly"
+    --mount "type=bind,src=${ALPACA_DATA_DIR},dst=/var/lib/hvo-roof-alpaca"
+  )
+else
+  container_args+=(--env Alpaca__Enabled=false)
+fi
+
 if [[ -n "${IDENTITY_DIR}" ]]; then
   # Read-write: the controller saves the store here, and the pre-flight check makes sure it can.
   container_args+=(
@@ -3264,6 +3525,10 @@ else
   )
 fi
 
+if [[ "${ALPACA_ENABLED}" == true ]]; then
+  publish_args+=(-p "${ALPACA_LAN_ADDRESS}:${ALPACA_PORT}:11111")
+fi
+
 if [[ -n "${ALLOWED_HOSTS}" ]]; then
   container_args+=(--env "AllowedHosts=${ALLOWED_HOSTS}")
 fi
@@ -3312,6 +3577,8 @@ case "${STATE}" in
     ;;
 esac
 
+retire_discovery || abort_switch "Could not stop the discovery responder"
+
 if [[ "${STATE}" != "missing" ]]; then
   # Only now, once the old controller has stopped, is an older stopped <name>-previous removed (by ID), with its volume
   # (the web UI's sign-in keys).
@@ -3341,6 +3608,7 @@ check_limits "${NEW_CONTAINER_ID}" "the new controller" || abort_switch "${FAILU
 check_privileges "the new controller" || abort_switch "${FAILURE}"
 echo "[deploy] The new controller has a read-only root filesystem, only the capabilities CHOWN, KILL, SETGID and SETUID, no-new-privileges, and ${LIMITS_SUMMARY}"
 verify_controller "${CONTAINER_NAME}" || abort_switch "${FAILURE}"
+sync_discovery "${NEW_CONTAINER_ID}" || abort_switch "Could not start the discovery responder"
 # The switch is complete and verified, and what is left only reports it: from here neither a signal nor a lost terminal
 # ends the script with an error while the new controller runs.
 trap '' HUP INT TERM PIPE

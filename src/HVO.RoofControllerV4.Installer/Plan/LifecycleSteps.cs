@@ -215,6 +215,7 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
         _deployKeyFile = null;
         var machine = context.Machine;
         ContainerSurvey? current;
+        ContainerSurvey? discovery;
         try
         {
             if (await MachineSurveyor.ConfirmContainerAsync(machine, ControllerRollbackStep.SwapContainer, cancellationToken).ConfigureAwait(false) is not null)
@@ -223,6 +224,9 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
             }
 
             current = await MachineSurveyor.ConfirmContainerAsync(machine, Target, cancellationToken).ConfigureAwait(false);
+            discovery = await MachineSurveyor.ConfirmContainerAsync(machine, Target + "-discovery", cancellationToken).ConfigureAwait(false);
+            if (discovery is not null && discovery.DiscoveryFor != Target)
+                return new StepCheck(StepChange.Blocked, "the discovery companion name is occupied by a container not owned by this controller; nothing is removed");
         }
         catch (InstallerException error)
         {
@@ -231,7 +235,7 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
 
         if (current is null)
         {
-            return StepCheck.Unchanged("not there");
+            return discovery is null ? StepCheck.Unchanged("not there") : new StepCheck(StepChange.Change, "the owned discovery companion removed (the controller is not there)");
         }
 
         if (current.Origin == ContainerOrigin.Compose)
@@ -241,7 +245,7 @@ public sealed class ControllerStopStep(ControllerStep controller) : PlanStep
 
         if (current.IsStopped)
         {
-            return StepCheck.Unchanged($"stopped: it is {current.State}");
+            return discovery is null ? StepCheck.Unchanged($"stopped: it is {current.State}") : new StepCheck(StepChange.Change, "the owned discovery companion removed (the controller is stopped)");
         }
 
         if (!current.IsRunning)

@@ -37,6 +37,7 @@ COPY ["src/HVO.RoofControllerV4.Common/HVO.RoofControllerV4.Common.csproj", "HVO
 COPY ["src/HVO.RoofControllerV4.Client/HVO.RoofControllerV4.Client.csproj", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj", "HVO.RoofControllerV4.RPi/"]
 COPY ["src/HVO.RoofControllerV4.Web/HVO.RoofControllerV4.Web.csproj", "HVO.RoofControllerV4.Web/"]
+COPY ["src/HVO.RoofControllerV4.Alpaca/HVO.RoofControllerV4.Alpaca.csproj", "HVO.RoofControllerV4.Alpaca/"]
 
 # Map the target platform to a .NET runtime identifier (linux-arm64 for the Raspberry Pi 5).
 RUN case "$TARGETARCH" in \
@@ -47,7 +48,7 @@ RUN case "$TARGETARCH" in \
     echo "SDK $(dotnet --version); target RID $(cat /tmp/rid)"
 
 # Restore with the Release configuration so the ReadyToRun (crossgen) packs are restored too.
-RUN for project in HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Web; do \
+RUN for project in HVO.RoofControllerV4.RPi HVO.RoofControllerV4.Web HVO.RoofControllerV4.Alpaca; do \
       dotnet restore "$project/$project.csproj" \
         --configfile NuGet.config \
         --runtime "$(cat /tmp/rid)" \
@@ -59,6 +60,7 @@ COPY ["src/HVO.RoofControllerV4.Common/", "HVO.RoofControllerV4.Common/"]
 COPY ["src/HVO.RoofControllerV4.Client/", "HVO.RoofControllerV4.Client/"]
 COPY ["src/HVO.RoofControllerV4.RPi/", "HVO.RoofControllerV4.RPi/"]
 COPY ["src/HVO.RoofControllerV4.Web/", "HVO.RoofControllerV4.Web/"]
+COPY ["src/HVO.RoofControllerV4.Alpaca/", "HVO.RoofControllerV4.Alpaca/"]
 
 # The product version and commit (docs/releasing.md). A release passes ROOF_VERSION=4.0.0, CI 4.0.0-ci.<run>, and the
 # deploy script 4.0.0-dev; left empty, the build is Directory.Build.props's 4.0.0-dev. The image has no .git, so the
@@ -67,7 +69,7 @@ COPY ["src/HVO.RoofControllerV4.Web/", "HVO.RoofControllerV4.Web/"]
 ARG ROOF_VERSION=""
 ARG ROOF_REVISION=""
 
-# The controller in /app and its web UI in /app/web: two processes, each with its own dependencies.
+# The controller in /app, its web UI in /app/web and opt-in Alpaca in /app/alpaca, each with its own dependencies.
 RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
     --no-restore \
     --configuration Release \
@@ -83,7 +85,15 @@ RUN dotnet publish "HVO.RoofControllerV4.RPi/HVO.RoofControllerV4.RPi.csproj" \
     --self-contained false \
     ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
     ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
-    --output /app/publish/web
+    --output /app/publish/web && \
+    dotnet publish "HVO.RoofControllerV4.Alpaca/HVO.RoofControllerV4.Alpaca.csproj" \
+    --no-restore \
+    --configuration Release \
+    --runtime "$(cat /tmp/rid)" \
+    --self-contained false \
+    ${ROOF_VERSION:+-p:Version=$ROOF_VERSION} \
+    ${ROOF_REVISION:+-p:SourceRevisionId=$ROOF_REVISION} \
+    --output /app/publish/alpaca
 
 # -------------------------
 # Runtime image
@@ -110,10 +120,13 @@ RUN apt-get update && \
     libgpiod2 \
     i2c-tools && \
     rm -rf /var/lib/apt/lists/* && \
-    fc-cache -f
+    fc-cache -f && \
+    groupadd --gid 1655 alpaca && \
+    useradd --uid 1655 --gid 1655 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin alpaca && \
+    install -m 0600 /dev/null /run/alpaca-server-key
 
 # Copy the published binaries from the build stage, and the supervisor and health check
-# (docs/deployment.md, "The container's two processes")
+# (docs/deployment.md, "The container's application processes")
 COPY --from=build /app/publish .
 COPY --chmod=0755 ["src/HVO.RoofControllerV4.RPi/container/roof-supervisor.sh", "/usr/local/bin/roof-supervisor"]
 COPY --chmod=0755 ["src/HVO.RoofControllerV4.RPi/container/healthcheck.sh", "/usr/local/bin/roof-healthcheck"]
@@ -125,10 +138,11 @@ ENV ASPNETCORE_URLS=http://+:8080 \
     TZ=UTC \
     HVO_FORCE_RASPBERRY_PI=${HVO_FORCE_RASPBERRY_PI} \
     HVO_CONTAINER_RPI_HINT=${HVO_CONTAINER_RPI_HINT} \
-    RoofWeb__Urls=http://+:8088
+    RoofWeb__Urls=http://+:8088 \
+    Alpaca__Enabled=false
 
-# The controller's API, hub, health and OpenAPI (8080, and 8443 for HTTPS), and the web UI (8088)
-EXPOSE 8080 8088
+# The controller's API, hub, health and OpenAPI (8080, and 8443 for HTTPS), web UI (8088), optional Alpaca (11111)
+EXPOSE 8080 8088 11111
 
 # The image's version, commit and source (OCI labels; build/check-image-labels.sh checks them). The source links a GHCR
 # package to its repository. After the last RUN, so that a new build time or commit invalidates no layer.
@@ -141,7 +155,7 @@ ARG ROOF_CREATED=""
 LABEL io.hvo.roof.identity-schema="3" \
       io.hvo.roof.state-contracts="{\"identity\":{\"writes\":3,\"reads\":{\"min\":1,\"max\":3}},\"settings\":{\"writes\":1,\"reads\":{\"min\":1,\"max\":1}}}" \
       org.opencontainers.image.title="HVO Roof Controller" \
-      org.opencontainers.image.description="The roll-off roof controller and its web UI: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
+      org.opencontainers.image.description="The roll-off roof controller, its web UI and optional Alpaca server: on a Raspberry Pi 5 with its HAT, or anywhere with the HAT emulator." \
       org.opencontainers.image.source="https://github.com/HualapaiValley/HVO.RoofController" \
       org.opencontainers.image.vendor="Hualapai Valley Observatory" \
       org.opencontainers.image.version="${ROOF_VERSION}" \
@@ -154,5 +168,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD ["/usr/local/bin/roof-healthcheck"]
 
 # tini is PID 1 and passes docker stop's SIGTERM to the supervisor, which stops the controller first (its shutdown stops
-# the roof), then the web UI. Arguments (--validate-deployment) run the controller alone with them.
+# the roof), and the web UI and optional Alpaca server concurrently. --validate-deployment validates the controller
+# and, when enabled, Alpaca settings read-only; it never starts the supervised applications.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/roof-supervisor"]

@@ -7,7 +7,8 @@ namespace HVO.RoofControllerV4.Alpaca.Security;
 /// <summary>
 /// The first thing every request meets. It refuses, before anything reads the request:
 /// <list type="bullet">
-/// <item>a client outside <see cref="AlpacaOptions.AllowedNetworks"/> (403);</item>
+/// <item>a client outside <see cref="AlpacaOptions.AllowedNetworks"/> (403), except the read-only loopback deployment
+/// probe at <c>GET /management/apiversions</c>;</item>
 /// <item>a <c>Host</c> header that is not an IP address, <c>localhost</c>, this computer's name or one of
 /// <see cref="AlpacaOptions.AllowedHosts"/> (400): a page served from another name cannot reach the server through DNS
 /// rebinding;</item>
@@ -53,7 +54,11 @@ internal sealed class AlpacaAccessFilter
     public Task InvokeAsync(HttpContext context)
     {
         var remote = context.Connection.RemoteIpAddress;
-        if (remote is null || !AlpacaNetworks.Contains(_networks, remote))
+        // A LAN-only allowlist can exclude loopback. Deployment must still prove this process serves its listener;
+        // only the protocol version is available here, never a device route, command or configured-device metadata.
+        var localVersionProbe = remote is not null && IPAddress.IsLoopback(AlpacaNetworks.Normalize(remote))
+            && HttpMethods.IsGet(context.Request.Method) && context.Request.Path == "/management/apiversions";
+        if (remote is null || (!localVersionProbe && !AlpacaNetworks.Contains(_networks, remote)))
         {
             Refused(remote, "address", "Refused a request from {RemoteAddress}, which is outside Alpaca:AllowedNetworks", remote);
             return Text(context, StatusCodes.Status403Forbidden, "This Alpaca server does not answer requests from this address.");

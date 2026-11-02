@@ -453,12 +453,16 @@ public sealed class ControllerStep(
             return settings.UsesHttps ? "redeployed to serve HTTPS" : "redeployed to serve HTTP";
         }
 
-        int[] ports = [.. new[] { settings.ApiPort, settings.WebPort }.Order()];
+        int[] ports = [.. new[] { settings.ApiPort, settings.WebPort }.Concat(settings.Alpaca is { Enabled: true } alpacaPorts ? [alpacaPorts.Port] : Array.Empty<int>()).Order()];
         if (!container.PublishedPorts.SequenceEqual(ports))
         {
             var now = container.PublishedPorts.Count == 0 ? "none" : string.Join(" and ", container.PublishedPorts);
             return $"redeployed on ports {settings.ApiPort} and {settings.WebPort} (it publishes {now})";
         }
+
+        if (container.AlpacaEnabled != (settings.Alpaca?.Enabled == true)
+            || (settings.Alpaca is { Enabled: true } alpaca && (container.AlpacaLanAddress != alpaca.LanAddress || container.AlpacaPort != alpaca.Port)))
+            return "redeployed with the chosen Alpaca listener (commands remain off by default)";
 
         if (container.PublishAddress != PublishAddress)
         {
@@ -782,6 +786,16 @@ public sealed class ControllerStep(
             // The script's copy of the archive goes in TMPDIR: here, inside the installer's own folder, which only root can
             // open and which goes when the run ends, even if the script could not remove its copy itself.
             environment["TMPDIR"] = work.Path;
+        }
+
+        environment["ALPACA_ENABLED"] = settings.Alpaca?.Enabled == true ? "true" : "false";
+        if (settings.Alpaca is { Enabled: true } alpaca)
+        {
+            var alpacaKey = keys.First(key => key.Use == ApiKeyUse.AlpacaServer);
+            environment["ALPACA_LAN_ADDRESS"] = alpaca.LanAddress;
+            environment["ALPACA_PORT"] = Port(alpaca.Port);
+            environment["ALPACA_API_KEY_FILE"] = ApiKeyFiles.KeyFile(layout.Secrets, alpacaKey.Index);
+            environment["ALPACA_DATA_DIR"] = layout.AlpacaData;
         }
 
         if (settings.LinuxAuth is { Enabled: true })

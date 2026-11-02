@@ -19,7 +19,8 @@ def run_as_subreaper():
         return subprocess.run(
             ["tests/container/supervisor-tests.sh",
              "test_a_live_process_is_not_considered_ended",
-             "test_a_web_ui_preparation_that_outlasts_its_time_is_killed_and_prepared_again"],
+             "test_a_web_ui_preparation_that_outlasts_its_time_is_killed_and_prepared_again",
+             "test_an_alpaca_preparation_timeout_retries_without_starting_it"],
             cwd=ROOT, check=False, timeout=20,
         ).returncode
     finally:

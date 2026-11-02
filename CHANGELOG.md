@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Alpaca deployment in the controller image (#229): a separate unprivileged process, persistent device IDs,
+  a LAN-bound TCP listener and credential-free host discovery responder. The installer adds an off-by-default option
+  and preserves the IDs in backup/restore. System/About and `hvo-roof alpaca status` report the server's port, IDs and
+  client counts. Default upgrades start no Alpaca process or listener, and `AllowCommands` stays `Off`.
+
 ### Fixed
 
 - `hvo-roof alpaca grant` now checks for a controlling foreground terminal with all three standard streams on the
@@ -918,7 +925,7 @@ the roof against this server; use the web UI (port 8088) for operator access.
   the controller's readiness. The deploy script checks the web UI after a deploy and rolls back
   when it cannot start. `tests/container/supervisor-tests.sh` tests the supervisor with fake
   processes, and the `supervisor` container scenarios run it on real Docker (C11 steps 5-9). See
-  [docs/deployment.md](docs/deployment.md#the-containers-two-processes).
+  [docs/deployment.md](docs/deployment.md#the-containers-application-processes).
 - Web UI (#46). `HVO.RoofControllerV4.Web` is the browser interface for phones, tablets and
   desktops, in HVO Dark, a client of the controller's API and status hub like `hvo-roof`. People
   sign in with a name and password (the controller's session, kept in an HttpOnly,

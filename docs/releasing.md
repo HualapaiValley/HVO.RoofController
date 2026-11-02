@@ -154,6 +154,9 @@ version, and check its labels (the state contract's included) and its platforms 
      this one, such as a setting to change or a step to take before upgrading, in a few lines of Markdown with no
      heading of their own. When there is nothing to do, say so: the file must not be empty. The release's notes start
      with them, under "Upgrade notes".
+     Incorporate [pending upgrade notes](upgrade-notes-pending.md) into that versioned file and reset the pending
+     file to "No pending upgrade actions." in the release pull request. Pending notes stay outside `docs/upgrade-notes`, whose asset parser accepts
+     only `X.Y.Z.md` files, so release candidates can build before the release pull request.
 3. **A release candidate**, if the release needs trying on the Pi first. Tag main's commit `v4.0.0-rc.1` (then
    `-rc.2`, and so on) as in step 4. A candidate is released as a prerelease: it goes through the same checks and gives
    the same assets and images, but it does not move the images' `latest` tag, and it needs neither upgrade notes nor
@@ -228,6 +231,7 @@ names the images until someone publishes the draft.
 | `hvo-roof-linux-auth-linux-arm64`, `hvo-roof-linux-auth-linux-x64` | The optional Linux PAM and sudo authentication worker, which the installer puts in place only when it is enabled ([Linux authentication](install-linux-auth.md#files-and-boundaries)) |
 | `hvo-roof-kiosk-<version>-linux-arm64.tar.gz` | The kiosk's program, unit, udev rule and example settings, in a folder of that name ([Install](kiosk.md#install)) |
 | `HVO-Roof-<version>.zip` | The Mac app, signed ad hoc ([Install](mac.md#install)) |
+| `docker-compose.alpaca.yaml` | Optional off-by-default Alpaca overlay; the discovery responder uses the same pinned controller image |
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
 | `deploy-roofcontroller-rpi.sh` | The deploy script, for a released image ([Deploying a released image](deployment.md#deploying-a-released-image)) |
 | `install.sh` | The script that checks a machine, then downloads the release's installer for it, checks it and starts it ([install.sh](install.md#installsh)) |

@@ -31,6 +31,13 @@ public sealed class AlpacaOptions
     /// </summary>
     public string[] ListenAddresses { get; set; } = [];
 
+    /// <summary>
+    /// The host's published LAN address for a container deployment, when supplied. Only a private IPv4 LAN address is
+    /// accepted: wildcard, loopback, public and overlay VPN addresses are refused before HTTP or discovery starts.
+    /// The server still binds its container's ListenAddresses; this is deployment metadata, never an advertised address.
+    /// </summary>
+    public string? PublishedAddress { get; set; }
+
     /// <summary>The server's port. Default 11111.</summary>
     public int Port { get; set; } = DefaultPort;
 
@@ -66,6 +73,9 @@ public sealed class AlpacaOptions
     /// changed, so clients keep recognising the roof. None: <c>~/.local/share/hvo-roof-alpaca</c>.
     /// </summary>
     public string? DataPath { get; set; }
+
+    /// <summary>Optional sanitized heartbeat for the controller's System/About API; set by the container supervisor.</summary>
+    public string? StatusFilePath { get; set; }
 
     /// <summary>The <c>Location</c> the management API reports, such as the observatory's name. Default empty.</summary>
     public string Location { get; set; } = string.Empty;
@@ -109,6 +119,18 @@ public sealed class AlpacaOptions
         if (Port is < 1 or > 65535)
         {
             problems.Add($"{SectionName}:Port must be between 1 and 65535, got {Port}.");
+        }
+
+        if (PublishedAddress is not null)
+        {
+            var address = IPAddress.TryParse(PublishedAddress, out var parsed) ? parsed : null;
+            var bytes = address?.GetAddressBytes();
+            if (bytes is not { Length: 4 } || !string.Equals(PublishedAddress, address?.ToString(), StringComparison.Ordinal)
+                || !(bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
+                || (bytes[0] == 192 && bytes[1] == 168)))
+            {
+                problems.Add($"{SectionName}:PublishedAddress must name a private IPv4 LAN address.");
+            }
         }
 
         ValidateNetworks(problems);
@@ -227,6 +249,12 @@ public sealed class AlpacaDiscoveryOptions
     /// </summary>
     public int? AdvertisedPort { get; set; }
 
+    /// <summary>
+    /// Optional absolute path to a readiness marker for a supervised discovery-only deployment. It is present only
+    /// after the discovery sockets have bound, and removed at startup and shutdown. Null leaves no marker.
+    /// </summary>
+    public string? ReadyFilePath { get; set; }
+
     /// <summary>Whether to answer IPv6 discovery (multicast ff12::a1:9aca) as well as IPv4 broadcasts. Default false.</summary>
     public bool IPv6 { get; set; }
 
@@ -235,6 +263,11 @@ public sealed class AlpacaDiscoveryOptions
         if (Port is < 1 or > 65535)
         {
             problems.Add($"{AlpacaOptions.SectionName}:Discovery:Port must be between 1 and 65535, got {Port}.");
+        }
+
+        if (ReadyFilePath is not null && !Path.IsPathFullyQualified(ReadyFilePath))
+        {
+            problems.Add($"{AlpacaOptions.SectionName}:Discovery:ReadyFilePath must be an absolute path.");
         }
 
         if (AdvertisedPort is < 1 or > 65535)

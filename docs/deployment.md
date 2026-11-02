@@ -7,7 +7,7 @@ This page covers:
   checkout or from a release's images
 - the deployment check (`--validate-deployment`) both of them run first
 - how the controller is stopped safely during a deploy, verified afterwards and rolled back
-- the container's two processes, the controller and the web UI, and the supervisor that runs them
+- the container's application processes, the controller, web UI and optional Alpaca server, and their supervisor
 - the container's privileges and resource limits, and what a controller killed by them, or otherwise, leaves the relays
   and the drive in
 
@@ -80,7 +80,7 @@ shred -u roof.key
 ```
 
 The web UI serves the same certificate on its own port (8088): the container's supervisor gives it a private copy of
-the certificate and its password (see [The container's two processes](#the-containers-two-processes)).
+the certificate and its password (see [The container's application processes](#the-containers-application-processes)).
 
 Install `roof.crt`, or your CA certificate, as trusted on browsers that use the web UI. Keep a copy on the machine
 that runs the deploy script too: pass it as `REMOTE_CA_CERT` so the script can check the HTTPS endpoint after a deploy
@@ -272,6 +272,17 @@ service that the controller depends on. The `emulator` profile, a test rig, does
 
 ## Deploying with the script
 
+Alpaca is off for a new deployment unless `ALPACA_ENABLED=true`; an unset choice preserves an existing opt-in.
+Use `ALPACA_LAN_ADDRESS` for one private IPv4 LAN address (never wildcard, public, loopback or overlay),
+`ALPACA_PORT` for its published TCP port (default `11111`), `ALPACA_API_KEY_FILE` for the dedicated account key on
+that host, and `ALPACA_DATA_DIR` for the persistent device ID directory (default `/var/lib/hvo-roof-alpaca`).
+`ALPACA_DISCOVERY_PORT` defaults to UDP `32227`. The script creates `<container-name>-discovery` on the host network,
+with no controller key, no mounted data or devices, and `Discovery:AdvertisedPort` set to the published TCP port.
+It preflights the server before replacement and verifies its management listener afterward. Stop, upgrade failure
+recovery and rollback retire or recreate the responder to match the controller. Set `ALPACA_ENABLED=false` to
+explicitly disable it. These settings never change `AllowCommands`; see
+[Alpaca container deployment](alpaca.md#container-deployment).
+
 ```bash
 cd src/HVO.RoofControllerV4.RPi
 PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./deploy-roofcontroller-rpi.sh --dry-run
@@ -300,7 +311,7 @@ web UI at `https://$PI_HOST:$WEB_HOST_PORT` after the deploy.
 | `CONTAINER_NAME` | `roof-controller` | Container name. The previous version is kept as `<name>-previous`. |
 | `HTTPS_HOST_PORT` | `8443` | Published HTTPS port of the controller's API (with `WEB_HOST_PORT`, the only published ports in HTTPS mode) |
 | `HOST_PORT` | `8080` | Published HTTP port, only with `ALLOW_INSECURE_HTTP=true` |
-| `WEB_HOST_PORT` | `8088` | Published port of the [web UI](#the-containers-two-processes): HTTPS with the controller's certificate, or plain HTTP with `ALLOW_INSECURE_HTTP=true`. It must differ from the controller's published port. |
+| `WEB_HOST_PORT` | `8088` | Published port of the [web UI](#the-containers-application-processes): HTTPS with the controller's certificate, or plain HTTP with `ALLOW_INSECURE_HTTP=true`. It must differ from the controller's published port. |
 | `PUBLISH_ADDRESS` | (empty) | Host address the ports are published on: empty for every interface, or an IPv4 address. `127.0.0.1` keeps the controller and the web UI to the machine itself, for a test rig that is not open to the network. `PI_HOST` is then `localhost`, or a name the certificate has with `REMOTE_CONNECT_TO=::127.0.0.1:`. |
 | `HOST_ADDRESSES` | (empty) | The host's LAN addresses (IPv4 or IPv6, separated by `;`, `,` or spaces; an IPv6 address with or without brackets), from which the script tells the controller where people reach its web UI. See [Where people reach the web UI](#where-people-reach-the-web-ui). Anything that is not an IP address is refused before anything changes. The [installer](install.md) gives them. |
 | `SECRETS_DIR` | `/etc/hvo-roof/secrets` | Secrets directory on the Pi |
@@ -426,7 +437,7 @@ pre-flight. For a hand deploy on the Pi itself (`PI_HOST=localhost`), give `HOST
    exactly them (Docker drops a limit it cannot enforce with only a warning), or the new container is removed and the
    old one restored as in step 8. Inside it, the supervisor
    starts the controller and the web UI, and starts the controller again at once after
-   `POST /api/v4.0/System/Restart`, which exits with code 75 ([The container's two processes](#the-containers-two-processes)).
+   `POST /api/v4.0/System/Restart`, which exits with code 75 ([The container's application processes](#the-containers-application-processes)).
    In HTTPS mode only `HTTPS_HOST_PORT` and `WEB_HOST_PORT` are published; plain HTTP listens on loopback inside the
    container, for the health check, the web UI's calls to the controller and the script's `docker exec` calls.
 7. **Verifies the new controller:**
@@ -781,6 +792,12 @@ password ([People, sessions and managed API keys](security.md#people-sessions-an
 
 ## Deploying with compose
 
+The base Compose file keeps Alpaca off. To opt in, add the optional `docker-compose.alpaca.yaml` overlay, configure
+one private IPv4 LAN publish address and a separate server key, and preserve its data mount. The release includes a
+matching overlay with its discovery responder pinned to the controller image; see
+[Alpaca container deployment](alpaca.md#container-deployment). Its host-network discovery process has no credentials
+or hardware access. The controller and its Alpaca HTTP listener retain Docker bridge networking.
+
 `src/HVO.RoofControllerV4.RPi/docker-compose.yaml` has two Pi profiles. Choose one; enabling both is rejected because
 they share the container name `roof-controller` (which also collides with a controller started by the script).
 
@@ -807,7 +824,7 @@ PI_HOST=roof-pi HTTPS_CERT_DIR=/etc/hvo-roof/https REMOTE_CA_CERT=~/roof.crt ./d
 Both Pi profiles mirror the script: the secrets directory at `/run/secrets` (`HVO_ROOF_SECRETS_DIR`, default
 `/etc/hvo-roof/secrets`), the identity store directory (`HVO_ROOF_IDENTITY_DIR`, default `/var/lib/hvo-roof/identity`),
 the [settings directories](#4-the-settings-directories) (`HVO_ROOF_CONFIG_DIR` and `HVO_ROOF_MANAGED_SECRETS_DIR`),
-`stop_grace_period: 30s`, `restart: unless-stopped`, the [supervisor](#the-containers-two-processes) with the
+`stop_grace_period: 30s`, `restart: unless-stopped`, the [supervisor](#the-containers-application-processes) with the
 controller and the web UI, and `AllowedHosts` from `HVO_ROOF_ALLOWED_HOSTS`. Compose cannot work out
 [where people reach the web UI](#where-people-reach-the-web-ui): give `HVO_ROOF_WEB_UI_URLS` (such as
 `https://192.0.2.10:8088/`), `HVO_ROOF_WEB_UI_ACCESS` (`Network` or `LocalOnly`) and `HVO_ROOF_HOST_ADDRESSES`, or the
@@ -836,7 +853,7 @@ reduce available resources. It does not change the host or any cgroup setting.
 A refusal logs the limit and remedy (on a Pi, append ` cgroup_enable=memory` to the single line in
 `/boot/firmware/cmdline.txt`, then reboot with the roof idle). It blocks **both the controller and the web UI**,
 but first turns every relay off and verifies the HAT register by read-back: a whole-container kill could have left
-it energized. If verification fails, both applications stay stopped and the supervisor keeps retrying with the normal
+it energized. If verification fails, all applications stay stopped and the supervisor keeps retrying with the normal
 backoff, rather than exiting and abandoning retained registers. Once verified off it exits **2**. A stop signal during
 refusal still runs the normal bounded shutdown and exits 2, even when verification keeps failing; the warning then
 reports the unverified state. No application starts during refusal or after a stop request.
@@ -975,19 +992,23 @@ carry over in both directions.
 `tests/emulator/deploy-scenarios.sh migration` runs both moves against the HAT emulator, with the refusals on each
 side and a person whose session carries over (see [Container scenarios](emulator.md#container-scenarios)).
 
-## The container's two processes
+## The container's application processes
 
-The container runs two processes: the controller (`HVO.RoofControllerV4.RPi`: the API, the status hub and the roof
-itself) and the web UI (`HVO.RoofControllerV4.Web`, on port 8088). The web UI is a client of the controller: it
+The container runs the controller (`HVO.RoofControllerV4.RPi`: the API, the status hub and the roof itself), the web UI
+(`HVO.RoofControllerV4.Web`, on port 8088), and, only with `Alpaca__Enabled=true`, the Alpaca server
+(`HVO.RoofControllerV4.Alpaca`, internal port 11111). The default remains two application processes.
+Alpaca is a separate client using its own account key, with commands off by default
+([Alpaca container deployment](alpaca.md#container-deployment)). The web UI is a client of the controller: it
 calls the controller's API over the container's loopback (`RoofWeb__ControllerUrl`, default `http://localhost:8080`),
 as any other client does, and never drives the HAT itself.
 
 A small supervisor, `/usr/local/bin/roof-supervisor` (`container/roof-supervisor.sh` in the source), starts and stops
-both. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals to the supervisor.
+these applications. `tini` is PID 1: it reaps orphaned processes and passes Docker's signals to the supervisor.
 
 | Event | What the supervisor does |
 |-------|--------------------------|
-| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Sends SIGTERM to the controller and the web UI at once, and waits up to 22 s for the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off, and up to 2 s for the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`). Once both have ended, it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), and exits. Until then it starts no process, so the stop works, and in time, also at the container's [process limit](#the-supervisor-at-the-process-limit). A process that is still running when its wait runs out is killed (SIGKILL), and given at most 1 s more to end: one stuck in the kernel (a hung filesystem or bus) can no longer run its own code, and the stop goes on without it. A [web UI preparation](#the-web-uis-user-and-settings) still running is abandoned at once (its processes are killed), and the web UI is not started. The whole stop is timed from the signal (its time taken in the signal's trap, without a fork), work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script, a fork that failed for good) stops the same way first. |
+| `docker stop` (SIGTERM; also SIGINT, SIGHUP and SIGQUIT) | Starts nothing more. Sends SIGTERM to the controller, web UI and enabled Alpaca process at once, and waits up to 22 s for the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`), because its shutdown stops the roof and verifies the relays off, and up to 2 s each for the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) and Alpaca (`HVO_SUPERVISOR_ALPACA_STOP_SECONDS`). Once all have ended, it [turns the relays off](#the-relays-when-the-controller-exits) itself, within 5 s (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`), and exits. Until then it starts no process, so the stop works, and in time, also at the container's [process limit](#the-supervisor-at-the-process-limit). A process that is still running when its wait runs out is killed (SIGKILL), and given at most 1 s more to end: one stuck in the kernel (a hung filesystem or bus) can no longer run its own code, and the stop goes on without it. A web UI or Alpaca preparation still running is abandoned at once (its processes are killed), and no prepared application starts. The whole stop is timed from the signal (its time taken in the signal's trap, without a fork), work already running then (a relay-off) included, and ends within the controller's wait and the longer of the other two: 27 s ([Shutdown timing](#shutdown-timing)). That, plus a second, must stay within the container's stop timeout (30 s: `STOP_TIMEOUT_SECONDS`, and the Compose files' `stop_grace_period`), or Docker kills the controller first. Any other end of the supervisor that it can catch (another signal, an error in its script, a fork that failed for good) stops the same way first. |
+| The Alpaca process exits | Restarts only Alpaca with backoff. The controller and web UI keep running. Its independently bounded preparation copies only its own key and settings; a stalled preparation never delays relay-off or Stop. |
 | The controller exits with 75 (`POST /api/v4.0/System/Restart`) | Turns the relays off, then starts it again at once, once they are verified off. The web UI and the container keep running, and Docker's restart count does not change. |
 | The relays cannot be verified off (at the first start, before a restart, after a crash, on a forced restart) | Does not start the controller: holds it stopped (`relays-unverified`) and tries the relays again after 1, 2, 4, 8, 16 and then every 30 s, for as long as it takes, and starts it once a read-back shows every relay off ([below](#the-relays-when-the-controller-exits)). The web UI keeps running and says why; the health check fails. |
 | The controller exits otherwise (a crash, a kill, a failed start) | Turns the relays off at once, then starts it again after 1, 2, 4 and 8 s for successive crashes (the delay doubles, at most 30 s: `HVO_SUPERVISOR_BACKOFF_MAX_SECONDS`), once the relays are verified off. The fifth crash within 120 s (`HVO_SUPERVISOR_CRASH_LIMIT`, `HVO_SUPERVISOR_CRASH_WINDOW_SECONDS`) leaves the controller stopped (`crash-loop`), with the relays off, instead of looping while the roof may need attention. The container keeps running and its health check fails (Docker marks it unhealthy after three failed checks); the web UI says why. |
@@ -1307,7 +1328,7 @@ what made the default safe to turn on (#138).
 | | What the container gets | Why |
 |---|---|---|
 | Root filesystem | Read-only (`--read-only`) | Nothing in the container can change its programs or settings files. |
-| Writable places | tmpfs: `/tmp` (64 MiB: .NET's diagnostics sockets), `/run/hvo-roof` (4 MiB: the [supervisor's](#the-containers-two-processes) state, control directory and the web UI's private copies) and `/root/.aspnet` (4 MiB: ASP.NET Core's key ring, which the controller uses for nothing that must outlive the container). A volume of the container's own at `/var/lib/hvo-roof-web`: the web UI's sign-in keys, so people stay signed in when the container restarts. And the mounts: the secrets, certificate, identity and settings directories. | These are every place the controller, the web UI, the supervisor and .NET write, found by running the container and listing its changes (`docker diff`). A replaced container's volume goes with it (`docker rm -v`). |
+| Writable places | tmpfs: `/tmp` (64 MiB: .NET's diagnostics sockets), `/run/hvo-roof` (4 MiB: the [supervisor's](#the-containers-application-processes) state, control directory and the web UI's private copies) and `/root/.aspnet` (4 MiB: ASP.NET Core's key ring, which the controller uses for nothing that must outlive the container). A volume of the container's own at `/var/lib/hvo-roof-web`: the web UI's sign-in keys, so people stay signed in when the container restarts. And the mounts: the secrets, certificate, identity and settings directories. | These are every place the controller, the web UI, the supervisor and .NET write, found by running the container and listing its changes (`docker diff`). A replaced container's volume goes with it (`docker rm -v`). |
 | Capabilities | None (`--cap-drop ALL`) but `CHOWN`, `KILL`, `SETGID` and `SETUID` | The supervisor's: `CHOWN` to give the web UI its copies and directories, `SETUID` and `SETGID` to start it as the `app` user (`setpriv`), and `KILL` to signal it, a process of another user, and to end its preparation's processes, some of which run as that user. Without `KILL` the supervisor cannot tell whether the web UI runs, and blocks waiting for it, so it no longer restarts a crashed controller; it is kept for that reason. The web UI runs with none. The HAT's devices need none: the controller opens them as root, their owner. |
 | Privilege escalation | `--security-opt no-new-privileges` | No process can gain privileges, through a setuid program or otherwise. |
 | CPU | `CONTAINER_CPUS` (`--cpus`): 1 by default, at least 1 | RoofController's default and floor of 1 vCPU (#149). More is accepted, up to the CPUs Docker reports. |
@@ -1484,30 +1505,31 @@ the same time as a move could delay the controller's safety loops by up to the r
 ### The supervisor at the process limit
 
 At the container's process limit (`CONTAINER_PIDS_LIMIT`, 512 tasks by default: processes and threads together) a new
-process cannot start, and bash, which runs the [supervisor](#the-containers-two-processes), retries a fork for
+process cannot start, and bash, which runs the [supervisor](#the-containers-application-processes), retries a fork for
 about 15 s and then ends the script: the supervisor would end late, a stop's signal would wait for it, and the relays
 would be left as they are. So once it has begun, the supervisor forks only to start a process (the controller, the web
-UI, its preparation, the relay-off helper), to replace its state file or to remove a forced restart's request, and only
+UI, optional Alpaca, either preparation, the relay-off helper), to replace its state file or to remove a forced restart's request, and only
 when its cgroup (`pids.max` and `pids.current`, read without a fork; resolved from process membership for
 configured Compose expectations) shows room: at least 40 tasks
 free, as the relay-off helper, a .NET program, used up to 24 when measured. Everything else it does (its time, its
 waits, the text of its log and state) uses bash's builtins. Without a limit (`pids.max` of `max`), or without the files,
 nothing is held back. At the limit:
 
-- **A stop** forks nothing until the controller, the web UI and the web UI's preparation have ended or been killed,
+- **A stop** forks nothing until the controller, web UI, Alpaca and both preparations have ended or been killed,
   which frees their tasks; only then does it start the last relay-off ([Shutdown timing](#shutdown-timing)). From the
   signal, that relay-off begins by 23 s and ends by 27 s with the defaults, when they were what held the tasks.
-- **A relay-off outside a stop** (after the controller exits, or tried again) first kills the web UI and its preparation
-  to make room (never the relay-off: the controller is not running then), and waits up to 1 s for it. The web UI starts
+- **A relay-off outside a stop** (after the controller exits, or tried again) first kills the web UI, Alpaca and their preparations
+  to make room (never the relay-off: the controller is not running then). All kills are sent before any reap; one
+  shared second covers every reap and the wait for room. The web UI starts
   again later, with its backoff. If there is still no room, the relays stay unverified, so the controller stays
   [held stopped](#the-relays-when-the-controller-exits), and it is tried again.
-- **A start** of the controller, the web UI or its preparation waits, without a fork meanwhile, until there is room
+- **A start** of the controller, web UI, Alpaca or either preparation waits, without a fork meanwhile, until there is room
   (logged once), and **a forced restart** waits too; `docker stop` and `docker restart` work then.
 - **The state file** is written in place instead of replaced, so a reader may find it empty or half written for a
   moment: the web UI then reports it unreadable, and the health check and the deploy script find no state in it.
 
 What is left: a task that SIGKILL cannot end (stuck in the kernel), or tasks of processes the supervisor did not start
-(`docker exec`), can keep the limit full once the controller and the web UI have ended. The stop then waits for room
+(`docker exec`), can keep the limit full once the controller, web UI and Alpaca have ended. The stop then waits for room
 until 1 s before its deadline (26 s with the defaults). Room by then starts the last relay-off late, with only the time
 left before the deadline (at least 1 s, which a .NET start may not be enough for); none leaves the relays as they are,
 with a `WARNING`, rather than fork without room. Either way the stop ends by 27 s. A limit the supervisor cannot see in
@@ -1575,7 +1597,7 @@ What each deployment should report:
 
 The container's health check, `/usr/local/bin/roof-healthcheck` (the image's `HEALTHCHECK` and the Compose health
 checks), is healthy exactly when the controller's `/health/available` answers 200. It also reports the web UI's
-`/health/live` (port 8088) and the [supervisor's](#the-containers-two-processes) view of both processes on the same
+`/health/live` (port 8088) and the [supervisor's](#the-containers-application-processes) view of both processes on the same
 line, which `docker inspect` shows:
 
 ```text
@@ -1609,11 +1631,12 @@ read `/health` with a Viewer key and expect Healthy.
 | Unverified shutdown retry | every 500 ms | Re-runs the all-off sequence until it verifies, the controller is disposed or 15 s pass. Each unverified shutdown call waits up to 5 s on it. Disposal usually ends it, about 10 s after SIGTERM plus the web server's stop time; when all three calls run, the 15 s limit ends it first. |
 | Controller disposal | 2 s | Waits for the controller lock and then for its background tasks. If blocked HAT I/O holds the lock, disposal stops waiting (Critical: relay state unknown) rather than block the exit, and runs its all-off stop if the call returns before the process ends. |
 | Camera streams | end at `ApplicationStopping` | An open viewer never holds up shutdown |
-| Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 22 s | The [supervisor](#the-containers-two-processes) passes SIGTERM to the controller (and the web UI) and waits this long for it, above the app's 20 s. Then it kills it (SIGKILL). |
+| Supervisor, the controller (`HVO_SUPERVISOR_CONTROLLER_STOP_SECONDS`) | 22 s | The [supervisor](#the-containers-application-processes) passes SIGTERM to every application before waiting on preparations, and gives the controller this allowance, above the app's 20 s. Then it kills it (SIGKILL). |
 | Supervisor, the web UI (`HVO_SUPERVISOR_UI_STOP_SECONDS`) | 2 s | At the same time as the controller: SIGTERM to the web UI, then SIGKILL. |
-| Supervisor, the relays (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`) | 5 s | Once the controller and the web UI have ended: the supervisor [turns the relays off](#the-relays-when-the-controller-exits) and verifies them, and kills the run that takes longer. |
+| Supervisor, Alpaca (`HVO_SUPERVISOR_ALPACA_STOP_SECONDS`) | 2 s | When enabled, SIGTERM at the same time as the controller and web UI, then SIGKILL at its own deadline. |
+| Supervisor, the relays (`HVO_SUPERVISOR_RELAYS_OFF_SECONDS`) | 5 s | Once the controller, web UI and Alpaca have ended: the supervisor [turns the relays off](#the-relays-when-the-controller-exits) and verifies them, and kills the run that takes longer. |
 | Supervisor, after a SIGKILL | at most 1 s | A process killed when its wait ran out is given this long to end. One stuck in the kernel (a hung filesystem or bus) cannot run its own code again, so the stop goes on without it. |
-| Supervisor, the web UI's preparation (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`) | 10 s, not part of the stop | It runs in the background before each start of the web UI; a stop abandons it at once (its processes are killed), so it adds nothing to the stop. |
+| Supervisor, application preparations (`HVO_SUPERVISOR_UI_PREPARE_SECONDS`, `HVO_SUPERVISOR_ALPACA_PREPARE_SECONDS`) | 10 s each, not part of the stop | Both run in the background. A stop kills both together and sends application SIGTERM before waiting; one shared second covers their reaps, overlapping the applications' stop allowances. |
 | Supervisor, the whole stop | 27 s from the signal | The controller's wait and the longer of the other two. The supervisor times the stop from the signal, in the signal's trap and without a fork: nothing starts after it, a relay-off already running when it came runs on within its own 5 s and counts against the 27 s, and each later wait is cut to the time left, the controller's and the web UI's ending early enough to leave the last relay-off at least 4 s of its 5 s (all 5 s unless one of them has to be killed and takes up to its 1 s to end), so the last relay-off begins by 23 s and ends by 27 s. The stop forks nothing before then, and the last relay-off's process starts only once the controller, the web UI and the preparation have ended and freed their tasks, so this holds at the container's [process limit](#the-supervisor-at-the-process-limit) too, also when the limit lasts until they are killed. When something else holds the tasks after they have ended, the last relay-off waits for room until 26 s and may begin late or, with none, not at all; the stop still ends by 27 s. Only a process that does not end at SIGKILL can make the supervisor itself exit up to 1 s later. The stop's own work (logging, starting the helper) adds a few hundred milliseconds. |
 | Docker `stop_grace_period` / `--stop-timeout` / `docker stop -t` | 30 s | Must exceed the whole stop (27 s). Docker sends SIGKILL to everything in the container after this. |
 

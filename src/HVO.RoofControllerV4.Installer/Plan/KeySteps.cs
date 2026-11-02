@@ -18,6 +18,9 @@ public enum ApiKeyUse
     /// <summary>The web UI's own key for Stop (RoofWeb__StopKeyFile).</summary>
     WebStop,
 
+    /// <summary>The Alpaca server account, for status, Stop and its authenticated controller protocol.</summary>
+    AlpacaServer,
+
     /// <summary>The kiosk's key, for PIN sign-in at the touchscreen.</summary>
     Kiosk
 }
@@ -62,7 +65,7 @@ public sealed record ConfiguredApiKey(int Index, string? Name, string? Role, boo
     public bool Is(string role) => string.Equals(Role?.Trim(), role, StringComparison.OrdinalIgnoreCase);
 
     private string? RoleName
-        => new[] { RoofControllerApiContract.ViewerRole, RoofControllerApiContract.OperatorRole, RoofControllerApiContract.AdminRole }.FirstOrDefault(Is);
+        => new[] { RoofControllerApiContract.ViewerRole, RoofControllerApiContract.OperatorRole, RoofControllerApiContract.AdminRole, RoofAlpacaContract.ServerRole }.FirstOrDefault(Is);
 }
 
 /// <summary>
@@ -85,6 +88,7 @@ public static partial class ApiKeyFiles
     public const string OperatorName = "installer-operator";
     public const string AdminName = "installer-admin";
     public const string WebStopName = "web-ui-stop";
+    public const string AlpacaServerName = "alpaca-server";
     public const string KioskName = "kiosk";
 
     public static string FileName(int index, string field)
@@ -180,6 +184,7 @@ public static partial class ApiKeyFiles
                     ?? usable.FirstOrDefault(key => !key.Kiosk && key.Is(RoofControllerApiContract.AdminRole)),
                 ApiKeyUse.WebStop => usable.FirstOrDefault(key => key.Index == webStopIndex && !key.Kiosk)
                     ?? usable.FirstOrDefault(key => Named(key, WebStopName) && !key.Kiosk && key.Is(RoofControllerApiContract.ViewerRole)),
+                ApiKeyUse.AlpacaServer => usable.FirstOrDefault(key => Named(key, AlpacaServerName) && !key.Kiosk && key.Is(RoofAlpacaContract.ServerRole)),
                 ApiKeyUse.Kiosk => usable.FirstOrDefault(key => Named(key, KioskName) && key.Kiosk && key.Is(RoofControllerApiContract.ViewerRole))
                     ?? usable.FirstOrDefault(key => key.Kiosk && key.Is(RoofControllerApiContract.ViewerRole)),
                 _ => throw new ArgumentOutOfRangeException(nameof(uses), use, null)
@@ -196,6 +201,7 @@ public static partial class ApiKeyFiles
                 ApiKeyUse.Operator => (OperatorName, RoofControllerApiContract.OperatorRole, false, false),
                 ApiKeyUse.Admin => (AdminName, RoofControllerApiContract.AdminRole, false, false),
                 ApiKeyUse.WebStop => (WebStopName, RoofControllerApiContract.ViewerRole, false, false),
+                ApiKeyUse.AlpacaServer => (AlpacaServerName, RoofAlpacaContract.ServerRole, false, false),
                 _ => (KioskName, RoofControllerApiContract.ViewerRole, true, true)
             };
 
@@ -270,6 +276,7 @@ public sealed class ApiKeyStep(ControllerLayout layout, ApiKeyAllocation key) : 
         ApiKeyUse.Operator => "the installer's operator key: the deploy script's Status and verified Stop (never shown)",
         ApiKeyUse.Admin => "the installer's admin key: adds the first admin (never shown)",
         ApiKeyUse.WebStop => "the web UI's own key for Stop (never shown)",
+        ApiKeyUse.AlpacaServer => "the Alpaca server's own account key (never shown)",
         _ => "the kiosk's key, for PIN sign-in at the touchscreen (never shown)"
     };
 

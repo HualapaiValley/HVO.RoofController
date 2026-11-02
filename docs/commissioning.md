@@ -395,7 +395,7 @@ The lease applies only when `OperatorLeaseTimeout` is set (2-120 s); production 
 ### C11. Container stop with an active camera stream, and the container's supervisor
 
 The container runs two processes under a supervisor: the controller and the web UI
-([deployment](deployment.md#the-containers-two-processes)). Steps 5-15 check how the supervisor handles each of them,
+([deployment](deployment.md#the-containers-application-processes)). Steps 5-15 check how the supervisor handles each of them,
 how it turns the relays off whenever the controller is not running, and that it starts the controller only once they
 are verified off.
 

@@ -56,9 +56,9 @@ internal static class RegularFiles
     /// regular file throws <see cref="NotARegularFileException"/> (naming it <paramref name="path"/>) before anything is
     /// read from it; one the installer may not open throws <see cref="UnauthorizedAccessException"/>.
     /// </summary>
-    public static byte[]? Read(string onDisk, string path)
+    public static byte[]? Read(string onDisk, string path, bool noFollow = false, int? maxBytes = null)
     {
-        using var handle = Open(onDisk, path);
+        using var handle = Open(onDisk, path, noFollow);
         if (handle is null)
         {
             return null;
@@ -70,6 +70,8 @@ internal static class RegularFiles
         int read;
         while ((read = RandomAccess.Read(handle, buffer, offset)) > 0)
         {
+            if (maxBytes is { } maximum && content.Length + read > maximum)
+                throw new IOException($"{path} is larger than {maximum} bytes.");
             content.Write(buffer, 0, read);
             offset += read;
         }
@@ -77,9 +79,9 @@ internal static class RegularFiles
         return content.ToArray();
     }
 
-    private static SafeFileHandle? Open(string onDisk, string path)
+    private static SafeFileHandle? Open(string onDisk, string path, bool noFollow)
     {
-        var flags = OperatingSystem.IsMacOS() ? MacFlags : LinuxFlags;
+        var flags = FlagsForOpen(OperatingSystem.IsMacOS(), RuntimeInformation.ProcessArchitecture, noFollow);
         int descriptor;
         int error;
         do
@@ -91,6 +93,8 @@ internal static class RegularFiles
 
         if (descriptor < 0)
         {
+            if (noFollow && error == (OperatingSystem.IsMacOS() ? 62 : 40))
+                throw new NotARegularFileException(path, "a symbolic link");
             return OpenFailure(error, onDisk, path, OperatingSystem.IsMacOS());
         }
 
@@ -118,6 +122,17 @@ internal static class RegularFiles
             handle.Dispose();
             throw;
         }
+    }
+
+    /// <summary>The native open flags for the process ABI, which can differ between Linux architectures.</summary>
+    internal static int FlagsForOpen(bool isMacOS, Architecture architecture, bool noFollow)
+    {
+        var flags = isMacOS ? MacFlags : LinuxFlags;
+        // ARM64 retains a distinct O_NOFOLLOW value for AArch32 compatibility: octal 0100000.
+        // x64's octal 00400000 means O_LARGEFILE on ARM64 and would silently follow the link.
+        // https://github.com/torvalds/linux/blob/v6.8/arch/arm64/include/uapi/asm/fcntl.h
+        var noFollowFlag = isMacOS ? 0x100 : architecture == Architecture.Arm64 ? 0x8000 : 0x20000;
+        return noFollow ? flags | noFollowFlag : flags;
     }
 
     /// <summary>Translates a failed native open, retaining physical paths for I/O errors and logical paths for file kinds.</summary>

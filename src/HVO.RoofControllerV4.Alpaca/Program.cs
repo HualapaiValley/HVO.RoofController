@@ -31,6 +31,9 @@ public class Program
     /// <summary>Runs only the discovery responder.</summary>
     public const string DiscoveryOnlyArgument = "--discovery-only";
 
+    /// <summary>Checks deployment settings and required files without writes, listeners or a controller connection.</summary>
+    public const string ValidateSettingsArgument = "--validate-settings";
+
     /// <summary>What the program says when it is off.</summary>
     public const string OffMessage =
         "The Alpaca server is off (Alpaca:Enabled is not true), so nothing listens and discovery is not answered. docs/alpaca.md says how to turn it on.";
@@ -47,6 +50,22 @@ public class Program
 
     public static int Main(string[] args)
     {
+        if (args.Contains(ValidateSettingsArgument, StringComparer.Ordinal))
+        {
+            try
+            {
+                ValidateSettings(args.Where(argument => argument != ValidateSettingsArgument).ToArray());
+                Console.WriteLine("Alpaca deployment settings validated (the server remains stopped).");
+                return 0;
+            }
+            catch (Exception ex) when (ex is AlpacaSettingsException or IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // Settings errors can contain private addresses. Preflight exposes neither config nor file contents.
+                Console.Error.WriteLine("Alpaca deployment settings are invalid or a required key, CA or identity file cannot be read. Check docs/alpaca.md.");
+                return 2;
+            }
+        }
+
         var discoveryOnly = args.Contains(DiscoveryOnlyArgument, StringComparer.Ordinal);
         var rest = args.Where(argument => argument != DiscoveryOnlyArgument).ToArray();
         try
@@ -81,6 +100,21 @@ public class Program
         }
     }
 
+    private static void ValidateSettings(string[] args)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+            ApplicationName = typeof(Program).Assembly.GetName().Name
+        });
+        var options = ReadOptions(builder.Configuration, discoveryOnly: false);
+        if (options is null) return;
+        _ = LoadKey(options.ControllerApiKeyFile!);
+        using var authority = LoadAuthority(options.ControllerCaCertificatePath);
+        AlpacaDeviceIds.ValidateExisting(options.EffectiveDataPath);
+    }
+
     /// <summary>
     /// Builds the server from <paramref name="args"/> and the environment, or returns null when it is off.
     /// <paramref name="customize"/> runs after the services are registered (tests replace the controller client and the
@@ -92,6 +126,7 @@ public class Program
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
             ApplicationName = typeof(Program).Assembly.GetName().Name,
         });
         builder.Configuration.Sources.Insert(0, new MemoryConfigurationSource { InitialData = DefaultSettings });
@@ -128,6 +163,7 @@ public class Program
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
             Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
             ApplicationName = typeof(Program).Assembly.GetName().Name,
         });
         builder.Configuration.Sources.Insert(0, new MemoryConfigurationSource { InitialData = DefaultSettings });
@@ -250,6 +286,7 @@ public class Program
         services.AddSingleton<AlpacaAuthFailures>();
         services.AddSingleton<AlpacaDome>();
         services.AddSingleton<AlpacaSafetyMonitor>();
+        services.AddHostedService<AlpacaServerStatus>();
         services.AddSingleton<AlpacaTransactions>();
         if (options.Discovery.Enabled)
         {

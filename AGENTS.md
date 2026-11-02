@@ -42,7 +42,7 @@ macOS machine with Docker.
 |---|---|
 | `HVO.RoofControllerV4.RPi` | The controller: ASP.NET Core on the Pi. It drives the Sequent Microsystems HAT over I2C (`HVO.Iot.Devices`) and serves the REST API and the status hub. It serves no pages. Its own rules: [AGENTS.md](src/HVO.RoofControllerV4.RPi/AGENTS.md). |
 | `HVO.RoofControllerV4.Web` | The web UI, Blazor Server: a separate process in the controller's container ([docs/web.md](docs/web.md)). |
-| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process, off by default, over the client library with its own account's key. It reads, stops (AbortSlew), and opens and closes (OpenShutter, CloseShutter) with the Alpaca client's own key when the controller allows it ([docs/alpaca.md](docs/alpaca.md)). |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process in the controller image, off by default, over the client library with its own account's key. It reads, stops (AbortSlew), and opens and closes (OpenShutter, CloseShutter) with the Alpaca client's own key when the controller allows it ([docs/alpaca.md](docs/alpaca.md)). |
 | `HVO.RoofControllerV4.Client` | The client library every UI uses: the REST API, the status hub, credentials and the CA, Stop, and the shared wording and palette. |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the commands and the Terminal.Gui interface ([docs/cli.md](docs/cli.md)). |
 | `HVO.RoofControllerV4.TerminalUi` | HVO Dark for Terminal.Gui, shared by `hvo-roof` and the installer. |
@@ -113,7 +113,7 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   starts only once a read-back has shown every relay off: until then it is held stopped (`relays-unverified`) and the
   supervisor keeps trying (the owner's decision, #138). Nothing starts after a stop request, and the whole stop ends
   within 27 s of the signal, also at the container's process limit: the supervisor forks only to start a process, and
-  only with room for it, and the stop forks nothing until the controller and the web UI have ended. A whole container
+  only with room for it, and the stop forks nothing until the controller, web UI, enabled Alpaca server and their preparations have ended. A whole container
   killed is the gap it cannot cover ([docs/deployment.md](docs/deployment.md#the-relays-when-the-controller-exits)).
 - Safety conditions (`RoofSafety:InterlockMode`, default `Warn`): the safety service reads ASCOM Alpaca mounts
   (`RoofSafety:Telescopes`, `AtPark`) and weather safety monitors (`RoofSafety:WeatherSources`, `IsSafe`), with GET
@@ -224,6 +224,7 @@ scripts have their own tests, which CI runs; run the ones for what you change, f
 
 ```bash
 python3 -m unittest discover -s tests/<docs|releasing|security|cli|mac|alpaca> -p 'test_*.py'
+python3 -m unittest discover -s tests/deploy -p 'test_*.py'  # optional Alpaca Compose overlay
 tests/alpaca/conformu.sh          # the Alpaca server under a pinned ConformU and the scripted Close runs, behind a chain guard, against the HAT emulator
 tests/versioning/version-tests.sh
 tests/deploy/deploy-script-tests.sh
@@ -301,7 +302,7 @@ observatory's Pi.
   ahead there with the ones it can, and warns loudly in its output and the controller's log. A capability or writable
   place is added only when a test on the emulator image shows it is needed. Compose passes expected CPU, memory and
   PID limits to the supervisor, which verifies its own cgroup v2 before either application starts (#152); v1 or
-  unverifiable limits refuse both applications, with relay-off/read-back and retries kept alive until verified off
+  unverifiable limits refuse every application, with relay-off/read-back and retries kept alive until verified off
   (then exit 2), and bounded shutdown on a stop. One-shot checks never touch the HAT. Deploy-created containers leave
   the expectations unset to preserve degraded rollback recovery. Keep the
   [fail-safe record](docs/deployment.md#the-relays-when-the-controller-exits) true: the supervisor turns the relays off

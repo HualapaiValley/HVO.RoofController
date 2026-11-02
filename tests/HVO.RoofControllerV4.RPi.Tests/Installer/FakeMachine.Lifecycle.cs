@@ -396,6 +396,9 @@ internal sealed partial class FakeMachine
             "systemctl" when arguments is ["disable", MachineSurveyor.KioskUnit] => Exists(MachineSurveyor.KioskUnitFile)
                 ? Answer($"Removed \"/etc/systemd/system/graphical.target.wants/{MachineSurveyor.KioskUnit}\".", after: () => Kiosk = Kiosk with { Enabled = false })
                 : new CommandResult(1, string.Empty, $"Failed to disable unit: Unit file {MachineSurveyor.KioskUnit} does not exist.\n"),
+            "stat" when arguments is ["-f", "%Su:%Sg", var macOwnerPath] => Answer(Owners.GetValueOrDefault(macOwnerPath, "root:root")),
+            "stat" when arguments is ["-f", "%u:%g", var macNumericPath] => Answer(NumericOwners.GetValueOrDefault(macNumericPath, "0:0")),
+            "stat" when arguments is ["-c", "%u:%g", "--", var numericPath] => Answer(NumericOwners.GetValueOrDefault(numericPath, "0:0")),
             "stat" when arguments is ["-c", "%F|%U:%G", "--", var path] => Stat(path, after: AfterStat.GetValueOrDefault(path)),
             "stat" when arguments is ["-L", "-c", "%F|%U:%G", "--", var opened] => StatOpened(opened),
             _ when arguments is ["--version"] && CliVersion(command.Program) is { } line => Answer(line),
@@ -439,6 +442,8 @@ internal sealed partial class FakeMachine
     }
 
     // stat -c '%F|%U:%G': its type as GNU stat names it, and its owner.
+    public Dictionary<string, string> NumericOwners { get; } = new(StringComparer.Ordinal);
+
     private CommandResult Stat(string path, Action? after = null)
     {
         var info = new FileInfo(OnDisk(path));

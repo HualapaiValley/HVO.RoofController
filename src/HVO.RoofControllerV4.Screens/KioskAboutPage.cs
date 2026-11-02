@@ -38,7 +38,7 @@ public sealed class KioskAboutPage : UserControl
     {
         Info = KioskAboutInfo.Describe(view, _console.Wording, _system.Self, _system.Summary, _system.SummaryProblem);
         // Rebuilt only when something shown changed, so a status heartbeat keeps the reader's page.
-        var shown = string.Join('\n', new[] { Info.Device, Info.Controller, Info.Host }
+        var shown = string.Join('\n', new[] { Info.Device, Info.Controller, Info.Alpaca, Info.Host }.OfType<KioskAboutSection>()
             .SelectMany(section => section.Rows.Select(row => $"{row.Name}={row.Value}").Append(section.Note)));
         if (shown == _shown) return;
         _shown = shown;
@@ -50,12 +50,20 @@ public sealed class KioskAboutPage : UserControl
         cards.Children.Add(controller);
         // The navigation names the page; the cards have the titles.
         var host = Card(Info.Host, tiles: true);
+        List<Control> contents = [cards];
+        if (Info.Alpaca is { } alpaca) contents.Add(Card(alpaca));
+        contents.Add(host);
         if (_console.Wording.SignIn == KioskSignIn.Pin)
         {
-            _document.SetItems([cards, host]);
+            _document.SetItems(contents);
             Content = _document;
         }
-        else Content = new StackPanel { Spacing = _metrics.Gap * 2, Children = { cards, host } };
+        else
+        {
+            var document = new StackPanel { Spacing = _metrics.Gap * 2 };
+            document.Children.AddRange(contents);
+            Content = document;
+        }
     }
 
     // A titled card: label and value rows (or, for tiles, a label over each value, three a row), then its note.

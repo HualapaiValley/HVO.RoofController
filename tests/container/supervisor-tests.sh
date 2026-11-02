@@ -29,10 +29,11 @@ setup() {
     exit 1
   fi
   # The web UI stand-in gets it as one of the web UI's settings: the supervisor passes it no other variable.
-  export FAKE_DIR="${WORK}/fake" RoofWeb__FakeDir="${WORK}/fake"
-  mkdir -p "${FAKE_DIR}" "${WORK}/bin" "${WORK}/app/web" "${WORK}/secrets"
+  export FAKE_DIR="${WORK}/fake" RoofWeb__FakeDir="${WORK}/fake" Alpaca__FakeDir="${WORK}/fake"
+  mkdir -p "${FAKE_DIR}" "${WORK}/bin" "${WORK}/app/web" "${WORK}/app/alpaca" "${WORK}/secrets"
   ln -s "${TESTS_DIR}/fake-process.sh" "${WORK}/bin/controller"
   ln -s "${TESTS_DIR}/fake-process.sh" "${WORK}/bin/ui"
+  ln -s "${TESTS_DIR}/fake-process.sh" "${WORK}/bin/alpaca"
   ln -s "${TESTS_DIR}/fake-relays-off" "${WORK}/bin/relays-off"
   : >"${FAKE_DIR}/events.log"
   SUPERVISOR_PID=""
@@ -42,6 +43,9 @@ setup() {
     "HVO_SUPERVISOR_SECRETS_DIR=${WORK}/secrets"
     "HVO_SUPERVISOR_CONTROLLER_EXEC=${WORK}/bin/controller"
     "HVO_SUPERVISOR_UI_EXEC=${WORK}/bin/ui"
+    "HVO_SUPERVISOR_ALPACA_EXEC=${WORK}/bin/alpaca"
+    "HVO_SUPERVISOR_ALPACA_USER="
+    "HVO_SUPERVISOR_ALPACA_DATA_DIR=${WORK}/alpaca-data"
     "HVO_SUPERVISOR_RELAYS_OFF_EXEC=${WORK}/bin/relays-off"
     "HVO_SUPERVISOR_UI_USER="
     "HVO_SUPERVISOR_UI_DATA_DIR=${WORK}/data"
@@ -217,10 +221,20 @@ normalized_state() {
   sed -E 's/"pid":[0-9]+/"pid":1/g; s/"(updatedAt|lastExitAt|at)":"[^"]+"/"\1":"T"/g' "$1"
 }
 
-# Both stand-ins started, and the state file says so.
+# A PID belongs to a ready stand-in only after that process has installed its signal handlers.
+stand_in_ready() {
+  local role=$1 pid ready
+  [[ -s "${FAKE_DIR}/${role}.pid" && -s "${FAKE_DIR}/${role}.ready" ]] || return 1
+  IFS= read -r pid <"${FAKE_DIR}/${role}.pid" || return 1
+  IFS= read -r ready <"${FAKE_DIR}/${role}.ready" || return 1
+  [[ "${pid}" == "${ready}" ]]
+}
+
+# Both stand-ins are ready, and the state file says they are running.
 wait_both_running() {
   wait_until 10 "both processes running" state_is '.controller.state + " " + .ui.state' "running running" &&
-    wait_until 5 "both stand-ins started" test -s "${FAKE_DIR}/ui.pid" -a -s "${FAKE_DIR}/controller.pid"
+    wait_until 5 "controller signal handlers ready" stand_in_ready controller &&
+    wait_until 5 "web UI signal handlers ready" stand_in_ready ui
 }
 
 # wait_supervisor_exit <seconds>: waits that long for the supervisor to end and sets EXIT_STATUS to its exit status; fails
@@ -1216,21 +1230,48 @@ test_docker_stop_turns_the_relays_off_after_killing_a_controller_that_outlasts_i
   expect_relays_never_turned_off_under_a_running_controller
 }
 
+readiness_waiter_case() (
+  local pid=${BASHPID}
+  # Exercise the real waiter without scheduler timing: PID publication alone is not signal-handler readiness.
+  # shellcheck disable=SC2317,SC2329 # called by the real waiter
+  wait_until() { shift 2; "$@"; }
+  mkdir -p "${WORK}/run"
+  printf '{"controller":{"state":"running"},"ui":{"state":"running"}}\n' >"${WORK}/run/supervisor.json"
+  printf '%s\n' "${pid}" >"${FAKE_DIR}/controller.pid"
+  printf '%s\n' "${pid}" >"${FAKE_DIR}/ui.pid"
+  if wait_both_running; then fail_test "PID files were accepted before signal handlers were ready"; fi
+  printf 'previous-process\n' >"${FAKE_DIR}/controller.ready"
+  printf 'previous-process\n' >"${FAKE_DIR}/ui.ready"
+  if wait_both_running; then fail_test "readiness from previous processes was accepted"; fi
+  printf '%s\n' "${pid}" >"${FAKE_DIR}/controller.ready"
+  printf '%s\n' "${pid}" >"${FAKE_DIR}/ui.ready"
+  wait_both_running || fail_test "matching current ready processes were not accepted"
+  [[ "${CURRENT_FAILED}" == false ]]
+)
+
+test_running_waiter_requires_current_signal_handler_readiness() {
+  readiness_waiter_case || fail_test "stand-in readiness contract"
+}
+
 test_sigint_sighup_and_sigquit_stop_as_docker_stop_does() {
   local signal
+  printf '0.5\n' >"${FAKE_DIR}/controller.before-ready-delay"
+  printf '0.5\n' >"${FAKE_DIR}/ui.before-ready-delay"
+  printf '0.5\n' >"${FAKE_DIR}/alpaca.before-ready-delay"
   for signal in INT HUP QUIT; do
     : >"${FAKE_DIR}/events.log"
-    rm -f "${FAKE_DIR}/controller.pid" "${FAKE_DIR}/ui.pid"
+    rm -f "${FAKE_DIR}/"{controller,ui,alpaca}.{pid,ready}
     # A background job of this script starts with SIGINT and SIGQUIT ignored, which a trap cannot undo; under tini they
     # are not.
-    start_supervisor --default-signal=INT,QUIT
-    wait_both_running || return
+    start_supervisor --default-signal=INT,QUIT Alpaca__Enabled=true
+    wait_all_running || return
     kill "-${signal}" "${SUPERVISOR_PID}"
     wait_supervisor_exit 10
     expect_equal "exit status after SIG${signal}" "${EXIT_STATUS}" 0
     expect_equal "events after SIG${signal}" "$(controller_and_relay_events | tail -n 4 | paste -sd ',')" \
       "controller term,controller exit 0,relays-off run,relays-off done 0"
     [[ "$(events)" == *"ui exit 0"* ]] || fail_test "the web UI was not stopped after SIG${signal}"
+    [[ "$(events)" == *"alpaca exit 0"* ]] || fail_test "Alpaca was not stopped after SIG${signal}"
   done
 }
 
@@ -1828,6 +1869,12 @@ fi
 
 # shellcheck source=tests/container/supervisor-cgroup-tests.sh
 source "${TESTS_DIR}/supervisor-cgroup-tests.sh"
+
+# shellcheck source=tests/container/supervisor-alpaca-tests.sh
+source "${TESTS_DIR}/supervisor-alpaca-tests.sh"
+
+# shellcheck source=tests/container/supervisor-wait-budget-tests.sh
+source "${TESTS_DIR}/supervisor-wait-budget-tests.sh"
 
 # shellcheck source=tests/container/supervisor-stop-boundary-tests.sh
 source "${TESTS_DIR}/supervisor-stop-boundary-tests.sh"

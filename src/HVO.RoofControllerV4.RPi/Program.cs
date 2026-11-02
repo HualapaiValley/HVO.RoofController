@@ -214,6 +214,7 @@ public class Program
         // reached as the deployment wrote it (RoofHost__*).
         services.Configure<RoofHostOptions>(Configuration.GetSection(RoofHostOptions.SectionName));
         services.AddSingleton<RoofHostMetrics>();
+        services.AddSingleton<RoofAlpacaServerStatus>();
         services.Configure<RoofControllerUiOptions>(Configuration.GetSection(RoofControllerUiOptions.SectionName));
 
         // Give the hosted-service stop path (verified roof stop) and long-lived camera streams time to finish on

@@ -54,6 +54,8 @@ public static class RoofSystemText
         ArgumentNullException.ThrowIfNull(summary);
         yield return ("Controller", RoofProductVersion.Describe(summary.ApplicationVersion));
         yield return ("Web UI", DescribeWebUi(summary));
+        if (summary.AlpacaServer is not null)
+            foreach (var row in DescribeAlpacaServer(summary.AlpacaServer)) yield return row;
         var controllerUp = Duration(TimeSpan.FromSeconds(summary.UptimeSeconds));
         yield return ("Uptime", summary.HostUptimeSeconds is { } host
             ? $"controller {controllerUp}, host {Duration(TimeSpan.FromSeconds(host))}"
@@ -69,6 +71,28 @@ public static class RoofSystemText
             ? $"{Bytes(free)} free of {Bytes(size)}"
             : Unavailable);
         yield return ("Addresses", DescribeAddresses(summary));
+    }
+
+    /// <summary>The deployed Alpaca server, without addresses, keys or paths. A stale heartbeat never shows a client count.</summary>
+    public static IEnumerable<(string Label, string Value)> DescribeAlpacaServer(AlpacaServerSummary? server)
+    {
+        if (server is null)
+        {
+            yield return ("Alpaca server", "unavailable (the controller reports no server status)");
+            yield break;
+        }
+        if (!server.Enabled)
+        {
+            yield return ("Alpaca server", "Off");
+            yield break;
+        }
+        var port = server.Port?.ToString(CultureInfo.InvariantCulture) ?? Unavailable;
+        yield return ("Alpaca server", $"{(server.Running ? "Running" : "unavailable (no fresh heartbeat)")}; port {port}");
+        yield return ("Alpaca Dome UniqueID", server.DomeUniqueId ?? Unavailable);
+        yield return ("Alpaca weather UniqueID", server.SafetyMonitorUniqueId ?? Unavailable);
+        yield return ("Alpaca connected clients", server.Running && server.DomeConnectedClients is { } dome && server.SafetyMonitorConnectedClients is { } weather
+            ? $"Dome {dome.ToString(CultureInfo.InvariantCulture)}, SafetyMonitor {weather.ToString(CultureInfo.InvariantCulture)}"
+            : Unavailable);
     }
 
     /// <summary>

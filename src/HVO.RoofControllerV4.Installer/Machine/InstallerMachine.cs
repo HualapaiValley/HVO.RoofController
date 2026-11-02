@@ -215,7 +215,7 @@ public sealed class InstallerMachine
     /// FIFO, a device, a socket, a folder) throws <see cref="NotARegularFileException"/> before anything is read, and
     /// opening it never waits (<see cref="RegularFiles"/>).
     /// </summary>
-    public byte[]? ReadRegularBytes(string path) => RegularFiles.Read(OnDisk(path), path);
+    public byte[]? ReadRegularBytes(string path, bool noFollow = false, int? maxBytes = null) => RegularFiles.Read(OnDisk(path), path, noFollow, maxBytes);
 
     /// <summary>The file's text, as <see cref="ReadRegularBytes"/> reads it (without a byte order mark), or null when there is no such file.</summary>
     public string? ReadRegularText(string path)

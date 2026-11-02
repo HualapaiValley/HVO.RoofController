@@ -1,5 +1,8 @@
 # Roof controller on the Raspberry Pi. See docs/deployment.md.
 #
+# Alpaca remains off in this base file. Explicitly add docker-compose.alpaca.yaml to enable its separate process,
+# LAN-bound TCP port and credential-free host-network discovery responder (docs/alpaca.md#container-deployment).
+#
 # Two mutually exclusive profiles (both name the container roof-controller, so they cannot run together and they
 # collide with a controller started by deploy-roofcontroller-rpi.sh instead of driving the HAT twice):
 #

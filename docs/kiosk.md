@@ -767,6 +767,14 @@ column.
 
 ![Locked kiosk About view: labelled cards for this kiosk, the controller and its host, with fallback text](images/kiosk/about-locked-800x480.png)
 
+The Controller card also shows whether the [Alpaca server](alpaca.md) is on and its published port. When enabled,
+**Alpaca devices** shows both persisted UniqueIDs and each device's connected-client count. An unavailable or stale
+heartbeat hides the counts; the last validated identities remain visible. These details use the same bounded pages,
+with Stop always in its own column.
+
+![Kiosk About with the enabled Alpaca server, complete synthetic device identities and per-device client counts](images/kiosk/alpaca-about-800x480.png)
+
+
 ## First-install owner PIN
 
 See [First-install kiosk PIN commissioning](kiosk-commissioning.md) for eligibility, mandatory replacement,

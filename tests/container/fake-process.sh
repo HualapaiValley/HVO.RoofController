@@ -5,17 +5,19 @@
 #   <role>.term-delay      seconds to take over SIGTERM before exiting (the controller's roof stop), default 0
 #   <role>.ignore-term     ignore SIGTERM altogether (only SIGKILL ends it)
 #   <role>.exit-now        exit with the code in the file within 0.1 s, once (the file is removed)
+#   <role>.before-ready-delay  delay before installing signal handlers, for readiness regression tests
 # and writes:
 #   events.log             "<role> start <pid>", "<role> term", "<role> exit <code>", one line each, in order
 #   times.log              the same lines, each preceded by the time it happened (EPOCHREALTIME: seconds, microseconds)
 #   <role>.pid             its pid
+#   <role>.ready           its pid, published only after its signal handlers are installed
 #   <role>.env             its environment (NUL-separated)
 #   <role>.args            its arguments, one per line
 #   <role>.oom             its oom_score_adj
 set -uo pipefail
 
 role=$(basename "$0")
-dir=${FAKE_DIR:-${RoofWeb__FakeDir:?}}
+dir=${FAKE_DIR:-${RoofWeb__FakeDir:-${Alpaca__FakeDir:?}}}
 event() {
   printf '%s %s %s\n' "${EPOCHREALTIME}" "${role}" "$*" >>"${dir}/times.log"
   printf '%s %s\n' "${role}" "$*" >>"${dir}/events.log"
@@ -33,6 +35,10 @@ if [[ -f "${dir}/${role}.exit-at-start" ]]; then
   exit "${code}"
 fi
 
+if [[ -f "${dir}/${role}.before-ready-delay" ]]; then
+  sleep "$(<"${dir}/${role}.before-ready-delay")"
+fi
+
 on_term() {
   event term
   if [[ -f "${dir}/${role}.ignore-term" ]]; then
@@ -43,6 +49,7 @@ on_term() {
   exit 0
 }
 trap on_term TERM
+printf '%s\n' "$$" >"${dir}/${role}.ready"
 
 while :; do
   if [[ -f "${dir}/${role}.exit-now" ]]; then

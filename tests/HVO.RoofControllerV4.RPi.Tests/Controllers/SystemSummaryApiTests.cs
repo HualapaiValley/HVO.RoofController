@@ -91,7 +91,7 @@ public sealed class SystemSummaryApiTests
             "applicationVersion", "uptimeSeconds", "generatedAtUtc", "hostUptimeSeconds", "processorCount", "cpuUsagePercent",
             "loadAverage1Minute", "loadAverage5Minutes", "loadAverage15Minutes", "cpuTemperatureCelsius", "memoryTotalBytes",
             "memoryAvailableBytes", "processWorkingSetBytes", "diskTotalBytes", "diskFreeBytes", "webUiUrls", "webUiAccess", "hostAddresses",
-            "ipAddresses", "runningInContainer"
+            "ipAddresses", "runningInContainer", "alpacaServer"
         ], "the summary is for every role: the machine's name, the environment and paths stay in the admin-only System/info");
         body.GetRawText().Should().NotContain(Environment.MachineName);
     }
@@ -113,6 +113,68 @@ public sealed class SystemSummaryApiTests
         summary.WebUiUrls.Should().Equal("https://192.0.2.10:8088/", "https://[2001:db8::10]:8088/");
         summary.WebUiAccess.Should().Be(RoofWebUiAccess.Network);
         summary.HostAddresses.Should().Equal("192.0.2.10", "2001:db8::10");
+    }
+
+    [TestMethod]
+    public async Task AlpacaSummary_IsOffByDefault_AndNeverClaimsAStaleClientCount()
+    {
+        using (var off = CreateHost())
+        using (var viewer = off.CreateApiClient(TestApiKeys.Viewer))
+        {
+            var body = await ApiJson.ReadElementAsync(await viewer.GetAsync(Summary));
+            body.GetProperty("alpacaServer").GetProperty("enabled").GetBoolean().Should().BeFalse();
+        }
+
+        var directory = Directory.CreateTempSubdirectory("hvo-alpaca-summary-").FullName;
+        var path = Path.Combine(directory, "status.json");
+        try
+        {
+            using var host = CreateHost(new Dictionary<string, string?>
+            {
+                ["Alpaca:Enabled"] = "true",
+                ["Alpaca:Discovery:AdvertisedPort"] = "47677",
+                ["Alpaca:StatusFilePath"] = path
+            });
+            using var viewer = host.CreateApiClient(TestApiKeys.Viewer);
+            var missing = (await ApiJson.ReadElementAsync(await viewer.GetAsync(Summary))).GetProperty("alpacaServer");
+            missing.GetProperty("enabled").GetBoolean().Should().BeTrue();
+            missing.GetProperty("running").GetBoolean().Should().BeFalse();
+            missing.GetProperty("port").GetInt32().Should().Be(47677);
+            missing.GetProperty("domeConnectedClients").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+
+            var dome = Guid.NewGuid().ToString("D");
+            var weather = Guid.NewGuid().ToString("D");
+            await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                GeneratedAtUtc = DateTimeOffset.UtcNow,
+                Port = 47677,
+                DomeUniqueId = dome,
+                SafetyMonitorUniqueId = weather,
+                DomeConnectedClients = 2,
+                SafetyMonitorConnectedClients = 1
+            }));
+            var fresh = (await ApiJson.ReadElementAsync(await viewer.GetAsync(Summary))).GetProperty("alpacaServer");
+            fresh.GetProperty("running").GetBoolean().Should().BeTrue();
+            fresh.GetProperty("domeUniqueId").GetString().Should().Be(dome);
+            fresh.GetProperty("safetyMonitorUniqueId").GetString().Should().Be(weather);
+            fresh.GetProperty("domeConnectedClients").GetInt32().Should().Be(2);
+            fresh.GetProperty("safetyMonitorConnectedClients").GetInt32().Should().Be(1);
+
+            await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                GeneratedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1), Port = 47677,
+                DomeUniqueId = dome, SafetyMonitorUniqueId = weather,
+                DomeConnectedClients = 2, SafetyMonitorConnectedClients = 1
+            }));
+            var stale = (await ApiJson.ReadElementAsync(await viewer.GetAsync(Summary))).GetProperty("alpacaServer");
+            stale.GetProperty("running").GetBoolean().Should().BeFalse();
+            stale.GetProperty("domeConnectedClients").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+            stale.GetProperty("safetyMonitorConnectedClients").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static RoofApiTestHost CreateHost(IDictionary<string, string?>? extra = null)

@@ -175,7 +175,7 @@ remove_controllers() {
     down --volumes --remove-orphans >/dev/null 2>&1 || true
   # With their volumes: each controller keeps the web UI's sign-in keys on one of its own. And the deploy script's desired
   # limits' records, each a volume of its own.
-  docker rm -f -v "${controller}" "${previous}" "${controller}-swap" >/dev/null 2>&1 || true
+  docker rm -f -v "${controller}" "${previous}" "${controller}-swap" "${controller}-discovery" >/dev/null 2>&1 || true
   for record in $(desired_records); do
     docker volume rm -f "${record}" >/dev/null 2>&1 || true
   done
@@ -806,7 +806,7 @@ setup() {
   sudo -n true 2>/dev/null || fail "sudo without a password (sudo -n) is required: the fixtures are given to root, as the installer makes them"
   docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
   docker compose version >/dev/null 2>&1 || fail "docker compose is required"
-  if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap)?$")" ]]; then
+  if [[ -n "$(docker ps -aq --filter "name=^/${controller}(-previous|-swap|-discovery)?$")" ]]; then
     fail "a ${controller} container exists on this Docker host; these scenarios deploy their own under that name. Remove it first."
   fi
   if [[ -n "$(desired_records)" ]]; then
