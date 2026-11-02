@@ -630,10 +630,12 @@ cycle's stops and a deadline stop that a lease renewal or a repeated Open or Clo
 after a relay mismatch or repeated failed relay reads. Routine reads keep their own 1.5 s limit until a protective
 fence moves: the section holding the lock then shares that fence's arrival deadline and skips remaining routine relay
 reads and LEDs to let the protective work take the lock promptly. Pending requests stay recorded until they are
-applied, including when they precede a section or pass to a queued worker; the earliest foreign deadline wins. A
-routine retry of unverified all-off relays keeps each access's own limit after those requests finish: its own fence
-does not bound it, but another pending request (an edge, Stop, shutdown or queued/recovery stop) does. A shutdown
-raises the fence before waiting for the lock, as do a drive-fault edge and a limit asserting; an input edge that
+applied, including when they precede a section or pass to a queued worker; routine work uses the earliest foreign
+deadline. A caller that decides its own stop retains that stop's deadline for all-off and verification, so an overdue
+foreign request cannot suppress a fresh protective stop's writes. A routine retry of unverified all-off relays keeps
+each access's own limit after those requests finish: its own fence does not bound it, but another pending request
+(an edge, Stop, shutdown or queued/recovery stop) does. A shutdown raises the fence before waiting for the lock, as do
+a drive-fault edge and a limit asserting; an input edge that
 cannot take the lock in time is never dropped: its own level is applied the moment the lock is free, with the motion
 it came during, and then the inputs are read fresh.
 

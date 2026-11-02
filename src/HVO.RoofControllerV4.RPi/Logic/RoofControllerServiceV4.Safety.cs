@@ -570,7 +570,7 @@ public partial class RoofControllerServiceV4
         BoundPendingFence();
         var limit = HatIoLimit;
         var bounded = false;
-        if (t_ioDeadline is { } deadline)
+        if ((t_ioDeadline ?? t_foreignFenceDeadline) is { } deadline)
         {
             // A stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereviews S-F4, F19).
             var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
@@ -628,6 +628,11 @@ public partial class RoofControllerServiceV4
     [ThreadStatic]
     private static bool t_fencePending;
 
+    // Routine work yields to this deadline. A stop decided by this caller uses t_ioDeadline instead: another
+    // request must not refuse the very relays-off writes and read-back it is waiting for (#231, Opus R2 F7).
+    [ThreadStatic]
+    private static long? t_foreignFenceDeadline;
+
     private PendingFenceRequest? _pendingFences;
 
     // Pending requests outlive the gap before a locked section opens (#231, Sol R1 F1). A section observes every
@@ -651,8 +656,7 @@ public partial class RoofControllerServiceV4
         if (deadline != long.MaxValue)
         {
             t_fencePending = true;
-            t_sectionDeadline = t_sectionDeadline is { } earlier && earlier < deadline ? earlier : deadline;
-            BoundTheStop();
+            t_foreignFenceDeadline = t_foreignFenceDeadline is { } earlier && earlier < deadline ? earlier : deadline;
         }
 
         return t_fencePending;
@@ -718,12 +722,13 @@ public partial class RoofControllerServiceV4
     /// section has one from its start (an edge or the watchdog's timer, whose bound counts their wait for the lock),
     /// otherwise 2 s from the decision; a Stop's bound runs from its start (<paramref name="armNow"/>). Before a stop is
     /// decided, routine accesses keep their own limit only, until another caller raises a protective fence: then the
-    /// remainder shares that fence's arrival deadline, and cosmetic accesses yield to it (#231, F27).
+    /// routine work shares that fence's arrival deadline, and cosmetic accesses yield to it (#231, F27). A stop this
+    /// caller decides retains its own deadline for all-off and verification, even when a foreign request is overdue.
     /// </summary>
     private HatIoSection BoundedSection(long? deadline = null, bool armNow = false, PendingFenceRequest? ownFence = null)
     {
         var section = new HatIoSection(t_ioDeadline, t_inBoundedSection, t_sectionDeadline, t_boundCut,
-            t_sectionController, t_sectionOwnFence, t_watchForeignFences, t_fencePending);
+            t_sectionController, t_sectionOwnFence, t_watchForeignFences, t_fencePending, t_foreignFenceDeadline);
         t_inBoundedSection = true;
         t_sectionDeadline = deadline;
         t_boundCut = false;
@@ -733,6 +738,7 @@ public partial class RoofControllerServiceV4
         t_watchForeignFences = Monitor.IsEntered(_syncLock);
         t_sectionOwnFence = ownFence;
         t_fencePending = false;
+        t_foreignFenceDeadline = null;
         if (armNow)
         {
             BoundTheStop();
@@ -764,9 +770,11 @@ public partial class RoofControllerServiceV4
         private readonly PendingFenceRequest? _ownFence;
         private readonly bool _watchForeignFences;
         private readonly bool _fencePending;
+        private readonly long? _foreignFenceDeadline;
 
         public HatIoSection(long? ioDeadline, bool inBoundedSection, long? sectionDeadline, bool boundCut,
-            RoofControllerServiceV4? controller, PendingFenceRequest? ownFence, bool watchForeignFences, bool fencePending)
+            RoofControllerServiceV4? controller, PendingFenceRequest? ownFence, bool watchForeignFences, bool fencePending,
+            long? foreignFenceDeadline)
         {
             _ioDeadline = ioDeadline;
             _inBoundedSection = inBoundedSection;
@@ -776,6 +784,7 @@ public partial class RoofControllerServiceV4
             _ownFence = ownFence;
             _watchForeignFences = watchForeignFences;
             _fencePending = fencePending;
+            _foreignFenceDeadline = foreignFenceDeadline;
         }
 
         public void Dispose()
@@ -788,6 +797,7 @@ public partial class RoofControllerServiceV4
             t_sectionOwnFence = _ownFence;
             t_watchForeignFences = _watchForeignFences;
             t_fencePending = _fencePending;
+            t_foreignFenceDeadline = _foreignFenceDeadline;
         }
     }
 
@@ -920,7 +930,7 @@ public partial class RoofControllerServiceV4
 
             var verified = mask == 0;
             RecordRelayState_NoLock(verified, mask);
-            if (!verified && t_ioDeadline is { } deadline && BoundPassed(deadline))
+            if (!verified && (t_ioDeadline ?? t_foreignFenceDeadline) is { } deadline && BoundPassed(deadline))
             {
                 // The stop's bound cut its relays-off work short: it goes on as soon as the lock is free, each access at its
                 // own limit, and the relays stay unverified until a read-back shows them off.

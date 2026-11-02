@@ -203,6 +203,7 @@ moved. The emulated HAT reports both.
 | 3 | With both limits actuated during a move, the controller stops, latches `ContradictoryLimitInputs`, and refuses Open, Close and ClearFault. `lastStopReason` may be `LimitSwitchReached`, because the open limit's edge is handled first. | `C3LimitInputPolarityScenarios.BothLimitsActuated_WhileMoving_StopsWithContradictoryLimitInputs_LatchesIt_AndRefusesMotion` |
 | 4 | A broken monitoring wire reads "not at the limit". The limit's run-circuit contact (C1 step 4) stops the drive. | `C3LimitInputPolarityScenarios.ABrokenMonitorWire_ReadsNotAtTheLimit` |
 | 5 | A closed-limit edge during slow routine supervision reads and pending LED writes, including one arriving after monitor acquisition but before the cycle opens its HAT section, turns the emulated HAT's relays off within the 2 s arrival bound plus scheduling margin. The cycle's remaining I/O and the edge's caller, including their LEDs, honor the same arrival deadline; healthy protective relay transfers verify off without a false fault latch. | `ProtectiveStopTimingScenarios.ALimitEdge_DuringSlowRoutineIo_StopsThePlantRelaysWithinTheBound_WithoutAFalseLatch` |
+| 6 | A fresh closed-limit edge sends all-off and verifies the emulated plant stopped while an overdue queued Stop still waits for the monitor; it does not latch a relay-verification failure. | `ProtectiveStopTimingScenarios.ALimitEdge_AfterAnOverdueQueuedStop_VerifiesOffBeforeReleasingTheMonitor` |
 
 **Installation assumptions**
 
@@ -242,6 +243,7 @@ moved. The emulated HAT reports both.
 | 4 | A broken IN3 wire and lost drive power each read as a fault and latch `DriveFault` | `C4FaultInputPolarityScenarios.WithTheFailSafeWiring_FailsSafe_AsAFault` |
 | 5 | Resetting the drive and clearing the latch (C5) | `C5ClearFaultPulseScenarios.TheDefaultPulse_ClosesRly3ForItsLength_AndResetsTheTrippedDrive` |
 | 6 | An IN3 drive-fault edge during slow routine supervision reads and pending LED writes, including one arriving after monitor acquisition but before the cycle opens its HAT section, turns the emulated HAT's relays off within the 2 s arrival bound plus scheduling margin. The cycle's remaining I/O and the edge's caller, including their LEDs, honor the same arrival deadline; healthy protective relay transfers verify off, and only `DriveFault` latches. | `ProtectiveStopTimingScenarios.ADriveFaultEdge_DuringSlowRoutineIo_StopsThePlantRelaysWithinTheBound_WithoutAFalseLatch` |
+| 7 | A fresh drive-fault edge sends all-off and verifies the emulated plant stopped while an overdue queued Stop still waits for the monitor; only `DriveFault` latches. | `ProtectiveStopTimingScenarios.ADriveFaultEdge_AfterAnOverdueQueuedStop_VerifiesOffBeforeReleasingTheMonitor` |
 | — | Cycling the drive's mains during travel latches `DriveFault`. A start within 2 s of power-up trips the drive with F_UF. | `LifecycleScenarios.TheDrivesMainsCycled_DuringTravel_LatchesDriveFault_AndAStartWithinTwoSecondsOfPowerUp_TripsF_UF` |
 
 **Installation assumptions**

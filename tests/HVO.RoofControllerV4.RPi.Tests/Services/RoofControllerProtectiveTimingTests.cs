@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +18,130 @@ namespace HVO.RoofControllerV4.RPi.Tests.Services;
 public class RoofControllerProtectiveTimingTests
 {
     public TestContext TestContext { get; set; } = null!;
+
+    [TestMethod]
+    [DataRow("Stop", "limit")]
+    [DataRow("Stop", "drive fault")]
+    [DataRow("edge", "limit")]
+    [DataRow("edge", "drive fault")]
+    [DataRow("Stop", "watchdog")]
+    [DataRow("Stop", "renewal")]
+    [DataRow("Stop", "repeat Close")]
+    public async Task AnOverdueForeignRequest_DoesNotSuppressANewProtectiveStop(string queued, string trigger)
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        var time = new ManualTimeProvider();
+        using var service = SimulatedRoofControllerService.Create(hat, time, configure: options =>
+        {
+            if (trigger is "renewal" or "repeat Close") options.OperatorLeaseTimeout = TimeSpan.FromSeconds(2);
+        });
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Close().IsSuccessful.Should().BeTrue();
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        Exception? queuedError = null;
+        var first = new Thread(() =>
+        {
+            try
+            {
+                if (queued == "Stop") service.Stop().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+                else service.SimReverseLimitRaw(false);
+            }
+            catch (Exception error) { queuedError = error; }
+        });
+        try
+        {
+            lock (sync)
+            {
+                // Keep the queued worker behind this monitor after its caller's arrival deadline has passed.
+                first.Start();
+                first.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+                queuedError.Should().BeNull();
+                if (queued == "edge") service.SimReverseLimitRaw(true); // contact chatter before re-assertion
+                if (trigger is "renewal" or "repeat Close") time.AdvanceWithoutTimers(TimeSpan.FromSeconds(2));
+                hat.ClearRelayWriteLog();
+                if (trigger == "limit") service.SimReverseLimitRaw(false);
+                else if (trigger == "drive fault") service.SimFaultRaw(true);
+                else if (trigger == "watchdog") service.TriggerWatchdog(service.CurrentMotionGeneration);
+                else if (trigger == "renewal") service.RenewLease();
+                else service.Close();
+
+                // Assert before releasing the monitor: a queued cleanup cannot supply the missing writes/read-back.
+                hat.RelayWriteLog.Count.Should().Be(4, "this protective caller must send its own all-off writes");
+                hat.RelayMask.Should().Be(0);
+                var status = service.GetCurrentStatusSnapshot();
+                status.RelayRegisterState.Should().Be(RoofRelayRegisterState.Verified);
+                status.LastStopReason.Should().Be(trigger switch
+                {
+                    "limit" => RoofControllerStopReason.LimitSwitchReached,
+                    "drive fault" => RoofControllerStopReason.DriveFault,
+                    "watchdog" => RoofControllerStopReason.SafetyWatchdogTimeout,
+                    _ => RoofControllerStopReason.OperatorLeaseExpired
+                });
+                status.IsFaultLatched.Should().Be(trigger is "drive fault" or "watchdog");
+                status.LatchedFaultReason.Should().NotBe(RoofControllerStopReason.RelayVerificationFailed);
+                if (trigger == "drive fault") status.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+            }
+        }
+        finally
+        {
+            if (first.ThreadState != System.Threading.ThreadState.Unstarted) first.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
+        }
+    }
+
+    [TestMethod]
+    public async Task AStopThatHasReleasedTheMonitor_DoesNotBoundTheNextRoutineRetry()
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        var retried = false;
+        var overran = false;
+        var verified = false;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meter) =>
+        {
+            if (instrument.Meter.Name == "HVO.RoofController.RPi" && instrument.Name == "roof.controller.commands")
+                meter.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            var isStop = false;
+            foreach (var tag in tags)
+                if (tag.Key == "roof.command" && tag.Value?.ToString() == "stop") isStop = true;
+            if (!isStop || retried) return;
+            retried = true;
+            // Command telemetry runs after Stop releases the monitor but before Stop returns. A new cycle must
+            // already have its routine allowance, even while that completed caller is still on the stack.
+            hat.Registers.FailRelayReads = true;
+            service.ForceRelayStates(false, false, false);
+            hat.Registers.FailRelayReads = false;
+            hat.Registers.BeforeRelayWrite = (register, _) => { if (register == 2) Thread.Sleep(600); };
+            try
+            {
+                service.RunSupervisionCycle();
+                overran = service.IsHatIoOverrun;
+                verified = service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified;
+            }
+            finally { hat.Registers.BeforeRelayWrite = null; }
+        });
+        listener.Start();
+        try
+        {
+            service.Stop().IsSuccessful.Should().BeTrue();
+            retried.Should().BeTrue();
+            overran.Should().BeFalse("the completed Stop request must be removed before the monitor is released");
+            verified.Should().BeTrue();
+        }
+        finally
+        {
+            hat.Registers.FailRelayReads = false;
+            hat.Registers.BeforeRelayWrite = null;
+            WaitForVerifiedOff(service, hat);
+        }
+    }
 
     [TestMethod]
     public async Task AQueuedAllOff_RetainsItsOriginalDeadline_WhenAnotherCycleWinsTheMonitor()

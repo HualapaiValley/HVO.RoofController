@@ -30,6 +30,64 @@ public sealed class ProtectiveStopTimingScenarios
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
+    [CommissioningCheck("C3", "6")]
+    public Task ALimitEdge_AfterAnOverdueQueuedStop_VerifiesOffBeforeReleasingTheMonitor()
+        => EdgeAfterOverdueStopAsync(driveFault: false);
+
+    [TestMethod]
+    [CommissioningCheck("C4", "7")]
+    public Task ADriveFaultEdge_AfterAnOverdueQueuedStop_VerifiesOffBeforeReleasingTheMonitor()
+        => EdgeAfterOverdueStopAsync(driveFault: true);
+
+    private static async Task EdgeAfterOverdueStopAsync(bool driveFault)
+    {
+        using var rig = await TimingPlant.StartAsync();
+        rig.Controller.Close().IsSuccessful.Should().BeTrue();
+        SpinWait.SpinUntil(() => (rig.Session.GetStatus().InputBits & 0x01) == 0, TimeSpan.FromSeconds(2))
+            .Should().BeTrue("the start limit must release before another limit asserts");
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(rig.Controller)!;
+        Exception? stopError = null;
+        var stop = new Thread(() =>
+        {
+            try { rig.Controller.Stop().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified); }
+            catch (Exception error) { stopError = error; }
+        });
+        try
+        {
+            lock (sync)
+            {
+                stop.Start();
+                stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+                stopError.Should().BeNull();
+                if (driveFault) rig.Session.Plant.TripDrive();
+                else rig.Session.Plant.SetLimitFault(openLimit: false, LimitSwitchFault.StuckActuated);
+                var writes = 0;
+                rig.Registers.BeforeAccess = access =>
+                {
+                    if (!access.IsRead && access.Register == SmI010Board.RelayClearRegister) writes++;
+                };
+                var bits = rig.Session.GetStatus().InputBits;
+                if (driveFault) rig.Controller.SimFaultRaw((bits & 0x04) != 0);
+                else rig.Controller.SimReverseLimitRaw((bits & 0x02) != 0);
+
+                writes.Should().Be(4, "the fresh edge must send all-off while the overdue worker still waits");
+                var status = rig.Controller.GetCurrentStatusSnapshot();
+                status.LastStopReason.Should().Be(driveFault ? RoofControllerStopReason.DriveFault : RoofControllerStopReason.LimitSwitchReached);
+                status.IsFaultLatched.Should().Be(driveFault);
+                if (driveFault) status.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+                AssertStoppedPlant(rig);
+            }
+        }
+        finally
+        {
+            rig.Registers.BeforeAccess = null;
+            if (stop.ThreadState != System.Threading.ThreadState.Unstarted) stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            await WaitForDeferredStopsAsync(rig.Controller);
+        }
+    }
+
+    [TestMethod]
     [CommissioningCheck("C3", "5")]
     [DataRow(false, 200)]
     [DataRow(false, 1600)]

@@ -737,7 +737,7 @@ public partial class RoofControllerServiceV4
         // First the generation and the relay fence, before the lock: an admitted start that has not yet written its
         // relay never will, and a waiting start is superseded.
         FenceRelaysOff();
-        using var pendingFence = TrackPendingFence(startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency));
+        var pendingFence = TrackPendingFence(startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency));
 
         // One deadline for the whole Stop: its wait for the lock and every HAT access it makes, the deadline stop it may
         // make first and the LEDs included (#220, PR #230 rereviews S-F4, F19). Past it the Stop answers that the relays
@@ -802,6 +802,7 @@ public partial class RoofControllerServiceV4
         finally
         {
             section.Dispose();
+            pendingFence.Dispose();
             if (lockTaken)
             {
                 Monitor.Exit(_syncLock);

@@ -137,11 +137,12 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   the lock is free until a read-back shows the relays off. Protective stops have the same bound through their caller's
   LEDs: from arrival for a limit-asserting or drive-fault edge or the watchdog's timer, and from the stop decision for
   a supervision cycle, a renewal or a repeated Open or Close. Routine reads keep their own 1.5 s until a protective
-  fence is pending; a bounded HAT section shares its earliest foreign arrival deadline even when the request preceded
-  that section. Supervision yields routine reads and LEDs to a waiting protective caller. The request remains recorded
-  until applied, including after transfer to a queued worker. A routine all-off retry's own fence does not bound it;
-  another pending request (an edge, Stop, shutdown or queued stop) does. Completed requests do not bound later
-  retries. Shutdown, a drive-fault edge and a limit asserting fence before they wait, and an edge that cannot take the
+  fence is pending; routine work in a bounded HAT section shares the earliest foreign arrival deadline even when the
+  request preceded that section. A caller that decides its own stop retains that stop's deadline for all-off and
+  verification; an overdue foreign request never suppresses those writes. Supervision yields routine reads and LEDs
+  to a waiting protective caller. The request remains recorded until applied, including after transfer to a queued
+  worker. A routine all-off retry's own fence does not bound it; another pending request (an edge, Stop, shutdown or
+  queued stop) does. Completed requests do not bound later retries. Shutdown, a drive-fault edge and a limit asserting fence before they wait, and an edge that cannot take the
   lock in time is applied, with its own level and motion, once it is free. A relay write the controller gave up on
   keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault` refused) until a read-back shows them off:
   the emulator transport fences a client's older connections at its next Hello, and on the Pi each I2C write runs on
