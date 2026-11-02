@@ -253,8 +253,58 @@ The Alpaca API has no real authentication, so the server keeps itself small and 
 
 ## Running it
 
-Phase 1 ships the server as a program, run from a build of this repository. It is not yet in the controller's image,
-the [deploy script](deployment.md) or the [installer](install.md) ([Not yet](#not-yet)).
+The controller image includes the server, off by default. Enable it through the [installer](install.md),
+[deploy script](deployment.md) or optional Compose overlay below. A source build can still run separately.
+Enabling the server leaves `RoofController:Alpaca:AllowCommands=Off`: deployment never enables Open or Close.
+
+### Container deployment
+
+The installer's **Alpaca server** option is off by default. When enabled, give this host's private IPv4 LAN address
+and the published TCP port (default `11111`). It creates a separate `RoofAlpacaServer` key without displaying it,
+keeps the device identities in `/var/lib/hvo-roof/alpaca/alpaca-devices.json`, and includes them in backup and restore.
+An upgrade keeps an existing opt-in; an explicit disable removes the listener and discovery responder.
+
+For the deploy script, provision the dedicated server key as described below and set `ALPACA_ENABLED=true`,
+`ALPACA_LAN_ADDRESS` to the host's private IPv4 LAN address, and `ALPACA_API_KEY_FILE` to the root-readable key file
+on that host. `ALPACA_PORT` defaults to `11111`; `ALPACA_DATA_DIR` defaults to `/var/lib/hvo-roof/alpaca` and must
+already exist. The directory is mounted read-write at `/var/lib/hvo-roof-alpaca`; keep it across replacements.
+`ALPACA_DISCOVERY_PORT` defaults to UDP `32227`. Never bind the TCP port to `0.0.0.0`, a public address or an overlay
+address. Deployment validates Alpaca's settings and existing identities before stopping the previous controller,
+and verifies the supervised process and read-only management listener after starting it. Failure restores the
+previous deployment and its discovery responder. `--stop` retires discovery too; `--rollback` matches discovery to
+the restored controller's saved settings and exact image.
+
+For Compose, explicitly add [`docker-compose.alpaca.yaml`](../src/HVO.RoofControllerV4.RPi/docker-compose.alpaca.yaml)
+to the base file, selecting either `pi` or `pi-lan-http`. Set `HVO_ALPACA_LAN_ADDRESS` (required),
+`HVO_ALPACA_API_KEY_FILE` (default `/etc/hvo-roof/secrets/alpaca-server-key`) and, optionally, `HVO_ALPACA_PORT`,
+`HVO_ALPACA_DATA_DIR` and `HVO_ALPACA_DISCOVERY_PORT`. Create the data directory first, mode `0755`.
+The release supplies both Compose files with the same pinned image. For example, with the variables already set:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.alpaca.yaml --profile pi config --quiet
+docker compose -f docker-compose.yaml -f docker-compose.alpaca.yaml --profile pi up -d
+```
+
+The base file alone publishes no Alpaca port and runs no discovery responder. To disable an existing Compose
+installation, bring down the composition with both files before bringing up the base file alone, so discovery and
+the old published port are removed.
+
+Inside the controller container, the supervisor starts Alpaca only with `Alpaca__Enabled=true`, as its own
+unprivileged user (`alpaca`, UID/GID `1655`). It copies the account key into a root-controlled private runtime
+directory, gives that process only `Alpaca__*` configuration and general runtime variables, and preserves its device
+identities on the data mount. Those GUIDs are public (`0644`, directory `0755`); the account key stays private.
+A server crash restarts that process alone. Its preparation and shutdown have their own deadlines; a hang cannot
+hold up relay-off after a controller exit or extend the container's 27-second stop bound. The host-network process
+runs `--discovery-only`, with no controller key, data mount or HAT access, advertising the published TCP port.
+
+The web System page, native About/System screens, terminal System page and `hvo-roof alpaca status` show the
+published port, both device UniqueIDs and each device's connected-client count. A heartbeat older than three seconds
+makes the server unavailable and the counts unknown; its validated IDs remain visible. The heartbeat contains no
+addresses or credentials. Listener settings remain deployment-local; the controller's existing settings catalogue
+contains its command policies and safety sources. The kiosk's [About view](kiosk.md#finding-the-installed-version)
+shows the same details, including the full device identities, while locked.
+
+### Running from source
 
 1. **Give it a key.** An admin adds an API key named `alpaca-server`, role `RoofAlpacaServer` (the Alpaca server's
    own account), on the web UI's [People](web.md#people) page, with `hvo-roof keys add --role alpaca-server`, or with
@@ -316,6 +366,8 @@ does not hold them.
 | `Enabled` | `false` | Whether the server runs at all. |
 | `ListenAddresses` | none (required) | The addresses it listens on: a LAN address, `127.0.0.1`, or `0.0.0.0` in a container whose published port is bound to the LAN address. Never a public address. |
 | `Port` | `11111` | The Alpaca port. |
+| `PublishedAddress` | none | When supplied by deployment, one private IPv4 LAN address on which Docker publishes TCP. Wildcard, loopback, public and overlay addresses are refused before listening. |
+| `StatusFilePath` | none | Optional sanitized server heartbeat for the controller; the supervisor sets `/run/hvo-roof/alpaca-status/status.json`. |
 | `AllowedNetworks` | loopback and the private ranges | The networks (CIDR) it answers, discovery included. Each must lie within loopback and the private ranges. |
 | `AllowedHosts` | none | Host names a request may name, besides IP addresses, `localhost` and this computer's name. |
 | `ControllerUrl` | `http://localhost:8080` | The controller's API. |
@@ -1185,7 +1237,4 @@ From the proposal's reviews, kept here:
 Phases 1 to 4 leave these to follow-ups of #220:
 
 - **Deployment checks** (#229): `--validate-deployment` checks of the `Host` allowlist and `ServerAddresses`.
-- **Deployment.** The server in the controller's image and container, the deploy script, Compose and the installer's
-  Alpaca option (off by default), its settings in the settings catalogue and the UIs, its `UniqueID`s in backups, and the
-  host-side discovery responder set up for a containerised server.
 - **TLS** on the Alpaca listener, so that the External key no longer crosses the LAN in the clear.

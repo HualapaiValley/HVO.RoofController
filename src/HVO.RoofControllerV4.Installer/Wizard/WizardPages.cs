@@ -525,6 +525,9 @@ internal sealed class ControllerPage : WizardPage
     private CheckBox? _openToLan;
     private TextField? _telemetry;
     private TextField? _importFrom;
+    private CheckBox? _alpacaEnabled;
+    private TextField? _alpacaLanAddress;
+    private TextField? _alpacaPort;
 
     public ControllerPage(InstallerWizard wizard)
         : base(wizard, "The controller")
@@ -552,6 +555,9 @@ internal sealed class ControllerPage : WizardPage
     public TextField? Telemetry => _telemetry;
 
     public TextField? ImportFrom => _importFrom;
+    public CheckBox? AlpacaEnabled => _alpacaEnabled;
+    public TextField? AlpacaLanAddress => _alpacaLanAddress;
+    public TextField? AlpacaPort => _alpacaPort;
 
     public override void Showing()
     {
@@ -581,6 +587,11 @@ internal sealed class ControllerPage : WizardPage
             _cameraUser = Field(ref previous, "View-only user", controller.Camera?.UserName ?? string.Empty, 24);
             previous = Hint(previous, Installer.CameraCredentialReminder, warning: true);
         }
+
+        previous = Heading(previous, "ASCOM Alpaca: optional, commands remain off by default");
+        _alpacaEnabled = Check(ref previous, "Enable the Alpaca server and LAN discovery", controller.Alpaca?.Enabled == true);
+        _alpacaLanAddress = Field(ref previous, "LAN IPv4 address", controller.Alpaca?.LanAddress ?? string.Empty, 20);
+        _alpacaPort = Field(ref previous, "Alpaca port", (controller.Alpaca?.Port ?? 11111).ToString(CultureInfo.InvariantCulture), 8);
 
         previous = Heading(previous, "Telemetry, exported over OTLP/HTTP: empty turns the export off");
         _telemetry = Field(ref previous, "Endpoint", controller.TelemetryEndpoint ?? string.Empty, 44);
@@ -623,7 +634,10 @@ internal sealed class ControllerPage : WizardPage
                 Camera = camera,
                 TelemetryEndpoint = _telemetry?.Text,
                 ImportSettingsFrom = _importFrom?.Text,
-                Rig = rig
+                Rig = rig,
+                Alpaca = _alpacaEnabled?.Value == CheckState.Checked
+                    ? new AlpacaInstallSettings { Enabled = true, LanAddress = _alpacaLanAddress?.Text ?? string.Empty, Port = int.TryParse(_alpacaPort?.Text, out var alpacaPort) ? alpacaPort : 0 }
+                    : controller.Alpaca is null ? null : controller.Alpaca with { Enabled = false }
             }
         };
 
@@ -657,6 +671,7 @@ internal sealed class ControllerPage : WizardPage
             lines.Add($"Camera: {(controller.Camera is { } camera ? $"{camera.BaseUrl}{(camera.UserName is { } user ? $" as {user}" : string.Empty)}" : "as it is")}");
         }
 
+        lines.Add(controller.Alpaca?.Enabled == true ? $"Alpaca: on, port {controller.Alpaca.Port} on its LAN address; commands remain off by default" : "Alpaca: off");
         lines.Add($"Telemetry: {controller.TelemetryEndpoint ?? "off"}");
         lines.Add($"Settings from a backup: {controller.ImportSettingsFrom ?? "none"}");
         return lines;

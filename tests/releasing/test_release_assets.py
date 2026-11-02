@@ -242,6 +242,7 @@ class TheAssets(ReleaseTestCase):
         "hvo-roof-kiosk-4.0.0-linux-arm64.tar.gz": ("kiosk", "linux-arm64"),
         "HVO-Roof-4.0.0.zip": ("mac-app", "osx-arm64"),
         "docker-compose.yaml": ("compose", None),
+        "docker-compose.alpaca.yaml": ("compose-alpaca", None),
         "deploy-roofcontroller-rpi.sh": ("deploy-script", None),
         "install.sh": ("install-script", None),
         **ARCHIVES,

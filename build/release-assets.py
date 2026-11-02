@@ -533,6 +533,10 @@ def build(arguments):
         raise AssetError(f"{release_compose.SOURCE}: {error}") from error
     (out / "docker-compose.yaml").write_text(compose, encoding="utf-8")
     assets["docker-compose.yaml"] = ("compose", None)
+    (out / "docker-compose.alpaca.yaml").write_text(
+        release_compose.alpaca_overlay(version, registry=arguments.registry,
+                                      controller_digest=arguments.controller_digest), encoding="utf-8")
+    assets["docker-compose.alpaca.yaml"] = ("compose-alpaca", None)
     shutil.copyfile(DEPLOY_SCRIPT, out / DEPLOY_SCRIPT.name)
     (out / DEPLOY_SCRIPT.name).chmod(0o755)
     assets[DEPLOY_SCRIPT.name] = ("deploy-script", None)

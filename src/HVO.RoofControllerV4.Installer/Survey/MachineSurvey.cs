@@ -551,6 +551,18 @@ public sealed record ContainerSurvey
     /// <summary>Whether the optional host authentication adapter is enabled.</summary>
     public bool LinuxAuthEnabled { get; init; }
 
+    /// <summary>The controller that owns a discovery companion, as its ownership label says.</summary>
+    public string? DiscoveryFor { get; init; }
+
+    /// <summary>Whether the opt-in Alpaca server runs.</summary>
+    public bool AlpacaEnabled { get; init; }
+
+    /// <summary>The Alpaca port publication address (never logged).</summary>
+    public string? AlpacaLanAddress { get; init; }
+
+    /// <summary>The published port, advertised by the host discovery responder.</summary>
+    public int? AlpacaPort { get; init; }
+
     /// <summary>The HAT emulator's time scale (Emulator__TimeScale), when set.</summary>
     public string? EmulatorTimeScale { get; init; }
 

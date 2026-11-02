@@ -75,6 +75,9 @@ public sealed class AlpacaDeviceIds
                     stream.WriteByte((byte)'\n');
                     stream.Flush(flushToDisk: true);
                 }
+                // Public management GUIDs, readable by preflight without DAC_OVERRIDE; only their owner can write.
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(temporary,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
                 // A new file never replaces one another server wrote meanwhile; a phase 1 file is replaced under the turn.
                 File.Move(temporary, path, overwrite: existing.Dome is not null);
@@ -90,6 +93,21 @@ public sealed class AlpacaDeviceIds
         {
             throw new AlpacaSettingsException(
                 $"The device identities in {path} could not be read or made ({ex.GetType().Name}). Check {AlpacaOptions.SectionName}:DataPath.");
+        }
+    }
+
+    /// <summary>Checks an existing identity file without creating a directory, lock or identities at preflight.</summary>
+    internal static void ValidateExisting(string directory)
+    {
+        try
+        {
+            _ = Read(Path.Combine(directory, FileName));
+        }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            throw new AlpacaSettingsException($"The Alpaca identity file cannot be read ({ex.GetType().Name}).");
         }
     }
 

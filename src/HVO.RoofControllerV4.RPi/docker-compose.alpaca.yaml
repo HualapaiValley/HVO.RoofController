@@ -1,0 +1,93 @@
+# Optional Alpaca overlay. Adding this file explicitly enables Alpaca; the base Compose file stays off.
+# Set HVO_ALPACA_LAN_ADDRESS to this host's private IPv4 LAN address. Never use a wildcard, public or overlay address.
+# With the base file, select either pi or pi-lan-http. The published TCP port defaults to 11111.
+# docs/alpaca.md#container-deployment describes key provisioning and the persistent device identities.
+x-alpaca-environment: &alpaca-environment
+  Alpaca__Enabled: "true"
+  Alpaca__ListenAddresses__0: "0.0.0.0"
+  Alpaca__PublishedAddress: ${HVO_ALPACA_LAN_ADDRESS:?Set HVO_ALPACA_LAN_ADDRESS to one private IPv4 LAN address}
+  Alpaca__Port: "11111"
+  Alpaca__ControllerUrl: http://localhost:8080
+  Alpaca__ControllerApiKeyFile: /run/secrets/alpaca-server-key
+  Alpaca__DataPath: /var/lib/hvo-roof-alpaca
+  Alpaca__Discovery__Enabled: "false"
+  Alpaca__Discovery__AdvertisedPort: ${HVO_ALPACA_PORT:-11111}
+
+x-alpaca-volumes: &alpaca-volumes
+  - type: bind
+    source: ${HVO_ALPACA_API_KEY_FILE:-/etc/hvo-roof/secrets/alpaca-server-key}
+    target: /run/secrets/alpaca-server-key
+    read_only: true
+    bind:
+      create_host_path: false
+  - type: bind
+    source: ${HVO_ALPACA_DATA_DIR:-/var/lib/hvo-roof/alpaca}
+    target: /var/lib/hvo-roof-alpaca
+    bind:
+      create_host_path: false
+
+services:
+  roof-controller-check:
+    environment: *alpaca-environment
+    volumes: *alpaca-volumes
+
+  roof-controller:
+    environment: *alpaca-environment
+    volumes: *alpaca-volumes
+    ports:
+      - target: 11111
+        published: ${HVO_ALPACA_PORT:-11111}
+        host_ip: ${HVO_ALPACA_LAN_ADDRESS:?Set HVO_ALPACA_LAN_ADDRESS to one private IPv4 LAN address}
+        protocol: tcp
+
+  roof-controller-lan-http-check:
+    environment: *alpaca-environment
+    volumes: *alpaca-volumes
+
+  roof-controller-lan-http:
+    environment: *alpaca-environment
+    volumes: *alpaca-volumes
+    ports:
+      - target: 11111
+        published: ${HVO_ALPACA_PORT:-11111}
+        host_ip: ${HVO_ALPACA_LAN_ADDRESS:?Set HVO_ALPACA_LAN_ADDRESS to one private IPv4 LAN address}
+        protocol: tcp
+
+  # Only UDP discovery uses the host network. This process has no controller key, data volume or hardware access.
+  alpaca-discovery:
+    image: hvov9/roof-controller:v4
+    entrypoint: [ "dotnet", "/app/alpaca/HVO.RoofControllerV4.Alpaca.dll" ]
+    command: [ "--discovery-only" ]
+    environment:
+      Alpaca__Enabled: "true"
+      Alpaca__PublishedAddress: ${HVO_ALPACA_LAN_ADDRESS:?Set HVO_ALPACA_LAN_ADDRESS to one private IPv4 LAN address}
+      Alpaca__Discovery__AdvertisedPort: ${HVO_ALPACA_PORT:-11111}
+      Alpaca__Discovery__Port: ${HVO_ALPACA_DISCOVERY_PORT:-32227}
+    depends_on:
+      roof-controller:
+        condition: service_healthy
+        required: false
+      roof-controller-lan-http:
+        condition: service_healthy
+        required: false
+    network_mode: host
+    user: "1655:1655"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop: [ ALL ]
+    security_opt: [ no-new-privileges ]
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    restart: unless-stopped
+    stop_grace_period: 3s
+    healthcheck:
+      disable: true
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
+    profiles: [ pi, pi-lan-http ]

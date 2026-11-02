@@ -40,6 +40,15 @@ def run(*arguments):
     return status, out.getvalue(), err.getvalue()
 
 
+class AlpacaOverlay(unittest.TestCase):
+    def test_release_pins_responder_to_the_controller_image(self):
+        result = release_compose.alpaca_overlay("4.0.0", controller_digest=CONTROLLER_DIGEST)
+        self.assertEqual(images(result), [f"ghcr.io/hualapaivalley/roof-controller:4.0.0@{CONTROLLER_DIGEST}"])
+        self.assertIn("--discovery-only", result)
+        self.assertIn("HVO_ALPACA_LAN_ADDRESS:?", result)
+        self.assertNotIn("hvov9/", result)
+
+
 class TheReleaseFile(unittest.TestCase):
     def setUp(self):
         self.result = release_compose.convert(SOURCE, "4.0.0")

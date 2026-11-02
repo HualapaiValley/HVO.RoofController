@@ -15,7 +15,7 @@
 set -uo pipefail
 
 role=$(basename "$0")
-dir=${FAKE_DIR:-${RoofWeb__FakeDir:?}}
+dir=${FAKE_DIR:-${RoofWeb__FakeDir:-${Alpaca__FakeDir:?}}}
 event() {
   printf '%s %s %s\n' "${EPOCHREALTIME}" "${role}" "$*" >>"${dir}/times.log"
   printf '%s %s\n' "${role}" "$*" >>"${dir}/events.log"

@@ -312,6 +312,37 @@ internal static class BackupCommands
 
         return entries;
 
+        async Task AddAlpacaAsync(string folder, string kind, string? owner, UnixFileMode mode)
+        {
+            // Only this known data file is read from the unprivileged server's volume. Its root-owned parent
+            // prevents the directory itself being swapped; O_NOFOLLOW binds the file read to a regular inode.
+            OnlyRootChanges(Path.GetDirectoryName(folder)!, (await StatAsync(machine, Path.GetDirectoryName(folder)!, cancellationToken).ConfigureAwait(false))?.Owner, machine.GetMode(Path.GetDirectoryName(folder)!));
+            if (owner != "root:root")
+            {
+                var numeric = await machine.Commands.RunAsync(new CommandLine("stat", "-c", "%u:%g", "--", folder), cancellationToken).ConfigureAwait(false);
+                owner = numeric.Succeeded ? numeric.Output.Trim() : null;
+            }
+            if (kind != "directory" || (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0
+                || owner is not ("root:root" or "1655:1655"))
+                throw new InstallerRefusedException("The Alpaca device identities directory must be a directory owned by root or user 1655, with no group or other write permission.");
+            var file = ControllerLayout.System.AlpacaDevicesFile;
+            byte[]? bytes;
+            try
+            {
+                bytes = machine.ReadRegularBytes(file, noFollow: true, maxBytes: 4096);
+                if (bytes is not null) ValidateAlpacaIdentities(bytes);
+            }
+            catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
+            {
+                throw new InstallerRefusedException("The Alpaca device identities could not be backed up: the file must be regular, readable and contain only device UniqueIDs. Nothing was written.");
+            }
+            entries.Add(new BackupEntry(folder, BackupEntry.Folder, Modes.Octal(Modes.Folder), owner));
+            if (bytes is null) return;
+            total += bytes.Length;
+            if (total > MaxBytes) throw new InstallerRefusedException("The backup exceeds its maximum size. Nothing was written.");
+            entries.Add(new BackupEntry(file, BackupEntry.File, Modes.Octal(Modes.File), owner, bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes))) { Content = bytes });
+        }
+
         async Task AddAsync(string path, bool recurse)
         {
             if (await StatAsync(machine, path, cancellationToken).ConfigureAwait(false) is not var (kind, owner))
@@ -320,6 +351,12 @@ internal static class BackupCommands
             }
 
             var mode = (UnixFileMode)((int)(machine.GetMode(path) ?? Modes.PrivateFile) & 0x1FF);
+            if (path == ControllerLayout.System.AlpacaData)
+            {
+                await AddAlpacaAsync(path, kind, owner, mode).ConfigureAwait(false);
+                return;
+            }
+
             if (kind == "directory" && recurse)
             {
                 OnlyRootChanges(path, owner, mode);
@@ -350,6 +387,16 @@ internal static class BackupCommands
         }
     }
 
+    private static void ValidateAlpacaIdentities(byte[] bytes)
+    {
+        using var document = JsonDocument.Parse(bytes);
+        var properties = document.RootElement.ValueKind == JsonValueKind.Object ? document.RootElement.EnumerateObject().ToArray() : [];
+        if (properties.Length is < 1 or > 2 || properties.Count(item => item.Name == "dome/0") != 1
+            || properties.Select(item => item.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length
+            || properties.Any(item => item.Name is not ("dome/0" or "safetymonitor/0") || item.Value.ValueKind != JsonValueKind.String || !Guid.TryParse(item.Value.GetString(), out _)))
+            throw new JsonException("Invalid Alpaca device identities.");
+    }
+
     private static void OnlyRootChanges(string folder, string? owner, UnixFileMode? mode)
     {
         const UnixFileMode othersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
@@ -366,7 +413,7 @@ internal static class BackupCommands
     /// manifest names each that was not (<c>absent</c>), so a rollback that puts a store back never takes a file the
     /// backup left out for one that was never saved.
     /// </summary>
-    internal static IReadOnlyList<string> StoreFiles { get; } = [.. StateContractGuard.Files(ControllerLayout.System).SelectMany(store => store.Files)];
+    internal static IReadOnlyList<string> StoreFiles { get; } = [.. StateContractGuard.Files(ControllerLayout.System).SelectMany(store => store.Files), ControllerLayout.System.AlpacaDevicesFile];
 
     /// <summary>
     /// Why an upgrade cannot back up <paramref name="store"/>, one of <see cref="StoreFiles"/>: it is there, but a backup
@@ -1083,6 +1130,11 @@ internal static class BackupCommands
                 throw Unreadable(path, $"{entry.Path} is not as its manifest says (its SHA-256 differs): the backup is damaged");
             }
 
+            if (name == ControllerLayout.System.AlpacaDevicesFile)
+            {
+                try { ValidateAlpacaIdentities(content); }
+                catch (JsonException) { throw Unreadable(path, "the Alpaca device identities are not valid"); }
+            }
             found[name] = entry with { Content = content };
         }
 

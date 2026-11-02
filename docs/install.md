@@ -543,6 +543,10 @@ Choosing HTTP asks you to type `http`, to confirm that keys, session tokens and 
   source, and that the old user's password must change ([security.md](security.md), "Rotate the Blue Iris credential").
   The installer writes the camera's settings to the secrets folder, so they take precedence over the camera settings
   in the web UI, which cannot change them then. Run the installer again to change the camera.
+- **Alpaca server:** off by default. Enable it only with this host's private IPv4 LAN address and a separate TCP
+  port (default `11111`). The installer provisions its own account key and host discovery responder, preserves
+  its device UniqueIDs across upgrades and backup/restore, and keeps `AllowCommands=Off`
+  ([Alpaca container deployment](alpaca.md#container-deployment)).
 - **Telemetry:** the OTLP/HTTP endpoint the controller exports to. Empty turns the export off.
 - **Settings from a backup:** the full path of an `appsettings.Local.json`, for a controller that has no settings yet
   ([Settings from a backup](#settings-from-a-backup)).
@@ -685,6 +689,9 @@ For `hvo-roof` and the Mac app on a Mac, a `client` section, and the admin who m
 | `controller.firstAdmin.pin` | `true` to give the first admin a PIN for the kiosk | `false` |
 | `controller.camera.baseUrl` | The Blue Iris server the controller shows the camera from, such as `http://192.168.0.4:81`. It must have no path, and no user name or password. | None: the camera is left as it is. |
 | `controller.camera.userName` | A Blue Iris user that may only view, when the server asks for one. Its password is typed, or given in a file. | None |
+| `controller.alpaca.enabled` | Whether to run the separate Alpaca server and host discovery responder | `false` |
+| `controller.alpaca.lanAddress` | This host's private IPv4 LAN address, required when enabled; never wildcard, public or overlay | None |
+| `controller.alpaca.port` | The published Alpaca TCP port, distinct from the API and web UI ports | `11111` |
 | `controller.telemetryEndpoint` | An OTLP/HTTP endpoint for the controller's telemetry, such as `http://collector:4318` | None: export is off |
 | `controller.importSettingsFrom` | The full path of an `appsettings.Local.json` to start a controller that has no settings with ([Settings from a backup](#settings-from-a-backup)). Not recorded. | None |
 | `controller.resources.cpus` | The controller container's CPU limit, at least `1`, such as `1` or `1.5` ([The controller's limits](#the-controllers-limits)) | Left out of the record: the deploy script's last one, else the running controller's, else `1`, RoofController's default |
@@ -1535,6 +1542,8 @@ before it changes anything: [State contracts](#state-contracts)):
 - `/var/lib/hvo-roof`: the people, the API keys, the settings set through the API, and the roof command history
   (`identity/command-history.jsonl`, about 4 MB at its default 10,000 commands and at most about 30 MB, so a backup
   stays well inside the 64 MB it takes in all: [The command history](security.md#the-command-history));
+- `/var/lib/hvo-roof/alpaca/alpaca-devices.json`, when present: the public Dome and SafetyMonitor GUIDs, so restored
+  clients recognise the same devices; the dedicated server key is already in the controller's secrets backup;
 - `/etc/hvo-roof-kiosk` and `/opt/hvo-roof-kiosk/appsettings.Local.json`: the kiosk's device key and settings.
 
 The programs and images are not in it: they come from the release. The archive is a `.tar.gz`, root's and `0600`,
@@ -1549,7 +1558,11 @@ would: one a restore could not read is not kept, and the backup fails.
 
 - Each file and folder keeps its permission bits, without setuid, setgid or the sticky bit: the install that follows a
   restore sets the modes it needs.
-- Every folder it reads must be root's, with only root writing to it: whoever else could change one could put a file of
+- The Alpaca identity directory is the sole narrow exception to root-owned folders: it may belong to UID/GID `1655`,
+  mode `0755`. Only its regular `alpaca-devices.json` is read without following links, capped at 4 KiB and validated
+  as the GUID-only identity dictionary. No lock file or other Alpaca-owned content enters the archive. Restore writes
+  these public identities as `0644` in the `0755` directory; older backups with no Alpaca file still restore.
+- Every other folder it reads must be root's, with only root writing to it: whoever else could change one could put a file of
   theirs in place of another as it is read. Such a folder is refused, with the `chown` and `chmod` that fix it, and
   nothing is written.
 - `/var/backups/hvo-roof`, and each folder above it up to `/`, must be a folder (not a link), root's, with only root

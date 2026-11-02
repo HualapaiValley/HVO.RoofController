@@ -26,9 +26,12 @@ public sealed class SystemSummaryController : ControllerBase
 {
     private readonly RoofHostMetrics _metrics;
 
-    public SystemSummaryController(RoofHostMetrics metrics)
+    private readonly RoofAlpacaServerStatus _alpaca;
+
+    public SystemSummaryController(RoofHostMetrics metrics, RoofAlpacaServerStatus alpaca)
     {
         _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+        _alpaca = alpaca ?? throw new ArgumentNullException(nameof(alpaca));
     }
 
     /// <summary>
@@ -39,5 +42,5 @@ public sealed class SystemSummaryController : ControllerBase
     [HttpGet("Summary", Name = nameof(GetSystemSummary))]
     [ProducesResponseType(typeof(SystemSummaryResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<SystemSummaryResponse>> GetSystemSummary(CancellationToken cancellationToken)
-        => await _metrics.GetSummaryAsync(cancellationToken).ConfigureAwait(false);
+        => (await _metrics.GetSummaryAsync(cancellationToken).ConfigureAwait(false)) with { AlpacaServer = _alpaca.Read() };
 }

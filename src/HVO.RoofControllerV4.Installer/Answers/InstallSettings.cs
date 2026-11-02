@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Client;
@@ -76,6 +78,9 @@ public sealed record ControllerSettings
     /// <summary>Explicit opt-in host authentication. Omitted leaves legacy authentication unchanged.</summary>
     public LinuxAuthSettings? LinuxAuth { get; init; }
 
+    /// <summary>The optional LAN Alpaca listener. Omitted or disabled leaves it off.</summary>
+    public AlpacaInstallSettings? Alpaca { get; init; }
+
     /// <summary>
     /// The controller container's resource limits (docs/deployment.md, "The container's privileges and limits"): the
     /// process, CPU and memory limits, RoofController's default for each one not given. Kept in the install record, so an
@@ -124,6 +129,7 @@ public sealed record ControllerSettings
         }
 
         foreach (var problem in (FirstAdmin?.Problems() ?? []).Concat(Camera?.Problems() ?? []).Concat(Rig?.Problems() ?? []).Concat(LinuxAuth?.Problems() ?? [])
+            .Concat(Alpaca?.Problems(ApiPort, WebPort) ?? [])
             .Concat((Resources ?? new ContainerResources()).Problems()))
         {
             yield return problem;
@@ -156,7 +162,8 @@ public sealed record ControllerSettings
             : null,
         TelemetryEndpoint = string.IsNullOrWhiteSpace(TelemetryEndpoint) ? null : TelemetryEndpoint.Trim(),
         ImportSettingsFrom = string.IsNullOrWhiteSpace(ImportSettingsFrom) ? null : ImportSettingsFrom.Trim(),
-        Resources = (Resources ?? new ContainerResources()).Normalised()
+        Resources = (Resources ?? new ContainerResources()).Normalised(),
+        Alpaca = Alpaca is { } alpaca ? alpaca with { LanAddress = alpaca.LanAddress?.Trim() ?? string.Empty } : null
     };
 
     public bool Equals(ControllerSettings? other)
@@ -172,11 +179,12 @@ public sealed record ControllerSettings
             && string.Equals(TelemetryEndpoint, other.TelemetryEndpoint, StringComparison.Ordinal)
             && Equals(Rig, other.Rig)
             && Equals(LinuxAuth, other.LinuxAuth)
+            && Equals(Alpaca, other.Alpaca)
             && string.Equals(ImportSettingsFrom, other.ImportSettingsFrom, StringComparison.Ordinal)
             && Equals(Resources, other.Resources);
 
     public override int GetHashCode()
-        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom, LinuxAuth, Resources));
+        => HashCode.Combine(Connection, HttpsPort, HttpPort, WebPort, HostNames.Count, Domains.Count, HashCode.Combine(FirstAdmin, Camera, TelemetryEndpoint, Rig, ImportSettingsFrom, LinuxAuth, Resources, Alpaca));
 
     public static string Describe(ConnectionMode mode) => mode switch
     {
@@ -667,4 +675,37 @@ public sealed record KioskSplashSettings
 
     /// <summary>Absolute path to a PNG the operator has permission to use. Keep it available for future upgrades.</summary>
     public string? Image { get; init; }
+}
+
+/// <summary>The optional Alpaca server, published on one RFC1918 LAN IPv4 address; commands remain off.</summary>
+public sealed record AlpacaInstallSettings
+{
+    /// <summary>Whether to run and publish the Alpaca server. Off by default.</summary>
+    public bool Enabled { get; init; }
+
+    /// <summary>The host's RFC1918 LAN IPv4 address. Never a wildcard, loopback, VPN or public address.</summary>
+    public string LanAddress { get; init; } = string.Empty;
+
+    /// <summary>The port published on that address and advertised by host discovery.</summary>
+    public int Port { get; init; } = 11111;
+
+    /// <summary>Invalid publication choices while the server is enabled.</summary>
+    public IEnumerable<string> Problems(int apiPort, int webPort)
+    {
+        if (!Enabled) yield break;
+        if (!IsLanAddress(LanAddress))
+            yield return "Alpaca needs one RFC1918 IPv4 LAN address (controller.alpaca.lanAddress); wildcard, loopback, VPN and public addresses are refused.";
+        if (Port is < 1 or > 65535)
+            yield return "The Alpaca port must be from 1 to 65535.";
+        else if (Port == apiPort || Port == webPort)
+            yield return "The Alpaca port must differ from the API and web UI ports.";
+    }
+
+    internal static bool IsLanAddress(string text)
+    {
+        if (!IPAddress.TryParse(text, out var address) || address.AddressFamily != AddressFamily.InterNetwork
+            || !string.Equals(address.ToString(), text, StringComparison.Ordinal)) return false;
+        var bytes = address.GetAddressBytes();
+        return bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) || (bytes[0] == 192 && bytes[1] == 168);
+    }
 }

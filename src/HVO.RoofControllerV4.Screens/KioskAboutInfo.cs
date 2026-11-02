@@ -17,7 +17,7 @@ public sealed record KioskAboutSection(string Name, string Title, IReadOnlyList<
 /// says why: <see cref="NotConfigured"/>, <see cref="Unreachable"/>, <see cref="Reading"/> or <see cref="NotAvailable"/>.
 /// The summary is shown only while the status is live, so a value from before a disconnection is never shown as current.
 /// </summary>
-public sealed record KioskAboutInfo(KioskAboutSection Device, KioskAboutSection Controller, KioskAboutSection Host)
+public sealed record KioskAboutInfo(KioskAboutSection Device, KioskAboutSection Controller, KioskAboutSection Host, KioskAboutSection? Alpaca = null)
 {
     /// <summary>The controller refused this device's key: it has not been set up for this device (or no longer is).</summary>
     public const string NotConfigured = RoofSystemText.ControllerNotConfigured;
@@ -74,17 +74,23 @@ public sealed record KioskAboutInfo(KioskAboutSection Device, KioskAboutSection 
 
         var device = new KioskAboutSection("about-device", self.Label, [new("about-client-version", "Version", self.Value)],
             wording.SignIn == KioskSignIn.Pin ? PinPolicy : DesktopPolicy);
+        var alpacaLabels = shown.Where(row => row.Label.StartsWith("Alpaca ", StringComparison.Ordinal)).Select(row => row.Label).ToArray();
         var controller = new KioskAboutSection("about-controller", "Controller",
         [
             Row(VersionLabel, "about-controller-version") with { Label = "Version" },
-            Row(WebUiLabel, "about-web-ui")
+            Row(WebUiLabel, "about-web-ui"),
+            .. alpacaLabels.Where(label => label == "Alpaca server").Select(label => Row(label, "about-alpaca-server"))
         ]);
         var hostLabels = shown.Count > 0
-            ? shown.Select(row => row.Label).Where(label => label is not (VersionLabel or WebUiLabel)).ToArray()
+            ? shown.Select(row => row.Label).Where(label => label is not (VersionLabel or WebUiLabel)
+                && !label.StartsWith("Alpaca ", StringComparison.Ordinal)).ToArray()
             : HostLabels;
         var host = new KioskAboutSection("about-host", "Controller host",
             [.. hostLabels.Select(label => Row(label, $"about-{label.ToLowerInvariant().Replace(' ', '-')}"))],
             live && problem is not null && problem != Unreachable ? problem : null);
-        return new(device, controller, host);
+        var details = alpacaLabels.Where(label => label != "Alpaca server").ToArray();
+        var alpaca = details.Length == 0 ? null : new KioskAboutSection("about-alpaca", "Alpaca devices",
+            [.. details.Select(label => Row(label, $"about-{label.ToLowerInvariant().Replace(' ', '-')}"))]);
+        return new(device, controller, host, alpaca);
     }
 }

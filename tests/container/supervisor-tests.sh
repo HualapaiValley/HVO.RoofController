@@ -29,10 +29,11 @@ setup() {
     exit 1
   fi
   # The web UI stand-in gets it as one of the web UI's settings: the supervisor passes it no other variable.
-  export FAKE_DIR="${WORK}/fake" RoofWeb__FakeDir="${WORK}/fake"
-  mkdir -p "${FAKE_DIR}" "${WORK}/bin" "${WORK}/app/web" "${WORK}/secrets"
+  export FAKE_DIR="${WORK}/fake" RoofWeb__FakeDir="${WORK}/fake" Alpaca__FakeDir="${WORK}/fake"
+  mkdir -p "${FAKE_DIR}" "${WORK}/bin" "${WORK}/app/web" "${WORK}/app/alpaca" "${WORK}/secrets"
   ln -s "${TESTS_DIR}/fake-process.sh" "${WORK}/bin/controller"
   ln -s "${TESTS_DIR}/fake-process.sh" "${WORK}/bin/ui"
+  ln -s "${TESTS_DIR}/fake-process.sh" "${WORK}/bin/alpaca"
   ln -s "${TESTS_DIR}/fake-relays-off" "${WORK}/bin/relays-off"
   : >"${FAKE_DIR}/events.log"
   SUPERVISOR_PID=""
@@ -42,6 +43,9 @@ setup() {
     "HVO_SUPERVISOR_SECRETS_DIR=${WORK}/secrets"
     "HVO_SUPERVISOR_CONTROLLER_EXEC=${WORK}/bin/controller"
     "HVO_SUPERVISOR_UI_EXEC=${WORK}/bin/ui"
+    "HVO_SUPERVISOR_ALPACA_EXEC=${WORK}/bin/alpaca"
+    "HVO_SUPERVISOR_ALPACA_USER="
+    "HVO_SUPERVISOR_ALPACA_DATA_DIR=${WORK}/alpaca-data"
     "HVO_SUPERVISOR_RELAYS_OFF_EXEC=${WORK}/bin/relays-off"
     "HVO_SUPERVISOR_UI_USER="
     "HVO_SUPERVISOR_UI_DATA_DIR=${WORK}/data"
@@ -1828,6 +1832,9 @@ fi
 
 # shellcheck source=tests/container/supervisor-cgroup-tests.sh
 source "${TESTS_DIR}/supervisor-cgroup-tests.sh"
+
+# shellcheck source=tests/container/supervisor-alpaca-tests.sh
+source "${TESTS_DIR}/supervisor-alpaca-tests.sh"
 
 # shellcheck source=tests/container/supervisor-stop-boundary-tests.sh
 source "${TESTS_DIR}/supervisor-stop-boundary-tests.sh"

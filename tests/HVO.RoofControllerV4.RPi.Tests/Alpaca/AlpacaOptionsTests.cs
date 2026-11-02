@@ -82,6 +82,30 @@ public sealed class AlpacaOptionsTests
     }
 
     [TestMethod]
+    [DataRow("0.0.0.0", false)]
+    [DataRow("203.0.113.10", false)]
+    [DataRow("100.64.0.1", false)]
+    [DataRow("127.0.0.1", false)]
+    [DataRow("::", false)]
+    [DataRow("192.168.1.20", true)]
+    [DataRow("10.1.2.3", true)]
+    [DataRow("172.16.1.2", true)]
+    public void PublishedAddress_RequiresAPrivateLanIPv4_ForServerAndDiscovery(string address, bool valid)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Alpaca:Enabled"] = "true", ["Alpaca:PublishedAddress"] = address,
+            ["Alpaca:ListenAddresses:0"] = "0.0.0.0", ["Alpaca:ControllerApiKeyFile"] = "/run/secrets/test-key"
+        }).Build();
+        foreach (var discoveryOnly in new[] { false, true })
+        {
+            Action read = () => AlpacaProgram.ReadOptions(configuration, discoveryOnly);
+            if (valid) read.Should().NotThrow();
+            else read.Should().Throw<AlpacaSettingsException>().Which.Message.Should().Contain("PublishedAddress").And.NotContain(address);
+        }
+    }
+
+    [TestMethod]
     public void TheDefaultAllowedNetworks_AreLoopbackAndThePrivateRanges()
     {
         var networks = new AlpacaOptions().EffectiveAllowedNetworks;

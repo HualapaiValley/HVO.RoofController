@@ -37,6 +37,46 @@ public sealed class KioskRenderTests
     [TestMethod]
     [DataRow(1280, 720, 8.2)]
     [DataRow(800, 480, 5.2)]
+    public async Task AlpacaAbout_KeepsTheFullIdentitiesCountsAndStopReachable(int width, int height, double density)
+    {
+        var directory = Directory.CreateTempSubdirectory("hvo-alpaca-about-").FullName;
+        var path = Path.Combine(directory, "status.json");
+        const string dome = "11111111-1111-1111-1111-111111111111";
+        const string weather = "22222222-2222-2222-2222-222222222222";
+        try
+        {
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new AlpacaServerHeartbeat(
+                KioskHarness.Start, 11111, dome, weather, 2, 1)));
+            await using var harness = await KioskHarness.CreateAsync(settings: new Dictionary<string, string?>
+            {
+                ["Alpaca:Enabled"] = "true", ["Alpaca:StatusFilePath"] = path
+            });
+            await harness.StartLiveAsync();
+            await using var screen = await KioskScreen.ShowAsync(harness, width, height, density);
+            await OnUiAsync(() => screen.Shell.ShowPage(KioskPage.About));
+            await UntilAsync(() => screen.Shell.System is { ReadingSummary: false, Summary.Count: > 0 }, "the Alpaca summary");
+            await screen.DrawAsync();
+            var seen = new HashSet<string>();
+            var pager = await OnUiAsync(() => (KioskPager)screen.Find("about-pages")!);
+            for (var page = 0; page < pager.PageCount; page++)
+            {
+                await OnUiAsync(() =>
+                {
+                    if (page > 0) pager.Move(1);
+                    screen.Window.UpdateLayout();
+                    foreach (var block in screen.Window.GetVisualDescendants().OfType<TextBlock>().Where(block => block.IsEffectivelyVisible))
+                        if (block.Text is { } text) seen.Add(text);
+                });
+                await screen.RenderAsync($"alpaca-about-p{page + 1}", TestContext);
+            }
+            seen.Should().Contain(dome).And.Contain(weather).And.Contain("Dome 2, SafetyMonitor 1");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    [DataRow(1280, 720, 8.2)]
+    [DataRow(800, 480, 5.2)]
     public async Task About_IsReadableWhileLockedAndOffline_AndKeepsStopVisible(int width, int height, double pixelsPerMillimetre)
     {
         await using var harness = await KioskHarness.CreateAsync();
@@ -54,6 +94,7 @@ public sealed class KioskRenderTests
                 "a locked PIN kiosk reads the controller's version with its own key (#209)");
             screen.Text("about-web-ui").Should().Be("https://192.0.2.10:8088/",
                 "people at the kiosk learn where the web UI is, from the host's address (#209)");
+            screen.Text("about-alpaca-server").Should().Be("Off", "the separately deployed server is off by default");
             screen.Text("about-cpu").Should().Be("12.5 %, load 0.42 0.35 0.30, 4 processors");
             screen.Text("about-temperature").Should().Be("47.2 °C");
             screen.Text("about-addresses").Should().Be("192.0.2.10");

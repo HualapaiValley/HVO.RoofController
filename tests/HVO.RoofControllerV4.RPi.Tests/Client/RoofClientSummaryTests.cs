@@ -18,6 +18,27 @@ public sealed class RoofClientSummaryTests
     private static readonly DateTimeOffset At = new(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
 
     [TestMethod]
+    public void Summary_DescribesTheSeparateAlpacaServer_AndWithholdsCountsWithoutAFreshHeartbeat()
+    {
+        var server = new AlpacaServerSummary
+        {
+            Enabled = true, Running = true, Port = 11111,
+            DomeUniqueId = "11111111-1111-1111-1111-111111111111",
+            SafetyMonitorUniqueId = "22222222-2222-2222-2222-222222222222",
+            DomeConnectedClients = 2, SafetyMonitorConnectedClients = 1
+        };
+        var summary = new SystemSummaryResponse("4.4.0", 1, DateTimeOffset.UtcNow) { AlpacaServer = server };
+        var rows = RoofSystemText.DescribeSummary(summary).ToDictionary(row => row.Label, row => row.Value);
+        rows["Alpaca server"].Should().Be("Running; port 11111");
+        rows["Alpaca Dome UniqueID"].Should().Be(server.DomeUniqueId);
+        rows["Alpaca weather UniqueID"].Should().Be(server.SafetyMonitorUniqueId);
+        rows["Alpaca connected clients"].Should().Be("Dome 2, SafetyMonitor 1");
+        var stale = RoofSystemText.DescribeAlpacaServer(server with { Running = false }).ToDictionary(row => row.Label, row => row.Value);
+        stale["Alpaca server"].Should().Be("unavailable (no fresh heartbeat); port 11111");
+        stale["Alpaca connected clients"].Should().Be(RoofSystemText.Unavailable);
+    }
+
+    [TestMethod]
     public async Task AViewer_ReadsTheSummary_WhereTheDetailedInformationIsRefused()
     {
         using var host = new RoofApiTestHost();

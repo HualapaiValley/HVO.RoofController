@@ -8,6 +8,7 @@ stop_boundary_case() (
   local role=$1 boundary=$2 function definition status child_status=0
   local parent_function=start_controller child_function=exec_controller
   if [[ "${role}" == ui ]]; then parent_function=launch_ui; child_function=exec_ui; fi
+  if [[ "${role}" == alpaca ]]; then parent_function=launch_alpaca; child_function=exec_alpaca; fi
   for function in "${parent_function}" "${child_function}"; do
     definition=$(sed -n "/^${function}() {$/,/^}$/p" "${SUPERVISOR}")
     [[ -n "${definition}" ]] || { echo "missing supervisor function: ${function}"; exit 1; }
@@ -36,16 +37,20 @@ APP
   : >"${events}"
   local STOP_REQUESTED=0 RELAYS_STATE=off NOW_US=0 UI_USER="" UI_PREPARE_PID=""
   local APP_DIR="${WORK}/app" UI_SETTINGS_FILE="${WORK}/boundary-settings"
+  local ALPACA_USER="" ALPACA_PREPARE_PID="" ALPACA_SETTINGS_FILE="${UI_SETTINGS_FILE}" ALPACA_OOM_SCORE_RAISE=500
   local CONTROLLER_OOM_SCORE_RAISE=100 UI_OOM_SCORE_RAISE=500
   local -a CONTROLLER_EXEC=("${WORK}/boundary-app" "${role}" "${events}")
-  local -a UI_EXEC=("${CONTROLLER_EXEC[@]}")
-  local -A PID=([controller]="" [ui]="") STARTS=([controller]=0 [ui]=0)
+  local -a UI_EXEC=("${CONTROLLER_EXEC[@]}") ALPACA_EXEC=("${CONTROLLER_EXEC[@]}")
+  local -A PID=([controller]="" [ui]="" [alpaca]="") STARTS=([controller]=0 [ui]=0 [alpaca]=0)
   local -A WAITING_FOR_ROOM=() STARTED_AT=() STATE=()
   : >"${UI_SETTINGS_FILE}"
   if [[ "${role}" == ui ]]; then
     # launch_ui waits for its preparation; an actual successful child makes that wait real and deterministic.
     : &
     UI_PREPARE_PID=$!
+  elif [[ "${role}" == alpaca ]]; then
+    : &
+    ALPACA_PREPARE_PID=$!
   fi
 
   # The parent guard case stops in the last preparation call, after all earlier stop checks. Its absence must be
@@ -134,4 +139,21 @@ test_ui_child_honours_a_stop_between_parent_check_and_fork() {
 
 test_ui_child_honours_a_stop_at_child_entry() {
   stop_boundary_case ui child-entry || fail_test "UI child-entry stop guard"
+}
+
+
+test_alpaca_starts_without_a_stop_at_launch_boundaries() {
+  stop_boundary_case alpaca none || fail_test "Alpaca no-stop launch boundary case"
+}
+
+test_alpaca_parent_stop_check_prevents_the_fork() {
+  stop_boundary_case alpaca parent-check || fail_test "Alpaca parent stop guard"
+}
+
+test_alpaca_child_honours_a_stop_between_parent_check_and_fork() {
+  stop_boundary_case alpaca prefork || fail_test "Alpaca inherited stop guard"
+}
+
+test_alpaca_child_honours_a_stop_at_child_entry() {
+  stop_boundary_case alpaca child-entry || fail_test "Alpaca child-entry stop guard"
 }

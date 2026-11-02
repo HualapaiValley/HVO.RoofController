@@ -48,6 +48,22 @@ public sealed class RoofCliAlpacaCommandTests
     }
 
     [TestMethod]
+    public async Task Status_AlsoReportsWhetherTheSeparateServerIsDeployed()
+    {
+        using var host = AlpacaCliSupport.CreateHost();
+        using var rig = new CliRig(host);
+        rig.UseApiKey(TestApiKeys.Viewer);
+
+        var text = await rig.RunAsync("alpaca", "status");
+        text.Code.Should().Be(RoofExitCode.Success, text.ToString());
+        text.Out.Should().MatchRegex(@"Alpaca server: +Off");
+        var json = await rig.RunAsync("alpaca", "status", "--json");
+        json.Code.Should().Be(RoofExitCode.Success, json.ToString());
+        json.Json.GetProperty("server").GetProperty("enabled").GetBoolean().Should().BeFalse();
+        json.Json.GetProperty("mode").GetString().Should().Be("CloseOnly", "the existing JSON command state remains available");
+    }
+
+    [TestMethod]
     public async Task Status_Json_IsTheControllersAlpacaState()
     {
         using var host = AlpacaCliSupport.CreateHost();

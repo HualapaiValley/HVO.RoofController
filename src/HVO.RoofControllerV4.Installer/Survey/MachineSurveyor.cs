@@ -377,15 +377,15 @@ public static partial class MachineSurveyor
                 && bindings.ValueKind == JsonValueKind.Object
                     ? bindings.EnumerateObject()
                         .Where(binding => binding.Value.ValueKind == JsonValueKind.Array)
-                        .SelectMany(binding => binding.Value.EnumerateArray())
-                        .Select(host => (
+                        .SelectMany(binding => binding.Value.EnumerateArray().Select(host => (
+                            ContainerPort: binding.Name,
                             Port: host.TryGetProperty("HostPort", out var port) && int.TryParse(port.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : 0,
-                            Address: host.TryGetProperty("HostIp", out var address) ? address.GetString() ?? string.Empty : string.Empty))
+                            Address: host.TryGetProperty("HostIp", out var address) ? address.GetString() ?? string.Empty : string.Empty)))
                         .Where(binding => binding.Port > 0)
                         .ToArray()
                     : [];
             var published = hostBindings.Select(binding => binding.Port).Distinct().Order().ToArray();
-            var addresses = hostBindings.Select(binding => binding.Address is "0.0.0.0" or "::" ? string.Empty : binding.Address).Distinct().ToArray();
+            var addresses = hostBindings.Where(binding => binding.ContainerPort != "11111/tcp").Select(binding => binding.Address is "0.0.0.0" or "::" ? string.Empty : binding.Address).Distinct().ToArray();
             var network = hasHostConfig && hostConfig.TryGetProperty("NetworkMode", out var mode) && mode.GetString() is { Length: > 0 } networkMode
                 && networkMode is not ("default" or "bridge")
                     ? networkMode
@@ -416,6 +416,10 @@ public static partial class MachineSurveyor
                 WebStopKeyFile = environment.GetValueOrDefault(WebStopKeyFileSetting) is { Length: > 0 } stopKey ? stopKey : null,
                 TelemetryEndpoint = environment.GetValueOrDefault(TelemetryEndpointSetting),
                 LinuxAuthEnabled = environment.GetValueOrDefault("RoofControllerSecurity__Identity__LinuxAuth__Enabled") == "true",
+                DiscoveryFor = labels.GetValueOrDefault("io.hvo.roof.discovery-for"),
+                AlpacaEnabled = environment.GetValueOrDefault("Alpaca__Enabled") == "true",
+                AlpacaLanAddress = environment.GetValueOrDefault("HVO_ALPACA_LAN_ADDRESS"),
+                AlpacaPort = int.TryParse(environment.GetValueOrDefault("Alpaca__Discovery__AdvertisedPort"), NumberStyles.None, CultureInfo.InvariantCulture, out var alpacaPort) ? alpacaPort : null,
                 EmulatorTimeScale = environment.GetValueOrDefault(EmulatorTimeScaleSetting),
                 EmulatorCameraFramesPerSecond = environment.GetValueOrDefault(EmulatorCameraFramesSetting),
                 StartedAt = container.TryGetProperty("State", out var started) ? StartedAt(started) : null,

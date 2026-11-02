@@ -57,6 +57,12 @@ public sealed record ControllerLayout(
     /// <summary>The controller's identity store: its people and managed API keys, as hashes.</summary>
     public string IdentityFile => Path.Join(Identity, "identity.json");
 
+    /// <summary>The Alpaca volume on the host: its stable device identities.</summary>
+    public string AlpacaData => Path.Join(Data, "alpaca");
+
+    /// <summary>The stable public Alpaca device identities, included in backup and restore.</summary>
+    public string AlpacaDevicesFile => Path.Join(AlpacaData, "alpaca-devices.json");
+
     /// <summary>The PKCS#12 file's password, a secret the controller reads.</summary>
     public string PfxPassword => Path.Join(Secrets, "Kestrel__Certificates__Default__Password");
 }
@@ -141,7 +147,7 @@ public static class PlanBuilder
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
             certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
-            keys = AllocateKeys(machine, survey, layout, roles);
+            keys = AllocateKeys(machine, survey, layout, roles, settings.Alpaca?.Enabled == true);
             steps.AddRange(keys.Select(key => new ApiKeyStep(layout, key)));
             var camera = CameraSteps.For(layout, rig, settings.Camera);
             steps.AddRange(camera);
@@ -174,6 +180,8 @@ public static class PlanBuilder
 
             steps.Add(new PortStep(settings.ApiPort, settings.UsesHttps ? "the controller's API (HTTPS)" : "the controller's API (HTTP)", MachineSurveyor.ControllerContainer));
             steps.Add(new PortStep(settings.WebPort, "the web UI", MachineSurveyor.ControllerContainer));
+            if (settings.Alpaca is { Enabled: true } alpaca)
+                steps.Add(new PortStep(alpaca.Port, "the Alpaca server on its LAN address", MachineSurveyor.ControllerContainer));
         }
 
         if (roles.Contains(InstallRole.Kiosk))
@@ -274,7 +282,7 @@ public static class PlanBuilder
         var layout = ControllerLayout.For(machine);
         settings = settings.Normalised();
         var rig = roles.Contains(InstallRole.Rig);
-        var keys = AllocateKeys(machine, survey, layout, roles);
+        var keys = AllocateKeys(machine, survey, layout, roles, settings.Alpaca?.Enabled == true);
         var steps = new List<PlanStep>(keys.Select(key => new ApiKeyStep(layout, key))) { new DeployToolsStep() };
 
         // The camera's files as the record has them: a change to one, or one written by an install that stopped before it
@@ -527,7 +535,7 @@ public static class PlanBuilder
         var settings = recorded.Normalised() with { FirstAdmin = null, ImportSettingsFrom = null };
         var names = CertificateNames.For(machine, settings);
         var rig = record.Roles.Contains(InstallRole.Rig);
-        var keys = AllocateKeys(machine, survey, layout, record.Roles);
+        var keys = AllocateKeys(machine, survey, layout, record.Roles, settings.Alpaca?.Enabled == true);
         var certificate = settings.UsesHttps ? new CertificateStep(layout, names, settings.Connection) : null;
         var emulator = rig ? new HatEmulatorStep(settings.Rig ?? new RigSettings()) : null;
         return (new ControllerStep(layout, settings, names, rig, certificate, keys, emulator), settings, emulator);
@@ -609,7 +617,7 @@ public static class PlanBuilder
     /// admin key (the first admin), the web UI's Stop key, and the kiosk's when the kiosk runs here too. Keys already in
     /// the secrets folder are reused. Without root, the plan says what each is for, not which entry it takes.
     /// </summary>
-    public static IReadOnlyList<ApiKeyAllocation> AllocateKeys(InstallerMachine machine, MachineSurvey survey, ControllerLayout layout, IReadOnlyCollection<InstallRole> roles)
+    public static IReadOnlyList<ApiKeyAllocation> AllocateKeys(InstallerMachine machine, MachineSurvey survey, ControllerLayout layout, IReadOnlyCollection<InstallRole> roles, bool alpaca = false)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(survey);
@@ -618,6 +626,7 @@ public static class PlanBuilder
         ApiKeyUse[] uses = roles.Contains(InstallRole.Kiosk)
             ? [ApiKeyUse.Operator, ApiKeyUse.Admin, ApiKeyUse.WebStop, ApiKeyUse.Kiosk]
             : [ApiKeyUse.Operator, ApiKeyUse.Admin, ApiKeyUse.WebStop];
+        if (alpaca) uses = [.. uses, ApiKeyUse.AlpacaServer];
         try
         {
             var existing = ApiKeyFiles.Read(machine, layout.Secrets);

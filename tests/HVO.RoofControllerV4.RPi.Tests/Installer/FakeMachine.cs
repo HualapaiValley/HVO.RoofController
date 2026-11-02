@@ -34,6 +34,8 @@ internal sealed record FakeContainer
     /// <summary>The Compose project that made it; null for the deploy script.</summary>
     public string? ComposeProject { get; init; }
 
+    public string? DiscoveryFor { get; init; }
+
     public string? Version { get; init; } = "4.0.0";
 
     /// <summary>A value in its environment that must never reach the log, the plan or the answers.</summary>
@@ -1401,7 +1403,10 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         DeployOptions.Add(string.Join(' ', options));
         if (options is ["--stop"])
         {
-            // As the script's --stop: the verified Stop above, then the container stopped and kept.
+            // As the script's --stop: the owned host discovery companion goes too.
+            if (Containers.TryGetValue(MachineSurveyor.ControllerContainer + "-discovery", out var discovery) && discovery.DiscoveryFor == MachineSurveyor.ControllerContainer)
+                Containers.Remove(MachineSurveyor.ControllerContainer + "-discovery");
+            // The verified Stop above, then the container stopped and kept.
             if (Containers.TryGetValue(MachineSurveyor.ControllerContainer, out var stopping) && stopping.State == "running")
             {
                 Containers[MachineSurveyor.ControllerContainer] = stopping with { State = "exited" };
@@ -1502,6 +1507,13 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             }
         }
 
+        settings["Alpaca__Enabled"] = environment.GetValueOrDefault("ALPACA_ENABLED") ?? "false";
+        if (settings["Alpaca__Enabled"] == "true")
+        {
+            settings["HVO_ALPACA_LAN_ADDRESS"] = environment["ALPACA_LAN_ADDRESS"];
+            settings["Alpaca__Discovery__AdvertisedPort"] = environment["ALPACA_PORT"];
+            Folder(environment["ALPACA_DATA_DIR"]);
+        }
         var https = environment["HTTPS_CERT_DIR"].Length > 0;
         Containers[MachineSurveyor.ControllerContainer] = WithLimits(new FakeContainer(), limits, environment) with
         {
@@ -1641,6 +1653,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             labels[MachineSurveyor.VersionLabel] = version;
         }
 
+        if (container.DiscoveryFor is { } discoveryFor) labels["io.hvo.roof.discovery-for"] = discoveryFor;
+
         if (container.ComposeProject is { } project)
         {
             labels[MachineSurveyor.ComposeProjectLabel] = project;
@@ -1668,6 +1682,8 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
             environment.Add(container.Https ? "ASPNETCORE_URLS=http://localhost:8080;https://+:8443" : "ASPNETCORE_URLS=http://+:8080");
             ports[container.Https ? "8443/tcp" : "8080/tcp"] = [new { HostIp = container.PublishAddress ?? string.Empty, HostPort = apiPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
             ports["8088/tcp"] = [new { HostIp = container.PublishAddress ?? string.Empty, HostPort = container.WebPort.ToString(System.Globalization.CultureInfo.InvariantCulture) }];
+            if (container.Settings.GetValueOrDefault("Alpaca__Enabled") == "true")
+                ports["11111/tcp"] = [new { HostIp = container.Settings["HVO_ALPACA_LAN_ADDRESS"], HostPort = container.Settings["Alpaca__Discovery__AdvertisedPort"] }];
             environment.Add($"HatEmulator__Enabled={(container.Emulated ? "true" : "false")}");
             if (container.Emulated)
             {

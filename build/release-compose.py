@@ -139,6 +139,19 @@ def convert(source, version, registry=REGISTRY, controller_digest=None, emulator
     return result
 
 
+def alpaca_overlay(version, registry=REGISTRY, controller_digest=None):
+    """The opt-in overlay, with its responder running the same immutable image as the controller."""
+    source = SOURCE.with_name("docker-compose.alpaca.yaml").read_text(encoding="utf-8")
+    expected = "    image: hvov9/roof-controller:v4\n"
+    if source.count(expected) != 1:
+        raise ConversionError("the Alpaca overlay must name the controller image exactly once")
+    reference = f"{registry}/roof-controller:{version}" + (f"@{controller_digest}" if controller_digest else "")
+    result = source.replace(expected, f"    image: {reference}\n")
+    if re.findall(r"^\s*image: (\S+)$", result, re.MULTILINE) != [reference]:
+        raise ConversionError("the Alpaca overlay names an unexpected image")
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Writes the release compose file: the Pi compose file with the release's images, built by nothing.")

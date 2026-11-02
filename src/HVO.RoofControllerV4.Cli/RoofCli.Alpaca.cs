@@ -36,13 +36,25 @@ public static partial class RoofCli
                 using var client = context.Connect();
                 var status = await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false);
                 var alpaca = status.Alpaca ?? throw new RoofCliRefusedException(RoofCliAlpaca.NoState, RoofExitCode.Failed);
+                AlpacaServerSummary? server = null;
+                try
+                {
+                    server = (await client.System.GetSummaryAsync(cancellationToken).ConfigureAwait(false)).AlpacaServer;
+                }
+                catch (RoofApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    // Older controllers have the command state without deployment status.
+                }
                 if (context.Json)
                 {
-                    context.WriteJson(alpaca);
+                    // Keep the existing command-state JSON fields, adding the separately deployed server's state.
+                    var json = System.Text.Json.JsonSerializer.SerializeToNode(alpaca, RoofClientJson.Create())!.AsObject();
+                    json["server"] = System.Text.Json.JsonSerializer.SerializeToNode(server, RoofClientJson.Create());
+                    context.WriteJson(json);
                 }
                 else
                 {
-                    RoofCliFormat.WriteRows(context.Out, RoofCliAlpaca.DescribeRows(alpaca));
+                    RoofCliFormat.WriteRows(context.Out, [.. RoofSystemText.DescribeAlpacaServer(server), .. RoofCliAlpaca.DescribeRows(alpaca)]);
                 }
 
                 return (int)RoofExitCode.Success;

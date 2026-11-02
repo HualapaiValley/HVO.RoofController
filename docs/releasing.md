@@ -228,6 +228,7 @@ names the images until someone publishes the draft.
 | `hvo-roof-linux-auth-linux-arm64`, `hvo-roof-linux-auth-linux-x64` | The optional Linux PAM and sudo authentication worker, which the installer puts in place only when it is enabled ([Linux authentication](install-linux-auth.md#files-and-boundaries)) |
 | `hvo-roof-kiosk-<version>-linux-arm64.tar.gz` | The kiosk's program, unit, udev rule and example settings, in a folder of that name ([Install](kiosk.md#install)) |
 | `HVO-Roof-<version>.zip` | The Mac app, signed ad hoc ([Install](mac.md#install)) |
+| `docker-compose.alpaca.yaml` | Optional off-by-default Alpaca overlay; the discovery responder uses the same pinned controller image |
 | `docker-compose.yaml` | The release compose file, each image pinned to its digest ([Deploying with Compose](deployment.md#deploying-with-compose)) |
 | `deploy-roofcontroller-rpi.sh` | The deploy script, for a released image ([Deploying a released image](deployment.md#deploying-a-released-image)) |
 | `install.sh` | The script that checks a machine, then downloads the release's installer for it, checks it and starts it ([install.sh](install.md#installsh)) |
