@@ -1211,14 +1211,19 @@ public partial class RoofControllerServiceV4
                 }
             }
 
-            if (ReadInputs_NoLock())
+            // A request can arrive during the routine all-off retry above. Its deadline may have cut that retry:
+            // yield the following read too, rather than count an access we would refuse before sending as failed.
+            if (!BoundPendingFence())
             {
-                Evaluate_NoLock(now);
-            }
-            else if (_commandedMotion != RoofMotionDirection.None && _consecutiveInputReadFailures >= _options.MaxConsecutiveInputReadFailures)
-            {
-                StopMotion_NoLock(RoofControllerStopReason.InputReadFailure,
-                    $"Safety inputs could not be read {_consecutiveInputReadFailures} consecutive times while moving.");
+                if (ReadInputs_NoLock())
+                {
+                    Evaluate_NoLock(now);
+                }
+                else if (_commandedMotion != RoofMotionDirection.None && _consecutiveInputReadFailures >= _options.MaxConsecutiveInputReadFailures)
+                {
+                    StopMotion_NoLock(RoofControllerStopReason.InputReadFailure,
+                        $"Safety inputs could not be read {_consecutiveInputReadFailures} consecutive times while moving.");
+                }
             }
 
             // An edge or Stop has raised its fence while the cycle held the lock. Its own all-off verification takes

@@ -13,6 +13,9 @@ internal sealed class CapturingLogger<T> : ILogger<T>
 
     public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries => _entries.ToArray();
 
+    /// <summary>Optional synchronous observation point for deterministic log-boundary timing tests.</summary>
+    public Action<string, Exception?>? Callback { get; set; }
+
     public IEnumerable<string> MessagesAt(LogLevel level) => Entries.Where(e => e.Level == level).Select(e => e.Message);
 
     public bool Contains(LogLevel level, string fragment)
@@ -23,5 +26,9 @@ internal sealed class CapturingLogger<T> : ILogger<T>
     public bool IsEnabled(LogLevel logLevel) => true;
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        => _entries.Enqueue((logLevel, formatter(state, exception), exception));
+    {
+        var message = formatter(state, exception);
+        _entries.Enqueue((logLevel, message, exception));
+        Callback?.Invoke(message, exception);
+    }
 }

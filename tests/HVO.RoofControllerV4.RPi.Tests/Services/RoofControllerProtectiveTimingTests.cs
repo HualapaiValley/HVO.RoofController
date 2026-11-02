@@ -483,11 +483,25 @@ public class RoofControllerProtectiveTimingTests
     {
         using var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false);
-        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        var logger = new CapturingLogger<RoofControllerServiceV4>();
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider(), logger: logger);
         (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
         hat.Registers.FailRelayReads = true;
         service.ForceRelayStates(false, false, false).Should().BeFalse();
         hat.Registers.FailRelayReads = false;
+        var boundaryObserved = false;
+        logger.Callback = (message, _) =>
+        {
+            if (message.StartsWith("All-off read-back was", StringComparison.Ordinal)
+                && typeof(RoofControllerServiceV4).GetField("t_foreignFenceDeadline", BindingFlags.NonPublic | BindingFlags.Static)!
+                    .GetValue(null) is long deadline)
+            {
+                boundaryObserved = true;
+                // A timed wait may return a fraction before its deadline. Resume the caller after that boundary,
+                // so the following routine read would deterministically be refused before reaching the HAT lane.
+                while (Stopwatch.GetTimestamp() <= deadline) Thread.Sleep(1);
+            }
+        };
         using var writing = new ManualResetEventSlim();
         hat.Registers.BeforeRelayWrite = (register, _) =>
         {
@@ -516,6 +530,7 @@ public class RoofControllerProtectiveTimingTests
         }
         finally
         {
+            logger.Callback = null;
             hat.Registers.BeforeRelayWrite = null;
             await cycle.WaitAsync(TimeSpan.FromSeconds(10));
             await edge.WaitAsync(TimeSpan.FromSeconds(10));
@@ -523,6 +538,11 @@ public class RoofControllerProtectiveTimingTests
             WaitForVerifiedOff(service, hat);
         }
 
+        boundaryObserved.Should().BeTrue();
+        logger.Entries.Should().NotContain(entry => entry.Message.Contains("Safety input read failed", StringComparison.Ordinal)
+            && entry.Exception != null
+            && entry.Exception.Message.Contains("2 s bound of the stop in progress has passed", StringComparison.Ordinal),
+            "a pending fence that cuts a routine retry must also yield the following input read");
         hat.RelayMask.Should().Be(0);
         service.GetCurrentStatusSnapshot().RelayRegisterState.Should().Be(RoofRelayRegisterState.Verified);
     }
