@@ -17,10 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   CORS headers, and a per-address polling limit. `ShutterStatus` is Open, Closed, Opening or Closing as the roof is,
   and Error for every other state (a stopped roof never reads as moving), from the last status the controller
   published, never older than 3 s; `AbortSlew` is the controller's Stop and always allowed (also before connecting),
-  and an unverified stop is an error; `OpenShutter` is refused (`0x40B`) and never reaches the controller
-  (`CloseShutter` comes with phase 3, below). A fixed table of error numbers, the management API with a `UniqueID` kept for good,
-  read-only setup pages, and a UDP discovery responder that can also run alone on a host's network
-  (`--discovery-only`). ConformU 4.5.3, pinned, checks it in CI against the HAT emulator with no errors and no issues.
+  and an unverified stop is an error (`CloseShutter` and `OpenShutter` come with phases 3 and 4, below). A fixed table
+  of error numbers, the management API with a `UniqueID` kept for good, read-only setup pages, and a UDP discovery
+  responder that can also run alone on a host's network (`--discovery-only`). ConformU 4.5.3, pinned, checks it in CI against the HAT emulator with no errors and no issues.
   Running it, its settings and what later phases add: [docs/alpaca.md](docs/alpaca.md).
 - ASCOM Alpaca safety sources (#220, phase 2): the safety service reads Alpaca mounts' `AtPark`
   (`RoofSafety:Telescopes`) and weather safety monitors' `IsSafe` (`RoofSafety:WeatherSources`), with `GET` only, never
@@ -61,11 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   with every check an ordinary Close has, on a single-use ticket (5 s), and refuses it while the human Stop hold is
   set, while a person holds the operator lease, or unless every blocking telescope, read again for that Close within
   `ScopeRereadBudgetMs` (600 ms by default), is clear of the roof; the weather never gates it. Nothing is queued or
-  retried, and an Alpaca client never reverses a person's motion. `OpenShutter` stays refused whatever any setting
-  says. The account is deny by default and accepted only from loopback and `RoofController:Alpaca:ServerAddresses`;
+  retried, and an Alpaca client never reverses a person's motion. The account is deny by default and accepted only from loopback and `RoofController:Alpaca:ServerAddresses`;
   the Alpaca server uses an account of its own (`RoofAlpacaServer`), passes the client's key on for that Close alone,
   never logs it, and slows down repeated wrong keys. The listener is still plain HTTP, so the key crosses the LAN in
-  the clear: it can only close the roof. [docs/alpaca.md](docs/alpaca.md#alpaca-close).
+  the clear: it can only close the roof, and open it under `OpenAndClose` (below), when the controller allows.
+  [docs/alpaca.md](docs/alpaca.md#alpaca-close).
 - Override grants (#220): a person may let one refused Alpaca Close through from the web UI, the terminal or the kiosk
   (never through Alpaca or an API key): it lifts only the telescope reasons shown, lasts
   `RoofController:Alpaca:OverrideWindowMinutes` (5, from 1 to 15), is used up by the next Close that gets past the
@@ -93,6 +92,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The HAT emulator fences a client's older connections at its next tagged Hello, holds register writes on request
   (`POST /api/emulator/link` `writeHoldMilliseconds`), and delays an Alpaca device's answers
   (`POST /api/emulator/alpaca/delay`).
+- Alpaca `OpenShutter` (#220, phase 4): an Alpaca client may open the roof through the Alpaca server with the External
+  Alpaca account's key, sent as for `CloseShutter`, once someone with the local credential sets
+  `RoofController:Alpaca:AllowCommands` to the new `OpenAndClose` (`Off` stays the default; `CloseOnly` refuses every
+  Alpaca Open). The controller alone decides each Open, on its own ticket and under its lock, with every check an
+  ordinary Open has, the human Stop hold and a person's operator lease as for a Close, and the owner's rule whatever
+  `RoofSafety:InterlockMode` says: at least one required weather source, every required one with a latest read that
+  succeeded, is fresh and says safe (a source whose latest read failed refuses an Open at once, before its
+  `MaxReadingAge`), and every blocking telescope, read again for that Open, clear of the roof. A refusal is `0x40B` with
+  its reasons and an alert; nothing is queued, retried or replayed, an Alpaca client never reverses a person's motion,
+  and the weather turning (or a telescope unparking) while the roof opens never stops it (an alert says so); nothing
+  closes the roof on its own. [docs/alpaca.md](docs/alpaca.md#alpaca-open).
+- `RoofController:Alpaca:AllowOpenWithoutBlockingScopes` (#220, default `false`, safety-critical, local credential
+  only): with no telescope set to block the roof, an Alpaca Open is refused (`no-blocking-scopes`) unless this is on;
+  then the weather alone decides, and every UI warns "Alpaca Open checks no telescope" while Open is allowed, as the
+  controller's log does at start.
+- Open override grants (#220): a person may let one refused Alpaca Open through from the web UI, the terminal (`hvo-roof
+  alpaca grant`, interactive only) or the kiosk, as for a Close: its own kind beside a Close grant, lifting only the
+  reasons shown (the weather's included), 1 to 15 minutes, used up by one Open, logged with who granted it. No grant
+  opens the roof while the safety interlock is `Block`: the grant route refuses an Open grant (403 `BlockMode`), the
+  UIs show the control disabled with the reason (the status's `openGrantUnavailable`), a change of mode drops every
+  grant, and an Open grant in force all the same is never honoured.
+- Every UI offers **Allow this Open once** on a refused Alpaca Open's alert (#220): the web UI, the terminal interface and
+  `hvo-roof alpaca grant --alert ID` (interactive only, as for a Close), the kiosk and the Mac app. It asks first, with
+  what the grant lifts and that the roof stays open if the weather turns, and sends an Open grant with exactly the
+  alert's reasons. While the safety interlock is `Block`, the Open grant is shown disabled with the controller's reason
+  (the terminal says why in its place, and `hvo-roof alpaca grant` refuses before asking, exit 7). The stepped-away
+  notice names the person's own grants in force (another person's is dropped once anyone takes the operator lease),
+  and `hvo-roof alpaca revoke --kind Open` revokes an Open grant. `hvo-roof alpaca
+  alerts` says `GRANT unavailable`, with the reason, for a refused Open while the safety interlock is `Block`.
 
 ### Changed
 

@@ -148,17 +148,19 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
         => _client.Alpaca.RequestTicketAsync(kind, new RoofApiKeyCredential(clientKey), client, TicketTimeout);
 
     /// <summary>
-    /// Sends the Alpaca client's Close with its ticket and key. The wait is the ticket's answer deadline plus 1 s; a
-    /// timeout is an error the client sees, never retried (#220, R12).
+    /// Sends the Alpaca client's Close or Open (<paramref name="kind"/>) with its ticket and key. The wait is the ticket's
+    /// answer deadline plus 1 s; a timeout is an error the client sees, never retried (#220, R12).
     /// </summary>
-    public async Task<RoofStatusResponse> CloseAsync(RoofAlpacaTicket ticket, string clientKey, RoofAlpacaForwarding client)
+    public async Task<RoofStatusResponse> CommandAsync(RoofAlpacaCommandKind kind, RoofAlpacaTicket ticket, string clientKey, RoofAlpacaForwarding client)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         var timeout = TimeSpan.FromMilliseconds(ticket.AnswerDeadlineMilliseconds) + TimeSpan.FromSeconds(1);
+        var request = new RoofAlpacaCommandRequest(ticket.TicketId, ticket.InstanceId, ticket.Generation);
         try
         {
-            var status = await _client.Alpaca.CloseAsync(new RoofAlpacaCommandRequest(ticket.TicketId, ticket.InstanceId, ticket.Generation),
-                new RoofApiKeyCredential(clientKey), client, timeout).ConfigureAwait(false);
+            var status = kind == RoofAlpacaCommandKind.Open
+                ? await _client.Alpaca.OpenAsync(request, new RoofApiKeyCredential(clientKey), client, timeout).ConfigureAwait(false)
+                : await _client.Alpaca.CloseAsync(request, new RoofApiKeyCredential(clientKey), client, timeout).ConfigureAwait(false);
             Offer(status);
             return status;
         }

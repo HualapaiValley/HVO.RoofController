@@ -239,7 +239,7 @@ public sealed class AlpacaProtocolTests
         response.Content.Headers.ContentType!.MediaType.Should().Be("text/html");
         response.Headers.GetValues("Content-Security-Policy").Single().Should().Contain("form-action 'none'");
         html.Should().Contain(alpaca.Services.GetRequiredService<AlpacaDeviceIds>().Dome);
-        html.Should().Contain("Disabled").And.Contain("Closed");
+        html.Should().Contain("the controller decides each: Alpaca commands are off").And.Contain("Closed");
         html.Should().NotContain("<form").And.NotContain("<script");
     }
 

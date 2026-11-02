@@ -26,10 +26,16 @@ internal static class AlpacaSetupPage
         var roof = services.GetRequiredService<AlpacaRoof>();
 
         string roofNow, weatherNow;
+        var commands = "OpenShutter and CloseShutter go to the roof controller with the Alpaca client's own key (the External Alpaca account's), and the controller decides each";
         try
         {
             var status = roof.GetCurrent();
             roofNow = AlpacaDome.DescribeStatus(status);
+            if (status.Alpaca is { } alpaca)
+            {
+                commands += $": {RoofAlpacaText.DescribeMode(alpaca.Mode)}";
+            }
+
             weatherNow = $"{(safetyMonitor.IsSafe(status) ? "IsSafe true" : "IsSafe false")}. {safetyMonitor.DescribeWeather(status)}";
         }
         catch (AlpacaException ex)
@@ -43,7 +49,7 @@ internal static class AlpacaSetupPage
             ("Server", $"{AlpacaEndpoints.ServerName} {RoofProductVersion.Describe(typeof(AlpacaSetupPage).Assembly)}"),
             ("Device", $"{AlpacaDome.DeviceTypeName} 0: {AlpacaDome.DeviceName}"),
             ("UniqueID", ids.Dome),
-            ("Commands", "Disabled. The server reads the roof and stops it (AbortSlew); it never opens or closes it."),
+            ("Commands", $"{commands}. AbortSlew always stops the roof, with no credential."),
             ("Roof now", roofNow),
             ("Connected clients", dome.Connections.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             ("Device", $"{AlpacaSafetyMonitor.DeviceTypeName} 0: {AlpacaSafetyMonitor.DeviceName}"),

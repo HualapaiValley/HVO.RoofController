@@ -67,7 +67,7 @@ public static class WebRoles
     /// <summary>What an API key with an Alpaca account's role is for, or null for any other role.</summary>
     public static string? DescribeAlpacaAccount(string? role) => NormalizeKeyRole(role) switch
     {
-        AlpacaCommander => "The External Alpaca account: Alpaca clients send this key through the Alpaca server to close the roof while the controller allows Alpaca commands. It can read the status and send that Close, nothing else, and is never a kiosk's key.",
+        AlpacaCommander => "The External Alpaca account: Alpaca clients send this key through the Alpaca server to close the roof, and to open it under OpenAndClose, while the controller allows Alpaca commands. It can read the status and send those commands, nothing else, and is never a kiosk's key.",
         AlpacaServer => "The Alpaca server's own account: the Alpaca server reads the status with it and reports the refusals it makes itself; its AbortSlew stops the roof without setting the Stop hold. It is never a kiosk's key.",
         _ => null
     };

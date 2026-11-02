@@ -3,7 +3,9 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Alpaca;
+using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Client;
+using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.Web.Components.Pages;
 using HVO.RoofControllerV4.Web.Roof;
 using static HVO.RoofControllerV4.RPi.Tests.Web.WebAlpacaSupport;
@@ -13,7 +15,8 @@ namespace HVO.RoofControllerV4.RPi.Tests.Web;
 /// <summary>
 /// The roof page's Alpaca panel (#220), from the controller's real Alpaca command state: which commands are on, the human
 /// Stop hold and "Allow Alpaca again", the operator lease, grants with Revoke, alerts with Acknowledge and "Allow this
-/// Close once", whose question is asked before anything is granted, and the controller's warnings.
+/// Close once" or "Allow this Open once", whose question is asked before anything is granted, and the controller's
+/// warnings, with Alpaca Close on or, for Open grants (#220, phase 4), Alpaca Open and Close, Block mode among them.
 /// </summary>
 [TestClass]
 public sealed class DashboardAlpacaTests
@@ -191,7 +194,7 @@ public sealed class DashboardAlpacaTests
             cut.FindAll("[data-testid=alpaca-question]").Should().BeEmpty();
             Text(cut.Find("[data-testid=notice]")).Should().EndWith(RoofAlpacaText.GrantCancelled);
         });
-        await harness.Console.GrantAlpacaCloseAsync();
+        await harness.Console.GrantAlpacaAsync();
         harness.Alpaca().Grants().Should().BeEmpty();
         grants.Should().BeEmpty("a cancelled question sends nothing, and a later confirm finds no question");
     }
@@ -209,7 +212,7 @@ public sealed class DashboardAlpacaTests
         harness.Console.View.Alpaca!.Question.Should().NotBeNull();
 
         await harness.Session!.StopAsync();
-        await harness.Console.GrantAlpacaCloseAsync();
+        await harness.Console.GrantAlpacaAsync();
 
         harness.Console.View.Alpaca!.Question.Should().BeNull();
         harness.Console.View.Notices.Select(notice => notice.Text).Should().Contain(RoofAlpacaText.GrantWithdrawn);
@@ -274,11 +277,177 @@ public sealed class DashboardAlpacaTests
         harness.Console.View.Alpaca!.Alerts[0].CanGrant.Should().BeFalse();
 
         harness.Console.AskAlpacaGrant(alert.Id);
-        await harness.Console.GrantAlpacaCloseAsync();
+        await harness.Console.GrantAlpacaAsync();
 
         var notice = harness.Console.View.Notices[0];
         notice.Level.Should().Be(WebRoofNoticeLevel.Danger);
         notice.Text.Should().Contain("Only an admin may grant an override on this controller");
+        harness.Alpaca().Grants().Should().BeEmpty();
+    }
+
+    // ---- Open grants (#220, phase 4) ----------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task AllowThisOpenOnce_OnARefusedOpen_AsksTheOpenQuestion_ThenGrantsAnOpenWithExactlyTheAlertsReasons()
+    {
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var grants = new List<string>();
+        harness.RecordLeaseRequests(grants);
+        var alert = harness.RaiseRefusedOpen("weather-unsafe:Sky", "scope-unknown:Main", RoofAlpacaContract.NoBlockingScopesKey);
+        await using var context = Context(harness);
+        var cut = context.Render<Dashboard>();
+        await cut.WaitForAssertionAsync(() =>
+        {
+            Text(cut.Find("[data-testid=alpaca-mode]")).Should().Be(RoofAlpacaText.DescribeMode(RoofAlpacaCommandMode.OpenAndClose));
+            var ask = cut.Find("[data-testid=alpaca-grant-ask]");
+            Text(ask).Should().Be(RoofAlpacaText.GrantOpenLabel);
+            ask.GetAttribute("data-kind").Should().Be(nameof(RoofAlpacaCommandKind.Open));
+            ask.HasAttribute("disabled").Should().BeFalse();
+            cut.FindAll("[data-testid=alpaca-grant-unavailable]").Should().BeEmpty();
+        });
+
+        cut.Click("[data-testid=alpaca-grant-ask]");
+
+        await cut.WaitForAssertionAsync(() =>
+        {
+            var question = cut.Find("[data-testid=alpaca-question]");
+            Text(question.QuerySelector("h3")!).Should().Be(RoofAlpacaText.GrantQuestionTitleFor(RoofAlpacaCommandKind.Open)).And.Be("Allow one Alpaca Open?");
+            question.QuerySelectorAll("p").Select(Text).Should().Equal(RoofAlpacaText.DescribeGrantQuestion(alert, 5));
+            Text(question.QuerySelector("[data-testid=alpaca-question-confirm]")!).Should().Be(RoofAlpacaText.GrantConfirmLabelFor(RoofAlpacaCommandKind.Open)).And.Be("Allow one Open");
+        });
+        harness.Alpaca().Grants().Should().BeEmpty("nothing is granted before the person confirms");
+        grants.Should().BeEmpty();
+
+        cut.Click("[data-testid=alpaca-question-confirm]");
+
+        await cut.WaitForAssertionAsync(() =>
+        {
+            var grant = harness.Alpaca().Grants().Should().ContainSingle().Subject;
+            grant.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+            grant.ReasonKeys.Should().Equal(alert.ReasonKeys);
+            grant.GrantedBy.Should().Be("olga (signed in)");
+            cut.FindAll("[data-testid=alpaca-question]").Should().BeEmpty();
+            var shown = cut.Find("[data-testid=alpaca-grant]");
+            shown.GetAttribute("data-kind").Should().Be(nameof(RoofAlpacaCommandKind.Open));
+            Text(shown.QuerySelector("span")!).Should().StartWith("One Open allowed by olga (signed in) (session), ");
+            Text(cut.Find("[data-testid=notice]")).Should().Contain("One Open allowed by olga (signed in) (session)");
+        });
+        grants.Should().ContainSingle().Which.Should().Contain("\"kind\":\"Open\"")
+            .And.Contain("\"reasonKeys\":[\"no-blocking-scopes\",\"scope-unknown:Main\",\"weather-unsafe:Sky\"]");
+    }
+
+    [TestMethod]
+    public async Task InBlockMode_AnOpensGrant_IsShownDisabledWithTheReason_AndSendsNothing_WhileACloseGrantIsUnaffected()
+    {
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose(block: true));
+        var grants = new List<string>();
+        harness.RecordLeaseRequests(grants);
+        var refusedOpen = harness.RaiseRefusedOpen("weather-unknown:Sky");
+        harness.ServerClock.Advance(TimeSpan.FromSeconds(1));
+        var refusedClose = harness.RaiseRefusedClose("scope-not-clear:Main");
+        await using var context = Context(harness);
+        var cut = context.Render<Dashboard>();
+
+        await cut.WaitForAssertionAsync(() =>
+        {
+            harness.Console.View.Status!.Alpaca!.OpenGrantUnavailable.Should().Be(RoofAlpacaCommands.OpenGrantsBlocked);
+            var alerts = cut.FindAll("[data-testid=alpaca-alert]");
+            alerts.Select(alert => alert.GetAttribute("data-id")).Should().Equal(refusedClose.Id, refusedOpen.Id);
+
+            var openAsk = alerts[1].QuerySelector("[data-testid=alpaca-grant-ask]")!;
+            Text(openAsk).Should().Be(RoofAlpacaText.GrantOpenLabel);
+            openAsk.HasAttribute("disabled").Should().BeTrue("no grant opens the roof in Block mode");
+            var reason = alerts[1].QuerySelector("[data-testid=alpaca-grant-unavailable]")!;
+            Text(reason).Should().Be(RoofAlpacaCommands.OpenGrantsBlocked);
+            openAsk.GetAttribute("aria-describedby").Should().Be(reason.Id);
+
+            var closeAsk = alerts[0].QuerySelector("[data-testid=alpaca-grant-ask]")!;
+            Text(closeAsk).Should().Be(RoofAlpacaText.GrantCloseLabel);
+            closeAsk.HasAttribute("disabled").Should().BeFalse("Block never gates a Close grant");
+            alerts[0].QuerySelector("[data-testid=alpaca-grant-unavailable]").Should().BeNull();
+        });
+
+        // A click that reaches the page anyway (a stale render) asks nothing and sends nothing.
+        harness.Console.AskAlpacaGrant(refusedOpen.Id);
+        await harness.Console.GrantAlpacaAsync();
+
+        harness.Console.View.Alpaca!.Question.Should().BeNull();
+        var notice = harness.Console.View.Notices[0];
+        notice.Level.Should().Be(WebRoofNoticeLevel.Warning);
+        notice.Text.Should().EndWith($"Not sent: {RoofAlpacaCommands.OpenGrantsBlocked}");
+        grants.Should().BeEmpty();
+        harness.Alpaca().Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task AnOpenGrantQuestion_AskedBeforeTheStatusSaidBlock_SendsNothingWhenConfirmed()
+    {
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var grants = new List<string>();
+        harness.RecordLeaseRequests(grants);
+        var alert = harness.RaiseRefusedOpen("weather-unsafe:Sky");
+        await harness.StartLiveAsync();
+        await harness.WaitForAsync(view => view.Alpaca?.Alerts.Count == 1, "the alert");
+        harness.Console.AskAlpacaGrant(alert.Id);
+        harness.Console.View.Alpaca!.Question.Should().NotBeNull();
+
+        harness.Host.Services.Reconfigure(RoofApiTestHost.SafetyInterlockModeKey, nameof(RoofSafetyInterlockMode.Block));
+        harness.Push(harness.Current);
+        await harness.WaitForAsync(view => view.Alpaca?.Alerts[0].GrantUnavailable is not null, "the status saying Block");
+        await harness.Console.GrantAlpacaAsync();
+
+        harness.Console.View.Alpaca!.Question.Should().BeNull();
+        harness.Console.View.Notices[0].Text.Should().Be($"Not sent: {RoofAlpacaCommands.OpenGrantsBlocked}");
+        grants.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task AnOpenGrantTheControllerRefusesInBlockMode_IsSaidAsANotice_InTheControllersWords()
+    {
+        // The interlock turns to Block after the page's status, just before the grant: the controller refuses it (403,
+        // BlockMode).
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var grants = new List<string>();
+        harness.RecordLeaseRequests(grants);
+        var alert = harness.RaiseRefusedOpen("weather-unsafe:Sky");
+        await harness.StartLiveAsync();
+        await harness.WaitForAsync(view => view.Alpaca?.Alerts.Count == 1, "the alert");
+        harness.Console.View.Alpaca!.Alerts[0].GrantUnavailable.Should().BeNull("the status does not say Block yet");
+        harness.BeforeRequest = request => AlpacaOpenUiSupport.BlockBeforeTheGrant(harness.Host.Services, request);
+
+        harness.Console.AskAlpacaGrant(alert.Id);
+        await harness.Console.GrantAlpacaAsync();
+
+        grants.Should().ContainSingle().Which.Should().Contain("\"kind\":\"Open\"");
+        var notice = harness.Console.View.Notices[0];
+        notice.Level.Should().Be(WebRoofNoticeLevel.Danger);
+        notice.Text.Should().Contain(RoofAlpacaCommands.OpenGrantsBlocked);
+        harness.Alpaca().Grants().Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task TheOpenGrantQuestion_Cancelled_OrWithdrawnByStop_SaysNoOpenWasAllowed_AndSendsNothing()
+    {
+        using var harness = await WebRoofHarness.CreateAsync(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var grants = new List<string>();
+        harness.RecordLeaseRequests(grants);
+        var alert = harness.RaiseRefusedOpen("weather-unsafe:Sky");
+        await harness.StartLiveAsync();
+        await harness.WaitForAsync(view => view.Alpaca?.Alerts.Count == 1, "the alert");
+
+        harness.Console.AskAlpacaGrant(alert.Id);
+        harness.Console.View.Alpaca!.Question!.Title.Should().Be("Allow one Alpaca Open?");
+        harness.Console.CancelAlpacaGrant();
+        harness.Console.View.Notices[0].Text.Should().EndWith(RoofAlpacaText.GrantCancelledFor(RoofAlpacaCommandKind.Open)).And.EndWith("No Open was allowed: the question was cancelled.");
+
+        harness.Console.AskAlpacaGrant(alert.Id);
+        await harness.Session!.StopAsync();
+        await harness.Console.GrantAlpacaAsync();
+
+        harness.Console.View.Alpaca!.Question.Should().BeNull();
+        harness.Console.View.Notices.Select(notice => notice.Text).Should().Contain(RoofAlpacaText.GrantWithdrawnFor(RoofAlpacaCommandKind.Open))
+            .And.Contain("No Open was allowed: Stop withdrew the question.");
+        grants.Should().BeEmpty();
         harness.Alpaca().Grants().Should().BeEmpty();
     }
 }

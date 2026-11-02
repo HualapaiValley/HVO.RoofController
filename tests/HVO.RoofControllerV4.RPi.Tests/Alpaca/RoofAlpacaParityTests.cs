@@ -6,9 +6,9 @@ using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
 
 /// <summary>
-/// An Alpaca Close goes through the controller's own Close path, with every check an ordinary Close has (#220, §2 O6):
-/// each hard refusal an ordinary Close gives, the Alpaca Close gives too, with the same code, and neither switches a
-/// relay. (The repeat and reversal rules differ by design and are tested on their own.)
+/// An Alpaca Close and an Alpaca Open (phase 4) go through the controller's own Close and Open paths, with every check an
+/// ordinary command has (#220, §2 O6): each hard refusal an ordinary command gives, the Alpaca one gives too, with the
+/// same code, and neither switches a relay. (The repeat and reversal rules differ by design and are tested on their own.)
 /// </summary>
 [TestClass]
 public sealed class RoofAlpacaParityTests
@@ -24,15 +24,31 @@ public sealed class RoofAlpacaParityTests
     [DataRow("relay writes fail", RoofControllerErrorCode.RelayStateUnverified)]
     [DataRow("drive still running", RoofControllerErrorCode.InterlockActive)]
     public async Task EveryHardRefusalOfAnOrdinaryClose_IsTheAlpacaClosesToo(string condition, RoofControllerErrorCode expected)
+        => await HardRefusalsMatchAsync(condition, expected, RoofMotionDirection.Closing);
+
+    [TestMethod]
+    [DataRow("fault latched", RoofControllerErrorCode.FaultLatched)]
+    [DataRow("inputs unreadable", RoofControllerErrorCode.HardwareUnavailable)]
+    [DataRow("drive fault active", RoofControllerErrorCode.InterlockActive)]
+    [DataRow("contradictory limits", RoofControllerErrorCode.InterlockActive)]
+    [DataRow("clear-fault pulse", RoofControllerErrorCode.OperationInProgress)]
+    [DataRow("shutting down", RoofControllerErrorCode.ShuttingDown)]
+    [DataRow("not initialized", RoofControllerErrorCode.NotInitialized)]
+    [DataRow("relay writes fail", RoofControllerErrorCode.RelayStateUnverified)]
+    [DataRow("drive still running", RoofControllerErrorCode.InterlockActive)]
+    public async Task EveryHardRefusalOfAnOrdinaryOpen_IsTheAlpacaOpensToo(string condition, RoofControllerErrorCode expected)
+        => await HardRefusalsMatchAsync(condition, expected, RoofMotionDirection.Opening);
+
+    private static async Task HardRefusalsMatchAsync(string condition, RoofControllerErrorCode expected, RoofMotionDirection direction)
     {
         // Each on a rig of its own: a refusal can itself latch, which would change what the other one meets.
         await using var ordinaryRig = (await StartAsync(condition)).Ready();
         var ordinaryPulse = await PrepareAsync(ordinaryRig, condition);
-        var ordinary = await ordinaryRig.Controller.StartMotionAsync(new RoofMotionRequest(RoofMotionDirection.Closing) { Owner = new RoofMotionOwner(RoofMotionOwnerKind.Person, "ada") });
+        var ordinary = await ordinaryRig.Controller.StartMotionAsync(new RoofMotionRequest(direction) { Owner = new RoofMotionOwner(RoofMotionOwnerKind.Person, "ada") });
 
         await using var alpacaRig = (await StartAsync(condition)).Ready();
         var alpacaPulse = await PrepareAsync(alpacaRig, condition);
-        var alpaca = await alpacaRig.CloseAsync();
+        var alpaca = direction == RoofMotionDirection.Opening ? await alpacaRig.OpenAsync() : await alpacaRig.CloseAsync();
 
         ordinary.ErrorCode().Should().Be(expected, ordinary.Error?.Message);
         alpaca.Code().Should().Be(expected, alpaca.Result.Error?.Message);
@@ -45,12 +61,16 @@ public sealed class RoofAlpacaParityTests
         await Task.WhenAll(new[] { ordinaryPulse, alpacaPulse }.OfType<Task>());
     }
 
-    /// <summary>A rig for <paramref name="condition"/>: not initialized, or with the drive-running interlock on (§2 O6).</summary>
+    /// <summary>
+    /// A rig for <paramref name="condition"/>: not initialized, or with the drive-running interlock on (§2 O6); Open and
+    /// Close on, safe weather, so only the condition can refuse.
+    /// </summary>
     private static Task<AlpacaCommandRig> StartAsync(string condition) => condition switch
     {
-        "not initialized" => AlpacaCommandRig.StartAsync(initialize: false),
-        "drive still running" => AlpacaCommandRig.StartAsync(configureController: options => options.AtSpeedConfirmationTimeout = TimeSpan.FromSeconds(3)),
-        _ => AlpacaCommandRig.StartAsync()
+        "not initialized" => AlpacaCommandRig.StartAsync(initialize: false, weatherSafe: true, mode: Common.Models.RoofAlpacaCommandMode.OpenAndClose),
+        "drive still running" => AlpacaCommandRig.StartAsync(configureController: options => options.AtSpeedConfirmationTimeout = TimeSpan.FromSeconds(3),
+            weatherSafe: true, mode: Common.Models.RoofAlpacaCommandMode.OpenAndClose),
+        _ => AlpacaCommandRig.StartAsync(weatherSafe: true, mode: Common.Models.RoofAlpacaCommandMode.OpenAndClose)
     };
 
     private static async Task<Task?> PrepareAsync(AlpacaCommandRig rig, string condition)

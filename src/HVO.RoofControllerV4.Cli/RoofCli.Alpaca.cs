@@ -69,15 +69,16 @@ public static partial class RoofCli
         {
             var alert = new Option<string>("--alert")
             {
-                Description = "The refused Close's alert, from 'alpaca alerts': the grant lifts exactly its reasons.",
+                Description = "The refused Close's or Open's alert, from 'alpaca alerts': the grant is for one command of its kind and lifts exactly its reasons.",
                 Required = true
             };
             var command = new Command(
                 "grant",
-                $"{RoofAlpacaText.GrantCloseLabel}: an override grant for one Alpaca Close despite a refused Close's reasons, for the "
-                + "controller's override window (operator; a person's session, at a terminal: it asks first, and cannot be scripted). "
-                + "It never bypasses the fault latch, the interlocks, the limits, the motor protections, a person's operator lease or "
-                + "the Stop hold.")
+                $"{RoofAlpacaText.GrantCloseLabel} or {RoofAlpacaText.GrantOpenLabel}: an override grant for one Alpaca Close (or Open) "
+                + "despite a refused Close's (or Open's) reasons, for the controller's override window (operator; a person's session, "
+                + "at a terminal: it asks first, and cannot be scripted). It never bypasses the fault latch, the interlocks, the limits, "
+                + "the motor protections, a person's operator lease or the Stop hold. No Open grant can be made while the safety "
+                + "interlock is Block.")
             {
                 alert
             };
@@ -103,19 +104,27 @@ public static partial class RoofCli
                     throw new RoofCliRefusedException(RoofCliAlpaca.NotGrantable(question));
                 }
 
+                // The refused command's kind: a grant is for one Close or one Open. One the controller says cannot be made now
+                // (an Open's while the safety interlock is Block) is not asked.
+                var kind = question.Command ?? RoofAlpacaCommandKind.Close;
+                if (RoofAlpacaText.GrantUnavailable(question, alpaca) is { } unavailable)
+                {
+                    throw new RoofCliRefusedException($"{RoofAlpacaText.DescribeGrantUnavailable(kind, unavailable)} Nothing was sent.");
+                }
+
                 // What the grant lifts, for whom and for how long: the person reads it before confirming.
                 foreach (var line in RoofAlpacaText.DescribeGrantQuestion(question, alpaca.OverrideWindowMinutes))
                 {
                     context.Host.Error.WriteLine(line);
                 }
 
-                if (!Confirm(context, $"{RoofAlpacaText.GrantCloseLabel}?"))
+                if (!Confirm(context, $"{RoofAlpacaText.GrantLabel(kind)}?"))
                 {
                     return (int)RoofExitCode.ConfirmationRequired;
                 }
 
                 // Exactly the reasons shown: the alert's own keys.
-                var grant = await PersonOnlyAsync(() => client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, [.. question.ReasonKeys], cancellationToken))
+                var grant = await PersonOnlyAsync(() => client.Alpaca.GrantAsync(kind, [.. question.ReasonKeys], cancellationToken))
                     .ConfigureAwait(false);
                 return ReportDone(context, grant, $"Granted. {RoofAlpacaText.DescribeGrant(grant)}");
             });
@@ -126,7 +135,7 @@ public static partial class RoofCli
         {
             var kind = new Option<RoofAlpacaCommandKind>("--kind")
             {
-                Description = "The grant's command: Close (the default; Alpaca Open is not available yet) or Open.",
+                Description = "The grant's command: Close (the default) or Open.",
                 DefaultValueFactory = _ => RoofAlpacaCommandKind.Close,
                 CustomParser = result =>
                 {
@@ -160,7 +169,8 @@ public static partial class RoofCli
         {
             var command = new Command(
                 "alerts",
-                "The Alpaca alerts, newest first: refused Alpaca commands, refusals as not authorised and warnings, with the client the Alpaca server reported.");
+                "The Alpaca alerts, newest first: refused Alpaca commands, refusals as not authorised and warnings, with the client the "
+                + "Alpaca server reported, and whether a grant can be made from each now.");
             SetAction(command, async (context, _, cancellationToken) =>
             {
                 using var client = context.Connect();
@@ -177,10 +187,20 @@ public static partial class RoofCli
                     return (int)RoofExitCode.Success;
                 }
 
-                RoofCliFormat.WriteTable(context.Out, RoofCliAlpaca.AlertHeaders, alerts.Select(RoofCliAlpaca.AlertRow));
-                if (alerts.Any(RoofAlpacaText.CanGrantFrom))
+                // Whether a grant can be made now is the status's, as for grant: no Open grant in Block mode.
+                var alpaca = (await client.Roof.GetStatusAsync(cancellationToken).ConfigureAwait(false)).Alpaca;
+                RoofCliFormat.WriteTable(context.Out, RoofCliAlpaca.AlertHeaders, alerts.Select(alert => RoofCliAlpaca.AlertRow(alert, alpaca)));
+                if (alerts.Any(alert => RoofAlpacaText.CanGrantFrom(alert) && RoofAlpacaText.GrantUnavailable(alert, alpaca) is null))
                 {
                     context.Out.WriteLine(RoofCliAlpaca.GrantHint);
+                }
+
+                foreach (var unavailable in alerts.Where(RoofAlpacaText.CanGrantFrom)
+                    .Select(alert => RoofAlpacaText.GrantUnavailable(alert, alpaca) is { } reason ? RoofAlpacaText.DescribeGrantUnavailable(alert.Command ?? RoofAlpacaCommandKind.Close, reason) : null)
+                    .OfType<string>()
+                    .Distinct(StringComparer.Ordinal))
+                {
+                    context.Out.WriteLine(unavailable);
                 }
 
                 return (int)RoofExitCode.Success;
@@ -257,7 +277,7 @@ internal static class RoofCliAlpaca
     public const string HoldCleared = "Stop hold cleared: Alpaca commands may run again, as the controller's settings allow.";
 
     public static readonly string GrantHint =
-        $"To allow one Close despite an alert's reasons: '{RoofCli.CommandName} alpaca grant --alert ID' (GRANT yes).";
+        $"To allow one Close or Open despite an alert's reasons: '{RoofCli.CommandName} alpaca grant --alert ID' (GRANT yes).";
 
     public static readonly string[] AlertHeaders = ["ID", "STATE", "GRANT", "ALERT"];
 
@@ -267,29 +287,27 @@ internal static class RoofCliAlpaca
         + "you press a key, nothing here holds Alpaca commands off. Your next key takes control back and cancels the grant.";
 
     /// <summary>
-    /// The banner after the person stepped away from the operator lease with <paramref name="grant"/> (null once it is used,
-    /// lapsed or revoked): what Alpaca may now do, and that a key takes control back. <paramref name="lease"/> is the lease
-    /// as the status shows it: another person's still refuses Alpaca commands.
+    /// The banner after the person stepped away from the operator lease with a grant: what Alpaca may now do with the
+    /// <paramref name="grants"/> in force (an Open grant, a Close grant, both, or none once they are used, lapsed or
+    /// revoked), and that a key takes control back. <paramref name="lease"/> is the lease as the status shows it: another
+    /// person's still refuses Alpaca commands.
     /// </summary>
-    public static string DescribeSteppedAway(RoofOverrideGrant? grant, RoofOperatorLeaseState? lease)
+    public static string DescribeSteppedAway(IReadOnlyList<RoofOverrideGrant> grants, RoofOperatorLeaseState? lease)
     {
+        ArgumentNullException.ThrowIfNull(grants);
         if (lease is { Held: true, Holder: { Length: > 0 } holder })
         {
             return $"You stepped away from the operator lease, but {holder} holds it: Alpaca commands stay refused. "
-                + (grant is null ? "Press any key to take control back." : "Press any key to take control back; that cancels the grant.");
+                + grants.Count switch
+                {
+                    0 => $"{RoofAlpacaText.KeyToTakeBack} to take control back.",
+                    1 => $"{RoofAlpacaText.KeyToTakeBack} to take control back; that cancels the grant.",
+                    _ => $"{RoofAlpacaText.KeyToTakeBack} to take control back; that cancels the grants."
+                };
         }
 
-        return grant is null
-            ? "You stepped away from the operator lease: Alpaca may move the roof. Press any key to take control back."
-            : $"You stepped away from the operator lease: Alpaca may close the roof once in the next {Duration(grant.SecondsRemaining)}. "
-                + "Press any key to take control back; that cancels the grant.";
+        return RoofAlpacaText.DescribeSteppedAway(grants, RoofAlpacaText.KeyToTakeBack);
     }
-
-    /// <summary>Seconds as the shared wording gives them: whole minutes from 90 s, seconds below.</summary>
-    public static string Duration(double seconds)
-        => seconds >= 90
-            ? $"{Math.Ceiling(seconds / 60).ToString(CultureInfo.InvariantCulture)} min"
-            : $"{Math.Max(0, Math.Ceiling(seconds)).ToString(CultureInfo.InvariantCulture)} s";
 
     /// <summary>Why a grant is refused without a terminal (or with --json): it is a person's decision, never scripted.</summary>
     public const string GrantNeedsATerminal =
@@ -302,8 +320,9 @@ internal static class RoofCliAlpaca
     public static string NoSuchAlert(string id) => $"There is no Alpaca alert '{id}'. '{RoofCli.CommandName} alpaca alerts' lists them.";
 
     public static string NotGrantable(RoofAlpacaAlert alert)
-        => $"Alert {alert.Id} cannot be granted from: only a refused Close that is not acknowledged, whose every reason is a telescope "
-            + "not clear of the roof or not known, can be. Nothing was sent.";
+        => $"Alert {alert.Id} cannot be granted from: only a refused Close or Open that is not acknowledged, whose every reason a grant "
+            + "can lift, can be (for a Close, a telescope not clear of the roof or not known; for an Open, also a required weather "
+            + "monitor's unsafe or unknown weather, no required weather source, or no telescope set to block the roof). Nothing was sent.";
 
     /// <summary>The Alpaca command state as label and value rows.</summary>
     public static IEnumerable<(string Label, string Value)> DescribeRows(RoofAlpacaStatus alpaca)
@@ -356,11 +375,16 @@ internal static class RoofCliAlpaca
     public static string DescribeAlertState(RoofAlpacaAlert alert)
         => !alert.Acknowledged ? "NEW" : alert.AcknowledgedBy is { Length: > 0 } by ? $"acknowledged by {by}" : "acknowledged";
 
-    public static IReadOnlyList<string> AlertRow(RoofAlpacaAlert alert) =>
+    /// <summary>
+    /// An alert as a row of <c>alpaca alerts</c>: its ID, whether it is new, whether a grant can be made from it (<c>yes</c>,
+    /// <c>no</c>, or <c>unavailable</c> for one <paramref name="alpaca"/> says cannot be made now: a refused Open's in Block
+    /// mode), and the shared sentence.
+    /// </summary>
+    public static IReadOnlyList<string> AlertRow(RoofAlpacaAlert alert, RoofAlpacaStatus? alpaca) =>
     [
         alert.Id,
         DescribeAlertState(alert),
-        RoofAlpacaText.CanGrantFrom(alert) ? "yes" : "no",
+        !RoofAlpacaText.CanGrantFrom(alert) ? "no" : RoofAlpacaText.GrantUnavailable(alert, alpaca) is null ? "yes" : "unavailable",
         RoofAlpacaText.DescribeAlert(alert)
     ];
 }

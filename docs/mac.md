@@ -80,12 +80,14 @@ What the app offers depends on the person's role, as the controller gives it, an
   memory, disk and addresses), its health checks and readiness, and for an admin the host's details and **Restart**.
 - **Alpaca** (#220), as on the kiosk ([Alpaca](kiosk.md#alpaca)), while the controller takes Alpaca commands or has an
   Alpaca alert, grant or warning to show: the Stop hold and **Allow Alpaca again**, the operator lease, grants with
-  **Revoke**, and alerts with **Acknowledge** and **Allow this Close once**, which asks first (Escape answers Cancel).
-  While an operator is signed in and Alpaca commands are on, the app holds the operator lease for them, so the
-  controller refuses Alpaca commands; every click and key is their input, and signing out gives it up. Granting steps
-  them away from it, so the Close they allowed can run; their next click or key takes control back and cancels the grant.
+  **Revoke**, and alerts with **Acknowledge** and **Allow this Close once** or **Allow this Open once** (the refused
+  command's), which asks first (Escape answers Cancel). While the safety interlock is `Block`, **Allow this Open once**
+  is disabled, with the controller's reason under the alert. While an operator is signed in and Alpaca commands are on,
+  the app holds the operator lease for them, so the controller refuses Alpaca commands; every click and key is their
+  input, and signing out gives it up. Granting steps them away from it, so the command they allowed can run; their next
+  click or key takes control back and cancels the grant.
 
-![The Alpaca page in the app: the Stop hold, the operator lease, a grant with Revoke, and alerts newest first with Allow this Close once and Acknowledge](images/mac/alpaca-p1-1280x800.png)
+![The Alpaca page in the app: Alpaca may open and close the roof, the Stop hold, the operator lease, a grant with Revoke, and alerts newest first with Allow this Open once, Allow this Close once and Acknowledge](images/mac/alpaca-p1-1280x800.png)
 
 People, API keys and sessions are managed in the web UI and with `hvo-roof`, not here; so are display and short names:
 your own in the web UI (your account) or the terminal (Setup), anyone's by an admin (#209).

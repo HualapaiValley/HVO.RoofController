@@ -18,11 +18,28 @@ namespace HVO.RoofControllerV4.RPi.Security;
 public sealed class AlpacaCommanderAllowedAttribute : Attribute;
 
 /// <summary>
-/// For an Alpaca Close's routes (the ticket for a Close, the Close itself): a refusal of the caller's credential raises
-/// the UIs' "not authorised" alert (#220, §6), naming the Alpaca client the server reported, never the key.
+/// For an Alpaca command's routes (the ticket, the Close, the Open): a refusal of the caller's credential is reported
+/// (#220, §6, Y3): for a Close (its ticket or itself) it raises the UIs' "not authorised" alert, naming the Alpaca client
+/// the server reported, never the key; for an Open it is only logged.
 /// </summary>
+/// <remarks>
+/// The command is the endpoint's own (<see cref="Command"/>), never taken from the request's path: only the ticket
+/// endpoint, which names none, reads its <c>kind</c> (PR #232 review S3).
+/// </remarks>
 [AttributeUsage(AttributeTargets.Method)]
-public sealed class AlpacaCloseAuthAlertAttribute : Attribute;
+public sealed class AlpacaCommandAuthReportAttribute : Attribute
+{
+    /// <summary>The ticket endpoint: the command is the one its <c>kind</c> names.</summary>
+    public AlpacaCommandAuthReportAttribute()
+    {
+    }
+
+    /// <summary>An endpoint for one command, <paramref name="command"/>.</summary>
+    public AlpacaCommandAuthReportAttribute(RoofAlpacaCommandKind command) => Command = command;
+
+    /// <summary>The endpoint's command; null for the ticket endpoint.</summary>
+    public RoofAlpacaCommandKind? Command { get; }
+}
 
 /// <summary>
 /// Deny by default for the External Alpaca account (#220): a request authenticated with its key reaches only the
@@ -76,8 +93,8 @@ public sealed class RoofPersonSessionOnlyAttribute : Attribute, IActionFilter, I
 }
 
 /// <summary>
-/// Raises the "not authorised" alert when an Alpaca Close's credential is refused (missing, wrong, or the wrong account),
-/// then answers as authorization always does. A Close only: an Open's refusal is logged, not alerted.
+/// Reports an Alpaca command whose credential is refused (missing, wrong, or the wrong account), then answers as
+/// authorization always does: a Close's raises the "not authorised" alert; an Open's is logged, not alerted.
 /// </summary>
 public sealed class RoofAlpacaAuthorizationResultHandler(RoofAlpacaCommands alpaca, IOptionsMonitor<RoofAlpacaCommandOptions> options) : IAuthorizationMiddlewareResultHandler
 {
@@ -85,18 +102,23 @@ public sealed class RoofAlpacaAuthorizationResultHandler(RoofAlpacaCommands alpa
 
     public Task HandleAsync(RequestDelegate next, HttpContext context, AuthorizationPolicy policy, PolicyAuthorizationResult authorizeResult)
     {
-        if (!authorizeResult.Succeeded && context.GetEndpoint()?.Metadata.GetMetadata<AlpacaCloseAuthAlertAttribute>() is not null
-            && IsCloseRequest(context))
+        if (!authorizeResult.Succeeded && context.GetEndpoint()?.Metadata.GetMetadata<AlpacaCommandAuthReportAttribute>() is { } report
+            && (report.Command ?? TicketKind(context)) is { } kind)
         {
-            alpaca.ReportAuthFailure(RoofAlpacaCommandKind.Close, RoofAlpacaClientMetadata.From(context, options.CurrentValue));
+            alpaca.ReportAuthFailure(kind, RoofAlpacaClientMetadata.From(context, options.CurrentValue));
         }
 
         return _default.HandleAsync(next, context, policy, authorizeResult);
     }
 
-    private static bool IsCloseRequest(HttpContext context)
-        => !context.Request.Path.Value!.EndsWith(RoofAlpacaContract.TicketRoute, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(context.Request.Query["kind"], nameof(RoofAlpacaCommandKind.Close), StringComparison.OrdinalIgnoreCase);
+    /// <summary>The command a refused ticket request named in its <c>kind</c>; null when it names none.</summary>
+    private static RoofAlpacaCommandKind? TicketKind(HttpContext context)
+    {
+        var kind = context.Request.Query["kind"].ToString();
+        return string.Equals(kind, nameof(RoofAlpacaCommandKind.Close), StringComparison.OrdinalIgnoreCase) ? RoofAlpacaCommandKind.Close
+            : string.Equals(kind, nameof(RoofAlpacaCommandKind.Open), StringComparison.OrdinalIgnoreCase) ? RoofAlpacaCommandKind.Open
+            : null;
+    }
 }
 
 /// <summary>The Alpaca client metadata the Alpaca server forwards, believed only from a trusted Alpaca server address.</summary>

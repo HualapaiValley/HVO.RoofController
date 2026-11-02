@@ -23,6 +23,7 @@ internal static class RoofApiRoutes
     private const string Alpaca = Common.Models.RoofAlpacaContract.Route + "/";
     public const string AlpacaTicket = Alpaca + Common.Models.RoofAlpacaContract.TicketRoute;
     public const string AlpacaClose = Alpaca + Common.Models.RoofAlpacaContract.CloseRoute;
+    public const string AlpacaOpen = Alpaca + Common.Models.RoofAlpacaContract.OpenRoute;
     public const string AlpacaEvents = Alpaca + Common.Models.RoofAlpacaContract.EventsRoute;
     public const string AlpacaGrants = Alpaca + Common.Models.RoofAlpacaContract.GrantsRoute;
     public const string AlpacaHold = Alpaca + Common.Models.RoofAlpacaContract.HoldRoute;

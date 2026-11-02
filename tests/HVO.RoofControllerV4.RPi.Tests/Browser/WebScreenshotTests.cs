@@ -3,6 +3,7 @@ using FluentAssertions;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Alpaca;
+using HVO.RoofControllerV4.RPi.Tests.Alpaca;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using HVO.RoofControllerV4.RPi.Tests.Security;
@@ -224,6 +225,50 @@ public sealed class WebScreenshotTests
         await Expect(browser.Stop).ToBeEnabledAsync();
         browser.Rig.App.Services.GetRequiredService<RoofAlpacaCommands>().Grants().Should().BeEmpty("nothing is granted before the person confirms");
         await new Screens(this, browser, "desktop").TakeAsync("20-alpaca");
+    }
+
+    [TestMethod]
+    public async Task TheAlpacaPanel_WithARefusedOpensGrantQuestion_AndTheOpenGrantDisabledInBlockMode_IsCaptured()
+    {
+        // #220, phase 4: Alpaca Open and Close on, a refused Open's alert from a client at a documentation address and its
+        // grant question; then, once the safety interlock turns to Block, its grant disabled with the controller's reason
+        // under it, beside a refused Close's, which Block never gates.
+        var settings = new Dictionary<string, string?>(DocumentedHost);
+        foreach (var (key, value) in AlpacaOpenUiSupport.OpenAndClose())
+        {
+            settings[key] = value;
+        }
+
+        var options = Scenario.Production(travelMeters: 2.0, settings: settings) with { Camera = true };
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, options, WebDevices.Desktop);
+        var page = browser.Page;
+        var alpaca = browser.Rig.App.Services.GetRequiredService<RoofAlpacaCommands>();
+        await browser.SignInAsync(WebBrowser.Admin);
+        await Expect(browser.CameraStatus).ToHaveTextAsync("Live", new() { Timeout = 15_000 });
+        await Expect(page.GetByTestId("alpaca-lease")).ToHaveTextAsync(new Regex("^Operator lease held by ada: Alpaca commands are refused"), new() { Timeout = 15_000 });
+
+        string[] reasons = ["weather-unsafe:Sky", RoofAlpacaContract.NoBlockingScopesKey];
+        alpaca.RaiseAlert("Refused", RoofAlpacaCommandKind.Open, $"An Alpaca Open was refused: {RoofAlpacaText.DescribeReasons(reasons)}.", reasons,
+            new RoofAlpacaClient(7, 3, "192.0.2.50", "header"));
+        var refusedOpen = alpaca.Alerts()[0];
+        await page.GetByTestId("alpaca-grant-ask").ClickAsync();
+        await Expect(page.GetByTestId("alpaca-question")).ToContainTextAsync("Allow one Alpaca Open?");
+        await Expect(page.GetByTestId("alpaca-mode")).ToHaveTextAsync(RoofAlpacaText.DescribeMode(RoofAlpacaCommandMode.OpenAndClose));
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        await page.GetByTestId("alpaca").ScrollIntoViewIfNeededAsync();
+        await new Screens(this, browser, "desktop").TakeAsync("21-alpaca-open", wholePage: false, startAtTop: false);
+        await page.GetByTestId("alpaca-question-cancel").ClickAsync();
+
+        browser.Rig.App.Services.Reconfigure(RoofApiTestHost.SafetyInterlockModeKey, nameof(RoofSafetyInterlockMode.Block));
+        alpaca.RaiseAlert("Refused", RoofAlpacaCommandKind.Close, "An Alpaca Close was refused: Telescope 'Main' is not parked.",
+            [RoofAlpacaContract.ReasonKey(RoofAlpacaContract.ScopeNotClearKind, "Main")], new RoofAlpacaClient(7, 4, "192.0.2.50", "header"));
+        var openAlert = page.Locator($"[data-testid=alpaca-alert][data-id='{refusedOpen.Id}']");
+        await Expect(openAlert.GetByTestId("alpaca-grant-ask")).ToBeDisabledAsync(new() { Timeout = 15_000 });
+        await Expect(openAlert.GetByTestId("alpaca-grant-unavailable")).ToHaveTextAsync(RoofAlpacaCommands.OpenGrantsBlocked);
+        await Expect(page.Locator("[data-testid=alpaca-grant-ask][data-kind=Close]")).ToBeEnabledAsync();
+        await page.GetByTestId("alpaca").ScrollIntoViewIfNeededAsync();
+        await new Screens(this, browser, "desktop").TakeAsync("22-alpaca-open-block", wholePage: false, startAtTop: false);
+        alpaca.Grants().Should().BeEmpty("nothing is granted before the person confirms");
     }
 
     [TestMethod]

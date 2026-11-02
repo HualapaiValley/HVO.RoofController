@@ -30,6 +30,12 @@ internal sealed class TestOptionsMonitor<T> : IOptionsMonitor<T>
         }
     }
 
+    /// <summary>
+    /// Changes the value without telling the listeners: the moment between a reload and its change notification, or a
+    /// reload whose notification never came.
+    /// </summary>
+    public void SetWithoutNotifying(T value) => CurrentValue = value;
+
     private sealed class Registration(Action dispose) : IDisposable
     {
         public void Dispose() => dispose();

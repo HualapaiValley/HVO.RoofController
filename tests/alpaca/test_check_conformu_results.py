@@ -116,10 +116,21 @@ class CheckConformuResultsTests(unittest.TestCase):
             for entry in run.get("InformationMessages", []) + run.get("ConfigurationAlerts", []):
                 self.assertTrue(entry.get("Why"), entry)
 
-    def test_the_repositorys_settings_never_open_the_shutter(self):
+    def test_the_repositorys_settings_open_the_shutter_on_loopback_only(self):
+        # Phase 4: ConformU opens and closes the shutter, so its target is the loopback address the script's chain guard
+        # has checked (the emulator's), never a name, and it never looks for devices.
         settings = json.loads((HERE / "conformu-settings.json").read_text())
-        self.assertIs(settings["DomeOpenShutter"], False)
+        self.assertIs(settings["DomeOpenShutter"], True)
         self.assertEqual(settings["AlpacaDevice"]["IpAddress"], "127.0.0.1")
+        self.assertEqual(settings["AlpacaDevice"]["HostName"], "127.0.0.1")
+        self.assertIs(settings["AlpacaConfiguration"]["DiscoveryEnabled"], False)
+
+    def test_the_repositorys_settings_give_the_emulated_roof_time_to_travel(self):
+        # The emulated roof travels its 2 m in 20 s; ConformU fails a shutter that has not arrived within the timeout.
+        settings = json.loads((HERE / "conformu-settings.json").read_text())
+        self.assertGreaterEqual(settings["DomeShutterMovementTimeout"], 40)
+        self.assertEqual(settings["AlpacaConfiguration"]["AccessUserName"], "")
+        self.assertEqual(settings["AlpacaConfiguration"]["AccessPassword"], "")
 
 
 if __name__ == "__main__":

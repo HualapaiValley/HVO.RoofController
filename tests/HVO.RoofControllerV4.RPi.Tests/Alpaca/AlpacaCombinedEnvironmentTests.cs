@@ -6,6 +6,7 @@ using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
 
@@ -91,6 +92,25 @@ public sealed class AlpacaCombinedEnvironmentTests
 
         rig.Controller.Should().BeOfType<RoofControllerServiceV4>()
             .Which.BeforeEnergizeHook.Should().BeNull("the hook is a test seam, never set in production");
+        rig.App.Services.GetRequiredService<HVO.RoofControllerV4.RPi.Alpaca.RoofAlpacaCommands>().BeforeGrantInstallHook
+            .Should().BeNull("the grant hook is a test seam too (PR #232 review S1)");
+    }
+
+    [TestMethod]
+    public void TheShippedCode_NeverSetsTheGrantHook()
+    {
+        var src = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ProductionOptions.AppSettingsPath)!, ".."));
+        var uses = Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .SelectMany(path => File.ReadAllLines(path).Select((line, index) => (Path: Path.GetFileName(path), Line: index + 1, Text: line)))
+            .Where(line => line.Text.Contains("BeforeGrantInstallHook", StringComparison.Ordinal))
+            .ToArray();
+
+        uses.Should().NotBeEmpty("the scan must find the declaration");
+        uses.Should().OnlyContain(line => line.Path == "RoofAlpacaCommands.cs", "the hook is declared and invoked there, and set only by tests");
+        uses.Where(line => line.Text.Contains("BeforeGrantInstallHook =", StringComparison.Ordinal) || line.Text.Contains("BeforeGrantInstallHook=", StringComparison.Ordinal))
+            .Should().BeEmpty("no shipped code sets it");
     }
 
     [TestMethod]

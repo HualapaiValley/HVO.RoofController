@@ -3,21 +3,6 @@
     "Kind": "protocol-log",
     "InformationMessages": [
       {
-        "Member": "PUT OpenShutter",
-        "Contains": "Test omitted due to Conform configuration setting",
-        "Why": "DomeOpenShutter is false in tests/alpaca/conformu-settings.json: ConformU never asks to open the roof."
-      },
-      {
-        "Member": "PUT SlewToAltitude",
-        "Contains": "Test omitted due to Conform configuration setting",
-        "Why": "Skipped with DomeOpenShutter false; a roll-off roof has no altitude anyway."
-      },
-      {
-        "Member": "GET Altitude",
-        "Contains": "Test omitted due to Conform configuration setting",
-        "Why": "Skipped with DomeOpenShutter false; a roll-off roof has no altitude anyway."
-      },
-      {
         "Member": "GET Description",
         "Contains": "Bad Alpaca URL base element (api = apx)\" - Received HTTP status 404 (NotFound)",
         "Why": "ProtocolTestPrimaryUrlStructure: a path outside /api and /management is not found."
@@ -56,13 +41,7 @@
   },
   "conformance": {
     "Kind": "results",
-    "ConfigurationAlerts": [
-      {
-        "Key": "Conform configuration",
-        "Contains": "Shutter related tests were omitted due to Conform configuration.",
-        "Why": "DomeOpenShutter is false: ConformU never opens the roof, and the roof starts Closed (phase 3's Close is a no-op there); the scripted runs check Close (tests/alpaca/alpaca-ci.py close-runs)."
-      }
-    ]
+    "ConfigurationAlerts": []
   },
   "safetymonitor-protocol": {
     "Kind": "protocol-log",

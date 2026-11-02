@@ -9,19 +9,16 @@ using HVO.RoofControllerV4.Common.Models;
 namespace HVO.RoofControllerV4.Alpaca.Devices;
 
 /// <summary>
-/// The roof as Alpaca Dome 0 (IDomeV3), a roll-off roof: a shutter and nothing else. This phase reads only, apart from
-/// AbortSlew, which stops the roof:
+/// The roof as Alpaca Dome 0 (IDomeV3), a roll-off roof: a shutter and nothing else:
 /// <list type="bullet">
 /// <item>The shutter, Slewing, the capabilities (CanSetShutter true, every other false), DeviceState and the common
 /// members read from the last status the controller published (<see cref="AlpacaRoof"/>).</item>
 /// <item>AbortSlew is the controller's Stop, always allowed: also before Connect, after a restart forgot the client,
 /// and with a fault latched.</item>
-/// <item>CloseShutter (#220, phase 3) carries the Alpaca client's own key (<c>X-HVO-Api-Key</c>, or HTTP Basic with the
-/// key as both parts) to the controller, which alone decides it: the server refuses on its own only for a client not
-/// connected, a missing or malformed credential, or an AbortSlew that overtook it before its ticket. It asks the
-/// controller for a ticket, then sends the Close with it; it never retries.</item>
-/// <item>OpenShutter is refused (<see cref="AlpacaErrors.InvalidOperation"/>) before anything reaches the controller,
-/// whatever any setting or grant says: Alpaca Open is not available in this version.</item>
+/// <item>CloseShutter (#220, phase 3) and OpenShutter (phase 4) carry the Alpaca client's own key (<c>X-HVO-Api-Key</c>,
+/// or HTTP Basic with the key as both parts) to the controller, which alone decides them: the server refuses on its own
+/// only for a client not connected, a missing or malformed credential, or an AbortSlew that overtook the command before
+/// its ticket. It asks the controller for a ticket, then sends the command with it; it never retries.</item>
 /// <item>Azimuth, altitude, park and home are not implemented (<see cref="AlpacaErrors.NotImplemented"/>), nor are the
 /// Command members.</item>
 /// <item>The <c>status</c> action describes the roof (and why it reads as Error); no action moves it or clears a
@@ -51,16 +48,12 @@ public sealed class AlpacaDome : AlpacaDevice
     /// <summary>The member that stops the roof, as it appears in URLs.</summary>
     public const string AbortSlewMember = "abortslew";
 
-    /// <summary>The refusal of OpenShutter in this phase, whatever any setting or grant says.</summary>
-    public const string OpenNotAvailable =
-        "OpenShutter is not available on this Alpaca server: it reads the roof, closes it when the controller allows, and stops it (AbortSlew). Open the roof from the roof controller's own interfaces.";
-
-    /// <summary>The refusal of a Close whose credential cannot be used, or that the controller did not accept.</summary>
+    /// <summary>The refusal of an OpenShutter or CloseShutter whose credential cannot be used, or that the controller did not accept.</summary>
     public const string NotAuthorised =
-        "Not authorised: CloseShutter needs the External Alpaca account's key, in the X-HVO-Api-Key header or as HTTP Basic with the key as both the user name and the password.";
+        "Not authorised: OpenShutter and CloseShutter need the External Alpaca account's key, in the X-HVO-Api-Key header or as HTTP Basic with the key as both the user name and the password.";
 
-    /// <summary>The refusal of a Close an AbortSlew overtook before its ticket.</summary>
-    public const string Aborted = "Aborted: an AbortSlew came after this CloseShutter and before it reached the controller; nothing was sent. Send it again if it is still wanted.";
+    /// <summary>The refusal of an OpenShutter or CloseShutter an AbortSlew overtook before its ticket.</summary>
+    public const string Aborted = "Aborted: an AbortSlew came after this command and before it reached the controller; nothing was sent. Send it again if it is still wanted.";
 
     private readonly AlpacaRoof _roof;
     private readonly AlpacaAuthFailures _failures;
@@ -105,8 +98,8 @@ public sealed class AlpacaDome : AlpacaDevice
 
         // Stop: always allowed.
         members[AbortSlewMember] = new(null, AbortSlewAsync);
-        members["openshutter"] = new(null, Sync(call => RequireConnected(call, () => AlpacaResult.Error(AlpacaErrors.InvalidOperation, OpenNotAvailable))));
-        members["closeshutter"] = new(null, CloseShutterAsync);
+        members["openshutter"] = new(null, (call, _) => ShutterAsync(call, RoofAlpacaCommandKind.Open));
+        members["closeshutter"] = new(null, (call, _) => ShutterAsync(call, RoofAlpacaCommandKind.Close));
         members["findhome"] = NotImplementedMethod("FindHome", "a roll-off roof has no home position");
         members["park"] = NotImplementedMethod("Park", "a roll-off roof has no park position");
         members["setpark"] = NotImplementedMethod("SetPark", "a roll-off roof has no park position");
@@ -141,24 +134,25 @@ public sealed class AlpacaDome : AlpacaDevice
     }
 
     /// <summary>
-    /// CloseShutter (#220): local refusals first (not connected, no usable credential), then the controller's ticket, then
-    /// the Close with it. The request's cancellation is not passed on: a client that hangs up does not cancel a command
-    /// already on its way, and nothing is retried.
+    /// OpenShutter or CloseShutter (#220, phases 4 and 3): local refusals first (not connected, no usable credential), then
+    /// the controller's ticket for that command, then the command with it. The request's cancellation is not passed on: a
+    /// client that hangs up does not cancel a command already on its way, and nothing is retried.
     /// </summary>
-    private async Task<AlpacaResult> CloseShutterAsync(Call call, CancellationToken cancellationToken)
+    private async Task<AlpacaResult> ShutterAsync(Call call, RoofAlpacaCommandKind kind)
     {
         if (!Connections.IsConnected(call.Client))
         {
             return AlpacaResult.Error(AlpacaErrors.NotConnected, "Not connected: set Connected to true (or call Connect) first.");
         }
 
+        var member = MemberOf(kind);
         var request = call.Request;
         var aborts = _roof.AbortCount;
         var credential = request.Credential;
         if (!credential.IsUsable)
         {
-            _logger.LogInformation("CloseShutter from {RemoteAddress} (ClientID {ClientId}) refused: {Credential}", request.RemoteAddress, request.ClientId, credential);
-            _ = _roof.ReportRefusalAsync(new RoofAlpacaEvent(nameof(RoofAlpacaCommandKind.Close), "NotAuthorised", request.RemoteAddress.ToString(), request.ClientId, request.ClientTransactionId));
+            _logger.LogInformation("{Member} from {RemoteAddress} (ClientID {ClientId}) refused: {Credential}", member, request.RemoteAddress, request.ClientId, credential);
+            _ = _roof.ReportRefusalAsync(new RoofAlpacaEvent(kind.ToString(), "NotAuthorised", request.RemoteAddress.ToString(), request.ClientId, request.ClientTransactionId));
             await _failures.DelayAsync(request.RemoteAddress).ConfigureAwait(false);
             return AlpacaResult.Error(AlpacaErrors.InvalidOperation, NotAuthorised);
         }
@@ -167,41 +161,44 @@ public sealed class AlpacaDome : AlpacaDevice
         RoofAlpacaTicket ticket;
         try
         {
-            ticket = await _roof.RequestTicketAsync(RoofAlpacaCommandKind.Close, credential.Key!, forwarding).ConfigureAwait(false);
+            ticket = await _roof.RequestTicketAsync(kind, credential.Key!, forwarding).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is RoofApiException or HttpRequestException or TimeoutException or OperationCanceledException or RoofProtocolException)
         {
-            return await RefusalAsync(request, "ticket", ex).ConfigureAwait(false);
+            return await RefusalAsync(request, kind, "ticket", ex).ConfigureAwait(false);
         }
 
         _failures.Accepted(request.RemoteAddress);
         if (_roof.AbortCount != aborts)
         {
-            _logger.LogInformation("CloseShutter from {RemoteAddress} (ClientID {ClientId}) refused: an AbortSlew came first", request.RemoteAddress, request.ClientId);
+            _logger.LogInformation("{Member} from {RemoteAddress} (ClientID {ClientId}) refused: an AbortSlew came first", member, request.RemoteAddress, request.ClientId);
             return AlpacaResult.Error(AlpacaErrors.InvalidOperation, Aborted);
         }
 
         try
         {
-            await _roof.CloseAsync(ticket, credential.Key!, forwarding).ConfigureAwait(false);
+            await _roof.CommandAsync(kind, ticket, credential.Key!, forwarding).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is RoofApiException or HttpRequestException or TimeoutException or OperationCanceledException or RoofProtocolException)
         {
-            return await RefusalAsync(request, "close", ex).ConfigureAwait(false);
+            return await RefusalAsync(request, kind, kind == RoofAlpacaCommandKind.Open ? "open" : "close", ex).ConfigureAwait(false);
         }
 
-        _logger.LogInformation("CloseShutter from {RemoteAddress} (ClientID {ClientId}, ClientTransactionID {ClientTransactionId}) accepted by the controller",
-            request.RemoteAddress, request.ClientId, request.ClientTransactionId);
+        _logger.LogInformation("{Member} from {RemoteAddress} (ClientID {ClientId}, ClientTransactionID {ClientTransactionId}) accepted by the controller",
+            member, request.RemoteAddress, request.ClientId, request.ClientTransactionId);
         return AlpacaResult.Done;
     }
 
-    /// <summary>The Alpaca answer to a ticket or Close the controller refused or did not answer; never retried.</summary>
-    private async Task<AlpacaResult> RefusalAsync(AlpacaRequest request, string step, Exception error)
+    private static string MemberOf(RoofAlpacaCommandKind kind) => kind == RoofAlpacaCommandKind.Open ? "OpenShutter" : "CloseShutter";
+
+    /// <summary>The Alpaca answer to a ticket or command the controller refused or did not answer; never retried.</summary>
+    private async Task<AlpacaResult> RefusalAsync(AlpacaRequest request, RoofAlpacaCommandKind kind, string step, Exception error)
     {
-        if (error is RoofApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden } && (error as RoofApiException)?.AlpacaRefusal is not "OpenNotAvailable")
+        var member = MemberOf(kind);
+        if (error is RoofApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden })
         {
-            // The controller raised the alert itself; the answer is slowed down for this address.
-            _logger.LogInformation("CloseShutter from {RemoteAddress} (ClientID {ClientId}) not authorised by the controller at the {Step}", request.RemoteAddress, request.ClientId, step);
+            // The controller raised the alert itself (a Close's) or logged it (an Open's); the answer is slowed down for this address.
+            _logger.LogInformation("{Member} from {RemoteAddress} (ClientID {ClientId}) not authorised by the controller at the {Step}", member, request.RemoteAddress, request.ClientId, step);
             await _failures.DelayAsync(request.RemoteAddress).ConfigureAwait(false);
             return AlpacaResult.Error(AlpacaErrors.InvalidOperation, NotAuthorised);
         }
@@ -209,15 +206,15 @@ public sealed class AlpacaDome : AlpacaDevice
         if (error is RoofApiException { Code: { } code } refusal)
         {
             var message = refusal.Detail is { Length: > 0 } detail ? detail : refusal.Message;
-            _logger.LogInformation("CloseShutter from {RemoteAddress} (ClientID {ClientId}) refused by the controller at the {Step}: {Code} {Rule}",
-                request.RemoteAddress, request.ClientId, step, code, refusal.AlpacaRefusal);
+            _logger.LogInformation("{Member} from {RemoteAddress} (ClientID {ClientId}) refused by the controller at the {Step}: {Code} {Rule}",
+                member, request.RemoteAddress, request.ClientId, step, code, refusal.AlpacaRefusal);
             return AlpacaResult.Error(AlpacaErrors.For(code), message);
         }
 
-        _logger.LogWarning("CloseShutter from {RemoteAddress} (ClientID {ClientId}): the controller did not answer the {Step} ({Reason}); nothing is retried",
-            request.RemoteAddress, request.ClientId, step, RoofText.DescribeFailure(error));
+        _logger.LogWarning("{Member} from {RemoteAddress} (ClientID {ClientId}): the controller did not answer the {Step} ({Reason}); nothing is retried",
+            member, request.RemoteAddress, request.ClientId, step, RoofText.DescribeFailure(error));
         return AlpacaResult.Error(AlpacaRoof.ErrorNumberFor(error),
-            $"The roof controller did not answer the Close ({RoofText.DescribeFailure(error)}). Nothing is retried: check the roof's state, and send CloseShutter again if it is still wanted.");
+            $"The roof controller did not answer the {kind} ({RoofText.DescribeFailure(error)}). Nothing is retried: check the roof's state, and send {member} again if it is still wanted.");
     }
 
     /// <summary>The <c>status</c> action's text: the shutter as Alpaca reads it, and the roof as the controller describes it.</summary>

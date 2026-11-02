@@ -26,6 +26,12 @@ public enum RoofScopeClearance
     Unknown
 }
 
+/// <summary>One required weather source judged for an Alpaca Open (#220, phase 4).</summary>
+/// <param name="Name">The source's name, as reason keys carry it.</param>
+/// <param name="State">Safe, Unsafe, or Unknown.</param>
+/// <param name="Text">Why, in words fit to show.</param>
+public sealed record RoofWeatherJudgement(string Name, RoofSafetyState State, string Text);
+
 /// <summary>One blocking telescope judged for one command.</summary>
 /// <param name="Name">The source's name, as reason keys carry it.</param>
 /// <param name="Clearance">Clear, not clear, or unknown.</param>
@@ -158,6 +164,58 @@ public sealed partial class RoofSafetyService
                 judgements.Add(clear
                     ? new RoofScopeJudgement(name, RoofScopeClearance.Clear, $"{label} is {source.LastSaid}", issuedAfter)
                     : new RoofScopeJudgement(name, RoofScopeClearance.NotClear, $"{label} is {source.LastSaid}", issuedAfter));
+            }
+        }
+
+        return judgements;
+    }
+
+    /// <summary>
+    /// Judges every required weather source for an Alpaca Open (#220, §3; §14.3 Y6, Roy's decision), with ages judged now:
+    /// Safe only when the newest read that ended succeeded, says safe, and is within its
+    /// <see cref="IRoofSafetySource.MaxReadingAge"/>. A source whose latest read failed is Unknown at once, even while its
+    /// last good reading still counts for the ordinary conditions (which keep it until it is too old): an unattended Open
+    /// needs fresh weather. Empty when no weather source is required. Never waits, and reads nothing.
+    /// </summary>
+    public IReadOnlyList<RoofWeatherJudgement> JudgeRequiredWeather()
+    {
+        var options = Options();
+        var judgements = new List<RoofWeatherJudgement>();
+        lock (_gate)
+        {
+            foreach (var source in _sources.Where(source => source.Kind == RoofSafetySourceKind.Weather && source.Counts))
+            {
+                var label = $"Weather monitor '{source.Name}'";
+                if (!_running)
+                {
+                    judgements.Add(new RoofWeatherJudgement(source.Name, RoofSafetyState.Unknown, $"{label} is not being read"));
+                    continue;
+                }
+
+                if (source.LastAttemptFailed)
+                {
+                    var why = source.ShownFailure is { } failure ? $" ({failure})" : string.Empty;
+                    judgements.Add(new RoofWeatherJudgement(source.Name, RoofSafetyState.Unknown, $"{label}: its latest read failed{why}"));
+                    continue;
+                }
+
+                if (source.LastSafe is not { } safe || source.LastReadTimestamp is not { } readAt)
+                {
+                    judgements.Add(new RoofWeatherJudgement(source.Name, RoofSafetyState.Unknown, $"{label} has not been read yet"));
+                    continue;
+                }
+
+                var maxAge = source.Inner.MaxReadingAge is { } own && own > TimeSpan.Zero ? own : options.MaxReadingAge;
+                if (_time.GetElapsedTime(readAt) + source.ObservedLag > maxAge)
+                {
+                    judgements.Add(new RoofWeatherJudgement(source.Name, RoofSafetyState.Unknown,
+                        string.Create(CultureInfo.InvariantCulture, $"{label}: the last reading ({source.LastSaid}) is older than {maxAge.TotalSeconds:0.#} s")));
+                    continue;
+                }
+
+                judgements.Add(safe
+                    ? new RoofWeatherJudgement(source.Name, RoofSafetyState.Safe, $"{label} reports safe weather")
+                    : new RoofWeatherJudgement(source.Name, RoofSafetyState.Unsafe, $"{label} reports unsafe weather"));
             }
         }
 

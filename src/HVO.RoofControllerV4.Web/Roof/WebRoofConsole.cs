@@ -151,16 +151,41 @@ public sealed record WebAlpacaGrantView(RoofAlpacaCommandKind Kind, string Text)
 /// <param name="Text">The alert in words (<see cref="RoofAlpacaText.DescribeAlert"/>).</param>
 /// <param name="Acknowledgement">Who acknowledged it, or null while nobody has.</param>
 /// <param name="CanAcknowledge">True when Acknowledge is offered: it is not acknowledged and the page has a session.</param>
-/// <param name="CanGrant">True when "Allow this Close once" is offered (<see cref="RoofAlpacaText.CanGrantFrom"/>, and the person's role).</param>
-public sealed record WebAlpacaAlertView(string Id, string Text, string? Acknowledgement, bool CanAcknowledge, bool CanGrant);
+/// <param name="CanGrant">
+/// True when the grant control is shown, "Allow this Close once" or "Allow this Open once" (<see cref="GrantLabel"/>):
+/// <see cref="RoofAlpacaText.CanGrantFrom"/>, and the person's role. It is disabled while <see cref="GrantUnavailable"/>
+/// says why.
+/// </param>
+public sealed record WebAlpacaAlertView(string Id, string Text, string? Acknowledgement, bool CanAcknowledge, bool CanGrant)
+{
+    /// <summary>The refused command a grant from this alert allows once: Close or Open (#220, phase 4).</summary>
+    public RoofAlpacaCommandKind GrantKind { get; init; } = RoofAlpacaCommandKind.Close;
+
+    /// <summary>The grant control's label for <see cref="GrantKind"/> (<see cref="RoofAlpacaText.GrantLabel"/>).</summary>
+    public string GrantLabel => RoofAlpacaText.GrantLabel(GrantKind);
+
+    /// <summary>
+    /// Why no grant can be made from this alert now, shown beside the disabled grant control (an Open's while the safety
+    /// interlock is Block, <see cref="RoofAlpacaText.GrantUnavailable"/>); null while it may be.
+    /// </summary>
+    public string? GrantUnavailable { get; init; }
+}
 
 /// <summary>
-/// The question a page asks before it grants an override for one Alpaca Close: what it lifts (exactly the alert's
-/// reasons), for whom, for how long, and that nothing else is bypassed (<see cref="RoofAlpacaText.DescribeGrantQuestion"/>).
+/// The question a page asks before it grants an override for one Alpaca command of <see cref="Kind"/>, the refused
+/// command's: what it lifts (exactly the alert's reasons), for whom, for how long, and that nothing else is bypassed
+/// (<see cref="RoofAlpacaText.DescribeGrantQuestion"/>).
 /// </summary>
 public sealed record WebAlpacaGrantQuestion(string AlertId, IReadOnlyList<string> ReasonKeys, IReadOnlyList<string> Lines)
 {
-    public string Title => RoofAlpacaText.GrantQuestionTitle;
+    /// <summary>The refused command the grant allows once: Close or Open.</summary>
+    public RoofAlpacaCommandKind Kind { get; init; } = RoofAlpacaCommandKind.Close;
+
+    /// <summary>"Allow one Alpaca Close?", "Allow one Alpaca Open?".</summary>
+    public string Title => RoofAlpacaText.GrantQuestionTitleFor(Kind);
+
+    /// <summary>The answer that grants it: "Allow one Close", "Allow one Open".</summary>
+    public string ConfirmLabel => RoofAlpacaText.GrantConfirmLabelFor(Kind);
 }
 
 /// <summary>
@@ -177,9 +202,10 @@ public sealed record WebAlpacaGrantQuestion(string AlertId, IReadOnlyList<string
 /// could not be watched. Stop wins: an Open or Close accepted after a Stop was sent is stopped again.</para>
 /// <para>The Alpaca command state (#220): an operator's live page holds the session's operator lease
 /// (<see cref="WebOperatorLease"/>) while it is open, and what the person does here keeps it
-/// (<see cref="NoteInput"/>); the page clears the human Stop hold, grants an override for one Alpaca Close only after the
-/// person confirms its question (Stop withdraws it), with the person stepping away from the lease until their next click
-/// or key (<see cref="WebOperatorLease.GrantAsync"/>), revokes grants and acknowledges alerts.</para>
+/// (<see cref="NoteInput"/>); the page clears the human Stop hold, grants an override for one Alpaca Close or Open (the
+/// refused command's) only after the person confirms its question (Stop withdraws it), with the person stepping away
+/// from the lease until their next click or key (<see cref="WebOperatorLease.GrantAsync"/>), revokes grants and
+/// acknowledges alerts. An Open grant the controller says cannot be made now (Block mode) is not asked.</para>
 /// <para>Thread-safe. <see cref="Changed"/> is raised on any thread; a component marshals it with
 /// <c>InvokeAsync</c>.</para>
 /// </remarks>
@@ -459,8 +485,9 @@ public sealed class WebRoofConsole : IDisposable
         });
 
     /// <summary>
-    /// "Allow this Close once" on an alert: nothing is sent; the page asks first (<see cref="WebAlpacaView.Question"/>),
-    /// with exactly the alert's reasons.
+    /// "Allow this Close once" or "Allow this Open once" on an alert: nothing is sent; the page asks first
+    /// (<see cref="WebAlpacaView.Question"/>), with exactly the alert's reasons, unless the controller says no grant of
+    /// its kind can be made now (an Open's in Block mode).
     /// </summary>
     public void AskAlpacaGrant(string alertId)
     {
@@ -477,10 +504,18 @@ public sealed class WebRoofConsole : IDisposable
             {
                 AddNoticeLocked("Not sent: that alert no longer allows a grant.", WebRoofNoticeLevel.Warning);
             }
+            else if (RoofAlpacaText.GrantUnavailable(alert, alpaca) is { } unavailable)
+            {
+                AddNoticeLocked($"Not sent: {unavailable}", WebRoofNoticeLevel.Warning);
+            }
             else
             {
                 _grantQuestion = new PendingGrant(
-                    new WebAlpacaGrantQuestion(alert.Id, [.. alert.ReasonKeys], RoofAlpacaText.DescribeGrantQuestion(alert, alpaca.OverrideWindowMinutes)),
+                    new WebAlpacaGrantQuestion(alert.Id, [.. alert.ReasonKeys], RoofAlpacaText.DescribeGrantQuestion(alert, alpaca.OverrideWindowMinutes))
+                    {
+                        Kind = alert.Command ?? RoofAlpacaCommandKind.Close
+                    },
+                    alert,
                     session,
                     session.StopsSent);
             }
@@ -490,10 +525,10 @@ public sealed class WebRoofConsole : IDisposable
     }
 
     /// <summary>
-    /// The person confirmed the grant question: grants an override for one Alpaca Close that lifts exactly the reasons the
-    /// question named. Nothing is sent when no question is asked, or a Stop withdrew it since.
+    /// The person confirmed the grant question: grants an override for one Alpaca command of the question's kind that lifts
+    /// exactly the reasons the question named. Nothing is sent when no question is asked, or a Stop withdrew it since.
     /// </summary>
-    public Task GrantAlpacaCloseAsync()
+    public Task GrantAlpacaAsync()
     {
         NoteInput();
         PendingGrant? asked;
@@ -503,7 +538,13 @@ public sealed class WebRoofConsole : IDisposable
             _grantQuestion = null;
             if (asked is not null && (!ReferenceEquals(_session, asked.Session) || asked.Session.StopsSent != asked.StopsSent))
             {
-                AddNoticeLocked(RoofAlpacaText.GrantWithdrawn, WebRoofNoticeLevel.Info);
+                AddNoticeLocked(RoofAlpacaText.GrantWithdrawnFor(asked.Question.Kind), WebRoofNoticeLevel.Info);
+                asked = null;
+            }
+            else if (asked is not null && RoofAlpacaText.GrantUnavailable(asked.Alert, _status?.Alpaca) is { } unavailable)
+            {
+                // The controller said since the question was asked that no such grant can be made now (Block mode).
+                AddNoticeLocked($"Not sent: {unavailable}", WebRoofNoticeLevel.Warning);
                 asked = null;
             }
         }
@@ -516,11 +557,12 @@ public sealed class WebRoofConsole : IDisposable
 
         // The person steps away with the grant (the controller ends their operator lease, which a grant never lifts): the
         // input that sent it is forgotten, and only their next click or key takes the lease back, dropping the grant.
-        return SendAlpacaAsync($"Sending {RoofAlpacaText.GrantConfirmLabel}…", RoofAlpacaText.GrantConfirmLabel, async (session, closing) =>
+        var kind = asked.Question.Kind;
+        return SendAlpacaAsync($"Sending {asked.Question.ConfirmLabel}…", asked.Question.ConfirmLabel, async (session, closing) =>
         {
             var grant = session.OperatorLease is { } lease
-                ? await lease.GrantAsync(RoofAlpacaCommandKind.Close, asked.Question.ReasonKeys, closing).ConfigureAwait(false)
-                : await session.Client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, asked.Question.ReasonKeys, closing).ConfigureAwait(false);
+                ? await lease.GrantAsync(kind, asked.Question.ReasonKeys, closing).ConfigureAwait(false)
+                : await session.Client.Alpaca.GrantAsync(kind, asked.Question.ReasonKeys, closing).ConfigureAwait(false);
             return RoofAlpacaText.DescribeGrant(grant);
         });
     }
@@ -531,13 +573,13 @@ public sealed class WebRoofConsole : IDisposable
         NoteInput();
         lock (_gate)
         {
-            if (_grantQuestion is null)
+            if (_grantQuestion is not { } asked)
             {
                 return;
             }
 
             _grantQuestion = null;
-            AddNoticeLocked(RoofAlpacaText.GrantCancelled, WebRoofNoticeLevel.Info);
+            AddNoticeLocked(RoofAlpacaText.GrantCancelledFor(asked.Question.Kind), WebRoofNoticeLevel.Info);
         }
 
         Publish();
@@ -1131,10 +1173,10 @@ public sealed class WebRoofConsole : IDisposable
         {
             DropLeaseLocked();
             _safetyQuestion = null;
-            if (_grantQuestion is not null)
+            if (_grantQuestion is { } asked)
             {
                 _grantQuestion = null;
-                AddNoticeLocked(RoofAlpacaText.GrantWithdrawn, WebRoofNoticeLevel.Info);
+                AddNoticeLocked(RoofAlpacaText.GrantWithdrawnFor(asked.Question.Kind), WebRoofNoticeLevel.Info);
             }
         }
 
@@ -1297,7 +1339,7 @@ public sealed class WebRoofConsole : IDisposable
     // (one goes at once when they act on a warning), and without them the status.
     private string? LeaseNoticeLocked()
         => _session is not { } person ? null
-            : _operatorLease is { SteppedAway: true } ? RoofAlpacaText.DescribeSteppedAway(_status?.Alpaca?.Grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Close), RoofAlpacaText.ClickToTakeBack)
+            : _operatorLease is { SteppedAway: true } ? RoofAlpacaText.DescribeSteppedAway(RoofAlpacaText.OwnGrants(_status?.Alpaca?.Grants ?? [], person.Name), RoofAlpacaText.ClickToTakeBack)
             : _operatorLease is { State: not null } lease ? lease.IdleWarning
             : RoofAlpacaText.DescribeIdleWarning(_status?.Alpaca?.OperatorLease, person.Name);
 
@@ -1331,7 +1373,11 @@ public sealed class WebRoofConsole : IDisposable
                 RoofAlpacaText.DescribeAlert(alert),
                 RoofAlpacaText.DescribeAcknowledgement(alert),
                 CanAcknowledge: session is not null && !alert.Acknowledged,
-                CanGrant: grant && RoofAlpacaText.CanGrantFrom(alert)))],
+                CanGrant: grant && RoofAlpacaText.CanGrantFrom(alert))
+            {
+                GrantKind = alert.Command ?? RoofAlpacaCommandKind.Close,
+                GrantUnavailable = RoofAlpacaText.GrantUnavailable(alert, alpaca)
+            })],
             Question = _grantQuestion?.Question,
             Busy = _alpacaBusy
         };
@@ -1339,8 +1385,8 @@ public sealed class WebRoofConsole : IDisposable
 
     private sealed record Command(WebSession Session, long StopsSent, CancellationToken Closing);
 
-    /// <summary>A grant question, with the session and the count of its Stops it was asked under.</summary>
-    private sealed record PendingGrant(WebAlpacaGrantQuestion Question, WebSession Session, long StopsSent);
+    /// <summary>A grant question, the alert it was asked from, and the session and the count of its Stops it was asked under.</summary>
+    private sealed record PendingGrant(WebAlpacaGrantQuestion Question, RoofAlpacaAlert Alert, WebSession Session, long StopsSent);
 
     /// <summary>A safety override question, with the session and the count of its Stops it was asked under.</summary>
     private sealed record PendingQuestion(RoofSafetyOverrideQuestion Question, WebSession Session, long StopsSent);

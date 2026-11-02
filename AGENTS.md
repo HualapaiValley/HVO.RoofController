@@ -42,7 +42,7 @@ macOS machine with Docker.
 |---|---|
 | `HVO.RoofControllerV4.RPi` | The controller: ASP.NET Core on the Pi. It drives the Sequent Microsystems HAT over I2C (`HVO.Iot.Devices`) and serves the REST API and the status hub. It serves no pages. Its own rules: [AGENTS.md](src/HVO.RoofControllerV4.RPi/AGENTS.md). |
 | `HVO.RoofControllerV4.Web` | The web UI, Blazor Server: a separate process in the controller's container ([docs/web.md](docs/web.md)). |
-| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process, off by default, over the client library with its own account's key. It reads, stops (AbortSlew), and closes (CloseShutter) with the Alpaca client's own key when the controller allows it; it never opens ([docs/alpaca.md](docs/alpaca.md)). |
+| `HVO.RoofControllerV4.Alpaca` | The Alpaca server: the roof as an ASCOM Alpaca Dome and the weather as a SafetyMonitor, a separate process, off by default, over the client library with its own account's key. It reads, stops (AbortSlew), and opens and closes (OpenShutter, CloseShutter) with the Alpaca client's own key when the controller allows it ([docs/alpaca.md](docs/alpaca.md)). |
 | `HVO.RoofControllerV4.Client` | The client library every UI uses: the REST API, the status hub, credentials and the CA, Stop, and the shared wording and palette. |
 | `HVO.RoofControllerV4.Cli` | `hvo-roof`: the commands and the Terminal.Gui interface ([docs/cli.md](docs/cli.md)). |
 | `HVO.RoofControllerV4.TerminalUi` | HVO Dark for Terminal.Gui, shared by `hvo-roof` and the installer. |
@@ -145,8 +145,8 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
 - `DirectionChangeDelay` (0 to 10 s, default 0: no wait; local-only): every start waits that long after the relays were
   last verified off, admitted first and then waiting without the lock, and runs its checks again before it energizes a
   relay ([docs/alpaca.md](docs/alpaca.md#waiting-out-the-direction-change-delay)).
-- Alpaca Close (#220, phase 3; `RoofController:Alpaca:AllowCommands`, `Off` by default, `CloseOnly` the only other
-  value): an Alpaca client's `CloseShutter` reaches the controller only with the External Alpaca account's key
+- Alpaca Close (#220, phase 3; `RoofController:Alpaca:AllowCommands`, `Off` by default, then `CloseOnly` or
+  `OpenAndClose`): an Alpaca client's `CloseShutter` reaches the controller only with the External Alpaca account's key
   (`RoofAlpacaCommander`, deny by default, accepted only from loopback and `ServerAddresses`) and a single-use ticket,
   and the controller alone decides it under its lock, with every check an ordinary Close has. It is refused while the
   human Stop hold is set (every Stop but the Alpaca server's own `AbortSlew` sets it, and so do the controller's start and
@@ -154,9 +154,18 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   `OperatorLeaseIdleMinutes` without input only while commands are on, never stopping a motion), and unless every
   blocking telescope, read again for that Close within `ScopeRereadBudgetMs`, is clear (the weather never gates it).
   A person's UI grant (one Close, 1 to 15 min, the reasons shown) lifts only a telescope refusal, never the hold, a
-  lease, a latch or `AllowCommands`. An Alpaca client never reverses a person's motion. Alpaca Open does not exist:
-  `OpenShutter` is refused before anything reaches the controller, which has no Open route
+  lease, a latch or `AllowCommands`. An Alpaca client never reverses a person's motion, only the Alpaca account's own
   ([docs/alpaca.md](docs/alpaca.md#alpaca-close)).
+- Alpaca Open (#220, phase 4; `AllowCommands` `OpenAndClose` only): an Alpaca client's `OpenShutter` goes the same way,
+  with every check an ordinary Open has, the hold and a person's lease as for a Close, and its own rule whatever
+  `InterlockMode` is: at least one required weather source, and every required one's latest read succeeded, is fresh and
+  says safe (a failed latest read refuses at once, before `MaxReadingAge`); and every blocking telescope, read again for
+  that Open, clear (unparked, unknown, stale or timed out is not clear). With no blocking telescope configured it is
+  refused unless `AllowOpenWithoutBlockingScopes` (default `false`, safety-critical, warned in every UI) is on. A
+  person's Open grant (separate from Close grants, one Open, 1 to 15 min, the reasons shown, weather's included) lifts
+  only those reasons, and never in `Block`: the grant route refuses it (403), every UI shows it disabled with the
+  reason, a mode change drops it, and the admission never honours one. The weather turning or a telescope unparking mid-Open never stops the roof (a UI alert), and
+  nothing ever closes it on its own ([docs/alpaca.md](docs/alpaca.md#alpaca-open)).
 - `IgnorePhysicalLimitSwitches` is for local simulation. On physical hardware it is refused unless
   `AllowIgnoringLimitSwitchesOnPhysicalHardware` is set in local configuration (never through the API).
 - None of this replaces an independent hardware stop path (E-stop, the VFD's STOP input); see

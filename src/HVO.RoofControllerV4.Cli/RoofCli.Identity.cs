@@ -606,7 +606,7 @@ public static partial class RoofCli
             var option = new Option<string?>("--role")
             {
                 Description = $"viewer (status and Stop), operator (also open, close, clear fault), admin (also settings, people, keys, restart), "
-                    + $"{RoofCliFormat.AlpacaCommanderRole} (the External Alpaca account: an Alpaca client's key, for Alpaca Close) "
+                    + $"{RoofCliFormat.AlpacaCommanderRole} (the External Alpaca account: an Alpaca client's key, for Alpaca Close and Open, as AllowCommands allows) "
                     + $"or {RoofCliFormat.AlpacaServerRole} (the Alpaca server's own account).",
                 Required = required,
                 CustomParser = result =>

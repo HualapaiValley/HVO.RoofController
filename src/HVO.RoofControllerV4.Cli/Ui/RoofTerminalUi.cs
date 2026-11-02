@@ -209,8 +209,8 @@ internal sealed class RoofTerminalUi : IDisposable
     internal RoofOperatorLeaseKeeper? OperatorLease => _operatorLease;
 
     /// <summary>
-    /// The grant the person stepped away from the operator lease with (<see cref="GrantCloseAsync"/>), until their next
-    /// key or click takes it back; null otherwise.
+    /// The grant the person stepped away from the operator lease with (<see cref="GrantAsync"/>), until their next key or
+    /// click takes it back; null otherwise.
     /// </summary>
     internal RoofOverrideGrant? SteppedAway => _steppedAway;
 
@@ -224,10 +224,11 @@ internal sealed class RoofTerminalUi : IDisposable
         {
             var lease = Status?.Alpaca?.OperatorLease;
             var person = LeaseHolder;
-            if (_steppedAway is { } away && person is not null && !(lease is { Held: true } && lease.Holder == person))
+            if (_steppedAway is not null && person is not null && !(lease is { Held: true } && lease.Holder == person))
             {
-                // While the grant is in force it says so; once it is used, lapsed or revoked, that the person is still away.
-                return RoofCliAlpaca.DescribeSteppedAway(Status?.Alpaca?.Grants.FirstOrDefault(grant => grant.Id == away.Id), lease);
+                // What every grant of theirs in force allows (an Open grant, a Close grant, or both); once none is, that the
+                // person is still away.
+                return RoofCliAlpaca.DescribeSteppedAway(RoofAlpacaText.OwnGrants(Status?.Alpaca?.Grants ?? [], person), lease);
             }
 
             return RoofAlpacaText.DescribeIdleWarning(lease, person);
@@ -818,20 +819,21 @@ internal sealed class RoofTerminalUi : IDisposable
     }
 
     /// <summary>
-    /// Grants an override for one Alpaca Close lifting exactly <paramref name="reasonKeys"/>. While this interface holds
-    /// the operator lease, the person steps away from it with the grant (the controller ends it, since a grant never lifts
-    /// a person's lease): no heartbeat crosses the grant, the input that confirmed it does not count after it, and only
-    /// their next key or click takes the lease back, which drops the grant. The banner says so meanwhile.
+    /// Grants an override for one Alpaca command of <paramref name="kind"/> (Close, or Open from phase 4) lifting exactly
+    /// <paramref name="reasonKeys"/>. While this interface holds the operator lease, the person steps away from it with
+    /// the grant (the controller ends it, since a grant never lifts a person's lease): no heartbeat crosses the grant, the
+    /// input that confirmed it does not count after it, and only their next key or click takes the lease back, which
+    /// drops the grant. The banner says so meanwhile.
     /// </summary>
-    internal async Task<RoofOverrideGrant> GrantCloseAsync(
-        RoofControllerClient client, RoofOperatorLeaseKeeper? keeper, IReadOnlyList<string> reasonKeys, CancellationToken cancellationToken)
+    internal async Task<RoofOverrideGrant> GrantAsync(
+        RoofControllerClient client, RoofOperatorLeaseKeeper? keeper, RoofAlpacaCommandKind kind, IReadOnlyList<string> reasonKeys, CancellationToken cancellationToken)
     {
         if (keeper is not { Refused: false })
         {
-            return await client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasonKeys, cancellationToken).ConfigureAwait(false);
+            return await client.Alpaca.GrantAsync(kind, reasonKeys, cancellationToken).ConfigureAwait(false);
         }
 
-        var grant = await keeper.StepAwayAsync(token => client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasonKeys, token), cancellationToken)
+        var grant = await keeper.StepAwayAsync(token => client.Alpaca.GrantAsync(kind, reasonKeys, token), cancellationToken)
             .ConfigureAwait(false);
         Post(() =>
         {

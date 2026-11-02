@@ -24,7 +24,7 @@ namespace HVO.RoofControllerV4.Screens;
 /// commands, the kiosk holds the Alpaca operator lease for them (#220, <see cref="RoofOperatorLeaseKeeper"/>): while anyone
 /// holds it, the controller refuses Alpaca commands. Its heartbeats say whether the person touched the screen since the
 /// last; nothing else counts as their input. It is given up when the kiosk locks, or the commands are turned off. When it
-/// lapses for want of input, or the person steps away from it by granting an override (<see cref="GrantCloseAsync"/>),
+/// lapses for want of input, or the person steps away from it by granting an override (<see cref="GrantAsync"/>),
 /// the heartbeats go on without taking it back; the person's next touch takes it back as it ends
 /// (<see cref="TouchEnded"/>), which cancels their grant.</para>
 /// <para>A status is shown as current only while the hub delivers it. Motion is not offered on a stale status: the roof
@@ -248,13 +248,13 @@ public sealed class KioskConsole : IAsyncDisposable
     }
 
     /// <summary>
-    /// Grants an override for one Alpaca Close that lifts exactly <paramref name="reasonKeys"/> (#220), with the unlocking
-    /// person's session. The person steps away with it: the controller ends their operator lease, since a grant never lifts
-    /// a person's lease, and the touch that asked for the grant does not take it back; only a later touch does, which
-    /// cancels the grant (<see cref="KioskView.AlpacaSteppedAway"/>). Throws as the request does; nothing is sent while
-    /// the kiosk is locked.
+    /// Grants an override for one Alpaca command of <paramref name="kind"/> (a Close, or from phase 4 an Open) that lifts
+    /// exactly <paramref name="reasonKeys"/> (#220), with the unlocking person's session. The person steps away with it:
+    /// the controller ends their operator lease, since a grant never lifts a person's lease, and the touch that asked for
+    /// the grant does not take it back; only a later touch does, which cancels the grant
+    /// (<see cref="KioskView.AlpacaSteppedAway"/>). Throws as the request does; nothing is sent while the kiosk is locked.
     /// </summary>
-    public async Task<RoofOverrideGrant> GrantCloseAsync(IReadOnlyList<string> reasonKeys, CancellationToken cancellationToken = default)
+    public async Task<RoofOverrideGrant> GrantAsync(RoofAlpacaCommandKind kind, IReadOnlyList<string> reasonKeys, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(reasonKeys);
         RoofSessionResponse session;
@@ -272,14 +272,14 @@ public sealed class KioskConsole : IAsyncDisposable
 
         // No heartbeat crosses the grant, and the input noted before it is forgotten once it is granted.
         var grant = keeper is null
-            ? await _client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasonKeys, cancellationToken).ConfigureAwait(false)
-            : await keeper.StepAwayAsync(token => _client.Alpaca.GrantAsync(RoofAlpacaCommandKind.Close, reasonKeys, token), cancellationToken).ConfigureAwait(false);
+            ? await _client.Alpaca.GrantAsync(kind, reasonKeys, cancellationToken).ConfigureAwait(false)
+            : await keeper.StepAwayAsync(token => _client.Alpaca.GrantAsync(kind, reasonKeys, token), cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
             if (keeper is not null && ReferenceEquals(_session, session) && ReferenceEquals(_operatorLease, keeper))
             {
                 _steppedAway = true;
-                _logger.LogInformation("{Name} granted one Alpaca Close and stepped away from the operator lease", session.Name);
+                _logger.LogInformation("{Name} granted one Alpaca {Kind} and stepped away from the operator lease", session.Name, kind);
             }
         }
 
@@ -1547,11 +1547,12 @@ public sealed class KioskConsole : IAsyncDisposable
         Publish();
     }
 
-    // While the person has stepped away by granting and nobody holds the lease: what Alpaca may do, and that a touch takes
-    // control back. Null otherwise (someone holding the lease refuses Alpaca, so there is nothing to say).
+    // While the person has stepped away by granting and nobody holds the lease: what Alpaca may do with every grant of
+    // theirs in force (an Open grant, a Close grant, or both), and that a touch takes control back. Null otherwise (someone holding the
+    // lease refuses Alpaca, so there is nothing to say).
     private string? AlpacaSteppedAwayLocked()
         => _steppedAway && _operatorLease is not null && _status?.Alpaca is { OperatorLease.Held: false } alpaca
-            ? RoofAlpacaText.DescribeSteppedAway(alpaca.Grants.FirstOrDefault(grant => grant.Kind == RoofAlpacaCommandKind.Close))
+            ? RoofAlpacaText.DescribeSteppedAway(RoofAlpacaText.OwnGrants(alpaca.Grants, _session?.Name))
             : null;
 
     // The unlocking person's idle warning: from the keeper's newest answer, counted down here, or else from the status.

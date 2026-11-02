@@ -11,10 +11,11 @@ or secrets. It is **off by default**, listens only on the addresses it is given,
 
 This page covers **phase 1, the Dome that reads the roof and stops it** (`AbortSlew`), **phase 2, the weather**: the
 server also serves the observatory's weather as an Alpaca **SafetyMonitor**, and the controller reads other Alpaca
-devices (mounts and weather monitors) as its [safety sources](#safety-sources), and **phase 3, `CloseShutter`**: an
+devices (mounts and weather monitors) as its [safety sources](#safety-sources), **phase 3, `CloseShutter`**: an
 Alpaca client with a key of its own may close the roof, when the controller allows it
-([Alpaca Close](#alpaca-close)). Commands are off until the controller's `AllowCommands` turns them on. `OpenShutter`
-is still refused, whatever any setting or grant says; it comes with phase 4 ([Not yet](#not-yet)).
+([Alpaca Close](#alpaca-close)), and **phase 4, `OpenShutter`**: the same client may open it, only when the weather is
+fresh and safe and every telescope that can block the roof is clear of it ([Alpaca Open](#alpaca-open)). Commands are
+off until the controller's `AllowCommands` turns them on: `CloseOnly` allows Close, `OpenAndClose` both.
 
 ## Contents
 
@@ -27,6 +28,7 @@ is still refused, whatever any setting or grant says; it comes with phase 4 ([No
 - [Server settings](#server-settings)
 - [Discovery](#discovery)
 - [Alpaca Close](#alpaca-close)
+- [Alpaca Open](#alpaca-open)
 - [Conformance](#conformance)
 - [Safety sources](#safety-sources)
 - [Not yet](#not-yet)
@@ -73,7 +75,7 @@ stop, as the roof coasts to a halt.
 | `CommandBlind`, `CommandBool`, `CommandString` | `0x400` NotImplemented. |
 | `AbortSlew` | **Stops the roof**: the controller's Stop ([AbortSlew](#abortslew)). |
 | `CloseShutter` | Closes the roof when the controller allows it, with the client's own key ([Alpaca Close](#alpaca-close)). Answers once the controller has started the Close, refused it, or found nothing to do. |
-| `OpenShutter` | `0x40B` InvalidOperation: Alpaca Open is not available in this version, whatever `AllowCommands` or any grant says. Nothing is sent to the controller. |
+| `OpenShutter` | Opens the roof when the controller allows it, with the client's own key ([Alpaca Open](#alpaca-open)). Answers once the controller has started the Open, refused it, or found nothing to do. |
 | `Action` | `status` only: a line describing the shutter, the roof, the last stop, the fault latch, the last error, the safety conditions, the Alpaca commands' state (on or off, the human Stop hold, a person's operator lease), and which controller answers (its name, instance and HAT mode). Any other action is `0x40C`. No action moves the roof or clears a fault. |
 
 ### Connecting
@@ -110,9 +112,10 @@ the client (its address, `ClientID` and `ClientTransactionID`).
 
 **An Alpaca client's `AbortSlew` does not hold off Alpaca commands.** It is the Alpaca server's own Stop (its own
 account, from an address the controller trusts), so it does not set the [human Stop hold](#the-human-stop-hold) and
-drops no override grant: the next `CloseShutter` is judged as any other. To hold Alpaca commands off, press Stop in the
-web UI, the terminal, the kiosk or `hvo-roof` (each sets the hold), or set `AllowCommands` to `Off`. An `AbortSlew`
-that comes while a `CloseShutter` waits for its ticket refuses that Close (`0x40B` "Aborted"): nothing is sent for it.
+drops no override grant: the next `OpenShutter` or `CloseShutter` is judged as any other. To hold Alpaca commands off,
+press Stop in the web UI, the terminal, the kiosk or `hvo-roof` (each sets the hold), or set `AllowCommands` to `Off`.
+An `AbortSlew` that comes while an `OpenShutter` or `CloseShutter` waits for its ticket refuses that command (`0x40B`
+"Aborted"): nothing is sent for it.
 
 ## The weather as SafetyMonitor 0
 
@@ -160,9 +163,9 @@ Alpaca errors are answered with HTTP 200, `ErrorNumber` and `ErrorMessage`. The 
 | `0x400` (1024) | NotImplemented | A member a roll-off roof does not have. |
 | `0x401` (1025) | InvalidValue | (Not used in this phase.) |
 | `0x407` (1031) | NotConnected | The client has not connected. Never for `AbortSlew`. |
-| `0x40B` (1035) | InvalidOperation | `OpenShutter` (not available in this version); a `CloseShutter` not authorised (no credential, a malformed or wrong one), overtaken by an `AbortSlew` ("Aborted"), or refused by the controller's [Close rules](#what-the-controller-checks) (`AlpacaCommandRefused`, `Superseded`); and the controller's refusals for the roof's state: `FaultLatched`, `InterlockActive`, `OperationInProgress`, `LeaseNotActive`, `SafetyInterlockActive`, `SafetyOverrideRequired`. |
+| `0x40B` (1035) | InvalidOperation | An `OpenShutter` or `CloseShutter` not authorised (no credential, a malformed or wrong one), overtaken by an `AbortSlew` ("Aborted"), or refused by the controller's rules ([Close](#what-the-controller-checks), [Open](#the-open-rule): `AlpacaCommandRefused`, `Superseded`); and the controller's refusals for the roof's state: `FaultLatched`, `InterlockActive`, `OperationInProgress`, `LeaseNotActive`, `SafetyInterlockActive`, `SafetyOverrideRequired`. |
 | `0x40C` (1036) | ActionNotImplemented | An action other than `status`. |
-| `0x500` (1280) | Controller unavailable | The roof's state, and the weather, are unknown: the controller cannot be reached, has sent no status yet, or has been silent for 3 s. Also a `CloseShutter` the controller did not answer in time: it is never retried, so check the roof and send it again if it is still wanted. |
+| `0x500` (1280) | Controller unavailable | The roof's state, and the weather, are unknown: the controller cannot be reached, has sent no status yet, or has been silent for 3 s. Also an `OpenShutter` or `CloseShutter` the controller did not answer in time: it is never retried, so check the roof and send it again if it is still wanted. |
 | `0x501` (1281) | Controller not initialized | The controller's `NotInitialized`. |
 | `0x502` (1282) | Controller shutting down | The controller's `ShuttingDown`. |
 | `0x503` (1283) | Hardware unavailable | The controller's `HardwareUnavailable`: it cannot read its safety inputs. |
@@ -215,10 +218,10 @@ The Alpaca API has no real authentication, so the server keeps itself small and 
   loopback and `RoofController:Alpaca:ServerAddresses`. Revoking the key cuts the server off: reads then answer
   `0x505`. A phase 1 server's plain Viewer key still reads and stops, but then every `AbortSlew` sets the hold and its
   reports are refused; the server says so in its log at start, and warns when its key has a higher role.
-- **Commands carry the client's own key.** `CloseShutter` needs the key of the **External Alpaca account** (role
-  `RoofAlpacaCommander`), sent by the client, which the server passes on to the controller for that Close alone. The
-  server holds no key that can close the roof. Reads, the common members and `AbortSlew` need no credential and never
-  pass one on ([The credential](#the-credential)).
+- **Commands carry the client's own key.** `OpenShutter` and `CloseShutter` need the key of the **External Alpaca
+  account** (role `RoofAlpacaCommander`), sent by the client, which the server passes on to the controller for that
+  command alone. The server holds no key that can open or close the roof. Reads, the common members and `AbortSlew` need
+  no credential and never pass one on ([The credential](#the-credential)).
 - **Off by default, LAN-only.** It starts nothing unless `Alpaca:Enabled` is true, and listens only on the
   `ListenAddresses` it is given. A public address is refused. Use this computer's LAN address, or `127.0.0.1`.
 - **An address allowlist.** Only clients within `AllowedNetworks` are answered (403 otherwise), discovery included.
@@ -235,14 +238,16 @@ The Alpaca API has no real authentication, so the server keeps itself small and 
 - **Polling is limited** to `RequestsPerSecondPerAddress` (100 a second, bursts of 200) per client address (429 past
   it). `AbortSlew` is never limited: the exemption is the member the device route matched, however the path is
   written.
-- **Only Close.** The server sends the controller a Close (a ticket, then the Close), a Stop and its refusal reports,
-  never Open, Clear fault, a lease renewal or a setting; the External account's key can do nothing else at the
-  controller either.
+- **Only Open, Close and Stop.** The server sends the controller an Open or a Close (a ticket, then the command), a Stop
+  and its refusal reports, never Clear fault, a lease renewal, a grant or a setting; the External account's key can do
+  nothing else at the controller either.
 - **Plain HTTP.** The Alpaca listener has no TLS yet (#220 leaves it for later). So the External key crosses the LAN in
-  the clear with every `CloseShutter` (HTTP Basic is an encoding, not encryption), and anyone who can watch that LAN
-  can take it. It can only close the roof, and only when the controller would allow it; it can never open the roof,
-  clear a fault, take a grant or change a setting. Keep the listener on the observatory's own LAN, and rotate the key
-  (the People page) if it may have been seen: rotating it ends every grant. The server's own connection to the
+  the clear with every `OpenShutter` and `CloseShutter` (HTTP Basic is an encoding, not encryption), and anyone who can
+  watch that LAN can take it. With `AllowCommands` `OpenAndClose`, that is a key that can **open** the roof, though only
+  when the controller would allow it: fresh, safe weather and every blocking telescope clear, or a person's grant, and
+  never past the Stop hold, a person's lease or a latched fault. It can never clear a fault, take a grant or change a
+  setting. Keep the listener on the observatory's own LAN, start with `CloseOnly`, and rotate the key (the People page)
+  if it may have been seen: rotating it ends every grant. The server's own connection to the
   controller can be HTTPS (`ControllerCertificateSha256` or `ControllerCaCertificatePath`, as the
   [client library](../src/HVO.RoofControllerV4.Client/README.md#connecting) checks them).
 
@@ -293,6 +298,12 @@ the [deploy script](deployment.md) or the [installer](install.md) ([Not yet](#no
    ([Clients](#clients)); then someone with the local credential sets `RoofController:Alpaca:AllowCommands` to
    `CloseOnly` ([Controller settings](#controller-settings)). Measure the telescopes' latency first and size
    `ScopeRereadBudgetMs` from it.
+6. **To let clients open the roof too** (optional, once Close has worked for a while): check that at least one weather
+   source is `Required` and every telescope that can reach the roof's path is configured with `BlocksRoof` (or decide
+   deliberately to set `AllowOpenWithoutBlockingScopes`, [The Open rule](#the-open-rule)), run the client against the
+   [HAT emulator](emulator.md) first ([Clients](#clients)), then set `AllowCommands` to `OpenAndClose` with the local
+   credential. (Turning commands on from `Off` sets the human Stop hold: a person clears it before the first Alpaca
+   command. Going from `CloseOnly` to `OpenAndClose` leaves the hold as it is, and drops every grant.)
 
 ## Server settings
 
@@ -355,7 +366,8 @@ Close on a disconnect or unsafe weather, and a refused Close needs a new `CloseS
 #220; the plan this follows is its phase 3.
 
 Commands are **off** until someone with the local credential sets `RoofController:Alpaca:AllowCommands` to
-`CloseOnly` ([Controller settings](#controller-settings)). `OpenShutter` stays refused whatever that says.
+`CloseOnly` or `OpenAndClose` ([Controller settings](#controller-settings)). An `OpenShutter` goes the same way, with a
+rule of its own ([Alpaca Open](#alpaca-open)).
 
 ### How a Close goes
 
@@ -400,8 +412,8 @@ no credential, ignore one that is sent, and work with commands off, a fault latc
 The controller accepts the External key only from the Alpaca server's addresses: loopback, and
 `RoofController:Alpaca:ServerAddresses`, judged on the connection's own peer address, never on a header a proxy adds.
 From any other address the right key is refused. The account may do nothing else: it may ask for a ticket, send a
-Close, and read the status (`GET RoofControl/Status`, `GET Safety`); every other route answers 403, Stop and the
-ordinary Open and Close included. No other key and no person's session may use the Alpaca routes.
+Close (and, under `OpenAndClose`, an Open: [Alpaca Open](#alpaca-open)), and read the status (`GET RoofControl/Status`,
+`GET Safety`); every other route answers 403, Stop and the ordinary Open and Close included. No other key and no person's session may use the Alpaca routes.
 
 **Guessing is slowed down.** After three refusals in a row from one client address, the server delays each further
 "Not authorised" answer, by 100 ms, doubling, at most 2 s, and forgets the address 10 minutes after its last refusal.
@@ -411,22 +423,24 @@ It never delays forwarding a command, never refuses a correct key, and never tou
 
 In this order, under the lock that starts the relays:
 
-1. **Commands on** (`AllowCommands` is `CloseOnly`), and the External account, its keys, `AllowCommands` and
-   `ServerAddresses` unchanged since the ticket (`AuthorizationChanged` otherwise).
+1. **Commands on** (`AllowCommands` is `CloseOnly` or `OpenAndClose`), and the External account, its keys,
+   `AllowCommands` and `ServerAddresses` unchanged since the ticket (`AuthorizationChanged` otherwise).
 2. **The hard protections**, as for any Close: not initialised, shutting down, the HAT unavailable, the relay register
    unverified, a latched fault, the drive fault input, contradictory limits, the drive still running.
 3. **A person in charge.** The [human Stop hold](#the-human-stop-hold) (`StopHold`) and a person's
    [operator lease](#the-operator-lease) (`LeaseHeld`) refuse every Alpaca Close.
 4. **What the Close would do.** Already closed: success, nothing sent. Already closing: success, nothing changes (no
-   relay write, no new deadline, no grant used). Opening on a person's command, or on one nobody in particular started
-   (a local input): refused (`PersonsMotion`); an Alpaca client never reverses a person's motion. (Alpaca Open does not
-   exist yet, so in this phase an Alpaca Close never reverses anything.) Otherwise it is a start.
+   relay write, no new deadline, no grant used). Opening (or about to): a reversal. Otherwise it is a start.
 5. **In time** for its answer's deadline (`DeadlineExceeded`).
 6. **The grant is used up here**: from this point any [override grant](#override-grants) for a Close is spent, whatever
    follows.
 7. **Nothing came after the ticket**: a Stop, a protective stop or another start since the ticket was issued refuses
    it (`Superseded`). A refusal, a repeat or a no-op never counts as one.
-8. **The Close rule**: every telescope that can block the roof is clear of it, from a read made after the Close
+8. **Never a person's motion**: a reversal of an Open on a person's command, or of one nobody in particular started (a
+   local input), is refused (`PersonsMotion`), the grant already used up; an Alpaca client never reverses a person's
+   motion. A reversal of an Alpaca client's Open is admitted like a start (the relays go off, the delay is waited out,
+   everything is checked again).
+9. **The Close rule**: every telescope that can block the roof is clear of it, from a read made after the Close
    arrived; otherwise a grant must lift every reason (`NotSafe`, with the reasons, and an alert).
 
 Then the Close starts, or [waits](#waiting-out-the-direction-change-delay). Any refusal leaves the roof as it was and
@@ -481,23 +495,21 @@ Operator role (on the kiosk with their own PIN). Never through Alpaca, and never
 - **For a while**: `OverrideWindowMinutes` (5 by default, 1 to 15), on the controller's monotonic clock, so changing
   the wall clock neither lengthens nor revives one. One grant at a time; a new one replaces it and starts the window
   again. Any UI can revoke it.
-- **Dropped** when the controller restarts, `AllowCommands`, `ServerAddresses`, `OverrideWindowMinutes` or
-  `InterlockMode` changes, the External account's keys change (added, rotated, revoked or re-roled), a person takes
+- **Dropped** when the controller restarts, `AllowCommands`, `AllowOpenWithoutBlockingScopes`, `ServerAddresses`,
+  `OverrideWindowMinutes` or `InterlockMode` changes, the External account's keys change (added, rotated, revoked or re-roled), a person takes
   the operator lease, or a Stop sets the [hold](#the-human-stop-hold).
 - **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands`.
 - **The person who grants steps away, for as long as the grant lasts.** A grant never lifts a person's lease, so the
   granting person's own lease ends with it, in every one of their sessions. While the grant lasts their UI takes it back
-  only when they do something there, and that drops the grant. A grant the same person makes again while their earlier
-  grant is still unused keeps every one of their sessions stepped away. A grant made again while a Close that used the
-  earlier grant is still waiting out the direction-change delay does not: when that Close starts or is refused, the next
-  heartbeat from any of their sessions takes the lease back and drops the new grant (nothing moves for it), so grant
-  again once the first Close has started or been refused. Once the grant is gone (the Close that used it decided, which
-  may be after it waits out the direction-change delay, or the grant lapsed, revoked or dropped), their UI holds the
-  lease again with its next heartbeat. Another person's lease still refuses the Close.
+  only when they do something there, and that drops the grant. A grant the same person makes again keeps every one of
+  their sessions stepped away, also while a Close that used the earlier grant is still waiting out the direction-change
+  delay: the new grant holds them away once that Close starts or is refused. Once every grant of theirs is gone (the
+  Close that used it decided, which may be after it waits out the direction-change delay, or the grant lapsed, revoked
+  or dropped), their UI holds the lease again with its next heartbeat. Another person's lease still refuses the Close.
 - **Audited**: the log and the command history name who granted what, from which UI, and the Close that used it,
   with the reasons at grant and at use. A grant is kept in the controller's memory only.
 
-The phase 3 grant is for a Close only: the controller refuses an Open grant (403).
+A Close grant lifts only a Close's reasons; an Open has grants of its own ([Open grants](#open-grants)).
 
 ### The human Stop hold
 
@@ -535,13 +547,17 @@ while commands are on, when it matters; `hvo-roof`'s commands never), with a hea
 `RoofControllerOptionsV4:DirectionChangeDelay` (0 by default: no wait, as before; at most 10 s; local credential only)
 makes every start, ordinary or Alpaca, wait that long after the relays were last verified off. A start that must wait
 is admitted first (its grant used), then waits **without holding the lock**, so a Stop during the wait answers at
-once, and then runs the checks again (the hold, a person's lease, commands on, the account unchanged, the Close rule
-on the newest readings, its deadline, and nothing having come since) before it energises a relay. If those refuse
-now, the roof stays stopped, the Close is refused and an alert says so. During the wait:
+once, and then runs the checks again (the hold, a person's lease, commands on, the account unchanged, the Close or
+[Open rule](#the-open-rule) on the newest readings, for an Open the interlock's mode too, its deadline, and nothing
+having come since) before it energises a relay. If those refuse now, the roof stays stopped, the command is refused
+and an alert says so. During the wait (a Close's, or an Open's alike):
 
-- a second Alpaca Close joins the waiting one and gets its answer;
-- a person's own Close takes the waiting start over as theirs (under their lease), still waiting out the delay;
-- an Open replaces it, and a Stop cancels it;
+- a second Alpaca command in the same direction joins the waiting one and gets its answer;
+- a person's own command in that direction takes the waiting start over as theirs (under their lease), still waiting
+  out the delay;
+- a command the other way is a reversal of the waiting one: an Alpaca client's is admitted or refused under its own
+  rule (refused, the waiting one goes on; admitted, it replaces it and waits out what is left of the delay), and a
+  person's replaces it; a Stop cancels it;
 - a request refused for its own fault (a bad ticket, the wrong kind) changes nothing.
 
 **A limit asserting refuses a waiting Close (a known limitation).** Every time a limit switch asserts, the controller
@@ -553,7 +569,7 @@ stays where it is, but the Close is refused. The client should send the Close ag
 the weather trigger's next Close). It is tracked for a follow-up.
 
 **Status during the wait** (an exception to "a roof not moving is never reported as moving"): the waiting start reads
-`ShutterStatus` Closing and `Slewing` true, since it has been accepted and will start unless something stops it. A start
+`ShutterStatus` Closing (Opening for an Open) and `Slewing` true, since it has been accepted and will start unless something stops it. A start
 refused when the wait ends reads `ShutterStatus` Error, wherever the roof stands (part way, or at a limit), with why in
 the `status` action, until the next start, Stop (a Stop that had to wait for the controller's lock, once it has run) or
 ClearFault, so a client polling the shutter sees its command failed. The controller's own status, and so every UI, keeps
@@ -562,13 +578,15 @@ the roof's real state (Open at the open limit, say), with the same reason as its
 
 ### Alerts
 
-The web UI, the terminal and the kiosk show an alert for each Alpaca Close refused for its policy, a person's lease,
-the hold or a latched fault; for a Close refused when its wait ended; for a telescope or the weather changing while an Alpaca
-Close moves the roof; and for a Close not authorised (refused by the server or by the controller), naming the client's
-address and `ClientID`, never the key. Alerts of the same kind and reasons are counted together with the last time,
-and a person acknowledges them (audited). The persistent warnings ("Alpaca Close checks no telescope", a re-read
-budget too small for the measured latency) show while commands are on. An Open not authorised, and anything with
-commands off, is only logged.
+The web UI, the terminal and the kiosk show an alert for each Alpaca Close or Open refused for its policy, a person's
+lease, the hold or a latched fault; for one refused when its wait ended; for a telescope changing while an Alpaca Close
+or Open moves the roof, and for the weather changing while an Alpaca Open does; and for a Close not authorised (refused
+by the server or by the controller), naming the client's address and `ClientID`, never the key. Each alert names its
+command (`Close` or `Open`); a grant made from it is of that kind. Alerts of the same kind and reasons are counted
+together with the last time, and a person acknowledges them (audited). The persistent warnings ("Alpaca Close checks no
+telescope", "Alpaca Open checks no telescope" while `AllowOpenWithoutBlockingScopes` lets the weather alone open the
+roof, a re-read budget too small for the measured latency) show while commands are on. An Open not authorised, an Open
+refused under `CloseOnly`, and anything with commands off, are only logged.
 
 The Alpaca server reports its own refusals (a missing or malformed credential) to the controller
 (`POST api/v4.0/alpaca/events`, its own account from a trusted address only): the kind, the client's address,
@@ -576,7 +594,7 @@ The Alpaca server reports its own refusals (a missing or malformed credential) t
 
 ### History
 
-The command history records each Alpaca Close (and each refusal) with the source `Alpaca`: the account and key name,
+The command history records each Alpaca Close and Open (and each refusal) with the source `Alpaca`: the account and key name,
 how the client authenticated (header or Basic), the client's address, `ClientID` and `ClientTransactionID` as the
 Alpaca server reported them (labelled so; never used to authorise), the address the controller itself saw, the grant
 it used and the reasons. Never a key or a Basic header.
@@ -636,7 +654,8 @@ The controller's side, under `RoofController:Alpaca` and `RoofController:Lease`,
 
 | Setting | Default | What it does |
 |---|---|---|
-| `RoofController:Alpaca:AllowCommands` | `Off` | `Off` or `CloseOnly`. The controller refuses to start with anything else (`OpenAndClose` comes with phase 4). Safety-critical; a change drops every grant and never stops a motion in progress. |
+| `RoofController:Alpaca:AllowCommands` | `Off` | `Off`, `CloseOnly` or `OpenAndClose`. The controller refuses to start with anything else. Safety-critical; a change drops every grant and never stops a motion in progress. Start with `CloseOnly`. |
+| `RoofController:Alpaca:AllowOpenWithoutBlockingScopes` | `false` | With no telescope set to block the roof, whether an Alpaca Open may go on the weather alone ([The Open rule](#the-open-rule)). Safety-critical; while it is on and Open is allowed, every UI warns, and the controller logs it at start. A change drops every grant. |
 | `RoofController:Alpaca:ServerAddresses` | none (loopback only) | The Alpaca server's addresses, besides loopback: single IPv4 or IPv6 host addresses, no networks, never the Docker bridge gateway. Checked at start. |
 | `RoofController:Alpaca:OverrideWindowMinutes` | `5` | How long a grant lasts, 1 to 15 minutes. A change drops every grant. |
 | `RoofController:Alpaca:ScopeRereadBudgetMs` | `600` | The telescopes' re-read budget, 300 to 2000 ms ([The telescopes, read again](#the-telescopes-read-again)). |
@@ -644,8 +663,9 @@ The controller's side, under `RoofController:Alpaca` and `RoofController:Lease`,
 | `RoofControllerOptionsV4:DirectionChangeDelay` | `0` | How long every start waits after the relays were last verified off, 0 to 10 s ([Waiting out the direction-change delay](#waiting-out-the-direction-change-delay)). |
 
 The status (`GET RoofControl/Status`, and every hub snapshot) carries `alpaca`: the mode, the hold, the operator
-lease, the grants, the alerts, the warnings, the number of blocking telescopes, the budget, the window and each
-telescope's latency; and `isStartPending`, `pendingMotion`, `motionOwner` (a person, the Alpaca account, or nobody
+lease, the grants, the alerts, the warnings, the number of blocking telescopes, the budget, the window, each
+telescope's latency, `allowOpenWithoutBlockingScopes`, and `openGrantUnavailable` (why no Open grant can be made now:
+the interlock is `Block`; null otherwise); and `isStartPending`, `pendingMotion`, `motionOwner` (a person, the Alpaca account, or nobody
 in particular) and `isContinuationRefused` (a start refused when its direction-change delay ended, which Dome 0 reports
 as Error).
 
@@ -653,24 +673,28 @@ The controller's routes, under `api/v4.0/alpaca`:
 
 | Route | Who |
 |---|---|
-| `POST shutter/ticket`, `POST shutter/close` | The External Alpaca account only, from a trusted address. |
+| `POST shutter/ticket`, `POST shutter/close`, `POST shutter/open` | The External Alpaca account only, from a trusted address. |
 | `POST events` | The Alpaca server's own account only, from a trusted address. |
 | `GET grants`, `GET alerts` | Any role. |
 | `POST grants`, `DELETE grants/{kind}`, `DELETE hold`, `POST lease` | A person's session with the Operator role (every API key 403). |
 | `DELETE lease`, `POST alerts/{id}/acknowledge` | A person's session (every API key 403). |
 
-There is no `shutter/open` route in this phase.
-
 ### Clients
 
-A client must send the External key with `CloseShutter`, as HTTP Basic (the key as user name and password) or the
-`X-HVO-Api-Key` header, and must send it **pre-emptively**: the server answers a Close without a credential with
-`0x40B`, not with an HTTP challenge.
+A client must send the External key with `OpenShutter` and `CloseShutter`, as HTTP Basic (the key as user name and
+password) or the `X-HVO-Api-Key` header, and must send it **pre-emptively**: the server answers a command without a
+credential with `0x40B`, not with an HTTP challenge.
+
+**Its timeout must outlast the controller's answer.** The server answers an Open or a Close within the re-read budget
+(`ScopeRereadBudgetMs`), plus what is left of the direction-change delay, plus 400 ms, and waits for the controller 1 s
+longer than that; with the defaults (600 ms, no delay) that is 2 s. Keep the budget plus the delay plus 1.4 s below the
+client's response timeout: ASCOM's Alpaca client library (the Dynamic Client's) waits 10 s for a member's answer and
+then sends it once more, which the server treats as a new command, admitted afresh.
 
 - **ConformU** 4.5.3 sends HTTP Basic from its settings file (`AccessUserName`, `AccessPassword`) with every request,
-  its protocol check's `CloseShutter` included ([Conformance](#conformance)).
+  its `OpenShutter` and `CloseShutter` included ([Conformance](#conformance)).
 - **NINA**'s own Alpaca client (a dome picked from its Alpaca discovery list) has no place for a user name and
-  password, so its `CloseShutter` is refused as not authorised. Connect NINA through the **ASCOM Alpaca Dynamic Client**
+  password, so its `OpenShutter` and `CloseShutter` are refused as not authorised. Connect NINA through the **ASCOM Alpaca Dynamic Client**
   instead (the owner's decision on #220), on the Windows PC that runs NINA:
   1. Install the ASCOM Platform (7 or later), which brings the Dynamic Client.
   2. In NINA's equipment for the dome, open the ASCOM Chooser. From its **Alpaca** menu, either enable discovery and
@@ -680,17 +704,173 @@ A client must send the External key with `CloseShutter`, as HTTP Basic (the key 
      Alpaca discovery, and open its **Properties** (its setup dialog).
   4. In the setup dialog's authentication settings, enter the External Alpaca account's key as **both** the user name
      and the password, and save. The Dynamic Client then sends them as HTTP Basic with every request.
-  5. Connect, and check that a `CloseShutter` from that PC is accepted: the server's log says `accepted by the
-     controller`, and the History page shows it with the `Alpaca` source and the `basic` auth method.
+  5. Connect, and check that a `CloseShutter` (and, with `OpenAndClose`, an `OpenShutter`) from that PC is accepted:
+     the server's log says `accepted by the controller`, and the History page shows it with the `Alpaca` source and the
+     `basic` auth method.
 
   **The key travels in the clear.** HTTP Basic is an encoding, not encryption, and the Alpaca listener is plain HTTP
   (TLS is not there yet, [Not yet](#not-yet)), so anyone who can watch the observatory's LAN can read the key from a
-  `CloseShutter`. Keep NINA's PC and the Alpaca server on that LAN; the key can only close the roof, and only when the
-  controller would allow it, and rotating it on the People page ends every grant.
-- Any other client: give it the key the same way, then check in the server's log that its `CloseShutter` arrives with
-  a credential.
+  command. Keep NINA's PC and the Alpaca server on that LAN. The key can close the roof, and open it under
+  `OpenAndClose`, only when the controller would allow it; rotating it on the People page ends every grant.
+- Any other client: give it the key the same way, then check in the server's log that its commands arrive with a
+  credential.
 
 Try a client against the [HAT emulator](emulator.md) first, never against the roof.
+
+#### The client matrix
+
+The client matrix ([`tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix`](../tests/alpaca/HVO.RoofControllerV4.AlpacaClientMatrix),
+run in CI by `tests/alpaca/conformu.sh` after its chain guard) drives the server with ASCOM's own Alpaca client
+library, `ASCOM.Alpaca.Components` 4.1.0, the library the Dynamic Client and NINA's native Alpaca devices are built on,
+with its default timeouts, against the HAT emulator on loopback only. It connects by explicit address (no discovery),
+and each profile goes through a capturing proxy that records what the client sends:
+
+| Profile | What it does | Result |
+|---|---|---|
+| **Dynamic Client** (NINA through it): the External key as user name and password | A NINA-like session, in the order the program runs it: connects; finds the shutter in Error and closes first (NINA's Error recovery); opens, and polls until Open; parks the mount, then closes (park-then-close); a refusal while the weather is unsafe (the client gets InvalidOperation with the controller's reason, and nothing moves); a person's Open grant through the session API, then the Open goes; `AbortSlew` during a motion (stops, reads Error part way); disconnects and connects again, and recovers from the Error once more. | Passes. Every request carried HTTP Basic, the first (`PUT connected`) included, and none was challenged. Open answered in 160 to 204 ms, Close in 145 to 162 ms, `AbortSlew` in 97 ms, a refused Open in 25 ms, against the controller's 1 s deadline, the server's 2 s wait and the library's 10 s. |
+| **NINA native**: no credential | Reads, `Connected`, `AbortSlew`; then `OpenShutter` and `CloseShutter`. | Passes. No request carried a credential; reads and `AbortSlew` work, and `OpenShutter` and `CloseShutter` answer `0x40B` "Not authorised" with nothing moving. |
+
+No Windows PC, NINA or ASCOM Platform takes part in CI. **Before Alpaca Open is turned on at the observatory**, repeat
+the session with the real NINA and the Dynamic Client on the Windows PC, against a HAT-emulator rig, never the roof:
+
+1. Set up a [rig](emulator.md) on a computer not wired to the roof: its controller with `OpenAndClose`, the emulator's
+   Alpaca mount as a blocking telescope and its safety monitor as a required weather source, and an External key; its
+   Alpaca server on the rig's LAN address, with `Alpaca:Location` "EMULATOR RIG, not the roof" and `AllowedNetworks`
+   narrowed to the PC. The emulator's control port (its fake mount and weather monitor, and the controls below) listens
+   on loopback only, and it has no authentication. On a rig the installer made, work the emulator's mount from the rig
+   itself, through that control API (its container publishes it on `127.0.0.1` only). Only an emulator started with
+   `dotnet run` can be served on the rig's address for the test network alone (`--urls http://<rig>:<port>`,
+   [Settings](emulator.md#settings)), so that NINA's mount can connect to its telescope. Clear the Stop hold in the
+   rig's web UI.
+2. On the PC, open `http://<rig>:11111/setup`: it must show the HAT emulated and the rig's controller.
+3. In a NINA profile of its own, never the observatory's, open the ASCOM Chooser, **Alpaca**, **Create Alpaca Driver
+   (Admin)**, named "HVO roof EMULATOR", with the rig's address, port `11111` and device `0`, and the External key as
+   both user name and password (no discovery).
+4. Run the session on the rig: reset the emulator part way (the shutter reads Error), close, then open; unpark the
+   emulator's mount and park it again (from NINA's mount connected to the emulator's Alpaca telescope, when its control
+   port is served on the test network, or through the rig's control API), then close; make the weather unsafe and open (NINA shows the controller's reason; nothing moves);
+   grant the Open from the rig's alert and open again (it opens); stop the dome during a motion (the shutter reads
+   Error); disconnect, connect again, close.
+5. Check the rig's History: every Open and Close shows the `Alpaca` source, `basic`, the PC's address, and the
+   server's log says `accepted by the controller`.
+6. Optionally, NINA's own discovered Alpaca dome: its Open and Close must be "Not authorised". Connect it only after
+   checking the device it lists is the rig's (its `Location`).
+
+## Alpaca Open
+
+Phase 4 of #220: an Alpaca client may open the roof with `OpenShutter`. An Open goes exactly the way a
+[Close](#alpaca-close) goes, with the same credential, ticket, re-read of the telescopes, checks under the controller's
+lock, fencing, history and alerts, and its own rule: the weather must be fresh and safe and every telescope that can
+block the roof clear of it. Nothing moves on its own: no Open is queued, retried or replayed, a refused Open needs a new
+`OpenShutter`, and there is no standing setting that opens without that rule (no "unattended Open").
+
+Open needs `RoofController:Alpaca:AllowCommands` set to `OpenAndClose` ([Controller settings](#controller-settings)).
+With `CloseOnly` every Alpaca Open is refused (`OpenNotAllowed`), with `Off` every Alpaca command (`CommandsOff`); both
+are only logged, never alerted. Start with `CloseOnly`, and allow Open once Close has worked for a while.
+
+### How an Open goes
+
+As [a Close goes](#how-a-close-goes): the server refuses at once a client not connected (`0x407`) and a missing,
+malformed or conflicting credential (`0x40B` "Not authorised"), asks the controller for an Open ticket
+(`POST api/v4.0/alpaca/shutter/ticket?kind=Open`), which starts the re-read of every blocking telescope, refuses the
+Open if an `AbortSlew` came meanwhile ("Aborted"), then sends it (`POST api/v4.0/alpaca/shutter/open`). A started Open
+answers with `ShutterStatus` Opening at once; a refused one leaves the status as it was. An Open ticket is good for an
+Open only, a Close ticket for a Close only. The deadline is the Close's: the re-read budget, what is left of the
+[direction-change delay](#waiting-out-the-direction-change-delay), and 400 ms.
+
+### What the controller checks for an Open
+
+In the order a Close is checked ([What the controller checks](#what-the-controller-checks)), with these differences:
+
+1. **Commands on** means `OpenAndClose`.
+2. The hard protections, as for any Open.
+3. The [human Stop hold](#the-human-stop-hold) and a person's [operator lease](#the-operator-lease) refuse every Alpaca
+   Open, exactly as they refuse a Close.
+4. **What the Open would do.** Already open: success, nothing sent. Already opening: success, nothing changes (no relay
+   write, no new deadline, no grant used). Closing (or about to): a reversal. Otherwise it is a start.
+5. to 7. In time, the grant used up, nothing after the ticket, as for a Close.
+8. **Never a person's motion**: a reversal of a Close on a person's command, or of one nobody in particular started, is
+   refused (`PersonsMotion`), the grant already used up; a reversal of an Alpaca client's Close is admitted like a start.
+9. **The Open rule**, below.
+
+### The Open rule
+
+**An Alpaca Open is Safe when the weather is fresh and safe and every blocking telescope is clear of the roof**, the
+owner's rule (#220), whatever `RoofSafety:InterlockMode` says:
+
+- **The weather.** At least one weather source is set `Required`, and **every** required one has a **latest read that
+  succeeded**, a reading no older than its `MaxReadingAge`, that says safe. A source whose latest read failed is
+  unknown for an Open at once, even while its last good reading still counts for the ordinary
+  [conditions](safety-service.md), which keep it until it is too old (the owner's decision, #220): an Open nobody is
+  watching needs fresh weather. A source set `Ignored` never decides.
+- **The telescopes.** Every telescope set `BlocksRoof` is clear of the roof (today: parked), from a read made after the
+  Open arrived, exactly as for a Close ([The telescopes, read again](#the-telescopes-read-again)): a telescope unparked,
+  unknown (its server down, a failed or timed-out read, `CanPark` false), stale, or configured but missing from the
+  safety service's list is not clear.
+- **No blocking telescope configured.** Then an Open is refused (`no-blocking-scopes`), and needs a person's grant,
+  unless `RoofController:Alpaca:AllowOpenWithoutBlockingScopes` is `true`: the weather alone decides then, every UI shows
+  "Alpaca Open checks no telescope" while Open is allowed, and the controller logs it at start. The setting never skips
+  a telescope that is configured to block the roof.
+- **`InterlockMode` does not relax it.** With the interlock `Off`, `Warn` or `Block`, an Alpaca Open needs this rule
+  (or, outside `Block`, a grant). The ordinary Open's override prompt (`overrideSafety`) never applies to Alpaca. In
+  `Block` only Safe opens the roof: no grant does ([Open grants](#open-grants)).
+
+A refusal names every reason, in words and as keys, and raises an alert:
+
+| Key | Reason |
+|---|---|
+| `scope-not-clear:<telescope>` | A blocking telescope is not parked. |
+| `scope-unknown:<telescope>` | A blocking telescope's state is not known (a failed, timed-out or stale read, `CanPark` false, not being read). |
+| `weather-unsafe:<monitor>` | A required weather source's latest reading says unsafe. |
+| `weather-unknown:<monitor>` | A required weather source has not been read, its latest read failed, or its reading is older than `MaxReadingAge`. |
+| `no-required-weather-source` | No weather source is set `Required`. |
+| `no-blocking-scopes` | No telescope is set to block the roof, and `AllowOpenWithoutBlockingScopes` is off. |
+
+**Once the roof moves, it keeps moving.** If the weather turns unsafe (or its source stops answering), or a blocking
+telescope unparks, while an Alpaca Open runs, the roof goes on opening and every UI raises an alert ("The roof
+continues; Stop it if it must not"). Every hard stop (Stop, the limits, the drive fault and running inputs, the
+watchdog, the fault latch) acts as always. **Nothing closes the roof on its own**: no Close on unsafe weather, on a
+client disconnecting or on the SafetyMonitor turning unsafe. A client that should close on bad weather (NINA's safety
+monitor trigger, say) sends its own `CloseShutter`, which the weather never gates.
+
+### Open grants
+
+A person may let **one** refused Open through, as for a Close ([Override grants](#override-grants)): from the refused
+Open's alert ("Allow this Open once") in the web UI, the terminal (or `hvo-roof alpaca grant`, interactive only) or the
+kiosk, by a person with the override role, never through Alpaca or with an API key (403). Each UI asks first ("Allow
+one Alpaca Open?"), with what the grant lifts and that the roof stays open if the weather turns.
+
+- **Its own kind.** An Open grant lifts only an Open's reasons, and a Close grant only a Close's: one of each may be in
+  force at once, each used up by one command of its kind.
+- **Reasons-bound, the weather's too**: it lifts only the keys it was given (any of the table's above). A new reason
+  since (rain started, a mount unparked) refuses the Open again, with a fresh alert, and the grant is still used up.
+- **For a while**: `OverrideWindowMinutes` (5 by default, 1 to 15), on the controller's monotonic clock; logged with who
+  granted it, from which UI, and the Open that used it.
+- **Never in `Block`.** While `RoofSafety:InterlockMode` is `Block`, the grant route refuses an Open grant (403,
+  `BlockMode`), every UI shows the Open grant control disabled with the reason, the status says why
+  (`openGrantUnavailable`), a change of the mode drops every grant (as any change of it does), and an Open grant that
+  is in force all the same is never honoured: the Open is refused and the grant used up.
+- **Dropped** when anything that drops a Close grant happens, and also when `AllowOpenWithoutBlockingScopes` changes.
+- **Never a way past** the hard protections, the hold, a person's lease or `AllowCommands` (`CloseOnly` refuses an Open
+  before its grant is used).
+- **The person who grants steps away**, as for a Close grant. With an Open and a Close grant of theirs both in force,
+  the person stays stepped away until both have ended: ending one (used, lapsed, revoked) leaves them away while the
+  other lasts. A person taking the lease drops every grant in force, another person's included, and that is also so
+  when a person's UI takes it back by itself once all their own grants have ended: with two people's grants in force,
+  the first person's UI coming back drops the second person's grant. It fails safe (the first person's lease would
+  refuse that command anyway); the second person grants again once the first has stepped away.
+
+### Known limitations
+
+Phase 3's [known limitation](#waiting-out-the-direction-change-delay) of a limit switch applies to an Open as to a
+Close, and fails safe the same way:
+
+- **A limit asserting refuses a waiting Open.** An Open waiting out the direction-change delay (after an `AbortSlew`
+  stopped a Close just short of the closed limit, say, the roof coasting onto it) is cancelled (`Superseded`) when a
+  limit asserts, and so is an Open whose ticket came before it. Nothing moves; the client sends the Open again.
+
+(Phase 3's other one, a grant made again while a used grant's command waits out the delay being dropped when that
+command was decided, is gone for both kinds: the grant made again holds the person away too.)
 
 ## Conformance
 
@@ -701,18 +881,22 @@ on the runner's loopback, never against hardware, and never before its chain gua
 - **Pinned.** ConformU 4.5.3, downloaded from its release and checked against its SHA-256 in
   [`tests/alpaca/conformu.sh`](../tests/alpaca/conformu.sh).
 - **Its settings** are [`tests/alpaca/conformu-settings.json`](../tests/alpaca/conformu-settings.json):
-  `DomeOpenShutter` false, and the protocol check's strict mode and URL-structure checks on. The script adds the run's
-  External key as ConformU's HTTP Basic user name and password, in a copy only the run can read.
+  `DomeOpenShutter` true, a 60 s shutter timeout (three times the emulated roof's 20 s travel) and a 3 s stabilisation
+  wait, and the protocol check's strict mode and URL-structure checks on. The script adds the run's External key as
+  ConformU's HTTP Basic user name and password, in a copy only the run can read.
 - **The chain guard** (`tests/alpaca/alpaca-ci.py guard`), before anything may command the roof: the controller's and
   the Alpaca server's URLs are loopback addresses (written as addresses, not names), the controller drives the HAT
   emulator, and the Alpaca server reaches that very controller instance (its `status` action names it). Otherwise the
   run stops before ConformU starts.
 - **Run-only keys and settings.** The script makes the run's keys (the Alpaca server's account, the External account,
-  an admin key that only makes the CI person) and the CI person's password in a directory only its user can read, gives
-  the controller their hashes, and deletes them at the end. `AllowCommands` is `CloseOnly` for the run only, never a
-  shipped default. The CI person (an Operator) clears the Stop hold set at the controller's start through the session
-  API, as a person would in a UI, and holds no operator lease. No log or result kept may hold a run secret: the script
-  fails if one does, and deletes it before CI keeps the results.
+  an admin key that makes the CI person and reads the history) and the CI person's password in a directory only its
+  user can read, gives the controller their hashes, and deletes them at the end. `AllowCommands` `OpenAndClose` and
+  `RoofSafety:InterlockMode` `Warn` are for the run only, never shipped defaults: the script writes them into a run-only
+  copy of the controller's `appsettings.Development.json` (its content root), not the environment, so the Open runs can
+  change them while the controller runs (a configuration reload). The safety sources are read every second. The CI
+  person (an Operator) clears the Stop hold set at the controller's start through the session API, as a person would in
+  a UI, and holds no operator lease. No log or result kept may hold a run secret: the script fails if one does, and
+  deletes it before CI keeps the results.
 - **Four checks**, the Alpaca protocol check and the conformance check of Dome 0 and of SafetyMonitor 0, must report
   **no error and no issue**. The SafetyMonitor's run uses the same settings, its device changed; the controller behind it
   reads the emulator's Alpaca safety monitor as its weather source and lists the server's `UniqueID`s (made by the script
@@ -720,36 +904,52 @@ on the runner's loopback, never against hardware, and never before its chain gua
   ConformU logs some failures, such as the shutter state straight after a command, as issues, so no errors alone is not
   enough. Every information message and configuration alert must be one
   [`tests/alpaca/conformu-expected.json`](../tests/alpaca/conformu-expected.json) lists, with why, and each listed one
-  must be reported. These are the shutter tests ConformU leaves out with `DomeOpenShutter` false (`OpenShutter`
-  among them), and, for both devices, the status codes of the URL-structure checks' malformed URLs.
-- **ConformU never moves the roof.** The roof starts Closed, so ConformU's `CloseShutter` succeeds with nothing to do,
-  and its `OpenShutter` is not sent. The script fails if the emulated roof moved or a relay was left on.
+  must be reported: for both devices, only the status codes of the URL-structure checks' malformed URLs; no
+  configuration alert.
+- **ConformU opens and closes the emulated roof** (the weather safe, the mount parked), through the Alpaca server, with
+  the External key. The script then checks the roof is at rest at a limit with every relay off, no plant violation and
+  no fault, and that the history records ConformU's Opens and Closes with the `Alpaca` source and HTTP Basic.
 - **Then the scripted Close runs** (`alpaca-ci.py close-runs`), each starting the emulated roof part way open through
   the emulator, checking the starting state, and checking the relays and the roof afterwards: the Stop hold left set
   refuses the Close; a missing and a wrong credential are not authorised; an unparked mount refuses it with an alert
   and nothing queued; a Close grant (made through the session API) lets the refused Close go and is used up; a new
   reason after a grant refuses it and the grant is still used; unsafe weather never gates it.
+- **Then the scripted Open runs** (`alpaca-ci.py open-runs`), the same way: a safe Open reads Opening at once and
+  reaches Open with the open relay alone; unsafe weather refuses it (`0x40B`, an alert with `weather-unsafe`) with
+  nothing moving or queued; a weather monitor that stops answering refuses it at once ("its latest read failed") while
+  the ordinary conditions still show its last safe reading; stale weather (that monitor kept silent until its last safe
+  reading is older than `MaxReadingAge`, shortened to 7 s for the run by a reload, so the ordinary conditions read it
+  stale too) refuses it with `weather-unknown`, nothing moving and nothing queued once fresh safe readings return (end
+  to end a reading goes stale only after failed reads, so the refusal names the failed latest read; the age rule on its
+  own is a unit test's); an unparked mount refuses it; an Open grant made through the
+  session API lets the refused Open go and is used up; a grant made in `Warn` is dropped when `InterlockMode` turns
+  `Block` at runtime (the reload checked on the status), `openGrantUnavailable` says why, a new Open grant is refused
+  (403 `BlockMode`) and the Open is refused with nothing moving; an Alpaca Open then an Alpaca Close reverses the roof
+  (the open relay off before the close relay on, never both); and `CloseOnly`, set at runtime, refuses an Open while a
+  Close goes.
+- **Then the client matrix** ([The client matrix](#the-client-matrix)).
 
-Run it locally from the repository root with `tests/alpaca/conformu.sh` (it builds the three programs; `--no-build`
-uses the last build). It uses ports 47210 to 47230 (`HVO_ALPACA_TEST_PORT_BASE` moves them) and keeps its logs and
-ConformU's reports in the directory it names. `tests/alpaca/check-conformu-results.py` has its own tests
-(`python3 -m unittest discover -s tests/alpaca -p 'test_*.py'`).
+Run it locally from the repository root with `tests/alpaca/conformu.sh` (it builds the three programs and the client
+matrix; `--no-build` uses the last build). It uses ports 47210 to 47232 (`HVO_ALPACA_TEST_PORT_BASE` moves them) and
+keeps its logs and ConformU's reports in the directory it names. `tests/alpaca/check-conformu-results.py` and the
+harness's helpers (`test_alpaca_ci.py`: the modes file, the relay-write checks, alert matching and refusing anything but
+loopback) have their own tests (`python3 -m unittest discover -s tests/alpaca -p 'test_*.py'`).
 
-> **Never point ConformU at an Alpaca server in front of the real roof.** `conformu conformance <url>` and
-> `conformu alpacaprotocol <url>` run with `DomeOpenShutter` on, whatever a settings file says, and the protocol check
-> sends `CloseShutter` even with it off. With commands on and the External key, this server closes the roof. Use
-> `conformance-settings` and `alpacaprotocol-settings` with the repository's settings file, against the emulator,
-> through `tests/alpaca/conformu.sh` and its chain guard.
+> **Never point ConformU at an Alpaca server in front of the real roof.** The repository's settings file opens the
+> shutter (`DomeOpenShutter` true), and `conformu conformance <url>` and `conformu alpacaprotocol <url>` run with it on
+> whatever a settings file says. With commands on and the External key, ConformU opens and closes the roof through this
+> server. Run it only through `tests/alpaca/conformu.sh` and its chain guard, against the emulator.
 
 The contract tests in `tests/HVO.RoofControllerV4.RPi.Tests/Alpaca` check the envelope, the parameters, the
 transaction numbers, the error table, connecting, `AbortSlew`, refused commands, an unreachable or silent controller,
 the allowlist, the `Host` and `Origin` checks and the polling limit, against an in-memory controller.
-`AlpacaCloseShutterTests` check the server's `CloseShutter`: the credential (header, Basic, both, mismatched), passing
-it on for the Close alone, the local refusals before any ticket, `OpenShutter` reaching nothing whatever the settings,
-an `AbortSlew` overtaking a Close, no retries, and the failure limit. `RoofAlpaca*Tests` check the controller's rules
-(the order, tickets, re-reads, grants, the hold, waiting starts), `RoofOperatorLeaseTests` the operator lease,, `AlpacaCommandsApiTests` its
-routes (the deny-by-default account, trusted addresses, person-only routes, events, the history, no key anywhere), and
-`AlpacaCloseScenarios` an Alpaca client's Close end to end on the emulated plant.
+`AlpacaCloseShutterTests` check the server's `CloseShutter` and `OpenShutter`: the credential (header, Basic, both,
+mismatched), passing it on for that command alone, the local refusals before any ticket, an `AbortSlew` overtaking a
+command, no retries, and the failure limit. `RoofAlpaca*Tests` check the controller's rules (the order, tickets,
+re-reads, grants, the hold, waiting starts; `RoofAlpacaOpen*Tests` the Open rule, Open grants and Block, and an Open's
+waiting starts and reversals), `RoofOperatorLeaseTests` the operator lease, `AlpacaCommandsApiTests` its routes (the
+deny-by-default account, trusted addresses, person-only routes, events, the history, no key anywhere), and
+`AlpacaCloseScenarios` and `AlpacaOpenScenarios` an Alpaca client's Close and Open end to end on the emulated plant.
 `AlpacaSafetyMonitorTests` check the SafetyMonitor: `IsSafe` as the weather alone (Safe with an unparked mount; false
 for unsafe, unknown or no required weather, an unreachable controller, and a controller that does not list its
 `UniqueID`), its own connection, its members and
@@ -807,7 +1007,10 @@ and every scope that can block the roof shows it is clear of the roof.**
 What an ordinary Open does with the conditions is the interlock's (`RoofSafety:InterlockMode`, Warn by default),
 unchanged: [The Open interlock](safety-service.md#the-open-interlock). An ordinary Close and every Stop are never gated.
 An **Alpaca** Close has its own rule, the blocking telescopes alone, read again for it, never the weather
-([The Close rule](#the-close-rule)). The conditions never move or stop the roof.
+([The Close rule](#the-close-rule)). An **Alpaca** Open has a stricter rule than the conditions, whatever the interlock
+says: every required weather source's latest read must also have succeeded, the telescopes are read again for it, and
+no blocking telescope at all is not Safe unless `AllowOpenWithoutBlockingScopes` says so
+([The Open rule](#the-open-rule)). The conditions never move or stop the roof.
 
 ### Source settings
 
@@ -979,12 +1182,8 @@ From the proposal's reviews, kept here:
 
 ## Not yet
 
-Phases 1 to 3 leave these to later phases of #220 or to follow-ups:
+Phases 1 to 4 leave these to follow-ups of #220:
 
-- **`OpenShutter`** (phase 4): `AllowCommands` `OpenAndClose`, the Open rule (fresh, successful reads of every required
-  weather source and every blocking telescope clear), Open grants and their UI, the `Block` interlock's rule for
-  Alpaca Open, `AllowOpenWithoutBlockingScopes`, ConformU with `DomeOpenShutter` on, and the client matrix (NINA
-  through the Dynamic Client, and another Dynamic Client program) on the emulator.
 - **Deployment checks** (#229): `--validate-deployment` checks of the `Host` allowlist and `ServerAddresses`.
 - **Deployment.** The server in the controller's image and container, the deploy script, Compose and the installer's
   Alpaca option (off by default), its settings in the settings catalogue and the UIs, its `UniqueID`s in backups, and the

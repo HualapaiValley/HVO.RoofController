@@ -1,7 +1,7 @@
 namespace HVO.RoofControllerV4.Common.Models;
 
 /// <summary>
-/// Wire-level rules of the controller's Alpaca command surface (#220, phase 3): the routes the Alpaca server and the UIs
+/// Wire-level rules of the controller's Alpaca command surface (#220, phases 3 and 4): the routes the Alpaca server and the UIs
 /// call under <c>api/v4.0/alpaca</c>, the headers the Alpaca server forwards, the two account roles, and the problem
 /// extensions. The Alpaca server is the only caller of the shutter routes; the person-only routes (grants, the Stop
 /// hold, the operator lease, alert acknowledgement) refuse every API key.
@@ -11,13 +11,13 @@ public static class RoofAlpacaContract
     /// <summary>The routes' prefix.</summary>
     public const string Route = "api/v4.0/alpaca";
 
-    /// <summary><c>POST</c> with <c>?kind=Close</c>: a single-use ticket for one command (External Alpaca account only).</summary>
+    /// <summary><c>POST</c> with <c>?kind=Close</c> or <c>?kind=Open</c>: a single-use ticket for one command (External Alpaca account only).</summary>
     public const string TicketRoute = "shutter/ticket";
 
     /// <summary><c>POST</c> with a <see cref="RoofAlpacaCommandRequest"/>: an Alpaca Close (External Alpaca account only).</summary>
     public const string CloseRoute = "shutter/close";
 
-    /// <summary>The Alpaca Open route. Not registered in phase 3: Open stays refused.</summary>
+    /// <summary><c>POST</c> with a <see cref="RoofAlpacaCommandRequest"/>: an Alpaca Open (External Alpaca account only; phase 4).</summary>
     public const string OpenRoute = "shutter/open";
 
     /// <summary><c>POST</c> with a <see cref="RoofAlpacaEvent"/>: the Alpaca server's own refusals (AlpacaServer account only).</summary>
@@ -80,8 +80,58 @@ public static class RoofAlpacaContract
     /// <summary>The reason-key kind: a blocking telescope whose state is not known (unread, failing, stale, re-read timed out).</summary>
     public const string ScopeUnknownKind = "scope-unknown";
 
+    /// <summary>The reason-key kind (Open only): a required weather source whose latest reading says unsafe.</summary>
+    public const string WeatherUnsafeKind = "weather-unsafe";
+
+    /// <summary>
+    /// The reason-key kind (Open only): a required weather source whose state is not known (not read yet, its latest read
+    /// failed, or its reading is too old).
+    /// </summary>
+    public const string WeatherUnknownKind = "weather-unknown";
+
+    /// <summary>The reason key (Open only, no source): no weather source is set Required, so nothing says the weather is safe.</summary>
+    public const string NoRequiredWeatherKey = "no-required-weather-source";
+
+    /// <summary>
+    /// The reason key (Open only, no source): no telescope is set to block the roof, and
+    /// <c>RoofController:Alpaca:AllowOpenWithoutBlockingScopes</c> is off, so an Open on the weather alone needs a grant.
+    /// </summary>
+    public const string NoBlockingScopesKey = "no-blocking-scopes";
+
     /// <summary>A reason's stable key: its kind and the source's name. Keys are compared; text is only shown.</summary>
     public static string ReasonKey(string kind, string source) => $"{kind}:{source}";
+
+    /// <summary>
+    /// True when a grant of <paramref name="command"/> may name <paramref name="key"/>: a Close grant lifts only telescope
+    /// reasons (the weather never gates a Close); an Open grant also lifts the weather's, and the two reasons that name no
+    /// source (<see cref="NoRequiredWeatherKey"/>, <see cref="NoBlockingScopesKey"/>).
+    /// </summary>
+    public static bool IsGrantableReasonKey(RoofAlpacaCommandKind command, string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (key.Length > 128)
+        {
+            return false;
+        }
+
+        if (command == RoofAlpacaCommandKind.Open && key is NoRequiredWeatherKey or NoBlockingScopesKey)
+        {
+            return true;
+        }
+
+        var colon = key.IndexOf(':', StringComparison.Ordinal);
+        if (colon <= 0 || colon == key.Length - 1)
+        {
+            return false;
+        }
+
+        return key[..colon] switch
+        {
+            ScopeNotClearKind or ScopeUnknownKind => true,
+            WeatherUnsafeKind or WeatherUnknownKind => command == RoofAlpacaCommandKind.Open,
+            _ => false
+        };
+    }
 }
 
 /// <summary>Which Alpaca commands the controller accepts (<c>RoofController:Alpaca:AllowCommands</c>, local-only).</summary>
@@ -90,10 +140,10 @@ public enum RoofAlpacaCommandMode
     /// <summary>None (the default): Alpaca reads and AbortSlew only.</summary>
     Off = 0,
 
-    /// <summary>Close only. Phase 3's highest setting.</summary>
+    /// <summary>Close only: an Alpaca Open is refused.</summary>
     CloseOnly = 1,
 
-    /// <summary>Open and Close. Not accepted until phase 4: a controller given it refuses to start.</summary>
+    /// <summary>Open and Close (#220, phase 4).</summary>
     OpenAndClose = 2
 }
 
@@ -142,6 +192,12 @@ public sealed record RoofOverrideGrant
     /// <summary>Who granted it, as audit lines name them.</summary>
     public string GrantedBy { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The granting person's name alone (their account), so a UI can tell its own person's grants from another person's;
+    /// null from a controller that does not send it.
+    /// </summary>
+    public string? GrantedByName { get; init; }
+
     /// <summary>Where: <c>kiosk</c> for a PIN session, <c>session</c> for a web, terminal or Mac session.</summary>
     public string Ui { get; init; } = string.Empty;
 
@@ -159,7 +215,7 @@ public sealed record RoofAlpacaAlert
     /// <summary>What it is: <c>Refused</c>, <c>ContinuationRefused</c>, <c>NotAuthorised</c>, <c>Warning</c>, <c>MidMotion</c>.</summary>
     public string Kind { get; init; } = string.Empty;
 
-    /// <summary>The command it concerns (<c>Close</c>), when it concerns one.</summary>
+    /// <summary>The command it concerns (<c>Close</c> or <c>Open</c>), when it concerns one.</summary>
     public RoofAlpacaCommandKind? Command { get; init; }
 
     public string Message { get; init; } = string.Empty;
@@ -230,8 +286,23 @@ public sealed record RoofAlpacaStatus
     /// <summary>The alerts, newest first, at most 20.</summary>
     public IReadOnlyList<RoofAlpacaAlert> Alerts { get; init; } = [];
 
-    /// <summary>Persistent warnings ("Alpaca Close checks no telescope", a re-read budget too short for the measured latency).</summary>
+    /// <summary>
+    /// Persistent warnings ("Alpaca Close checks no telescope", Alpaca Open allowed on the weather alone, a re-read budget
+    /// too short for the measured latency).
+    /// </summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    /// <c>RoofController:Alpaca:AllowOpenWithoutBlockingScopes</c>: with no telescope set to block the roof, an Alpaca Open
+    /// may go on the weather alone (otherwise it needs a grant).
+    /// </summary>
+    public bool AllowOpenWithoutBlockingScopes { get; init; }
+
+    /// <summary>
+    /// Why no Open grant can be made now, for the UIs to show beside a disabled Open grant control (the safety interlock is
+    /// Block: no grant opens the roof); null while Open grants may be made.
+    /// </summary>
+    public string? OpenGrantUnavailable { get; init; }
 
     /// <summary>How many telescopes block the roof (the configuration's).</summary>
     public int BlockingScopes { get; init; }

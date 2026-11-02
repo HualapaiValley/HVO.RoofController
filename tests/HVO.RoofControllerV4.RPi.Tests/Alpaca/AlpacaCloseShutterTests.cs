@@ -12,11 +12,11 @@ using HVO.RoofControllerV4.RPi.Tests.Controllers;
 namespace HVO.RoofControllerV4.RPi.Tests.Alpaca;
 
 /// <summary>
-/// The Alpaca server's CloseShutter (#220, phase 3): local refusals only for a client not connected, a missing or
-/// malformed credential (header, or HTTP Basic with the key as both parts), or an AbortSlew that overtook it before its
-/// ticket; otherwise the client's own key is passed on for the ticket and the Close (never the server's, never kept), the
-/// client's metadata forwarded, the controller's answer mapped, nothing retried. Refusals as not authorised are slowed
-/// down per address, never a correct key.
+/// The Alpaca server's CloseShutter (#220, phase 3) and OpenShutter (phase 4): local refusals only for a client not
+/// connected, a missing or malformed credential (header, or HTTP Basic with the key as both parts), or an AbortSlew that
+/// overtook it before its ticket; otherwise the client's own key is passed on for the ticket and the command (never the
+/// server's, never kept), the client's metadata forwarded, the controller's answer mapped, nothing retried. Refusals as
+/// not authorised are slowed down per address, never a correct key.
 /// </summary>
 [TestClass]
 public sealed class AlpacaCloseShutterTests
@@ -56,8 +56,10 @@ public sealed class AlpacaCloseShutterTests
 
             return path switch
             {
-                _ when path.Contains("/alpaca/shutter/ticket", StringComparison.Ordinal) => Json(new RoofAlpacaTicket("ticket-1", RoofAlpacaCommandKind.Close, "instance-1", 5, 1000)),
+                _ when path.Contains("/alpaca/shutter/ticket", StringComparison.Ordinal) => Json(new RoofAlpacaTicket("ticket-1",
+                    path.EndsWith("kind=Open", StringComparison.Ordinal) ? RoofAlpacaCommandKind.Open : RoofAlpacaCommandKind.Close, "instance-1", 5, 1000)),
                 _ when path.Contains("/alpaca/shutter/close", StringComparison.Ordinal) => Json(RoofServiceMock.Snapshot(RoofControllerStatus.Closing, RoofMotionDirection.Closing, relayMask: 0x0A)),
+                _ when path.Contains("/alpaca/shutter/open", StringComparison.Ordinal) => Json(RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening, relayMask: 0x09)),
                 _ when path.Contains("/alpaca/events", StringComparison.Ordinal) => new HttpResponseMessage(HttpStatusCode.NoContent),
                 _ when path.Contains("/RoofControl/Stop", StringComparison.Ordinal) => Json(RoofServiceMock.Snapshot(RoofControllerStatus.Stopped)),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound)
@@ -99,17 +101,23 @@ public sealed class AlpacaCloseShutterTests
 
     private static int Error(JsonElement answer) => answer.GetProperty("ErrorNumber").GetInt32();
 
+    /// <summary>The command a shutter member sends: <c>closeshutter</c> a Close, <c>openshutter</c> an Open.</summary>
+    private static (string Kind, string Route) Command(string member) => member == "openshutter" ? ("Open", "open") : ("Close", "close");
+
     [TestMethod]
-    public async Task WithTheKeyInTheHeader_TheTicketAndTheCloseCarryTheClientsKey_AndItsMetadata()
+    [DataRow("closeshutter")]
+    [DataRow("openshutter")]
+    public async Task WithTheKeyInTheHeader_TheTicketAndTheCommandCarryTheClientsKey_AndItsMetadata(string member)
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
+        var (kind, route) = Command(member);
 
-        var answer = await alpaca.PutAsync("closeshutter", "ClientID=7&ClientTransactionID=41", Header());
+        var answer = await alpaca.PutAsync(member, "ClientID=7&ClientTransactionID=41", Header());
 
         Error(answer).Should().Be(0, answer.GetProperty("ErrorMessage").GetString());
         var calls = controller.Requests.Where(request => request.Path.Contains("/alpaca/shutter/", StringComparison.Ordinal)).ToList();
-        calls.Select(call => call.Path).Should().Equal($"/api/v4.0/alpaca/shutter/ticket?kind=Close", "/api/v4.0/alpaca/shutter/close");
+        calls.Select(call => call.Path).Should().Equal($"/api/v4.0/alpaca/shutter/ticket?kind={kind}", $"/api/v4.0/alpaca/shutter/{route}");
         calls.Should().OnlyContain(call => call.ApiKey == ClientKey, "the client's key, passed on for these calls only");
         calls[0].Forwarded.Should().BeEquivalentTo(new Dictionary<string, string>
         {
@@ -122,24 +130,29 @@ public sealed class AlpacaCloseShutterTests
     }
 
     [TestMethod]
-    public async Task WithHttpBasic_KeyAsBothParts_TheCloseGoesOn_AsBasic()
+    [DataRow("closeshutter")]
+    [DataRow("openshutter")]
+    public async Task WithHttpBasic_KeyAsBothParts_TheCommandGoesOn_AsBasic(string member)
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
 
-        Error(await alpaca.PutAsync("closeshutter", "ClientID=7", Basic(ClientKey, ClientKey))).Should().Be(0);
+        Error(await alpaca.PutAsync(member, "ClientID=7", Basic(ClientKey, ClientKey))).Should().Be(0);
 
         controller.Requests.Where(request => request.Path.Contains("/alpaca/shutter/", StringComparison.Ordinal))
             .Should().HaveCount(2).And.OnlyContain(call => call.ApiKey == ClientKey && call.Forwarded[RoofAlpacaContract.AuthMethodHeader] == "basic");
     }
 
     [TestMethod]
-    [DataRow("missing")]
-    [DataRow("basic parts differ")]
-    [DataRow("header and basic differ")]
-    [DataRow("not basic")]
-    [DataRow("malformed basic")]
-    public async Task AMissingOrMalformedCredential_IsNotAuthorised_NothingReachesTheShutterRoutes_AndTheRefusalIsReported(string kind)
+    [DataRow("missing", "closeshutter")]
+    [DataRow("basic parts differ", "closeshutter")]
+    [DataRow("header and basic differ", "closeshutter")]
+    [DataRow("not basic", "closeshutter")]
+    [DataRow("malformed basic", "closeshutter")]
+    [DataRow("missing", "openshutter")]
+    [DataRow("basic parts differ", "openshutter")]
+    [DataRow("header and basic differ", "openshutter")]
+    public async Task AMissingOrMalformedCredential_IsNotAuthorised_NothingReachesTheShutterRoutes_AndTheRefusalIsReported(string kind, string member)
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
@@ -152,7 +165,7 @@ public sealed class AlpacaCloseShutterTests
             _ => []
         };
 
-        var answer = await alpaca.PutAsync("closeshutter", "ClientID=9&ClientTransactionID=3", headers);
+        var answer = await alpaca.PutAsync(member, "ClientID=9&ClientTransactionID=3", headers);
 
         Error(answer).Should().Be(AlpacaErrors.InvalidOperation);
         answer.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.NotAuthorised);
@@ -161,21 +174,23 @@ public sealed class AlpacaCloseShutterTests
         var report = controller.Requests.Single(request => request.Path.Contains("/alpaca/events", StringComparison.Ordinal));
         report.ApiKey.Should().Be(TestApiKeys.Viewer, "the server reports with its own account's key");
         report.Body.Should().NotContain(ClientKey);
-        JsonSerializer.Deserialize<RoofAlpacaEvent>(report.Body, ApiJson.Options).Should().Be(new RoofAlpacaEvent("Close", "NotAuthorised", AlpacaTestHost.ClientAddress.ToString(), 9, 3));
+        JsonSerializer.Deserialize<RoofAlpacaEvent>(report.Body, ApiJson.Options).Should().Be(new RoofAlpacaEvent(Command(member).Kind, "NotAuthorised", AlpacaTestHost.ClientAddress.ToString(), 9, 3));
     }
 
     [TestMethod]
-    public async Task AKeyTheControllerRefuses_IsNotAuthorised_AndNoCloseIsSent()
+    [DataRow("closeshutter")]
+    [DataRow("openshutter")]
+    public async Task AKeyTheControllerRefuses_IsNotAuthorised_AndNoCommandIsSent(string member)
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
         controller.Override = request => request.RequestUri!.AbsolutePath.Contains("/shutter/ticket", StringComparison.Ordinal) ? new HttpResponseMessage(HttpStatusCode.Unauthorized) : null;
 
-        var answer = await alpaca.PutAsync("closeshutter", "ClientID=7", Header());
+        var answer = await alpaca.PutAsync(member, "ClientID=7", Header());
 
         Error(answer).Should().Be(AlpacaErrors.InvalidOperation);
         answer.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.NotAuthorised);
-        controller.Count("/alpaca/shutter/close").Should().Be(0);
+        controller.Count($"/alpaca/shutter/{Command(member).Route}").Should().Be(0);
     }
 
     [TestMethod]
@@ -199,23 +214,28 @@ public sealed class AlpacaCloseShutterTests
     }
 
     [TestMethod]
-    public async Task AControllerThatDoesNotAnswerTheClose_IsAnError_AndTheCloseIsNeverRetried()
+    [DataRow("closeshutter")]
+    [DataRow("openshutter")]
+    public async Task AControllerThatDoesNotAnswerTheCommand_IsAnError_AndItIsNeverRetried(string member)
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
-        controller.Override = request => request.RequestUri!.AbsolutePath.Contains("/shutter/close", StringComparison.Ordinal)
+        var route = $"/shutter/{Command(member).Route}";
+        controller.Override = request => request.RequestUri!.AbsolutePath.Contains(route, StringComparison.Ordinal)
             ? throw new TaskCanceledException("The controller did not answer (test).", new TimeoutException())
             : null;
 
-        var answer = await alpaca.PutAsync("closeshutter", "ClientID=7", Header());
+        var answer = await alpaca.PutAsync(member, "ClientID=7", Header());
 
         Error(answer).Should().Be(AlpacaErrors.ControllerUnavailable);
-        answer.GetProperty("ErrorMessage").GetString().Should().Contain("Nothing is retried");
-        controller.Count("/alpaca/shutter/close").Should().Be(1);
+        answer.GetProperty("ErrorMessage").GetString().Should().Contain("Nothing is retried").And.Contain(Command(member).Kind);
+        controller.Count($"/alpaca{route}").Should().Be(1);
     }
 
     [TestMethod]
-    public async Task AnAbortSlewBetweenTheClosesArrivalAndItsTicket_RefusesIt_AndNoCloseIsSent()
+    [DataRow("closeshutter")]
+    [DataRow("openshutter")]
+    public async Task AnAbortSlewBetweenTheCommandsArrivalAndItsTicket_RefusesIt_AndNothingIsSent(string member)
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
@@ -231,11 +251,11 @@ public sealed class AlpacaCloseShutterTests
             return null;
         };
 
-        var answer = await alpaca.PutAsync("closeshutter", "ClientID=7", Header());
+        var answer = await alpaca.PutAsync(member, "ClientID=7", Header());
 
         Error(answer).Should().Be(AlpacaErrors.InvalidOperation);
         answer.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.Aborted);
-        controller.Count("/alpaca/shutter/close").Should().Be(0);
+        controller.Count($"/alpaca/shutter/{Command(member).Route}").Should().Be(0);
         controller.Count("/RoofControl/Stop").Should().Be(1);
     }
 
@@ -280,15 +300,18 @@ public sealed class AlpacaCloseShutterTests
     }
 
     [TestMethod]
-    public async Task OpenShutter_IsRefusedLocally_EvenWithACorrectKey_AndAsksForNoTicket()
+    public async Task TheControllersRefusalOfAnOpen_IsInvalidOperation_WithItsWords()
     {
         var (alpaca, controller) = await StartAsync();
         await using var _ = alpaca;
+        controller.Override = request => request.RequestUri!.AbsolutePath.Contains("/shutter/open", StringComparison.Ordinal)
+            ? Problem(HttpStatusCode.Conflict, RoofControllerErrorCode.AlpacaCommandRefused, "Not safe to open: Weather monitor 'Cloud sensor' reports unsafe weather.", "NotSafe")
+            : null;
 
-        var answer = await alpaca.PutAsync("openshutter", "ClientID=7", Header());
+        var refused = await alpaca.PutAsync("openshutter", "ClientID=7", Header());
 
-        Error(answer).Should().Be(AlpacaErrors.InvalidOperation);
-        answer.GetProperty("ErrorMessage").GetString().Should().Be(AlpacaDome.OpenNotAvailable);
-        controller.Requests.Should().NotContain(request => request.Path.Contains("/alpaca/", StringComparison.Ordinal));
+        Error(refused).Should().Be(AlpacaErrors.InvalidOperation);
+        refused.GetProperty("ErrorMessage").GetString().Should().Contain("reports unsafe weather");
+        controller.Count("/alpaca/shutter/close").Should().Be(0, "an Open is never sent as anything else");
     }
 }

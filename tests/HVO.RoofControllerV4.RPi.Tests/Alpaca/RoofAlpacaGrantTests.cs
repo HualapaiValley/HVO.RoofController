@@ -85,14 +85,12 @@ public sealed class RoofAlpacaGrantTests
     }
 
     [TestMethod]
-    public void OpenGrants_AreRefused_AndAGrantNamesTheReasonsItLifts()
+    public void AGrantNamesTheReasonsItLifts_AndACloseGrantNeverTheWeather()
     {
         var rig = AlpacaCommandRig.StartAsync().GetAwaiter().GetResult();
         try
         {
             var person = AlpacaCommandRig.Person();
-            rig.Commands.Grant(person, new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["scope-unknown:Main"]))
-                .StatusCode.Should().Be(StatusCodes.Status403Forbidden);
             rig.Commands.Grant(person, Close()).StatusCode.Should().Be(StatusCodes.Status400BadRequest);
             rig.Commands.Grant(person, Close("weather-unsafe:Sky")).StatusCode.Should().Be(StatusCodes.Status400BadRequest, "weather never gates Close");
             rig.Commands.Grant(person, Close("scope-unknown:")).StatusCode.Should().Be(StatusCodes.Status400BadRequest);

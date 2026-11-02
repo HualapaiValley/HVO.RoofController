@@ -102,7 +102,10 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         IReadOnlyList<ITelescopeRereadSource>? telescopes = null,
         Action<RoofControllerOptionsV4>? configureController = null,
         bool initialize = true,
-        TimeSpan? readTimeout = null)
+        TimeSpan? readTimeout = null,
+        bool allowOpenWithoutBlockingScopes = false,
+        RoofSafetyInterlockMode interlockMode = RoofSafetyInterlockMode.Warn,
+        TimeSpan? maxReadingAge = null)
     {
         time ??= TimeProvider.System;
         var hat = new FakeRoofHat();
@@ -125,17 +128,17 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
         var weather = weatherSafe is { } safe ? new SimulatedWeather(safe) : null;
         var safetyOptions = new TestOptionsMonitor<RoofSafetyOptions>(new RoofSafetyOptions
         {
-            InterlockMode = RoofSafetyInterlockMode.Warn,
+            InterlockMode = interlockMode,
             PollInterval = RoofSafetyOptions.MaxPollInterval,
             ReadTimeout = readTimeout ?? TimeSpan.FromSeconds(2),
-            MaxReadingAge = TimeSpan.FromSeconds(60),
+            MaxReadingAge = maxReadingAge ?? TimeSpan.FromSeconds(60),
             Telescopes = [.. (configuredTelescopes ?? []).Select(name => new RoofSafetyTelescopeOptions { Name = name, Url = "http://192.0.2.1:11111", BlocksRoof = true })]
         });
         var safety = new RoofSafetyService(sources, weather is null ? [] : [weather], safetyOptions, time, NullLogger<RoofSafetyService>.Instance);
         if (startSafety)
         {
             await safety.StartAsync(CancellationToken.None);
-            await WaitUntilAsync(() => safety.GetCurrent().Sources.All(source => source.LastReadingUtc is not null || source.Kind != RoofSafetySourceKind.TelescopePark)
+            await WaitUntilAsync(() => safety.GetCurrent().Sources.All(source => source.LastReadingUtc is not null)
                 && scripted.All(scope => scope.Reads > 0), "the safety service's first poll");
         }
 
@@ -148,7 +151,12 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
             ]
         });
         var keyStore = new RoofApiKeyStore(keys, NullLogger<RoofApiKeyStore>.Instance);
-        var options = new TestOptionsMonitor<RoofAlpacaCommandOptions>(new RoofAlpacaCommandOptions { AllowCommands = mode, ScopeRereadBudgetMs = budgetMs });
+        var options = new TestOptionsMonitor<RoofAlpacaCommandOptions>(new RoofAlpacaCommandOptions
+        {
+            AllowCommands = mode,
+            ScopeRereadBudgetMs = budgetMs,
+            AllowOpenWithoutBlockingScopes = allowOpenWithoutBlockingScopes
+        });
         var lease = new TestOptionsMonitor<RoofOperatorLeaseOptions>(new RoofOperatorLeaseOptions());
         var commands = new RoofAlpacaCommands(controller, safety, options, lease, safetyOptions, keyStore, sources, time, NullLogger<RoofAlpacaCommands>.Instance);
         return new AlpacaCommandRig(controller, hat, safety, commands, options, lease, safetyOptions, keys, keyStore, scripted, weather);
@@ -190,6 +198,51 @@ internal sealed class AlpacaCommandRig : IAsyncDisposable
 
     public RoofAlpacaTicket Ticket(ClaimsPrincipal? commander = null)
         => Commands.IssueTicket(RoofAlpacaCommandKind.Close, commander ?? Commander, Client).Ticket!;
+
+    /// <summary>A ticket then the Open, as the Alpaca server sends them, with the External account's key (#220, phase 4).</summary>
+    public async Task<RoofAlpacaCommandOutcome> OpenAsync(ClaimsPrincipal? commander = null, RoofAlpacaClient? client = null)
+    {
+        var user = commander ?? Commander;
+        var ticket = Commands.IssueTicket(RoofAlpacaCommandKind.Open, user, client ?? Client).Ticket;
+        ticket.Should().NotBeNull();
+        return await Commands.OpenAsync(new RoofAlpacaCommandRequest(ticket!.TicketId, ticket.InstanceId, ticket.Generation), user, client ?? Client);
+    }
+
+    /// <summary>Sends a ticketed Open whose ticket is <paramref name="ticket"/>.</summary>
+    public Task<RoofAlpacaCommandOutcome> OpenAsync(RoofAlpacaTicket ticket, ClaimsPrincipal? commander = null)
+        => Commands.OpenAsync(new RoofAlpacaCommandRequest(ticket.TicketId, ticket.InstanceId, ticket.Generation), commander ?? Commander, Client);
+
+    /// <summary>A ticket for one command of <paramref name="kind"/>.</summary>
+    public RoofAlpacaTicket Ticket(RoofAlpacaCommandKind kind, ClaimsPrincipal? commander = null)
+        => Commands.IssueTicket(kind, commander ?? Commander, Client).Ticket!;
+
+    /// <summary>Sets the safety interlock's mode, as a settings reload does.</summary>
+    public void SetInterlockMode(RoofSafetyInterlockMode mode)
+    {
+        var current = SafetyOptions.CurrentValue;
+        SafetyOptions.Set(new RoofSafetyOptions
+        {
+            InterlockMode = mode,
+            PollInterval = current.PollInterval,
+            ReadTimeout = current.ReadTimeout,
+            MaxReadingAge = current.MaxReadingAge,
+            Telescopes = current.Telescopes
+        });
+    }
+
+    /// <summary>Sets the controller's Alpaca command settings (the others as they are).</summary>
+    public void SetOptions(RoofAlpacaCommandMode? mode = null, bool? allowOpenWithoutBlockingScopes = null)
+    {
+        var current = Options.CurrentValue;
+        Options.Set(new RoofAlpacaCommandOptions
+        {
+            AllowCommands = mode ?? current.AllowCommands,
+            ScopeRereadBudgetMs = current.ScopeRereadBudgetMs,
+            OverrideWindowMinutes = current.OverrideWindowMinutes,
+            AllowOpenWithoutBlockingScopes = allowOpenWithoutBlockingScopes ?? current.AllowOpenWithoutBlockingScopes,
+            ServerAddresses = current.ServerAddresses
+        });
+    }
 
     /// <summary>Rotates the External account's key (an epoch change).</summary>
     public void RotateCommanderKey()
@@ -355,16 +408,32 @@ internal sealed class ScriptedTelescopeSource(string name, bool parked) : ITeles
     }
 }
 
-/// <summary>A weather source whose answer a test sets.</summary>
-internal sealed class SimulatedWeather(bool safe) : IWeatherSafetySource
+/// <summary>A weather source whose answer a test sets: safe or not, or failing (a device that cannot be read).</summary>
+internal sealed class SimulatedWeather(bool safe, string name = "Weather", RoofWeatherSourceRequirement requirement = RoofWeatherSourceRequirement.Required)
+    : IWeatherSafetySource
 {
-    public string Name => "Weather";
+    private int _reads;
+
+    public string Name { get; } = name;
 
     public TimeSpan? MaxReadingAge => null;
 
+    public RoofWeatherSourceRequirement Requirement { get; } = requirement;
+
     public bool Safe { get; set; } = safe;
 
-    public Task<WeatherSafetyReading> ReadWeatherSafetyAsync(CancellationToken cancellationToken) => Task.FromResult(new WeatherSafetyReading(Safe));
+    /// <summary>When true, every read fails.</summary>
+    public bool Fails { get; set; }
+
+    public int Reads => Volatile.Read(ref _reads);
+
+    public Task<WeatherSafetyReading> ReadWeatherSafetyAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _reads);
+        return Fails
+            ? Task.FromException<WeatherSafetyReading>(new IOException("Scripted weather monitor cannot be reached."))
+            : Task.FromResult(new WeatherSafetyReading(Safe));
+    }
 }
 
 internal static class AlpacaOutcomeExtensions
