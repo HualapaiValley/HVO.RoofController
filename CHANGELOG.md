@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Limit and drive-fault edges take priority over a supervision cycle's remaining routine HAT reads and LEDs (#231,
-  F27). The open section shares the fence's 2 s arrival deadline; slow but healthy routine reads alone still do not
-  stop motion or latch a fault. Idle all-off sequences for a relay mismatch or repeated failed relay reads also have
-  the stop bound, with verification continuing after it when needed (F28). Recovery logs describe the allowed wait
-  accurately when the stop deadline cuts an access sooner than its normal 1.5 s limit (F30).
+- Limit and drive-fault edges take priority over a supervision cycle's remaining routine HAT reads and LEDs (#231).
+  Pending protective requests retain their 2 s arrival deadline across section entry and queued work. Slow but
+  healthy routine reads alone still do not stop motion or latch a fault. Idle all-off sequences for a relay mismatch
+  or repeated failed relay reads also have the stop bound. A stop or idle all-off re-run that cannot verify within
+  that bound latches `RelayVerificationFailed`, even when each transfer fits its own 1.5 s limit; a drive-fault latch
+  escalates to that reason. All-off work continues until verified, and the latch then requires explicit ClearFault.
+  Recovery logs no longer claim the normal 1.5 s limit was exceeded when the stop bound cut an access sooner.
 
 ## [4.4.0] - 2026-11-01
 
@@ -137,12 +139,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stop is bounded and fenced (#220): a start that passed its checks can no longer energize a relay after a Stop. A
   person's Stop sets the human Stop hold and then raises that fence before it waits for anything; a shutdown, a drive
   fault and a limit asserting raise it too. A Stop has one 2 s deadline for its wait for the controller's lock and all
-  its HAT I/O (a passed watchdog, lease or drive deadline's stop, which it makes first, and the LEDs included), and past
-  it answers `RelayStateUnverified`, writing the relays off as soon as it can; the protective stops have the same bound
-  through their caller's LEDs: from arrival for an edge or the watchdog's timer, and from the stop decision for a
-  supervision cycle, renewal or repeated Open or Close. An input edge that cannot take the lock in time is applied once it is
-  free, with its own level and motion, never dropped. A relay write the controller gave up on keeps the relays
-  unverified, and `ClearFault` refused, until a read-back shows them off.
+  its HAT I/O (a passed watchdog, lease or drive deadline's stop, which it makes first, and the LEDs included), and
+  past it answers `RelayStateUnverified`, writing the relays off as soon as it can; the protective stops have the same
+  bound through their caller's LEDs: from arrival for an edge or the watchdog's timer, and from the stop decision for
+  a supervision cycle, renewal or repeated Open or Close. An input edge that cannot take the lock in time is applied
+  once it is free, with its own level and motion, never dropped. A relay write the controller gave up on keeps the
+  relays unverified, and `ClearFault` refused, until a read-back shows them off.
 - Every HAT access the controller makes is bounded (#220): relay writes and read-back, input reads and the LEDs run on
   the HAT's own access thread, and the controller waits at most 1.5 s for each. One that runs longer fails as a failed transfer does
   (relays unverified, `RelayVerificationFailed` latched), lets the controller's lock go, and holds off every later

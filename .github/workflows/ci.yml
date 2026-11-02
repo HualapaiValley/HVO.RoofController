@@ -37,6 +37,7 @@ jobs:
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
       AVALONIA_TELEMETRY_OPTOUT: 1
       TEST_PROJECT: ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj
+      HEAP_SMOKE_TEST: HVO.RoofControllerV4.RPi.Tests.TestSupport.C14ManagedHeapTests.TheLiveBytes_FollowWhatTheProcessKeeps
     defaults:
       run:
         # The dotnet host resolves global.json from the working directory upward, not from
@@ -123,10 +124,21 @@ jobs:
         run: >
           dotnet test "$TEST_PROJECT"
           --no-build -c Debug -v minimal
-          --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak"
+          --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak&FullyQualifiedName!=${HEAP_SMOKE_TEST}"
           --settings coverage.runsettings
           --collect:"XPlat Code Coverage"
           --logger "trx;LogFileName=tests.trx"
+          --results-directory TestResults
+          -- RunConfiguration.TreatNoTestsAsError=true
+
+      # This process-wide allocation delta needs a fresh host: DoNotParallelize does not drain the preceding
+      # parallel fixtures' background teardown. Keep its assertions and the C14 soak's criteria unchanged.
+      - name: Test live-heap smoke in a fresh host
+        run: >
+          dotnet test "$TEST_PROJECT"
+          --no-build -c Debug -v minimal
+          --filter "FullyQualifiedName=${HEAP_SMOKE_TEST}"
+          --logger "trx;LogFileName=heap-smoke.trx"
           --results-directory TestResults
           -- RunConfiguration.TreatNoTestsAsError=true
 

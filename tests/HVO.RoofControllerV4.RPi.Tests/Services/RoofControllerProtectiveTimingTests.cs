@@ -19,6 +19,163 @@ public class RoofControllerProtectiveTimingTests
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
+    public async Task AQueuedAllOff_RetainsItsOriginalDeadline_WhenAnotherCycleWinsTheMonitor()
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Close().IsSuccessful.Should().BeTrue();
+        hat.Registers.BeforeRelayWrite = (register, _) => { if (register == 2) Thread.Sleep(900); };
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        try
+        {
+            lock (sync)
+            {
+                service.Stop().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
+                SpinWait.SpinUntil(() => !service.IsHatIoOverrun, TimeSpan.FromSeconds(5)).Should().BeTrue();
+                // Both the bound's continuation and the lane recovery are waiting for this monitor. Its original
+                // deadline has passed; a routine retry must yield now, rather than take a new two-second allowance.
+                try
+                {
+                    var elapsed = Stopwatch.StartNew();
+                    service.RunSupervisionCycle();
+                    elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(300));
+                }
+                finally { hat.Registers.BeforeRelayWrite = null; }
+            }
+        }
+        finally
+        {
+            hat.Registers.BeforeRelayWrite = null;
+            WaitForVerifiedOff(service, hat);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("limit")]
+    [DataRow("drive fault")]
+    public async Task UniformlySlowIo_CutsTheEdgeAtItsArrivalBound_LatchesUnverifiedStop_ThenVerifies(string trigger)
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Close().IsSuccessful.Should().BeTrue();
+        PendingLedRetry(service);
+        using var firstRead = new ManualResetEventSlim();
+        hat.Registers.BeforeRead = _ => { firstRead.Set(); Thread.Sleep(1400); };
+        hat.Registers.BeforeRelayWrite = (_, _) => Thread.Sleep(1400);
+        hat.Registers.BeforeLedWrite = (_, _) => Thread.Sleep(1400);
+        Task? cycle = null;
+        Task? edge = null;
+        try
+        {
+            cycle = Task.Run(service.RunSupervisionCycle);
+            firstRead.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            await Task.Delay(1600);
+            var elapsed = Stopwatch.StartNew();
+            edge = Task.Run(() =>
+            {
+                if (trigger == "limit") service.SimReverseLimitRaw(false);
+                else service.SimFaultRaw(true);
+            });
+            await edge.WaitAsync(TimeSpan.FromSeconds(5));
+            var edgeReturnedAfter = elapsed.Elapsed;
+            edgeReturnedAfter.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(300));
+
+            // Every transfer remains slow, including recovery. This characterizes an unverified stop rather than
+            // the routine-read/LED contention tests, whose protective writes and verification are healthy and fast.
+            (await Task.Run(() => SpinWait.SpinUntil(() => !service.IsHatIoOverrun && service.DeferredStopCount == 0
+                && service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0,
+                TimeSpan.FromSeconds(30)))).Should().BeTrue("queued all-off work must eventually verify even on the slow bus");
+            TestContext.WriteLine("{0}, uniformly 1400 ms I/O: edge returned {1:F0} ms, all-off verified {2:F0} ms after arrival",
+                trigger, edgeReturnedAfter.TotalMilliseconds, elapsed.Elapsed.TotalMilliseconds);
+            var status = service.GetCurrentStatusSnapshot();
+            status.LastStopReason.Should().Be(trigger == "limit" ? RoofControllerStopReason.LimitSwitchReached : RoofControllerStopReason.DriveFault);
+            status.IsFaultLatched.Should().BeTrue();
+            status.LatchedFaultReason.Should().Be(RoofControllerStopReason.RelayVerificationFailed);
+        }
+        finally
+        {
+            hat.Registers.BeforeRead = null;
+            hat.Registers.BeforeRelayWrite = null;
+            hat.Registers.BeforeLedWrite = null;
+            if (cycle is not null) await cycle.WaitAsync(TimeSpan.FromSeconds(10));
+            if (edge is not null) await edge.WaitAsync(TimeSpan.FromSeconds(10));
+            WaitForVerifiedOff(service, hat);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("limit")]
+    [DataRow("drive fault")]
+    [DataRow("Stop")]
+    public async Task AFenceBeforeTheCyclePublishesItsSection_IsNotLost(string trigger)
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Close().IsSuccessful.Should().BeTrue();
+        PendingLedRetry(service);
+        hat.Registers.BeforeRead = _ => Thread.Sleep(1400);
+        hat.Registers.BeforeLedWrite = (_, _) => Thread.Sleep(1400);
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        var before = service.CommandGeneration;
+        var elapsed = new Stopwatch();
+        Exception? edgeError = null;
+        var edge = new Thread(() =>
+        {
+            try
+            {
+                elapsed.Start();
+                if (trigger == "Stop") service.Stop();
+                else if (trigger == "limit") service.SimReverseLimitRaw(false);
+                else service.SimFaultRaw(true);
+            }
+            catch (Exception error) { edgeError = error; }
+        });
+        try
+        {
+            lock (sync)
+            {
+                // Model the cycle after monitor acquisition but before opening its HAT section. The edge raises its
+                // fence and reaches the monitor wait first; a reentrant cycle resumes the interrupted work deterministically.
+                edge.Start();
+                SpinWait.SpinUntil(() => service.CommandGeneration > before
+                    && (edge.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0, TimeSpan.FromSeconds(1))
+                    .Should().BeTrue("the protective caller has fenced and is waiting for the cycle's monitor");
+                try { service.RunSupervisionCycle(); }
+                finally
+                {
+                    // Protective relay transfers are fast; only the cycle's routine I/O is degraded.
+                    hat.Registers.BeforeRead = null;
+                    hat.Registers.BeforeLedWrite = null;
+                }
+            }
+
+            SpinWait.SpinUntil(() => hat.RelayMask == 0, TimeSpan.FromSeconds(8)).Should().BeTrue();
+            var offTime = elapsed.Elapsed;
+            TestContext.WriteLine("{0} before section: relays off {1:F0} ms after arrival", trigger, offTime.TotalMilliseconds);
+            offTime.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(300));
+        }
+        finally
+        {
+            hat.Registers.BeforeRead = null;
+            hat.Registers.BeforeLedWrite = null;
+            if (edge.ThreadState != System.Threading.ThreadState.Unstarted) edge.Join(TimeSpan.FromSeconds(10)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
+        }
+
+        edgeError.Should().BeNull();
+        var status = service.GetCurrentStatusSnapshot();
+        status.IsMoving.Should().BeFalse();
+        status.IsFaultLatched.Should().Be(trigger == "drive fault");
+        if (trigger == "drive fault") status.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+    }
+
+    [TestMethod]
     public async Task RecoveryAfterTheStopCutAnAccess_DoesNotClaimTheNormal1500MsLimitWasExceeded()
     {
         using var hat = new FakeRoofHat();
@@ -42,9 +199,11 @@ public class RoofControllerProtectiveTimingTests
     }
 
     [TestMethod]
-    [DataRow("limit")]
-    [DataRow("drive fault")]
-    public async Task AnEdgeDuringSlowSupervision_SkipsPendingLeds_AndStopsWithoutAFalseLatch(string trigger)
+    [DataRow("limit", 200)]
+    [DataRow("limit", 1600)]
+    [DataRow("drive fault", 200)]
+    [DataRow("drive fault", 1600)]
+    public async Task AnEdgeDuringSlowSupervision_SkipsPendingLeds_AndStopsWithoutAFalseLatch(string trigger, int edgeDelayMs)
     {
         using var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false);
@@ -53,12 +212,11 @@ public class RoofControllerProtectiveTimingTests
         service.Close().IsSuccessful.Should().BeTrue();
         PendingLedRetry(service);
         using var firstRead = new ManualResetEventSlim();
-        var reads = 0;
         // Slow the cycle's two routine reads and the cosmetic writes. The subsequent protective all-off and its
         // verification are healthy: this isolates contention, rather than a stop transfer exceeding its own deadline.
         hat.Registers.BeforeRead = _ =>
         {
-            if (Interlocked.Increment(ref reads) <= 2)
+            if (hat.RelayMask != 0)
             {
                 firstRead.Set();
                 Thread.Sleep(1400);
@@ -71,7 +229,7 @@ public class RoofControllerProtectiveTimingTests
         {
             cycle = Task.Run(service.RunSupervisionCycle);
             firstRead.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
-            await Task.Delay(1600);
+            await Task.Delay(edgeDelayMs);
             var elapsed = Stopwatch.StartNew();
             // Do not change the input register: only the edge carries the evidence, as when the poll thread delivers
             // an assertion during a direct read that still reports the preceding level.
@@ -83,7 +241,7 @@ public class RoofControllerProtectiveTimingTests
             var off = SpinWait.SpinUntil(() => hat.RelayMask == 0, TimeSpan.FromSeconds(7));
             var offTime = elapsed.Elapsed;
             off.Should().BeTrue();
-            TestContext.WriteLine("{0}: relays off {1:F0} ms after edge", trigger, offTime.TotalMilliseconds);
+            TestContext.WriteLine("{0}, edge at {1} ms: relays off {2:F0} ms after edge", trigger, edgeDelayMs, offTime.TotalMilliseconds);
             offTime.Should().BeLessThan(RoofControllerServiceV4.StopLockWait + TimeSpan.FromMilliseconds(300));
         }
         finally
@@ -103,7 +261,9 @@ public class RoofControllerProtectiveTimingTests
     }
 
     [TestMethod]
-    public async Task AnEdgeBoundsTheRestOfAnOpenRoutineRetry_FromItsArrival()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AnEdgeBoundsTheRestOfAnOpenRoutineRetry_FromItsArrival(bool aLaterFenceAlsoArrives)
     {
         using var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false);
@@ -126,6 +286,11 @@ public class RoofControllerProtectiveTimingTests
         await Task.Delay(100);
         var elapsed = Stopwatch.StartNew();
         var edge = Task.Run(() => service.SimFaultRaw(true));
+        var laterEdge = aLaterFenceAlsoArrives ? Task.Factory.StartNew(() =>
+        {
+            Thread.Sleep(650); // Both fences precede the next HAT call; the later one must not extend the first.
+            service.SimFaultRaw(true);
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default) : null;
         try
         {
             await cycle.WaitAsync(TimeSpan.FromSeconds(6));
@@ -138,6 +303,7 @@ public class RoofControllerProtectiveTimingTests
             hat.Registers.BeforeRelayWrite = null;
             await cycle.WaitAsync(TimeSpan.FromSeconds(10));
             await edge.WaitAsync(TimeSpan.FromSeconds(10));
+            if (laterEdge is not null) await laterEdge.WaitAsync(TimeSpan.FromSeconds(10));
             WaitForVerifiedOff(service, hat);
         }
 
@@ -152,6 +318,7 @@ public class RoofControllerProtectiveTimingTests
         hat.SetInputs(true, true, false, false);
         using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
         (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        service.Stop().IsSuccessful.Should().BeTrue("a completed request must not arm the subsequent routine retry");
         hat.Registers.FailRelayReads = true;
         service.ForceRelayStates(false, false, false).Should().BeFalse();
         hat.Registers.FailRelayReads = false;
