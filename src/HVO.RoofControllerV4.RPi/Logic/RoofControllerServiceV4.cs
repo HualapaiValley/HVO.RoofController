@@ -669,6 +669,11 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     /// </summary>
     private void UpdateIndicatorLeds_NoLock()
     {
+        if (BoundPendingFence())
+        {
+            return;
+        }
+
         byte mask = 0;
         if (!_options.IgnorePhysicalLimitSwitches)
         {
@@ -692,6 +697,11 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
             // while healthy with the active-low fault wiring). Re-assert the modes with each change, and while idle until
             // a write succeeds, so a HAT that reset since initialization shows the logical states again.
             ApplyIndicatorLedModes_NoLock();
+            if (BoundPendingFence())
+            {
+                return;
+            }
+
             var result = HatCall(() => _hat.SetLedsMask(mask));
             if (result.IsSuccessful)
             {
@@ -740,7 +750,7 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     /// </summary>
     private void CheckIndicatorLedModes_NoLock()
     {
-        if (!_ledModesApplied)
+        if (BoundPendingFence() || !_ledModesApplied)
         {
             return;
         }

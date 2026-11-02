@@ -615,8 +615,11 @@ work goes on as soon as the lock is free, each access at its own limit, until a 
 switches a relay on meanwhile. A protective stop has the same bound, over every HAT access from its decision to the end
 of what decided it, that caller's LEDs included: from the moment they come for a limit or drive-fault edge and the
 watchdog's timer (their wait for the lock counts), and from the decision for a supervision cycle's stops and a deadline
-stop that a lease renewal or a repeated Open or Close finds. The routine reads before a stop is decided keep only their
-own 1.5 s limit. A shutdown raises the fence before it waits for the lock, as do a drive-fault edge and a limit
+stop that a lease renewal or a repeated Open or Close finds, including an idle all-off after a relay mismatch or repeated
+failed relay reads. Routine reads keep their own 1.5 s limit until a protective fence moves: the section holding the
+lock then shares that fence's arrival deadline and skips remaining routine relay reads and LEDs to let the protective
+work take the lock promptly. A routine retry of unverified all-off relays keeps each access's own limit. A shutdown raises
+the fence before it waits for the lock, as do a drive-fault edge and a limit
 asserting; an input edge that cannot take the lock in time is never dropped: its own level is applied the moment the
 lock is free, with the motion it came during, and then the inputs are read fresh.
 

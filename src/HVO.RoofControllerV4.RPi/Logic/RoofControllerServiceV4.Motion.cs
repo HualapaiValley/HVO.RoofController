@@ -76,8 +76,9 @@ public partial class RoofControllerServiceV4
     /// A relays-off request: moves the generation and raises the relay fence to it, so no ON of an earlier admission is
     /// written after this point. Returns the new generation.
     /// </summary>
-    private long FenceRelaysOff()
+    private long FenceRelaysOff(long? deadline = null)
     {
+        BoundPendingFence();
         var generation = BumpGeneration();
         long current;
         do
@@ -89,6 +90,11 @@ public partial class RoofControllerServiceV4
             }
         }
         while (Interlocked.CompareExchange(ref _relayOffFence, generation, current) != current);
+
+        if (Volatile.Read(ref _activeHatIoFenceWatch) is { } watch && watch != t_sectionFenceWatch)
+        {
+            watch.Observe(deadline ?? StopDeadlineFromNow());
+        }
 
         return generation;
     }
@@ -735,7 +741,7 @@ public partial class RoofControllerServiceV4
 
         // First the generation and the relay fence, before the lock: an admitted start that has not yet written its
         // relay never will, and a waiting start is superseded.
-        FenceRelaysOff();
+        FenceRelaysOff(startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency));
 
         // One deadline for the whole Stop: its wait for the lock and every HAT access it makes, the deadline stop it may
         // make first and the LEDs included (#220, PR #230 rereviews S-F4, F19). Past it the Stop answers that the relays

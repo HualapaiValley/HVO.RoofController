@@ -134,9 +134,10 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   relays-off write is dropped. A person's Stop sets the Stop hold, then the fence, before it waits for anything; one
   2 s deadline covers its wait for the lock and all its HAT I/O (a passed deadline's stop first, its relays-off writes,
   the read-back and the LEDs), and past it Stop answers `RelayStateUnverified` and its relays-off work goes on once the
-  lock is free until a read-back shows the relays off. The protective stops (an edge, the watchdog's timer, a
-  supervision cycle's or a renewal's deadline stop) have the same bound from their decision through their caller's
-  LEDs; routine reads keep their own 1.5 s; shutdown, a drive-fault
+  lock is free until a read-back shows the relays off. Protective stops have the same bound through their caller's
+  LEDs: from arrival for an edge or the watchdog's timer, and from the stop decision for a supervision cycle, a renewal
+  or a repeated Open or Close. Routine reads keep their own 1.5 s until a protective fence moves; the open section then
+  shares that fence's arrival deadline and skips remaining routine relay reads and LEDs. Shutdown, a drive-fault
   edge and a limit asserting fence before they wait, and an edge that cannot take the lock in time is applied, with its
   own level and motion, once it is free. A
   relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault`

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Limit and drive-fault edges take priority over a supervision cycle's remaining routine HAT reads and LEDs (#231,
+  F27). The open section shares the fence's 2 s arrival deadline; slow but healthy routine reads alone still do not
+  stop motion or latch a fault. Idle all-off sequences for a relay mismatch or repeated failed relay reads also have
+  the stop bound, with verification continuing after it when needed (F28). Recovery logs describe the allowed wait
+  accurately when the stop deadline cuts an access sooner than its normal 1.5 s limit (F30).
+
 ## [4.4.0] - 2026-11-01
 
 ### Added
@@ -131,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fault and a limit asserting raise it too. A Stop has one 2 s deadline for its wait for the controller's lock and all
   its HAT I/O (a passed watchdog, lease or drive deadline's stop, which it makes first, and the LEDs included), and past
   it answers `RelayStateUnverified`, writing the relays off as soon as it can; the protective stops have the same bound
-  from their decision through their caller's LEDs. An input edge that cannot take the lock in time is applied once it is
+  through their caller's LEDs: from arrival for an edge or the watchdog's timer, and from the stop decision for a
+  supervision cycle, renewal or repeated Open or Close. An input edge that cannot take the lock in time is applied once it is
   free, with its own level and motion, never dropped. A relay write the controller gave up on keeps the relays
   unverified, and `ClearFault` refused, until a read-back shows them off.
 - Every HAT access the controller makes is bounded (#220): relay writes and read-back, input reads and the LEDs run on
