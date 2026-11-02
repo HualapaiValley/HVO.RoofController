@@ -10,7 +10,7 @@ If migrating a server previously run from source, preserve its existing `alpaca-
 Alpaca data directory before first start. Never replace it with freshly generated IDs: astronomy clients recognise
 these devices by their GUIDs. The default host directory is `/var/lib/hvo-roof-alpaca`, owned by UID/GID `1655`, mode
 `0755`; the public ID file is `0644`. Preserve the separate server account key through the normal secrets workflow.
-The installer now includes these IDs in backups. Restore a backup containing Alpaca data with this installer or a newer one; older installers do not understand that separate directory. Old backups without Alpaca data remain valid, and new backups with Alpaca off keep the legacy backup contract.
+The installer now includes these IDs in backups. Restore a backup containing Alpaca data with this installer or a newer one; older installers do not understand that separate directory. Old backups without Alpaca data remain valid. When the dedicated Alpaca directory is absent, new backups keep the legacy archive contract; retained Alpaca data is backed up even while the server is off.
 
 Rollback keeps the dedicated Alpaca data directory; older images and installers simply ignore it. It is a sibling
 of `/var/lib/hvo-roof`, so the old installer's root-owned backup walk still works after rollback and can hand over to
