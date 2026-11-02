@@ -9,6 +9,7 @@ using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.Screens;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
@@ -594,8 +595,15 @@ public sealed class KioskPanelTests
         system.Question!.Lines.Should().Contain(RoofSystemText.RestartLoadsHandEdit);
         system.Question.Lines.Should().Contain("  RoofControllerOptionsV4:OpenRelayId: 1 -> 2  [SAFETY-CRITICAL]");
         system.Question.Answers.Select(answer => answer.Label).Should().Equal("Confirm and restart");
+        // An accepted restart can dispose the provider before the caller reads the response.
+        var services = harness.Host.Services;
+        var signal = services.GetRequiredService<RoofRestartSignal>();
+        var lifetime = services.GetRequiredService<IHostApplicationLifetime>();
+
         await system.Question.Answers[0].Act();
-        harness.Host.Services.GetRequiredService<RoofRestartSignal>().Requested.Should().BeTrue();
+        await ClientTestSupport.WaitForRestartDisposalAsync(services, lifetime);
+        signal.Requested.Should().BeTrue();
+        lifetime.ApplicationStopping.IsCancellationRequested.Should().BeTrue();
     }
 
     [TestMethod]

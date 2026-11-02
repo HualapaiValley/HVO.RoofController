@@ -295,8 +295,34 @@ public sealed class KioskPinChangeTests
         await UntilAsync(() => pad.Users.Count == 1, "the commissioned owner");
         await OnUiAsync(() => pad.Select(owner));
         await TypeAsync(screen, TestSecrets.Pin);
-        await screen.TouchAsync(screen.Find("pin-unlock")!);
-        await harness.WaitForAsync(view => view.UnlockedBy == "fixture-owner", "the owner's PIN session");
+        await OnUiAsync(() => pad.CanUnlock.Should().BeTrue("all four keypad touches reached the selected owner's pad"));
+        // Hold the answer until the touch dispatch has returned: its UI-context continuation must be pumped by
+        // the wait below. A background-only poll can otherwise strand the PIN request when the answer is late.
+        var answerHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAnswer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.DelayAnswer = (request, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath.TrimStart('/') == RoofApiRoutes.KioskPin)
+            {
+                answerHeld.TrySetResult();
+                return releaseAnswer.Task.WaitAsync(cancellationToken);
+            }
+
+            return Task.CompletedTask;
+        };
+        try
+        {
+            await screen.TouchAsync(screen.Find("pin-unlock")!);
+            await UntilAsync(() => answerHeld.Task.IsCompleted, "the owner's PIN answer held after the touch");
+            releaseAnswer.TrySetResult();
+            await UntilAsync(() => harness.Console.View.UnlockedBy == "fixture-owner" && !pad.Unlocking,
+                "the owner's PIN session", TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            releaseAnswer.TrySetResult();
+            harness.DelayAnswer = null;
+        }
 
         await screen.TouchAsync(screen.Find("nav-change-pin")!);
         await EnterAsync(screen, TestSecrets.Pin, NewPin, NewPin);

@@ -148,7 +148,7 @@ models exactly that register.
 | `Emulation/SocketI2cRegisterClientTests`, `RoofHatConnectionTests` | The controller's socket register client (Hello check, time bounds, reconnects, disposal, `Host` rules) and emulator mode selection, refusal, warning and telemetry |
 | `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, a start before the emulator, the start's warning, the telemetry marks and the Degraded health |
 | `Emulation/DevelopmentConfigurationTests` | `appsettings.Development.json`: the HAT emulator, with the limit switches in force and the production wiring |
-| `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API ([Commissioning scenarios](#commissioning-scenarios)) |
+| `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API; C5's short-pulse boundary uses the manual-clock plant harness ([Commissioning scenarios](#commissioning-scenarios)) |
 | `Scenarios/CameraProxyScenarios` | The camera proxy against the emulated camera: frames relayed, a refusing camera, a frozen one, a camera server restart |
 | `Scenarios/ScenarioCoverageTests` | `docs/commissioning.md` and the scenarios agree: every check has a scenario that CI runs, and every step and assumption is listed |
 | `Client/…` | The client library (#44) against the controller in process: every endpoint's answer and refusal, sign-in, sessions and kiosks, Stop beside a stuck command, the status feed through restarts and silence, settings forms, credentials files, certificate pins over real HTTPS (`RoofCertificatePinTests`), the shared wording and the web UI's Stop texts, and that every endpoint has a client call; `RoofClientScenarios` against the emulated roof |
@@ -221,7 +221,9 @@ the "Emulator image" workflow. `SMOKE_NO_BUILD=1` reuses images already built.
 scenarios. `EmulatedRoofRig` starts the whole controller host with the production `appsettings.json` against an
 in-process HAT emulator and plant. A scenario drives it through the API as an operator does, then checks the plant:
 contacts, drive output, roof position and invariant violations. The roof is 25 cm long by default (about 3.5 s from
-limit to limit) and runs in real time, so the controller's windows keep their production values.
+limit to limit) and runs in real time, so the controller's windows keep their production values. C5's deliberately
+short pulse uses `PlantHarness` instead: it measures the contact duration on a manual clock so a scheduling delay
+cannot turn the pulse into one long enough to reset the drive. The other C5 scenarios retain the HTTP host.
 
 Each scenario names its check and step with `[CommissioningCheck("C3", "2")]`. `ScenarioCoverageTests` fails when the
 document and the scenarios disagree, or when a check has no scenario. The scenario classes are
