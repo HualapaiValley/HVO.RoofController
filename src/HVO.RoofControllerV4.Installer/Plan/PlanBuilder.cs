@@ -144,6 +144,8 @@ public static class PlanBuilder
 
             AddFolder(steps, layout.Settings, Modes.Folder, "settings files the controller reads");
             AddFolder(steps, layout.Data, Modes.Folder, "the controller's data");
+            if (settings.Alpaca is { Enabled: true })
+                steps.Add(new AlpacaDataDirectoryStep(layout));
             AddFolder(steps, layout.Identity, Modes.PrivateFolder, "people, sessions and API keys");
             AddFolder(steps, layout.SettingsSecrets, Modes.PrivateFolder, "secrets set through the API");
             certificate = AddCertificateSteps(steps, layout, names, settings.Connection, replacingAuthority);
@@ -284,6 +286,8 @@ public static class PlanBuilder
         var rig = roles.Contains(InstallRole.Rig);
         var keys = AllocateKeys(machine, survey, layout, roles, settings.Alpaca?.Enabled == true);
         var steps = new List<PlanStep>(keys.Select(key => new ApiKeyStep(layout, key))) { new DeployToolsStep() };
+        if (settings.Alpaca is { Enabled: true })
+            steps.Add(new AlpacaDataDirectoryStep(layout));
 
         // The camera's files as the record has them: a change to one, or one written by an install that stopped before it
         // redeployed the controller, is more than the certificate.

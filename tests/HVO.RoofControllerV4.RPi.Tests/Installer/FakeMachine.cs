@@ -1383,6 +1383,9 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         DeploysCancellable.Add(cancellationToken.CanBeCanceled);
         DuringDeploy?.Invoke();
         File.Exists(OnDisk(script)).Should().BeTrue("the installer writes the deploy script before it runs it");
+        if (options.Count == 0 && environment.GetValueOrDefault("ALPACA_ENABLED") == "true"
+            && !Directory.Exists(OnDisk(environment["ALPACA_DATA_DIR"])))
+            return new CommandResult(1, string.Empty, "[deploy] ERROR: Alpaca bind source directory does not exist.\n");
         if (DeployFailure is { } failure)
         {
             return new CommandResult(DeployFailureExitCode, "[deploy] Pre-flight\n", failure + "\n");
@@ -1512,7 +1515,7 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
         {
             settings["HVO_ALPACA_LAN_ADDRESS"] = environment["ALPACA_LAN_ADDRESS"];
             settings["Alpaca__Discovery__AdvertisedPort"] = environment["ALPACA_PORT"];
-            Folder(environment["ALPACA_DATA_DIR"]);
+
         }
         var https = environment["HTTPS_CERT_DIR"].Length > 0;
         Containers[MachineSurveyor.ControllerContainer] = WithLimits(new FakeContainer(), limits, environment) with
