@@ -586,12 +586,17 @@ public sealed class RoofClientApiTests
         using var host = CreateHost();
         using var admin = CreateClient(host, new RoofApiKeyCredential(TestApiKeys.Admin));
 
+        // An accepted restart can dispose the provider before the caller reads the response.
+        var services = host.Services;
+        var signal = services.GetRequiredService<RoofRestartSignal>();
+        var lifetime = services.GetRequiredService<IHostApplicationLifetime>();
+
         var restart = await admin.System.RestartAsync();
 
         restart.ExitCode.Should().Be(RoofSettingsContract.RestartExitCode);
         host.RoofService.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.Once());
-        var signal = host.Services.GetRequiredService<RoofRestartSignal>();
-        await WaitUntilAsync(() => signal.Requested, "the restart to be requested");
+        await ClientTestSupport.WaitForRestartDisposalAsync(services, lifetime);
+        await WaitUntilAsync(() => signal.Requested && lifetime.ApplicationStopping.IsCancellationRequested, "the restart to be requested");
     }
 
     [TestMethod]

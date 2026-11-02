@@ -254,6 +254,10 @@ moved. The emulated HAT reports both.
 
 ### C5. ClearFault pulse length
 
+Steps 2 and 3 use the production controller and HAT library with the emulated plant on a manual clock, so CPU
+scheduling cannot turn the deliberately short pulse into a long one. The other C5 scenarios use the full HTTP host
+and measure its real-time relay contact pulses.
+
 The API accepts `POST .../ClearFault?pulseMs=N`, with N from 50 to 2000 (default 250). The hardware overview, section
 8.3, recommends about 100-300 ms. The scenarios measure RLY3 on the emulated relay's contact.
 

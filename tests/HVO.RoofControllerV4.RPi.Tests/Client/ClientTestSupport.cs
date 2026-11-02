@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Hosting;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Client;
 
@@ -66,6 +67,24 @@ internal static class ClientTestSupport
 
             await Task.Delay(10);
         }
+    }
+
+    /// <summary>Forces the restart race: assertions run only after the host has disposed its service provider.</summary>
+    public static async Task WaitForRestartDisposalAsync(IServiceProvider services, IHostApplicationLifetime lifetime)
+    {
+        await WaitUntilAsync(() => lifetime.ApplicationStopped.IsCancellationRequested, "the restarted host to stop");
+        await WaitUntilAsync(() =>
+        {
+            try
+            {
+                _ = services.GetService(typeof(IHostApplicationLifetime));
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                return true;
+            }
+        }, "the restarted host's service provider to be disposed");
     }
 
     /// <summary>Opens the status hub's WebSocket on the test server running now.</summary>
