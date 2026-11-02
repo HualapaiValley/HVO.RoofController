@@ -131,17 +131,22 @@ Describe these exactly as implemented; do not call the watchdog a dead-man contr
   or commit one ([docs/safety-service.md](docs/safety-service.md), [docs/alpaca.md](docs/alpaca.md)).
 - Stop is bounded and fenced (#220): every command that may start motion carries the controller's command generation,
   which every start and every relays-off path moves on, and a relay ON whose generation is older than the last
-  relays-off write is dropped. A person's Stop sets the Stop hold, then the fence, before it waits for anything; one
-  2 s deadline covers its wait for the lock and all its HAT I/O (a passed deadline's stop first, its relays-off writes,
-  the read-back and the LEDs), and past it Stop answers `RelayStateUnverified` and its relays-off work goes on once the
-  lock is free until a read-back shows the relays off. The protective stops (an edge, the watchdog's timer, a
-  supervision cycle's or a renewal's deadline stop) have the same bound from their decision through their caller's
-  LEDs; routine reads keep their own 1.5 s; shutdown, a drive-fault
-  edge and a limit asserting fence before they wait, and an edge that cannot take the lock in time is applied, with its
-  own level and motion, once it is free. A
-  relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`, `ClearFault`
-  refused) until a read-back shows them off: the emulator transport fences a client's older connections at its next
-  Hello, and on the Pi each I2C write runs on the HAT's one access thread.
+  relays-off write is dropped. A person's Stop sets the Stop hold, then the fence, before it waits for anything; one 2
+  s deadline covers its wait for the lock and all its HAT I/O (a passed deadline's stop first, its relays-off writes,
+  the read-back and the LEDs), and past it Stop answers `RelayStateUnverified` and its relays-off work goes on once
+  the lock is free until a read-back shows the relays off. Protective stops have the same bound through their caller's
+  LEDs: from arrival for a limit-asserting or drive-fault edge or the watchdog's timer, and from the stop decision for
+  a supervision cycle, a renewal or a repeated Open or Close. Routine reads keep their own 1.5 s until a protective
+  fence is pending; routine work in a bounded HAT section shares the earliest foreign arrival deadline even when the
+  request preceded that section. A caller that decides its own stop retains that stop's deadline for all-off and
+  verification; an overdue foreign request never suppresses those writes. Supervision yields routine reads and LEDs to
+  a waiting protective caller. The request remains recorded until applied, including after transfer to a queued
+  worker. A routine all-off retry's own fence does not bound it; another pending request (an edge, Stop, shutdown or
+  queued stop) does. Completed requests do not bound later retries. Shutdown, a drive-fault edge and a limit asserting
+  fence before they wait, and an edge that cannot take the lock in time is applied, with its own level and motion,
+  once it is free. A relay write the controller gave up on keeps the relays unverified (Stop `RelayStateUnverified`,
+  `ClearFault` refused) until a read-back shows them off: the emulator transport fences a client's older connections
+  at its next Hello, and on the Pi each I2C write runs on the HAT's one access thread.
 - `DirectionChangeDelay` (0 to 10 s, default 0: no wait; local-only): every start waits that long after the relays were
   last verified off, admitted first and then waiting without the lock, and runs its checks again before it energizes a
   relay ([docs/alpaca.md](docs/alpaca.md#waiting-out-the-direction-change-delay)).
@@ -211,7 +216,10 @@ cd src
 dotnet build HVO.RoofController.sln
 # What CI's build-and-test job runs; the scenario, browser and soak categories run in scenarios.yml
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj \
-  --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak"
+  --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak&FullyQualifiedName!~C14ManagedHeapTests.TheLiveBytes_FollowWhatTheProcessKeeps"
+# The process-wide live-heap smoke test uses a fresh test host, clear of the parallel fixtures' background teardown.
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj \
+  --filter "FullyQualifiedName~C14ManagedHeapTests.TheLiveBytes_FollowWhatTheProcessKeeps"
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests/HVO.RoofControllerV4.RPi.Tests.csproj \
   --filter "TestCategory=Scenario"
 # Release treats warnings as errors; CI builds both configurations

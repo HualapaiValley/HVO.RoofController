@@ -301,17 +301,21 @@ to `HVO_INSTALLER_RENDERS_DIR`, or to the test's results (`installer/`). CI draw
 ```
 cd src
 dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests -c Release
-dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak"
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build \
+  --filter "TestCategory!=Scenario&TestCategory!=Browser&TestCategory!=Soak&FullyQualifiedName!~C14ManagedHeapTests.TheLiveBytes_FollowWhatTheProcessKeeps"
+dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build \
+  --filter "FullyQualifiedName=HVO.RoofControllerV4.RPi.Tests.TestSupport.C14ManagedHeapTests.TheLiveBytes_FollowWhatTheProcessKeeps"
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Scenario"
 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Browser"
 HVO_SOAK_DURATION=00:30:00 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=Soak"
 HVO_KIOSK_SOAK_DURATION=00:30:00 dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "TestCategory=KioskSoak"
 ```
 
-The first command is the unit test job in CI, the kiosk's renders included (set `HVO_KIOSK_RENDERS_DIR` to keep them in
-one directory). The second runs the commissioning scenarios, the short soaks included. The third runs the browser tests
-(Chromium must be installed for the configuration built, here `bin/Release`). The fourth runs the C14 soak alone, for as
-long as `HVO_SOAK_DURATION` says, and the fifth the kiosk soak, for `HVO_KIOSK_SOAK_DURATION`.
+The first two test commands are the unit test job in CI, the kiosk's renders included (set `HVO_KIOSK_RENDERS_DIR`
+to keep them in one directory). The process-wide live-heap smoke test runs in a fresh test host after the other unit
+tests. The next command runs the commissioning scenarios, the short soaks included, followed by the browser tests
+(Chromium must be installed for the configuration built, here `bin/Release`). The last two run the C14 soak alone,
+for as long as `HVO_SOAK_DURATION` says, and the kiosk soak, for `HVO_KIOSK_SOAK_DURATION`.
 
 The deploy script has its own tests, `tests/deploy/deploy-script-tests.sh` (bash 3.2 or later, `python3`, `jq`,
 `sha256sum` or `shasum`, and `setsid` or `perl` for the script itself). They run the script against fake `docker` and

@@ -31,9 +31,11 @@ public partial class RoofControllerServiceV4
         var options = _options;
         var faultActive = input == 3 && isHigh == options.FaultInputActiveHigh;
         var limitAsserted = input is 1 or 2 && !options.IgnorePhysicalLimitSwitches && isHigh != options.UseNormallyClosedLimitSwitches;
+        PendingFenceRequest? pendingFence = null;
         if ((faultActive || limitAsserted) && _initialized && !_disposed)
         {
             FenceRelaysOff();
+            pendingFence = TrackPendingFence(deadline);
         }
 
         // The motion the edge belongs to, so a queued edge is judged with it.
@@ -47,7 +49,8 @@ public partial class RoofControllerServiceV4
             Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
             if (!lockTaken)
             {
-                QueueInputEdge(input, isHigh, faultActive, motion);
+                QueueInputEdge(input, isHigh, faultActive, motion, pendingFence);
+                pendingFence = null; // The worker owns the pending request until it applies the edge.
                 return;
             }
 
@@ -56,11 +59,12 @@ public partial class RoofControllerServiceV4
                 return;
             }
 
-            using var section = BoundedSection(faultActive || limitAsserted ? deadline : null);
+            using var section = BoundedSection(faultActive || limitAsserted ? deadline : null, ownFence: pendingFence);
             ApplyInputEdge_NoLock(input, isHigh);
         }
         finally
         {
+            pendingFence?.Dispose();
             if (lockTaken)
             {
                 Monitor.Exit(_syncLock);
@@ -92,7 +96,7 @@ public partial class RoofControllerServiceV4
     /// trip does); then the inputs are read fresh. A drive fault seen on the edge stops any motion and latches, even if
     /// the input has cleared by then.
     /// </summary>
-    private void QueueInputEdge(int input, bool isHigh, bool faultActive, long motion)
+    private void QueueInputEdge(int input, bool isHigh, bool faultActive, long motion, PendingFenceRequest? pendingFence)
     {
         _logger.LogWarning("Input IN{Input} edge RawHigh={RawHigh} came while the controller lock was held by a blocked HAT access; it is applied as soon as the lock is free", input, isHigh);
         _ = Task.Run(() =>
@@ -101,6 +105,9 @@ public partial class RoofControllerServiceV4
             {
                 lock (_syncLock)
                 {
+                    // Complete the applied request before this worker releases the monitor. The outer finally
+                    // also covers an exception while acquiring it; disposing a request again is harmless.
+                    using var appliedFence = pendingFence;
                     if (_disposed || !_initialized)
                     {
                         return;
@@ -137,6 +144,10 @@ public partial class RoofControllerServiceV4
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Applying the queued IN{Input} edge failed", input);
+            }
+            finally
+            {
+                pendingFence?.Dispose();
             }
         });
     }
@@ -557,11 +568,18 @@ public partial class RoofControllerServiceV4
     /// <see cref="HatIoOverrunException"/> as a failed transfer does, and every later access fails at once until it has
     /// returned (<see cref="OnHatIoRecovered"/>).
     /// </summary>
-    private T HatCall<T>(Func<T> access)
+    private T HatCall<T>(Func<T> access, bool protectiveRelayOff = false)
     {
+        BoundPendingFence();
         var limit = HatIoLimit;
         var bounded = false;
-        if (t_ioDeadline is { } deadline)
+        var accessDeadline = t_ioDeadline;
+        if ((!protectiveRelayOff || accessDeadline is null) && t_foreignFenceDeadline is { } foreign)
+        {
+            accessDeadline = accessDeadline is { } own ? Math.Min(own, foreign) : foreign;
+        }
+
+        if (accessDeadline is { } deadline)
         {
             // A stop's one deadline spans its wait for the lock and all of its HAT I/O (#220, PR #230 rereviews S-F4, F19).
             var left = Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), deadline);
@@ -607,6 +625,90 @@ public partial class RoofControllerServiceV4
     [ThreadStatic]
     private static bool t_boundCut;
 
+    [ThreadStatic]
+    private static RoofControllerServiceV4? t_sectionController;
+
+    [ThreadStatic]
+    private static PendingFenceRequest? t_sectionOwnFence;
+
+    [ThreadStatic]
+    private static bool t_watchForeignFences;
+
+    [ThreadStatic]
+    private static bool t_fencePending;
+
+    // Routine work yields to this deadline. A stop decided by this caller uses t_ioDeadline for its all-off writes
+    // and read-back: another request must not refuse the very work it is waiting for (#231, Opus R2 F7).
+    [ThreadStatic]
+    private static long? t_foreignFenceDeadline;
+
+    private PendingFenceRequest? _pendingFences;
+
+    // Pending requests outlive the gap before a locked section opens (#231, Sol R1 F1). A section observes every
+    // foreign request still waiting to be applied; no ephemeral watcher publication or notification can lose one.
+    private bool BoundPendingFence()
+    {
+        if (t_sectionController != this || !t_watchForeignFences)
+        {
+            return false;
+        }
+
+        var deadline = long.MaxValue;
+        for (var request = Volatile.Read(ref _pendingFences); request is not null; request = request.Next)
+        {
+            if (!request.IsCompleted && request != t_sectionOwnFence)
+            {
+                deadline = Math.Min(deadline, request.Deadline);
+            }
+        }
+
+        if (deadline != long.MaxValue)
+        {
+            t_fencePending = true;
+            t_foreignFenceDeadline = t_foreignFenceDeadline is { } earlier && earlier < deadline ? earlier : deadline;
+        }
+
+        return t_fencePending;
+    }
+
+    // Recorded after the relay fence rises and before the caller waits. The list is lock-free: Stop never waits for a
+    // registration lock. A queued caller transfers its request to its worker, so later cycles still yield to it.
+    private PendingFenceRequest TrackPendingFence(long deadline)
+    {
+        var request = new PendingFenceRequest(this, deadline);
+        PendingFenceRequest? current;
+        do
+        {
+            current = Volatile.Read(ref _pendingFences);
+            request.Next = current;
+        }
+        while (Interlocked.CompareExchange(ref _pendingFences, request, current) != current);
+
+        return request;
+    }
+
+    private void PrunePendingFences()
+    {
+        while (Volatile.Read(ref _pendingFences) is { IsCompleted: true } completed)
+        {
+            Interlocked.CompareExchange(ref _pendingFences, completed.Next, completed);
+        }
+    }
+
+    private sealed class PendingFenceRequest(RoofControllerServiceV4 controller, long deadline) : IDisposable
+    {
+        private int _completed;
+        public long Deadline { get; } = deadline;
+        public PendingFenceRequest? Next { get; set; }
+        public bool IsCompleted => Volatile.Read(ref _completed) != 0;
+
+        public void Dispose()
+        {
+            Volatile.Write(ref _completed, 1);
+            controller.PrunePendingFences();
+        }
+    }
+
     /// <summary>
     /// The deadline of a Stop or a protective stop that starts now: <see cref="StopLockWait"/> from now, for its wait for
     /// the lock and every HAT access it makes, its LEDs included (#220, PR #230 rereviews S-F4, F19).
@@ -628,14 +730,24 @@ public partial class RoofControllerServiceV4
     /// until the section ends, the caller's LEDs included, has one deadline. That is <paramref name="deadline"/> when the
     /// section has one from its start (an edge or the watchdog's timer, whose bound counts their wait for the lock),
     /// otherwise 2 s from the decision; a Stop's bound runs from its start (<paramref name="armNow"/>). Before a stop is
-    /// decided, routine accesses keep their own limit only.
+    /// decided, routine accesses keep their own limit only, until another caller raises a protective fence: then the
+    /// routine work shares that fence's arrival deadline, and cosmetic accesses yield to it (#231, F27). A stop this
+    /// caller decides retains its own deadline for all-off and verification, even when a foreign request is overdue.
     /// </summary>
-    private static HatIoSection BoundedSection(long? deadline = null, bool armNow = false)
+    private HatIoSection BoundedSection(long? deadline = null, bool armNow = false, PendingFenceRequest? ownFence = null)
     {
-        var section = new HatIoSection(t_ioDeadline, t_inBoundedSection, t_sectionDeadline, t_boundCut);
+        var section = new HatIoSection(t_ioDeadline, t_inBoundedSection, t_sectionDeadline, t_boundCut,
+            t_sectionController, t_sectionOwnFence, t_watchForeignFences, t_fencePending, t_foreignFenceDeadline);
         t_inBoundedSection = true;
         t_sectionDeadline = deadline;
         t_boundCut = false;
+        t_sectionController = this;
+        // Stop opens its section before waiting for the lock and already has its own arrival deadline. Only a
+        // section holding the lock can delay foreign protective work; local all-off retries are never requests.
+        t_watchForeignFences = Monitor.IsEntered(_syncLock);
+        t_sectionOwnFence = ownFence;
+        t_fencePending = false;
+        t_foreignFenceDeadline = null;
         if (armNow)
         {
             BoundTheStop();
@@ -663,13 +775,25 @@ public partial class RoofControllerServiceV4
         private readonly bool _inBoundedSection;
         private readonly long? _sectionDeadline;
         private readonly bool _boundCut;
+        private readonly RoofControllerServiceV4? _controller;
+        private readonly PendingFenceRequest? _ownFence;
+        private readonly bool _watchForeignFences;
+        private readonly bool _fencePending;
+        private readonly long? _foreignFenceDeadline;
 
-        public HatIoSection(long? ioDeadline, bool inBoundedSection, long? sectionDeadline, bool boundCut)
+        public HatIoSection(long? ioDeadline, bool inBoundedSection, long? sectionDeadline, bool boundCut,
+            RoofControllerServiceV4? controller, PendingFenceRequest? ownFence, bool watchForeignFences, bool fencePending,
+            long? foreignFenceDeadline)
         {
             _ioDeadline = ioDeadline;
             _inBoundedSection = inBoundedSection;
             _sectionDeadline = sectionDeadline;
             _boundCut = boundCut;
+            _controller = controller;
+            _ownFence = ownFence;
+            _watchForeignFences = watchForeignFences;
+            _fencePending = fencePending;
+            _foreignFenceDeadline = foreignFenceDeadline;
         }
 
         public void Dispose()
@@ -678,6 +802,11 @@ public partial class RoofControllerServiceV4
             t_inBoundedSection = _inBoundedSection;
             t_sectionDeadline = _sectionDeadline;
             t_boundCut = _boundCut;
+            t_sectionController = _controller;
+            t_sectionOwnFence = _ownFence;
+            t_watchForeignFences = _watchForeignFences;
+            t_fencePending = _fencePending;
+            t_foreignFenceDeadline = _foreignFenceDeadline;
         }
     }
 
@@ -693,7 +822,7 @@ public partial class RoofControllerServiceV4
             return;
         }
 
-        _logger.LogCritical("A HAT access that ran past its {Limit} ms limit has returned; every relay is written off and verified now", HatIoLimit.TotalMilliseconds);
+        _logger.LogCritical("A HAT access that exceeded its allowed wait has returned; every relay is written off and verified now");
         QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false);
     }
 
@@ -715,11 +844,11 @@ public partial class RoofControllerServiceV4
         return TryWriteRelay_NoLock(relayId, true) ? RelayWriteOutcome.Verified : RelayWriteOutcome.Failed;
     }
 
-    private bool TryWriteRelay_NoLock(int relayId, bool on)
+    private bool TryWriteRelay_NoLock(int relayId, bool on, bool protectiveStop = false)
     {
         try
         {
-            var result = HatCall(() => _hat.SetRelay(relayId, on));
+            var result = HatCall(() => _hat.SetRelay(relayId, on), protectiveRelayOff: protectiveStop && !on);
             if (result.IsSuccessful)
             {
                 return true;
@@ -736,12 +865,12 @@ public partial class RoofControllerServiceV4
     }
 
     /// <summary>Reads the relay register (bits 0-3). Updates relay-read freshness tracking; never throws.</summary>
-    private int? TryReadRelayMask_NoLock()
+    private int? TryReadRelayMask_NoLock(bool protectiveStop = false)
     {
         Exception? error = null;
         try
         {
-            var result = HatCall(_hat.GetRelaysMask);
+            var result = HatCall(_hat.GetRelaysMask, protectiveRelayOff: protectiveStop);
             if (result.IsSuccessful)
             {
                 _lastSuccessfulRelayReadUtc = Now;
@@ -783,18 +912,19 @@ public partial class RoofControllerServiceV4
         CancelPendingStart_NoLock("The relays were driven off while this start waited; nothing moved for it.");
         lock (_hatTransactionLock)
         {
-            TryWriteRelay_NoLock(_options.OpenRelayId, false);
-            TryWriteRelay_NoLock(_options.CloseRelayId, false);
-            TryWriteRelay_NoLock(_options.StopRelayId, false);
-            TryWriteRelay_NoLock(_options.ClearFaultRelayId, false);
+            var protectiveStop = t_ioDeadline is not null;
+            TryWriteRelay_NoLock(_options.OpenRelayId, false, protectiveStop);
+            TryWriteRelay_NoLock(_options.CloseRelayId, false, protectiveStop);
+            TryWriteRelay_NoLock(_options.StopRelayId, false, protectiveStop);
+            TryWriteRelay_NoLock(_options.ClearFaultRelayId, false, protectiveStop);
 
-            var mask = TryReadRelayMask_NoLock();
+            var mask = TryReadRelayMask_NoLock(protectiveStop);
             if (mask != 0)
             {
                 _logger.LogWarning("All-off read-back was {Mask}; writing the whole relay register to zero", FormatMask(mask));
                 try
                 {
-                    var result = HatCall(() => _hat.SetRelaysMask(0));
+                    var result = HatCall(() => _hat.SetRelaysMask(0), protectiveRelayOff: protectiveStop);
                     if (!result.IsSuccessful)
                     {
                         _logger.LogWarning(result.Error, "Relay register zero write failed");
@@ -805,16 +935,16 @@ public partial class RoofControllerServiceV4
                     _logger.LogWarning(ex, "Relay register zero write threw");
                 }
 
-                mask = TryReadRelayMask_NoLock();
+                mask = TryReadRelayMask_NoLock(protectiveStop);
             }
 
             var verified = mask == 0;
             RecordRelayState_NoLock(verified, mask);
-            if (!verified && t_ioDeadline is { } deadline && BoundPassed(deadline))
+            if (!verified && (t_ioDeadline ?? t_foreignFenceDeadline) is { } deadline && BoundPassed(deadline))
             {
                 // The stop's bound cut its relays-off work short: it goes on as soon as the lock is free, each access at its
                 // own limit, and the relays stay unverified until a read-back shows them off.
-                QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false);
+                QueueDeferredStop(RoofControllerStopReason.RelayVerificationFailed, null, onlyWhileMoving: false, deadline: deadline);
             }
 
             return verified;
@@ -1064,6 +1194,15 @@ public partial class RoofControllerServiceV4
             using var section = BoundedSection();
             var now = Now;
 
+            if (BoundPendingFence())
+            {
+                // The protective caller already owns the evidence. Do not begin another routine read when it is
+                // waiting for this monitor; its pending request remains visible until that caller applies it.
+                // Idle work yields too: refusing a routine read is not evidence of an input transfer failure.
+                FinishMutation_NoLock();
+                return;
+            }
+
             if (_relayRegisterState == RoofRelayRegisterState.Unverified && !_clearFaultInProgress && _commandedMotion == RoofMotionDirection.None)
             {
                 if (AllRelaysOff_NoLock())
@@ -1072,17 +1211,27 @@ public partial class RoofControllerServiceV4
                 }
             }
 
-            if (ReadInputs_NoLock())
+            // A request can arrive during the routine all-off retry above. Its deadline may have cut that retry:
+            // yield the following read too, rather than count an access we would refuse before sending as failed.
+            if (!BoundPendingFence())
             {
-                Evaluate_NoLock(now);
-            }
-            else if (_commandedMotion != RoofMotionDirection.None && _consecutiveInputReadFailures >= _options.MaxConsecutiveInputReadFailures)
-            {
-                StopMotion_NoLock(RoofControllerStopReason.InputReadFailure,
-                    $"Safety inputs could not be read {_consecutiveInputReadFailures} consecutive times while moving.");
+                if (ReadInputs_NoLock())
+                {
+                    Evaluate_NoLock(now);
+                }
+                else if (_commandedMotion != RoofMotionDirection.None && _consecutiveInputReadFailures >= _options.MaxConsecutiveInputReadFailures)
+                {
+                    StopMotion_NoLock(RoofControllerStopReason.InputReadFailure,
+                        $"Safety inputs could not be read {_consecutiveInputReadFailures} consecutive times while moving.");
+                }
             }
 
-            CheckRelayRegister_NoLock();
+            // An edge or Stop has raised its fence while the cycle held the lock. Its own all-off verification takes
+            // priority over another routine read (and the LEDs below); let it take the lock promptly.
+            if (!BoundPendingFence())
+            {
+                CheckRelayRegister_NoLock();
+            }
             CheckDeadlines_NoLock(now);
             if (_commandedMotion == RoofMotionDirection.None)
             {
@@ -1140,6 +1289,7 @@ public partial class RoofControllerServiceV4
         else
         {
             _logger.LogCritical("{Message} Driving all relays off", message);
+            BoundTheStop();
             AllRelaysOff_NoLock();
             Latch_NoLock(RoofControllerStopReason.RelayVerificationFailed, message);
         }
@@ -1149,7 +1299,8 @@ public partial class RoofControllerServiceV4
     /// A periodic relay register read failed. Below <see cref="MaxConsecutiveRelayReadFailures"/> the last verified
     /// state is kept and the failure reported. At the threshold, commanded motion stops and latches
     /// <see cref="RoofControllerStopReason.RelayVerificationFailed"/>; when idle, the all-off sequence runs again and
-    /// latches only if it cannot verify. Status and readiness report unhealthy relay reads until a read succeeds.
+    /// latches only if it cannot verify within the stop bound. Status and readiness report unhealthy relay reads until
+    /// a read succeeds.
     /// </summary>
     private void HandleRelayReadFailure_NoLock()
     {
@@ -1169,6 +1320,7 @@ public partial class RoofControllerServiceV4
         }
 
         _logger.LogCritical("{Message} Driving all relays off", message);
+        BoundTheStop();
         if (AllRelaysOff_NoLock())
         {
             _logger.LogWarning("Relay register all-off verified after {Failures} failed supervision reads", failures);
@@ -1185,7 +1337,6 @@ public partial class RoofControllerServiceV4
             CheckDriveStoppedAfterStop_NoLock(now);
             return;
         }
-
 
         if (_watchdogDeadlineUtc is { } watchdogDeadline && now >= watchdogDeadline)
         {

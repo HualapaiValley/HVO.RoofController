@@ -78,6 +78,7 @@ public partial class RoofControllerServiceV4
     /// </summary>
     private long FenceRelaysOff()
     {
+        BoundPendingFence();
         var generation = BumpGeneration();
         long current;
         do
@@ -736,6 +737,7 @@ public partial class RoofControllerServiceV4
         // First the generation and the relay fence, before the lock: an admitted start that has not yet written its
         // relay never will, and a waiting start is superseded.
         FenceRelaysOff();
+        var pendingFence = TrackPendingFence(startTimestamp + (long)(StopLockWait.TotalSeconds * Stopwatch.Frequency));
 
         // One deadline for the whole Stop: its wait for the lock and every HAT access it makes, the deadline stop it may
         // make first and the LEDs included (#220, PR #230 rereviews S-F4, F19). Past it the Stop answers that the relays
@@ -744,13 +746,13 @@ public partial class RoofControllerServiceV4
         Result<RoofControllerStatus> result;
         var lockTaken = false;
         var reverify = false;
-        var section = BoundedSection(deadline, armNow: true);
+        var section = BoundedSection(deadline, armNow: true, ownFence: pendingFence);
         try
         {
             Monitor.TryEnter(_syncLock, StopLockWait, ref lockTaken);
             if (!lockTaken)
             {
-                result = DeferStop(reason);
+                result = DeferStop(reason, deadline);
             }
             else if (_disposed)
             {
@@ -800,6 +802,7 @@ public partial class RoofControllerServiceV4
         finally
         {
             section.Dispose();
+            pendingFence.Dispose();
             if (lockTaken)
             {
                 Monitor.Exit(_syncLock);
@@ -810,7 +813,7 @@ public partial class RoofControllerServiceV4
         {
             // The relays read back off before the bound passed, during the LEDs: they are read back again once the lock is
             // free. (A relays-off sequence the bound cut short queued its own.)
-            QueueDeferredStop(reason, null, onlyWhileMoving: false, stopRequest: true);
+            QueueDeferredStop(reason, null, onlyWhileMoving: false, stopRequest: true, deadline: deadline);
         }
 
         RoofControllerTelemetry.CompleteCommand(activity, "stop", result.IsSuccessful, startTimestamp);
@@ -822,9 +825,9 @@ public partial class RoofControllerServiceV4
     /// is queued to run the moment the lock is free (its fence already keeps any earlier start's relay off), and the
     /// answer says the relays are not verified off.
     /// </summary>
-    private Result<RoofControllerStatus> DeferStop(RoofControllerStopReason reason)
+    private Result<RoofControllerStatus> DeferStop(RoofControllerStopReason reason, long deadline)
     {
-        QueueDeferredStop(reason, null, onlyWhileMoving: false, stopRequest: true);
+        QueueDeferredStop(reason, null, onlyWhileMoving: false, stopRequest: true, deadline: deadline);
         const string message = "Stop could not take the controller lock within 2 s: a relay or input access is still in progress. " +
             "The relays-off write is queued and runs as soon as it ends; until then the relay state is unverified. Use the independent hardware stop.";
         _logger.LogCritical("{Message} Reason={Reason}", message, reason);
@@ -838,9 +841,10 @@ public partial class RoofControllerServiceV4
     /// (<paramref name="stopRequest"/>) also ends a refused continuation's Error, as a Stop that took the lock does.
     /// </summary>
     private void QueueDeferredStop(RoofControllerStopReason reason, string? error, bool onlyWhileMoving, long? motionGeneration = null,
-        bool stopRequest = false)
+        bool stopRequest = false, long? deadline = null)
     {
         FenceRelaysOff();
+        var pendingFence = TrackPendingFence(deadline ?? StopDeadlineFromNow());
         Interlocked.Increment(ref _deferredStops);
         _ = Task.Run(() =>
         {
@@ -848,6 +852,7 @@ public partial class RoofControllerServiceV4
             {
                 lock (_syncLock)
                 {
+                    using var appliedFence = pendingFence;
                     if (_disposed)
                     {
                         return;
@@ -885,6 +890,7 @@ public partial class RoofControllerServiceV4
             }
             finally
             {
+                pendingFence.Dispose();
                 Interlocked.Decrement(ref _deferredStops);
             }
         });

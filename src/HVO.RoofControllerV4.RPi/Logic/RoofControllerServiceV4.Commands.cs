@@ -473,15 +473,19 @@ public partial class RoofControllerServiceV4
         // The intent and the relay fence go up before shutdown waits for the lock (#220, PR #230 rereview F11): a start
         // that passed its checks and holds the lock never energizes, and nothing new is admitted meanwhile.
         var firstCall = !_shuttingDown;
+        PendingFenceRequest? pendingFence = null;
         if (!_disposed)
         {
             _shuttingDown = true;
             FenceRelaysOff();
+            pendingFence = TrackPendingFence(StopDeadlineFromNow());
         }
 
+        using var pendingRequest = pendingFence;
         Task<bool> retry;
         lock (_syncLock)
         {
+            using var appliedFence = pendingFence;
             if (_disposed)
             {
                 return _relayRegisterState == RoofRelayRegisterState.Unverified

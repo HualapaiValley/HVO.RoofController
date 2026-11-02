@@ -666,24 +666,34 @@ it used and the reasons. Never a key or a Basic header.
 
 ### Command fencing
 
-Every command that may start motion carries the controller's **command generation**, which every start and every way the
-relays go off (Stop, a protective stop, shutdown) moves on. A relay write for a start whose generation is older than the
-last relays-off write is dropped, so a start that passed its checks just before a Stop can never energise a relay after
-it. A person's Stop first sets the human Stop hold, an in-memory change that waits for nothing (its change notification
-runs on its own), so no Alpaca Close is admitted in between; then Stop raises the fence, before it waits for anything.
-Stop has one deadline, 2 s from its start, for its wait for the lock and every HAT access it makes: the stop of a
-watchdog, lease or drive deadline that has passed but not yet been acted on (which Stop makes first, and then has
-nothing left to write if it verified the relays off), its own relays-off writes and read-back, and the LEDs. An access
-gets at most what is left of the deadline, and none is sent once it has passed. A Stop whose deadline passes before its
-HAT work has ended, the LEDs' included, answers `RelayStateUnverified` (`0x504` to an `AbortSlew`), and its relays-off
-work goes on as soon as the lock is free, each access at its own limit, until a read-back shows the relays off; nothing
-switches a relay on meanwhile. A protective stop has the same bound, over every HAT access from its decision to the end
-of what decided it, that caller's LEDs included: from the moment they come for a limit or drive-fault edge and the
-watchdog's timer (their wait for the lock counts), and from the decision for a supervision cycle's stops and a deadline
-stop that a lease renewal or a repeated Open or Close finds. The routine reads before a stop is decided keep only their
-own 1.5 s limit. A shutdown raises the fence before it waits for the lock, as do a drive-fault edge and a limit
-asserting; an input edge that cannot take the lock in time is never dropped: its own level is applied the moment the
-lock is free, with the motion it came during, and then the inputs are read fresh.
+Every command that may start motion carries the controller's **command generation**, which every start and every way
+the relays go off (Stop, a protective stop, shutdown) moves on. A relay write for a start whose generation is older
+than the last relays-off write is dropped, so a start that passed its checks just before a Stop can never energise a
+relay after it. A person's Stop first sets the human Stop hold, an in-memory change that waits for nothing (its change
+notification runs on its own), so no Alpaca Close is admitted in between; then Stop raises the fence, before it waits
+for anything. Stop has one deadline, 2 s from its start, for its wait for the lock and every HAT access it makes: the
+stop of a watchdog, lease or drive deadline that has passed but not yet been acted on (which Stop makes first, and
+then has nothing left to write if it verified the relays off), its own relays-off writes and read-back, and the LEDs.
+An access gets at most what is left of the deadline, and none is sent once it has passed. A Stop whose deadline passes
+before its HAT work has ended, the LEDs' included, answers `RelayStateUnverified` (`0x504` to an `AbortSlew`), and its
+relays-off work goes on as soon as the lock is free, each access at its own limit, until a read-back shows the relays
+off; nothing switches a relay on meanwhile. If the bus is too slow for the relay-off writes and read-back to finish in
+the remaining stop bound, the stop remains unverified and latches `RelayVerificationFailed` (escalating a drive-fault
+latch to that reason), even if each access fits its own 1.5 s limit. Deferred all-off work continues until verified;
+the latch stays until explicit ClearFault. A protective stop has the same bound, over every HAT access from its
+decision to the end of what decided it, that caller's LEDs included: from the moment they come for a limit or
+drive-fault edge and the watchdog's timer (their wait for the lock counts), and from the decision for a supervision
+cycle's stops and a deadline stop that a lease renewal or a repeated Open or Close finds, including an idle all-off
+after a relay mismatch or repeated failed relay reads. Routine reads keep their own 1.5 s limit until a protective
+fence moves: the section holding the lock then shares that fence's arrival deadline and skips remaining routine relay
+reads and LEDs to let the protective work take the lock promptly. Pending requests stay recorded until they are
+applied, including when they precede a section or pass to a queued worker; routine work uses the earliest foreign
+deadline. A caller that decides its own stop retains that stop's deadline for all-off and verification, so an overdue
+foreign request cannot suppress a fresh protective stop's writes. A routine retry of unverified all-off relays keeps
+each access's own limit after those requests finish: its own fence does not bound it, but another pending request (an
+edge, Stop, shutdown or queued/recovery stop) does. A shutdown raises the fence before waiting for the lock, as do a
+drive-fault edge and a limit asserting; an input edge that cannot take the lock in time is never dropped: its own
+level is applied the moment the lock is free, with the motion it came during, and then the inputs are read fresh.
 
 **Every HAT access the controller makes is bounded.** A relay write, a relay read-back, an input read and an LED write
 each run on a thread of the HAT's own, and the controller waits at most 1.5 s for one, less than Stop's 2 s. (The HAT
