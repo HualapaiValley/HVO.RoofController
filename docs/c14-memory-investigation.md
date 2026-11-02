@@ -155,11 +155,48 @@ C14 failed its managed heap check three times between October 27 and November 1,
 then returns the runtime's approximation of the bytes in use. `soak-memory.jsonl` also records the GC's own figures
 for that collection: every sample's record is a full blocking collection (generation 2, not concurrent; 177 of them
 did not compact), and its heap size less its fragmentation is the bytes it left live. Over 2,266 samples from the 22
-soaks with these records (October 19 to November 1), the approximation read more than 0.1 MB under the live bytes in
-976 samples, by up to 8.2 MB, and never more than 0.1 MB over (at most 77 KB). Whether the first or last five samples
-land on short readings decides the endpoint. On `08c3121` the live bytes moved +0.6%
+nightly and pull request soaks listed below (October 19 to November 1), the approximation read more than 0.1 MB under
+the live bytes in 976 samples, by up to 8.2 MB, and never more than 0.1 MB over (at most 77 KB). Whether the first or
+last five samples land on short readings decides the endpoint. On `08c3121` the live bytes moved +0.6%
 while the reading said +31.7%. The controlled experiment above shows the same: identical baselines read −20.67% and
 +0.68%.
+
+The counted set is the 14 `main` nightlies, #159's `c81ff60` run, the six #220 phase-3 runs (PR #230), and phase 4's
+`d1fd160` run (PR #232). Counts use each artifact's `soak-memory.jsonl` once, without its duplicate under `TestResults`.
+"Short" means the approximation is more than 100,000 bytes below `gc.heapSizeBytes - gc.fragmentedBytes`.
+
+| Source | Run | Samples | Short readings | Non-compacting collections |
+|---|---|---:|---:|---:|
+| `main`, October 19 | [39219392805](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39219392805) | 111 | 96 | 0 |
+| `main`, October 20 | [39388842958](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39388842958) | 111 | 73 | 0 |
+| `main`, October 21 | [39564928863](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39564928863) | 111 | 34 | 0 |
+| `main`, October 22 | [39742930447](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39742930447) | 110 | 64 | 0 |
+| `main`, October 23 | [39919994367](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39919994367) | 111 | 63 | 0 |
+| `main`, October 24 | [40074264822](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/40074264822) | 111 | 111 | 0 |
+| `main`, October 25 | [40173735698](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/40173735698) | 111 | 17 | 10 |
+| `main`, October 26 | [40288979059](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/40288979059) | 111 | 31 | 25 |
+| `main`, October 27 | [40471150266](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/40471150266) | 111 | 51 | 0 |
+| `main`, October 28 | [40659120915](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/40659120915) | 111 | 26 | 12 |
+| `main`, October 29 | [40844028053](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/40844028053) | 111 | 37 | 21 |
+| `main`, October 30 | [41028937194](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41028937194) | 111 | 47 | 24 |
+| `main`, October 31 | [41185254524](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41185254524) | 111 | 56 | 0 |
+| `main`, November 1 | [41293163036](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41293163036) | 111 | 40 | 0 |
+| #159, `c81ff60` | [39836178067](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39836178067) | 111 | 80 | 0 |
+| Phase 3, `caa8ae5` | [41246784183](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41246784183) | 56 | 9 | 0 |
+| Phase 3, `5601293` (cancelled) | [41263313041](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41263313041) | 1 | 0 | 0 |
+| Phase 3, `5601293` | [41263441072](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41263441072) | 109 | 20 | 6 |
+| Phase 3, `04348ca` | [41271582342](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41271582342) | 109 | 24 | 24 |
+| Phase 3, `6eda002` | [41289321486](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41289321486) | 109 | 16 | 42 |
+| Phase 3, `0e1295b` | [41298177163](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41298177163) | 109 | 30 | 13 |
+| Phase 4, `d1fd160` | [41349362192](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41349362192) | 109 | 51 | 0 |
+| **Total (22 soaks)** | | **2,266** | **976** | **177** |
+
+The 30-minute phase-3 run (`caa8ae5`) and the cancelled run contribute to the reading counts, but not to the 20
+completed two-hour soaks compared below. The six #159 controlled-experiment variants in
+[run 39817647033](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/39817647033) are excluded from this
+22-soak set. They add 666 samples, 357 short readings and 50 non-compacting collections: including them gives **28
+soaks, 2,932 samples, 1,333 short readings and 227 non-compacting collections**. The stated maximum shortfall and
+overshoot, generation and concurrency claims also hold over all 28.
 
 **The command history.** The roof command history (#206) keeps every command in memory, up to
 `RoofCommandHistory:MaximumEntries` (10,000 by default) or its retention. A soak cycle records four commands, so the
