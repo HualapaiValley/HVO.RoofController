@@ -105,6 +105,9 @@ public partial class RoofControllerServiceV4
             {
                 lock (_syncLock)
                 {
+                    // Complete the applied request before this worker releases the monitor. The outer finally
+                    // also covers an exception while acquiring it; disposing a request again is harmless.
+                    using var appliedFence = pendingFence;
                     if (_disposed || !_initialized)
                     {
                         return;
@@ -1191,10 +1194,11 @@ public partial class RoofControllerServiceV4
             using var section = BoundedSection();
             var now = Now;
 
-            if (_commandedMotion != RoofMotionDirection.None && BoundPendingFence())
+            if (BoundPendingFence())
             {
                 // The protective caller already owns the evidence. Do not begin another routine read when it is
                 // waiting for this monitor; its pending request remains visible until that caller applies it.
+                // Idle work yields too: refusing a routine read is not evidence of an input transfer failure.
                 FinishMutation_NoLock();
                 return;
             }

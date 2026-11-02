@@ -327,6 +327,7 @@ in place of an interrupted bus.
 | 5 | An interruption shorter than the threshold does not stop the move | `C7BusFailureScenarios.AnInterruptionShorterThanTheThreshold_DoesNotStopTheMove` |
 | 6 | With the roof idle, a failed relay register read reports unhealthy. After the second failure, the controller re-runs the all-off sequence: it latches `RelayVerificationFailed` if the reads keep failing, and recovers without a latch if the re-run verifies within the stop bound. | `C7BusFailureScenarios.RelayRegisterReadsFailing_WhileIdle_ReportUnhealthy_ThenLatchRelayVerificationFailed`, `C7BusFailureScenarios.TwoFailedRelayRegisterReads_WhileIdle_RerunTheAllOffSequence_AndItVerifiesWithoutALatch` |
 | 7 | With the roof idle, an unexpected energized relay or two failed relay-register reads starts a protective all-off. With 900 ms relay-off writes, the cycle returns within its 2 s stop bound plus scheduling margin; unfinished verification latches `RelayVerificationFailed`, and queued work completes and verifies every relay off. | `ProtectiveStopTimingScenarios.IdleProtectiveAllOff_WithSlowWrites_ReturnsWithinTheBound_AndEventuallyVerifies` |
+| 8 | Idle supervision yields to an overdue queued stop without reporting an input-read failure for an access it never sent. The emulated relay register verifies all-off and status retains no false input error after that stop completes. | `ProtectiveStopTimingScenarios.AnIdlePlant_YieldsToAnOverdueStop_WithoutAFalseInputFailure` |
 
 **Installation assumptions**
 

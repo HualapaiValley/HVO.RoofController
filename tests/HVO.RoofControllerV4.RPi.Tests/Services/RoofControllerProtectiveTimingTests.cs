@@ -20,6 +20,51 @@ public class RoofControllerProtectiveTimingTests
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AnIdleCycle_YieldsToAnOverdueRequest_WithoutReportingAnInputFailure(bool needsRoutineRetry)
+    {
+        using var hat = new FakeRoofHat();
+        hat.SetInputs(true, true, false, false);
+        using var service = SimulatedRoofControllerService.Create(hat, new ManualTimeProvider());
+        (await service.Initialize(CancellationToken.None)).IsSuccessful.Should().BeTrue();
+        if (needsRoutineRetry)
+        {
+            hat.Registers.FailRelayReads = true;
+            service.ForceRelayStates(false, false, false).Should().BeFalse();
+            hat.Registers.FailRelayReads = false;
+        }
+
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+        var stop = new Thread(() => service.Stop());
+        try
+        {
+            lock (sync)
+            {
+                stop.Start();
+                stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+                var queued = service.DeferredStopCount;
+                var reads = hat.Registers.InputReadCount;
+                service.RunSupervisionCycle();
+                hat.Registers.InputReadCount.Should().Be(reads, "an idle cycle must yield rather than attempt routine I/O");
+                service.DeferredStopCount.Should().Be(queued, "the existing queued stop already owns all-off");
+                var status = service.GetCurrentStatusSnapshot();
+                status.ConsecutiveInputReadFailures.Should().Be(0);
+                status.LastError.Should().BeNull();
+            }
+        }
+        finally
+        {
+            hat.Registers.FailRelayReads = false;
+            if (stop.ThreadState != System.Threading.ThreadState.Unstarted) stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
+        }
+
+        service.GetCurrentStatusSnapshot().ConsecutiveInputReadFailures.Should().Be(0);
+        service.GetCurrentStatusSnapshot().LastError.Should().BeNull();
+    }
+
+    [TestMethod]
     public async Task AStopDecision_DoesNotExemptRoutineLedsFromAnOverdueForeignDeadline()
     {
         using var hat = new FakeRoofHat();
@@ -54,14 +99,16 @@ public class RoofControllerProtectiveTimingTests
     }
 
     [TestMethod]
-    [DataRow("Stop", "limit")]
-    [DataRow("Stop", "drive fault")]
-    [DataRow("edge", "limit")]
-    [DataRow("edge", "drive fault")]
-    [DataRow("Stop", "watchdog")]
-    [DataRow("Stop", "renewal")]
-    [DataRow("Stop", "repeat Close")]
-    public async Task AnOverdueForeignRequest_DoesNotSuppressANewProtectiveStop(string queued, string trigger)
+    [DataRow("Stop", "limit", false)]
+    [DataRow("Stop", "drive fault", false)]
+    [DataRow("edge", "limit", false)]
+    [DataRow("edge", "drive fault", false)]
+    [DataRow("Stop", "watchdog", false)]
+    [DataRow("Stop", "renewal", false)]
+    [DataRow("Stop", "repeat Close", false)]
+    [DataRow("Stop", "limit", true)]
+    [DataRow("Stop", "drive fault", true)]
+    public async Task AnOverdueForeignRequest_DoesNotSuppressANewProtectiveStop(string queued, string trigger, bool requiresFallback)
     {
         using var hat = new FakeRoofHat();
         hat.SetInputs(true, true, false, false);
@@ -94,6 +141,8 @@ public class RoofControllerProtectiveTimingTests
                 if (queued == "edge") service.SimReverseLimitRaw(true); // contact chatter before re-assertion
                 if (trigger is "renewal" or "repeat Close") time.AdvanceWithoutTimers(TimeSpan.FromSeconds(2));
                 hat.ClearRelayWriteLog();
+                // Fail the first two single-relay clears, leaving the Close bit on for the whole-register fallback.
+                if (requiresFallback) hat.Registers.FailNextRelayWrites = 2;
                 if (trigger == "limit") service.SimReverseLimitRaw(false);
                 else if (trigger == "drive fault") service.SimFaultRaw(true);
                 else if (trigger == "watchdog") service.TriggerWatchdog(service.CurrentMotionGeneration);
@@ -101,7 +150,9 @@ public class RoofControllerProtectiveTimingTests
                 else service.Close();
 
                 // Assert before releasing the monitor: a queued cleanup cannot supply the missing writes/read-back.
-                hat.RelayWriteLog.Count.Should().Be(4, "this protective caller must send its own all-off writes");
+                hat.RelayWriteLog.Count.Should().Be(requiresFallback ? 3 : 4,
+                    "this protective caller must send its own all-off writes, including any fallback");
+                if (requiresFallback) hat.RelayWriteLog.Should().Contain(write => write.Register == 0 && write.Value == 0);
                 hat.RelayMask.Should().Be(0);
                 var status = service.GetCurrentStatusSnapshot();
                 status.RelayRegisterState.Should().Be(RoofRelayRegisterState.Verified);
@@ -119,6 +170,7 @@ public class RoofControllerProtectiveTimingTests
         }
         finally
         {
+            hat.Registers.FailNextRelayWrites = 0;
             if (first.ThreadState != System.Threading.ThreadState.Unstarted) first.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
             WaitForVerifiedOff(service, hat);
         }
@@ -191,6 +243,11 @@ public class RoofControllerProtectiveTimingTests
         {
             lock (sync)
             {
+                // Resume a cycle after its entry yield check: a queued request still has to bound a retry that
+                // already owns the monitor and its HAT section when that request becomes visible.
+                const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+                using var section = (IDisposable)typeof(RoofControllerServiceV4).GetMethod("BoundedSection", flags)!
+                    .Invoke(service, [null, false, null])!;
                 service.Stop().ErrorCode().Should().Be(RoofControllerErrorCode.RelayStateUnverified);
                 SpinWait.SpinUntil(() => !service.IsHatIoOverrun, TimeSpan.FromSeconds(5)).Should().BeTrue();
                 // Both the bound's continuation and the lane recovery are waiting for this monitor. Its original
@@ -198,7 +255,7 @@ public class RoofControllerProtectiveTimingTests
                 try
                 {
                     var elapsed = Stopwatch.StartNew();
-                    service.RunSupervisionCycle();
+                    typeof(RoofControllerServiceV4).GetMethod("AllRelaysOff_NoLock", flags)!.Invoke(service, null);
                     elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(300));
                 }
                 finally { hat.Registers.BeforeRelayWrite = null; }

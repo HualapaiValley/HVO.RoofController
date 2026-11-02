@@ -852,6 +852,7 @@ public partial class RoofControllerServiceV4
             {
                 lock (_syncLock)
                 {
+                    using var appliedFence = pendingFence;
                     if (_disposed)
                     {
                         return;

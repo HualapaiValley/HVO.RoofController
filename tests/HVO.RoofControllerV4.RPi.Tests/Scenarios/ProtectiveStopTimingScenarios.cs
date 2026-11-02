@@ -30,6 +30,37 @@ public sealed class ProtectiveStopTimingScenarios
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
+    [CommissioningCheck("C7", "8")]
+    public async Task AnIdlePlant_YieldsToAnOverdueStop_WithoutAFalseInputFailure()
+    {
+        using var rig = await TimingPlant.StartAsync();
+        var sync = typeof(RoofControllerServiceV4).GetField("_syncLock", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(rig.Controller)!;
+        var stop = new Thread(() => rig.Controller.Stop());
+        try
+        {
+            lock (sync)
+            {
+                stop.Start();
+                stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+                rig.Controller.RunSupervisionCycle();
+                var status = rig.Controller.GetCurrentStatusSnapshot();
+                status.ConsecutiveInputReadFailures.Should().Be(0);
+                status.LastError.Should().BeNull();
+            }
+        }
+        finally
+        {
+            if (stop.ThreadState != System.Threading.ThreadState.Unstarted) stop.Join(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            await WaitForDeferredStopsAsync(rig.Controller);
+        }
+
+        rig.Controller.GetCurrentStatusSnapshot().ConsecutiveInputReadFailures.Should().Be(0);
+        rig.Controller.GetCurrentStatusSnapshot().LastError.Should().BeNull();
+        AssertStoppedPlant(rig);
+    }
+
+    [TestMethod]
     [CommissioningCheck("C3", "6")]
     public Task ALimitEdge_AfterAnOverdueQueuedStop_VerifiesOffBeforeReleasingTheMonitor()
         => EdgeAfterOverdueStopAsync(driveFault: false);

@@ -485,6 +485,7 @@ public partial class RoofControllerServiceV4
         Task<bool> retry;
         lock (_syncLock)
         {
+            using var appliedFence = pendingFence;
             if (_disposed)
             {
                 return _relayRegisterState == RoofRelayRegisterState.Unverified

@@ -11,12 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Limit and drive-fault edges take priority over a supervision cycle's remaining routine HAT reads and LEDs (#231).
   Pending protective requests retain their 2 s arrival deadline across section entry and queued work. A fresh
-  protective stop retains its own deadline for all-off and verification, even when another request is overdue.
-  Slow but healthy routine reads alone still do not stop motion or latch a fault. Idle all-off sequences for a relay
-  mismatch or repeated failed relay reads also have the stop bound. A stop or idle all-off re-run that cannot verify within
-  that bound latches `RelayVerificationFailed`, even when each transfer fits its own 1.5 s limit; a drive-fault latch
-  escalates to that reason. All-off work continues until verified, and the latch then requires explicit ClearFault.
-  Recovery logs no longer claim the normal 1.5 s limit was exceeded when the stop bound cut an access sooner.
+  protective stop retains its own deadline for all-off and verification, even when another request is overdue. Slow
+  but healthy routine reads alone still do not stop motion or latch a fault. Idle all-off sequences for a relay
+  mismatch or repeated failed relay reads also have the stop bound. A stop or idle all-off re-run that cannot verify
+  within that bound latches `RelayVerificationFailed`, even when each transfer fits its own 1.5 s limit; a drive-fault
+  latch escalates to that reason. All-off work continues until verified, and the latch then requires explicit
+  ClearFault. Recovery logs no longer claim the normal 1.5 s limit was exceeded when the stop bound cut an access
+  sooner. Idle supervision yields to pending stops without reporting an input-read failure for work it skipped.
 
 - `hvo-roof alpaca grant` now checks for a controlling foreground terminal with all three standard streams on the
   same tty, rejects known automation markers, and requires the command kind plus a fresh displayed value for both
