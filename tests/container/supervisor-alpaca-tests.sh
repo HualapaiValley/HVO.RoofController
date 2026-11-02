@@ -3,7 +3,7 @@
 
 wait_all_running() {
   wait_both_running && wait_until 5 "Alpaca running" state_is .alpaca.state running &&
-    wait_until 5 "Alpaca stand-in started" test -s "${FAKE_DIR}/alpaca.pid"
+    wait_until 5 "Alpaca signal handlers ready" stand_in_ready alpaca
 }
 
 alpaca_env() { tr '\0' '\n' <"${FAKE_DIR}/alpaca.env"; }
