@@ -30,8 +30,8 @@ internal sealed class CommissioningCheckAttribute(string check, string? step = n
 internal static class Scenario
 {
     /// <summary>
-    /// The category of the commissioning scenarios. They start the whole host against the emulated plant and take
-    /// seconds each, so the unit test step leaves them out and the scenario job runs them.
+    /// The category of the commissioning scenarios. Most start the whole host against the emulated plant; duration
+    /// boundaries use the deterministic plant harness. The unit test step leaves them out and the scenario job runs them.
     /// </summary>
     public const string Category = "Scenario";
 

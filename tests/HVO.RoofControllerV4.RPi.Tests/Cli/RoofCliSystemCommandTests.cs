@@ -14,6 +14,7 @@ using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.RPi.Tests.Versioning;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Moq;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
@@ -250,13 +251,18 @@ public sealed class RoofCliSystemCommandTests
         rig.UseApiKey(TestApiKeys.Admin);
         rig.Input.Enqueue("y");
 
+        // An accepted restart can dispose the provider before the caller reads the response.
+        var services = host.Services;
+        var signal = services.GetRequiredService<RoofRestartSignal>();
+        var lifetime = services.GetRequiredService<IHostApplicationLifetime>();
+
         var result = await rig.RunAsync("restart");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Out.Should().Be(Restarting + Environment.NewLine + "'hvo-roof health --probe ready' says when it is back." + Environment.NewLine);
         host.RoofService.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.Once());
-        var signal = host.Services.GetRequiredService<RoofRestartSignal>();
-        await ClientTestSupport.WaitUntilAsync(() => signal.Requested, "the restart to be requested");
+        await ClientTestSupport.WaitForRestartDisposalAsync(services, lifetime);
+        await ClientTestSupport.WaitUntilAsync(() => signal.Requested && lifetime.ApplicationStopping.IsCancellationRequested, "the restart to be requested");
     }
 
     [TestMethod]
@@ -336,13 +342,18 @@ public sealed class RoofCliSystemCommandTests
         rig.UseApiKey(TestApiKeys.Admin);
         files.WriteHandEdit("{ \"RoofControllerOptionsV4\": { \"OpenRelayId\": 2, \"CloseRelayId\": 1 } }");
 
+        // An accepted restart can dispose the provider before the caller reads the response.
+        var services = host.Services;
+        var signal = services.GetRequiredService<RoofRestartSignal>();
+        var lifetime = services.GetRequiredService<IHostApplicationLifetime>();
+
         var result = await rig.RunAsync("restart", "--force", "--confirm-safety-critical");
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Out.Should().StartWith(Restarting);
         roof.Mock.Verify(service => service.Stop(RoofControllerStopReason.HostShutdown), Times.Once());
-        var signal = host.Services.GetRequiredService<RoofRestartSignal>();
-        await ClientTestSupport.WaitUntilAsync(() => signal.Requested, "the restart to be requested");
+        await ClientTestSupport.WaitForRestartDisposalAsync(services, lifetime);
+        await ClientTestSupport.WaitUntilAsync(() => signal.Requested && lifetime.ApplicationStopping.IsCancellationRequested, "the restart to be requested");
     }
 
     // ---- setup: saving ------------------------------------------------------------------------------------------------

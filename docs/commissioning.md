@@ -18,7 +18,7 @@ assumption of its own; `SmVectorAssumptions` and `PlantDocumentedFiguresTests` h
 
 | Runs | Covers | Command (the `dotnet` commands run from `src/`) |
 |---|---|---|
-| `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
+| `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant; C5 steps 2 and 3 run the controller and HAT library on a manual clock. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
 | `Browser` tests | C9 step 4 and C15, plus the web UI in Chromium on phones, tablets and a desktop window | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after building the tests (`dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests`) and installing Chromium once from that build with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium` (without `--with-deps` when its system libraries are installed) |
 | [Container scenarios](emulator.md#container-scenarios) | C11 in a real container (with the container's supervisor), C12, and the move between Compose and the deploy script, on real Docker | `tests/emulator/deploy-scenarios.sh` (from the repository root) |
 | Nightly soak | C14 for two hours. Its invariant results go to the run summary and an artifact. | `HVO_SOAK_DURATION=02:00:00 HVO_SOAK_RESULTS_DIR="$PWD/soak" dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Soak` |
@@ -253,6 +253,10 @@ moved. The emulated HAT reports both.
   setting depends on it. The emulated drive trips as the manual documents, and the controller latches `DriveFault`.
 
 ### C5. ClearFault pulse length
+
+Steps 2 and 3 use the production controller and HAT library with the emulated plant on a manual clock, so CPU
+scheduling cannot turn the deliberately short pulse into a long one. The other C5 scenarios use the full HTTP host
+and measure its real-time relay contact pulses.
 
 The API accepts `POST .../ClearFault?pulseMs=N`, with N from 50 to 2000 (default 250). The hardware overview, section
 8.3, recommends about 100-300 ms. The scenarios measure RLY3 on the emulated relay's contact.

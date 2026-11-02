@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using HVO.Iot.Devices.Iot.Devices.Sequent;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
@@ -19,6 +20,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
@@ -348,11 +350,18 @@ internal sealed class EmulatedRoofRig : IAsyncDisposable
 /// <summary>
 /// The production host with the settings given and the test API keys. Nothing is replaced; without
 /// <paramref name="consoleLog"/> the host's console log provider is removed. Disposing it also disposes the rate
-/// limiters its pipeline made (<see cref="PipelineRateLimiters"/>), so a stopped host leaves the heap.
+/// limiters its pipeline made (<see cref="PipelineRateLimiters"/>), so a stopped host leaves the heap, and waits for
+/// the entry point's service disposal before the rig closes the emulator.
 /// </summary>
-internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, string environment, RecordingLoggerProvider logs, bool consoleLog = true) : WebApplicationFactory<Program>
+internal sealed class EmulatedRoofApp(
+    Dictionary<string, string?> settings,
+    string environment,
+    RecordingLoggerProvider logs,
+    bool consoleLog = true,
+    Action<IServiceCollection>? configureServices = null) : WebApplicationFactory<Program>
 {
     private IServer? _server;
+    private HostDisposalCompletion? _hostDisposal;
 
     /// <summary>The address every in-memory request comes from; null leaves the test server's.</summary>
     public System.Net.IPAddress? RemoteAddress { get; init; }
@@ -364,6 +373,14 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
         var limiters = _server is null ? [] : PipelineRateLimiters.Find(_server);
         _server = null;
         await base.DisposeAsync();
+        if (_hostDisposal is { } disposal)
+        {
+            // Program.Run and the factory both dispose the same provider. The provider marks itself disposed before
+            // awaiting its services, so the factory's second call can finish while Program.Run still disposes the
+            // controller. Keep the emulator available until the controller's final all-off/read-back has finished.
+            await disposal.Completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
         foreach (var limiter in limiters)
         {
             await limiter.DisposeAsync();
@@ -373,6 +390,7 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
     protected override IHost CreateHost(IHostBuilder builder)
     {
         var host = base.CreateHost(builder);
+        _hostDisposal = host.Services.GetRequiredService<HostDisposalCompletion>();
         _server = host.Services.GetRequiredService<IServer>();
         return host;
     }
@@ -407,6 +425,24 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
 
         builder.UseEnvironment(environment);
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(values));
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<HostDisposalCompletion>();
+            // Program's entry point may start the host before CreateHost returns. Resolve the completion marker
+            // inside the original HAT factory, so reverse-order disposal always reaches it after the HAT and
+            // controller, independent of which thread starts or disposes the host. The HAT itself is unchanged.
+            var hatFactory = services.Single(service => service.ServiceType == typeof(IFourRelayFourInputHat)).ImplementationFactory!;
+            services.Replace(ServiceDescriptor.Singleton<IFourRelayFourInputHat>(provider =>
+            {
+                provider.GetRequiredService<HostDisposalCompletion>();
+                return (IFourRelayFourInputHat)hatFactory(provider);
+            }));
+        });
+        if (configureServices is not null)
+        {
+            builder.ConfigureServices(configureServices);
+        }
+
         if (RemoteAddress is { } remote)
         {
             builder.ConfigureServices(services => services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter>(new RemoteAddressFilter(remote)));
@@ -431,6 +467,13 @@ internal sealed class EmulatedRoofApp(Dictionary<string, string?> settings, stri
 
             logging.AddProvider(logs);
         });
+    }
+
+    private sealed class HostDisposalCompletion : IDisposable
+    {
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Dispose() => Completed.TrySetResult();
     }
 }
 
