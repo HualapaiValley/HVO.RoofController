@@ -970,15 +970,27 @@ internal sealed partial class FakeMachine : ICommandRunner, IDisposable
     }
 
     /// <summary>
-    /// <paramref name="text"/> with the random names in it (this machine's root and the installer's work folders, GUIDs in
-    /// hex) replaced, so a check that a short secret is not shown (a 4-digit PIN) never matches one inside them.
+    /// <paramref name="text"/> with known random names (this machine's root, installer work folders and atomic-file
+    /// suffixes, and kiosk identity GUID fields) replaced, so a short-secret check cannot match a PIN inside them.
     /// </summary>
     public string WithoutRandomNames(string text)
-        => InstallerWorkFolder().Replace(text.Replace(Root, "<root>", StringComparison.Ordinal), "hvo-roof-install-<random>");
+    {
+        var normalized = InstallerWorkFolder().Replace(text.Replace(Root, "<root>", StringComparison.Ordinal), "hvo-roof-install-<random>");
+        normalized = InstallerTemporaryFile().Replace(normalized, "<random>");
+        return KioskIdentityGuid().Replace(normalized, "${prefix}<random>");
+    }
 
     // A work folder's GUID only: exactly 32 hex digits, not the start of a longer hex run.
     [GeneratedRegex("hvo-roof-install-[0-9a-f]{32}(?![0-9a-f])")]
     private static partial Regex InstallerWorkFolder();
+
+    // Only the exact GUID suffix of an atomic filename; do not hide an unrelated key or a longer hex run.
+    [GeneratedRegex("(?<=\\.)[0-9a-f]{32}(?=\\.tmp(?:$|[^a-zA-Z0-9]))")]
+    private static partial Regex InstallerTemporaryFile();
+
+    // The commissioning document's random IDs and stamps, retaining the surrounding JSON and all secret fields.
+    [GeneratedRegex("(?<prefix>\"(?:id|principalId|ownerStamp|stamp)\"\\s*:\\s*\")[0-9a-f]{32}(?=\")")]
+    private static partial Regex KioskIdentityGuid();
 
     /// <summary>Every file under the machine's root, as text: for proving a secret is in none of them.</summary>
     public string AllText()

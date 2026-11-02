@@ -14,6 +14,45 @@ namespace HVO.RoofControllerV4.RPi.Tests.Installer;
 public sealed class FakeMachinePortabilityTests
 {
     [TestMethod]
+    [DataRow("/etc/hvo-roof/settings.json.", ".tmp")]
+    [DataRow("\"id\": \"", "\"")]
+    [DataRow("\"principalId\":\"", "\"")]
+    [DataRow("\"ownerStamp\" : \"", "\"")]
+    [DataRow("\"stamp\": \"", "\"")]
+    public void RandomNames_NormalizesAtomicFileAndKioskGuids_ThatContainASyntheticPin(string before, string after)
+    {
+        using var machine = new FakeMachine();
+        const string guid = "aabbccdd9081eeff0011223344556677";
+        var probe = before + guid + after;
+
+        // The PIN check used to match the synthetic digits inside this otherwise unrelated GUID.
+        machine.WithoutRandomNames(probe).Contains("9081", StringComparison.Ordinal).Should().BeFalse();
+        machine.WithoutRandomNames(probe).Should().Be(before + "<random>" + after);
+    }
+
+    [TestMethod]
+    public void RandomNames_PreservesActualPinsAndUnrelatedOrIncompleteHexValues()
+    {
+        using var machine = new FakeMachine();
+        const string guid = "aabbccdd9081eeff0011223344556677";
+        string[] probes =
+        [
+            "PIN: 9081",
+            "\"pin\": \"9081\"",
+            "/etc/hvo-roof/settings.json.9081.tmp",
+            "/etc/hvo-roof/settings.json." + guid + "a.tmp",
+            "/etc/hvo-roof/settings.json." + guid + ".tmpother",
+            "hvo-roof-install-" + guid + "a",
+            "\"principalId\":\"" + guid + "a\"",
+            "\"apiKey\":\"" + guid + "\"",
+            "a plain hex value: " + guid
+        ];
+
+        foreach (var probe in probes)
+            machine.WithoutRandomNames(probe).Should().Be(probe);
+    }
+
+    [TestMethod]
     [DataRow("rename")]
     [DataRow("unlink")]
     [DataRow("replace")]

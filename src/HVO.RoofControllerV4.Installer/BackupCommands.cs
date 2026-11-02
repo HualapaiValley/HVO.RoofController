@@ -52,8 +52,15 @@ internal static class BackupCommands
         yield return Restore(host);
     }
 
+    internal static Option<string?> PassphraseFileOption() => new("--passphrase-file")
+    {
+        Description = "Encrypt a backup, or unlock an encrypted restore, with the single UTF-8 line in this root-owned 0600/0400 file. Keep it separately from the archive.",
+        HelpName = "FILE"
+    };
+
     private static Command Backup(InstallerHost host)
     {
+        var passphrase = PassphraseFileOption();
         var output = new Option<string?>("--output")
         {
             Description = $"The file to write, which must not be there. Without it, a new file in {DefaultFolder}.",
@@ -65,12 +72,14 @@ internal static class BackupCommands
             + "certificate and certificate authority, its people and settings, the kiosk's device key and settings, and the record "
             + "of what is installed. restore puts them back. Keep a copy off the Pi, where only you can read it.");
         backup.Options.Add(output);
-        backup.SetAction((parseResult, token) => Installer.GuardAsync(host, () => BackupAsync(host, parseResult.GetValue(output), token), token));
+        backup.Options.Add(passphrase);
+        backup.SetAction((parseResult, token) => Installer.GuardAsync(host, () => BackupAsync(host, parseResult.GetValue(output), parseResult.GetValue(passphrase), token), token));
         return backup;
     }
 
     private static Command Restore(InstallerHost host)
     {
+        var passphrase = PassphraseFileOption();
         var file = new Argument<string>("FILE") { Description = "The backup to restore, which only root may read." };
         var replace = new Option<bool>("--replace")
         {
@@ -87,14 +96,15 @@ internal static class BackupCommands
         restore.Options.Add(replace);
         restore.Options.Add(plan);
         restore.Options.Add(release);
+        restore.Options.Add(passphrase);
         restore.SetAction((parseResult, token) => Installer.GuardAsync(
             host,
-            () => RestoreAsync(host, parseResult.GetValue(file)!, parseResult.GetValue(replace), parseResult.GetValue(plan), parseResult.GetValue(release), token),
+            () => RestoreAsync(host, parseResult.GetValue(file)!, parseResult.GetValue(replace), parseResult.GetValue(plan), parseResult.GetValue(release), parseResult.GetValue(passphrase), token),
             token));
         return restore;
     }
 
-    private static async Task<int> BackupAsync(InstallerHost host, string? output, CancellationToken cancellationToken)
+    private static async Task<int> BackupAsync(InstallerHost host, string? output, string? passphraseFile, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         NeedsRootOnLinux(machine, "backup");
@@ -104,10 +114,12 @@ internal static class BackupCommands
             host.Version,
             host.Time,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-        var written = await WriteAsync(host, session, output, cancellationToken).ConfigureAwait(false);
+        var written = await WriteAsync(host, session, output, cancellationToken, passphraseFile).ConfigureAwait(false);
         host.Out.WriteLine();
-        host.Out.WriteLine($"Keep a copy of {written} off this machine, where only you can read it: it holds the controller's secrets, "
-            + "its certificate authority's key and the kiosk's device key. Anyone with it can act as the controller.");
+        host.Out.WriteLine(passphraseFile is null
+            ? $"Keep a copy of {written} off this machine, where only you can read it: it holds the controller's secrets, "
+                + "its certificate authority's key and the kiosk's device key. Anyone with it can act as the controller."
+            : $"Keep a copy of {written} off this machine, where only you can read it. It is encrypted: keep its passphrase separately; without it the backup cannot be restored.");
         return (int)InstallerExitCode.Success;
     }
 
@@ -117,8 +129,9 @@ internal static class BackupCommands
     /// the backup once it is whole, and made durable (the archive, then its folder, synced) before it returns; a backup that
     /// fails leaves nothing.
     /// </summary>
-    internal static async Task<string> WriteAsync(InstallerHost host, InstallerSession session, string? output, CancellationToken cancellationToken)
+    internal static async Task<string> WriteAsync(InstallerHost host, InstallerSession session, string? output, CancellationToken cancellationToken, string? passphraseFile = null)
     {
+        using var encryption = await BackupEncryption.LoadAsync(session.Machine, passphraseFile, cancellationToken).ConfigureAwait(false);
         var now = host.Time.GetUtcNow();
         var written = await WriteArchiveAsync(
             session.Machine,
@@ -127,8 +140,9 @@ internal static class BackupCommands
             InstallerSession.RoofVersion(host.Version),
             session.Survey.SystemRecord?.Version,
             now,
-            () => OutputPathAsync(session.Machine, session.Survey.HostName, now, output, cancellationToken),
-            cancellationToken).ConfigureAwait(false);
+            () => OutputPathAsync(session.Machine, session.Survey.HostName, now, output, cancellationToken, encrypted: encryption is not null),
+            cancellationToken,
+            encryption: encryption).ConfigureAwait(false);
         var entries = written.Entries;
         var files = entries.Count(entry => entry.Type == BackupEntry.File);
         var folders = entries.Count - files;
@@ -167,7 +181,8 @@ internal static class BackupCommands
         DateTimeOffset now,
         Func<Task<string>> output,
         CancellationToken cancellationToken,
-        bool storesRequired = false)
+        bool storesRequired = false,
+        BackupEncryption? encryption = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(log);
@@ -203,30 +218,49 @@ internal static class BackupCommands
             entries,
             absent);
         var partial = path + ".partial";
+        var created = false;
         try
         {
             var stream = machine.CreateNew(partial, Modes.PrivateFile);
+            created = true;
             await using (stream.ConfigureAwait(false))
             {
-                var gzip = new GZipStream(stream, CompressionLevel.Optimal, leaveOpen: true);
-                await using (gzip.ConfigureAwait(false))
+                // Encrypt in memory so an encrypted backup never leaves a plaintext temporary archive on disk.
+                using var plaintext = encryption is null ? null : new MemoryStream();
+                var payload = (Stream?)plaintext ?? stream;
+                try
                 {
-                    var tar = new TarWriter(gzip, TarEntryFormat.Pax, leaveOpen: true);
-                    await using (tar.ConfigureAwait(false))
+                    var gzip = new GZipStream(payload, CompressionLevel.Optimal, leaveOpen: true);
+                    await using (gzip.ConfigureAwait(false))
                     {
-                        await WriteEntryAsync(tar, ManifestName, Modes.PrivateFile, now, JsonSerializer.SerializeToUtf8Bytes(manifest, InstallerJson.Options), cancellationToken).ConfigureAwait(false);
-                        foreach (var entry in entries)
+                        var tar = new TarWriter(gzip, TarEntryFormat.Pax, leaveOpen: true);
+                        await using (tar.ConfigureAwait(false))
                         {
-                            await WriteEntryAsync(tar, entry.Path.TrimStart('/'), entry.FileMode, now, entry.Content, cancellationToken).ConfigureAwait(false);
+                            await WriteEntryAsync(tar, ManifestName, Modes.PrivateFile, now, JsonSerializer.SerializeToUtf8Bytes(manifest, InstallerJson.Options), cancellationToken).ConfigureAwait(false);
+                            foreach (var entry in entries)
+                            {
+                                await WriteEntryAsync(tar, entry.Path.TrimStart('/'), entry.FileMode, now, entry.Content, cancellationToken).ConfigureAwait(false);
+                            }
                         }
                     }
+
+                    if (encryption is not null)
+                    {
+                        var encrypted = encryption.Encrypt(plaintext!.GetBuffer().AsSpan(0, checked((int)plaintext.Length)), cancellationToken);
+                        if (encrypted.Length > MaxBytes) throw new InstallerRefusedException("The encrypted backup exceeds its maximum size. Nothing was written.");
+                        await stream.WriteAsync(encrypted, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext.GetBuffer());
                 }
 
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 stream.Flush(flushToDisk: true);
             }
 
-            await ReadBackAsync(machine, partial, path, cancellationToken).ConfigureAwait(false);
+            await ReadBackAsync(machine, partial, path, cancellationToken, encryption).ConfigureAwait(false);
             // Durable before anything relies on it (an upgrade's record names it, a purge removes what it holds): the archive
             // synced, renamed, then its folder synced. One whose new name cannot be made durable is taken away again.
             machine.SetMode(partial, Modes.PrivateFile);
@@ -234,7 +268,7 @@ internal static class BackupCommands
         }
         finally
         {
-            if (machine.FileExists(partial))
+            if (created && machine.FileExists(partial))
             {
                 machine.DeleteFile(partial);
             }
@@ -250,14 +284,23 @@ internal static class BackupCommands
     }
 
     // The archive just written, read as restore reads it: a backup restore would refuse fails now, not when it is needed.
-    private static async Task ReadBackAsync(InstallerMachine machine, string partial, string path, CancellationToken cancellationToken)
+    private static async Task ReadBackAsync(InstallerMachine machine, string partial, string path, CancellationToken cancellationToken, BackupEncryption? encryption = null)
     {
         try
         {
             var stream = machine.OpenRead(partial) ?? throw new InstallerException($"{partial} went while it was written.");
             await using (stream.ConfigureAwait(false))
             {
-                await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+                if (encryption is null)
+                    await ReadArchiveAsync(stream, path, cancellationToken).ConfigureAwait(false);
+                else
+                {
+                    using var copy = new MemoryStream();
+                    await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+                    var plaintext = encryption.Decrypt(copy.GetBuffer().AsSpan(0, checked((int)copy.Length)), cancellationToken);
+                    try { await ParseAsync(plaintext, path, cancellationToken).ConfigureAwait(false); }
+                    finally { CryptographicOperations.ZeroMemory(plaintext); }
+                }
             }
         }
         catch (InstallerRefusedException error)
@@ -581,12 +624,12 @@ internal static class BackupCommands
         return null;
     }
 
-    private static async Task<string> OutputPathAsync(InstallerMachine machine, string hostName, DateTimeOffset now, string? output, CancellationToken cancellationToken)
+    private static async Task<string> OutputPathAsync(InstallerMachine machine, string hostName, DateTimeOffset now, string? output, CancellationToken cancellationToken, bool encrypted = false)
     {
         if (output is null)
         {
             await MakeDefaultFolderAsync(machine, cancellationToken).ConfigureAwait(false);
-            return DefaultPath(hostName, now);
+            return DefaultPath(hostName, now) + (encrypted ? ".enc" : string.Empty);
         }
 
         var path = Path.GetFullPath(output, machine.CurrentDirectory);
@@ -620,7 +663,7 @@ internal static class BackupCommands
         return path;
     }
 
-    private static void RefuseRemovedOutput(string path)
+    internal static void RefuseRemovedOutput(string path)
     {
         if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).Append(KioskSteps.StateFolder).Append(KioskSteps.CacheFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
         {
@@ -655,13 +698,27 @@ internal static class BackupCommands
         }
     }
 
-    private static async Task<int> RestoreAsync(InstallerHost host, string file, bool replace, bool planOnly, string? releaseFolder, CancellationToken cancellationToken)
+    private static async Task<int> RestoreAsync(InstallerHost host, string file, bool replace, bool planOnly, string? releaseFolder, string? passphraseFile, CancellationToken cancellationToken)
     {
         var machine = host.Machine;
         NeedsRootOnLinux(machine, "restore");
         var release = Installer.Release(host, releaseFolder);
         var path = Path.GetFullPath(file, machine.CurrentDirectory);
-        var backup = await ReadAsync(machine, path, cancellationToken).ConfigureAwait(false);
+        var archive = await ReadPrivateAsync(machine, path, cancellationToken).ConfigureAwait(false);
+        ReadBackup backup;
+        if (BackupEncryption.IsEncrypted(archive))
+        {
+            using var encryption = await BackupEncryption.LoadAsync(machine, passphraseFile, cancellationToken).ConfigureAwait(false)
+                ?? throw new InstallerRefusedException("This is an encrypted backup: give --passphrase-file FILE, the root-owned 0600/0400 file containing its passphrase. Nothing was restored.");
+            var plaintext = encryption.Decrypt(archive, cancellationToken);
+            try { backup = await ParseAsync(plaintext, path, cancellationToken).ConfigureAwait(false); }
+            finally { CryptographicOperations.ZeroMemory(plaintext); }
+        }
+        else
+        {
+            if (passphraseFile is not null) throw new InstallerUsageException("This backup is not encrypted: restore it without --passphrase-file.");
+            backup = await ParseAsync(archive, path, cancellationToken).ConfigureAwait(false);
+        }
         RefusePendingCommissioning(backup);
         var record = backup.Record;
         var version = InstallerSession.RoofVersion(host.Version);
@@ -978,7 +1035,7 @@ internal static class BackupCommands
     /// (<see cref="ParseAsync"/>), never the path opened again. A file in <see cref="DefaultFolder"/> is read only while
     /// that folder is trusted (<see cref="FolderProblemAsync"/>).
     /// </summary>
-    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken)
+    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, int maxBytes = (int)MaxBytes)
     {
         ArgumentNullException.ThrowIfNull(machine);
         if (Path.GetDirectoryName(path) == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
@@ -1007,9 +1064,9 @@ internal static class BackupCommands
                 throw NotPrivate(path, opened.Kind, opened.Owner, openedMode);
             }
 
-            if (stream.Length > MaxBytes)
+            if (stream.Length > maxBytes)
             {
-                throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+                throw Unreadable(path, $"it is more than {maxBytes} bytes");
             }
 
             using var copy = new MemoryStream();
@@ -1017,9 +1074,9 @@ internal static class BackupCommands
             int read;
             while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
             {
-                if (copy.Length + read > MaxBytes)
+                if (copy.Length + read > maxBytes)
                 {
-                    throw Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB");
+                    throw Unreadable(path, $"it is more than {maxBytes} bytes");
                 }
 
                 copy.Write(buffer, 0, read);

@@ -37,6 +37,220 @@ public sealed class InstallerBackupTests
 
     private static readonly InstallAnswers ControllerAndKiosk = new() { Roles = [InstallRole.Controller, InstallRole.Kiosk] };
 
+    private const string PassphraseFile = "/root/backup-passphrase";
+
+    private static void Passphrase(FakeMachine pi, string path = PassphraseFile)
+    {
+        pi.Write(path, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) + "\n");
+        File.SetUnixFileMode(pi.OnDisk(path), Modes.PrivateFile);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task EncryptedBackup_ThenPurgeAndRestore_PreservesPrivateFilesAndAlpacaIdentities(bool duringPurge)
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi);
+        pi.Folder("/srv/keep");
+        const string identities = "{\"dome/0\":\"00000000-0000-0000-0000-000000000001\",\"safetymonitor/0\":\"00000000-0000-0000-0000-000000000002\"}";
+        pi.Write(ControllerLayout.System.AlpacaDevicesFile, identities);
+        var paths = new[] { ManagedSecret, Ca, Certificate, KioskSteps.DeviceKeyFile, ControllerLayout.System.AlpacaDevicesFile };
+        var originals = paths.ToDictionary(path => path, path => File.ReadAllBytes(pi.OnDisk(path)));
+        pi.TrackDurability(Kept);
+        bool? durableBeforeRemoval = null;
+        pi.DuringDeploy = () => durableBeforeRemoval ??= pi.SurvivesPowerLoss(Kept);
+
+        var backup = duringPurge
+            ? await pi.RunAsync("uninstall", "--purge", "--yes", "--backup", Kept, "--passphrase-file", PassphraseFile, "--confirm", "roofpi")
+            : await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile);
+
+        backup.ExitCode.Should().Be(0, backup.ToString());
+        pi.Mode(Kept).Should().Be(Modes.PrivateFile);
+        pi.SurvivesPowerLoss(Kept).Should().BeTrue();
+        var ciphertext = File.ReadAllBytes(pi.OnDisk(Kept));
+        ciphertext.Take(2).Should().NotEqual(new byte[] { 0x1f, 0x8b }, "an opted-in backup must be encrypted even with a .tar.gz filename");
+        foreach (var bytes in originals.Values)
+            Assert.IsFalse(ciphertext.AsSpan().IndexOf(bytes) >= 0, "The encrypted archive contains a plaintext file.");
+        if (!duringPurge)
+        {
+            var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi");
+            purge.ExitCode.Should().Be(0, purge.ToString());
+        }
+        durableBeforeRemoval.Should().BeTrue();
+        pi.Exists("/etc/hvo-roof").Should().BeFalse();
+        pi.Exists(ControllerLayout.System.AlpacaData).Should().BeFalse();
+
+        var restore = await RestoreAsync(pi, Kept, "--passphrase-file", PassphraseFile);
+
+        restore.ExitCode.Should().Be(0, restore.ToString());
+        foreach (var path in paths)
+            Assert.IsTrue(File.ReadAllBytes(pi.OnDisk(path)).SequenceEqual(originals[path]), $"Restore changed {path}.");
+        pi.Mode(ManagedSecret).Should().Be(Modes.PrivateFile);
+        pi.Mode(ControllerLayout.System.AlpacaDevicesFile).Should().Be(Modes.File);
+        var secret = pi.Read(PassphraseFile).TrimEnd('\n');
+        foreach (var text in new[] { backup.ToString(), restore.ToString(), pi.Read(InstallPaths.SystemLog), pi.Read(InstallPaths.SystemRecord) })
+            Assert.IsFalse(text.Contains(secret, StringComparison.Ordinal), "The passphrase reached output, the log or the record.");
+        pi.Asked.Should().BeEmpty("file input needs no secret prompt");
+        pi.Unexpected.Should().BeEmpty();
+    }
+
+    [TestMethod]
+    public async Task EncryptedBackup_DefaultNameAndRandomness_AndRestorePlanChangesNothing()
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi);
+        var backup = await pi.RunAsync("backup", "--passphrase-file", PassphraseFile);
+        backup.ExitCode.Should().Be(0, backup.ToString());
+        var encrypted = DefaultBackup + ".enc";
+        pi.Exists(encrypted).Should().BeTrue();
+        pi.Exists(DefaultBackup).Should().BeFalse();
+        pi.Folder("/srv/keep");
+        (await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile)).ExitCode.Should().Be(0);
+        Assert.IsFalse(File.ReadAllBytes(pi.OnDisk(encrypted)).SequenceEqual(File.ReadAllBytes(pi.OnDisk(Kept))), "Each encryption needs a fresh salt and nonce.");
+        (await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi")).ExitCode.Should().Be(0);
+        var before = pi.Snapshot();
+
+        var plan = await RestoreAsync(pi, encrypted, "--plan", "--passphrase-file", PassphraseFile);
+
+        plan.ExitCode.Should().Be(0, plan.ToString());
+        Assert.IsTrue(before.SequenceEqual(pi.Snapshot()), "An encrypted restore plan changed files.");
+    }
+
+    [TestMethod]
+    [DataRow("missing")]
+    [DataRow("wrong")]
+    [DataRow("salt")]
+    [DataRow("nonce")]
+    [DataRow("ciphertext")]
+    [DataRow("tag")]
+    [DataRow("truncated")]
+    public async Task EncryptedRestore_RefusesWithoutAuthentication_BeforeWritingAnything(string damage)
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi);
+        pi.Folder("/srv/keep");
+        var backup = await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile);
+        backup.ExitCode.Should().Be(0, backup.ToString());
+        (await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi")).ExitCode.Should().Be(0);
+        if (damage == "wrong") Passphrase(pi);
+        else if (damage != "missing")
+        {
+            var bytes = File.ReadAllBytes(pi.OnDisk(Kept));
+            // The versioned header ends at the first LF, followed by a 16-byte salt and 12-byte nonce.
+            var header = Array.IndexOf(bytes, (byte)'\n') + 1;
+            var offset = damage switch { "salt" => header, "nonce" => header + 16, "ciphertext" => header + 28, _ => bytes.Length - 1 };
+            bytes[offset] ^= 1;
+            File.WriteAllBytes(pi.OnDisk(Kept), damage == "truncated" ? bytes[..(header + 5)] : bytes);
+        }
+        var before = pi.Snapshot();
+
+        var restore = damage == "missing" ? await RestoreAsync(pi, Kept) : await RestoreAsync(pi, Kept, "--passphrase-file", PassphraseFile);
+
+        restore.ExitCode.Should().Be((int)InstallerExitCode.Refused, restore.ToString());
+        restore.Error.Should().Contain(damage == "missing" ? "--passphrase-file" : "encrypted backup");
+        Assert.IsTrue(before.SequenceEqual(pi.Snapshot()), "An unauthenticated restore changed files.");
+        pi.Exists("/etc/hvo-roof").Should().BeFalse();
+    }
+
+    [TestMethod]
+    [DataRow("missing")]
+    [DataRow("public")]
+    [DataRow("owner")]
+    [DataRow("link")]
+    [DataRow("empty")]
+    [DataRow("multiline")]
+    [DataRow("oversized")]
+    public async Task EncryptedBackup_RefusesUnsafePassphraseFiles_AndPurgeRemovesNothing(string kind)
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi);
+        pi.Folder("/srv/keep");
+        if (kind == "missing") File.Delete(pi.OnDisk(PassphraseFile));
+        if (kind == "public") File.SetUnixFileMode(pi.OnDisk(PassphraseFile), Modes.File);
+        if (kind == "owner") pi.Owners[PassphraseFile] = "pi:pi";
+        if (kind == "link")
+        {
+            File.Move(pi.OnDisk(PassphraseFile), pi.OnDisk(PassphraseFile + ".real"));
+            File.CreateSymbolicLink(pi.OnDisk(PassphraseFile), pi.OnDisk(PassphraseFile + ".real"));
+        }
+        if (kind == "empty") pi.Write(PassphraseFile, "\n");
+        if (kind == "multiline") pi.Write(PassphraseFile, "first\nsecond\n");
+        if (kind == "oversized") pi.Write(PassphraseFile, new string('x', 4097));
+
+        var purge = await pi.RunAsync("uninstall", "--purge", "--yes", "--backup", Kept, "--passphrase-file", PassphraseFile, "--confirm", "roofpi");
+
+        purge.ExitCode.Should().Be((int)InstallerExitCode.Refused, purge.ToString());
+        pi.Exists(Kept).Should().BeFalse();
+        pi.Exists(Kept + ".partial").Should().BeFalse();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
+        pi.Containers.Should().ContainKey(MachineSurveyor.ControllerContainer);
+    }
+
+    [TestMethod]
+    [DataRow("uninstall", "--passphrase-file", PassphraseFile)]
+    [DataRow("uninstall", "--purge", "--no-backup", "--passphrase-file", PassphraseFile)]
+    public async Task EncryptionOptions_CannotBeIgnoredByUninstall(params string[] args)
+    {
+        using var pi = await InstalledPiAsync();
+        var run = await pi.RunAsync(args);
+        run.ExitCode.Should().Be((int)InstallerExitCode.Usage, run.ToString());
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
+    }
+
+    [TestMethod]
+    public async Task EncryptedBackup_DoesNotRemoveAPreexistingPartialFile()
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi);
+        pi.Write(Kept + ".partial", "another run's file");
+
+        var run = await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile);
+
+        run.ExitCode.Should().NotBe(0);
+        pi.Exists(Kept).Should().BeFalse();
+        pi.Read(Kept + ".partial").Should().Be("another run's file");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task EncryptedBackup_FailedVerificationOrSync_LeavesNoArchiveAndDoesNotPurge(bool sync)
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi);
+        pi.Folder("/srv/keep");
+        if (sync) pi.DuringDirectorySync = folder => pi.DirectorySyncFailure = folder == "/srv/keep" ? "Input/output error" : null;
+        else
+        {
+            var record = JsonNode.Parse(pi.Read(InstallPaths.SystemRecord))!;
+            record["version"] = "4.0";
+            pi.Write(InstallPaths.SystemRecord, record.ToJsonString());
+        }
+
+        var run = await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile);
+
+        run.ExitCode.Should().NotBe(0);
+        if (!sync) run.Error.Should().Contain("read it back");
+        pi.Exists(Kept).Should().BeFalse();
+        pi.Exists(Kept + ".partial").Should().BeFalse();
+        pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
+    }
+
+    [TestMethod]
+    [DataRow("/etc/hvo-roof/secrets/backup-password")]
+    [DataRow("/var/lib/hvo-roof/backup-password")]
+    [DataRow("/opt/hvo-roof-kiosk/backup-password")]
+    public async Task EncryptedBackup_RefusesAPassphraseInTheBackupOrPurgeTree(string file)
+    {
+        using var pi = await InstalledPiAsync();
+        Passphrase(pi, file);
+        pi.Folder("/srv/keep");
+        var run = await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", file);
+        run.ExitCode.Should().Be((int)InstallerExitCode.Refused, run.ToString());
+        pi.Exists(Kept).Should().BeFalse();
+    }
+
     [TestMethod]
     public async Task AlpacaDisabled_BackupKeepsTheLegacyAbsenceContract()
     {

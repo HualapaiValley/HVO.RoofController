@@ -1584,11 +1584,43 @@ Backed up 18 files and 8 folders to /root/roofpi.tar.gz (0600, root's):
 Keep a copy of /root/roofpi.tar.gz off this machine, where only you can read it: it holds the controller's secrets, its certificate authority's key and the kiosk's device key. Anyone with it can act as the controller.
 ```
 
-**Where to keep it.** The archive is not encrypted: anyone who reads it can act as the controller, issue certificates
+**Where to keep it.** By default the archive is not encrypted: anyone who reads it can act as the controller, issue certificates
 its clients trust, and sign in as the kiosk. Copy it off the Pi, with `scp` as root or with `sudo cat` over SSH, to a
 place only you can read: an encrypted disk, or a password manager's file store, kept offline. A copy on the Pi alone
 goes with the Pi's SD card. Back up after each change: a new person, a new key, a renewed certificate. Nothing it holds
 is ever printed or logged: only paths and counts.
+
+**Optional encryption (#89).** Add `--passphrase-file FILE` to `backup`, or to `uninstall --purge --backup FILE`.
+The passphrase file must be a regular file owned by root, mode `0600` or `0400`, containing one nonempty UTF-8 line
+(at most 4096 bytes, with an optional final LF or CRLF). Links and files readable by others are refused; the opened
+file is checked too. Keep it outside the folders backed up or removed by uninstall; their symbolic-link aliases
+are refused too. There is no option accepting the passphrase itself on the command line. For example, generate a
+strong passphrase directly into a private file, then back up:
+
+```bash
+sudo sh -c 'umask 077; openssl rand -base64 48 > /root/roof-backup-passphrase'
+sudo hvo-roof-install backup --output /root/roofpi.tar.gz.enc --passphrase-file /root/roof-backup-passphrase
+sudo hvo-roof-install restore /root/roofpi.tar.gz.enc --passphrase-file /root/roof-backup-passphrase --plan
+```
+
+Without `--output`, encrypted backups use `hvo-roof-<host>-<UTC time>.tar.gz.enc` in the same root-only folder.
+An explicit filename is used as given. The archive is still root's and `0600`, checked by decrypting and reading
+back the whole manifest and every file before it is renamed and made durable. Plaintext temporary archives are
+never written. Encryption needs no additional program or package. It uses AES-256-GCM with a fresh 16-byte salt,
+12-byte nonce, 16-byte authentication tag and PBKDF2-HMAC-SHA256 (600,000 iterations). The version 1 envelope is
+the ASCII line `HVO-ROOF-BACKUP-AES256-GCM-v1` followed by LF, the salt, nonce, gzip ciphertext and tag; the entire
+header (line, salt and nonce) is authenticated as associated data. This is the installer's format, read by this
+release or newer, rather than an age or GPG archive. Public-key recipients are not part of this option.
+
+Restore recognises encryption from the contents, regardless of the filename, and explains that it needs
+`--passphrase-file` when none was supplied. File input works without a prompt, including with `--plan`. A wrong
+passphrase, unsupported encryption version or damaged archive is refused before any restored file is written or
+any install starts. Plain `.tar.gz` restores continue to work without the option. Upgrade and rollback's automatic
+backups keep their existing unencrypted format.
+
+**Keep the passphrase separately.** Store a recovery copy in a password manager or another protected place off the
+Pi, separate from the archive and from any media carrying it. Losing it makes the encrypted backup unusable;
+copying it beside the archive defeats the protection. Encryption does not change Roof's root-only ownership rules.
 
 `sudo hvo-roof-install restore FILE` puts a backup back, on a new Pi or on this one after an uninstall, then installs
 what the backup's record says, with this installer's release. Download the installer first ([Getting it](#getting-it)):
@@ -1655,6 +1687,10 @@ the deploy script first. It cannot be undone, so it asks for two more things:
 ```bash
 sudo hvo-roof-install uninstall --purge --backup /root/roofpi.tar.gz --confirm roofpi
 ```
+
+To encrypt that backup, add `--passphrase-file /root/roof-backup-passphrase` and choose a new archive filename.
+An encryption or backup verification failure prevents the purge. `--passphrase-file` requires `--purge --backup FILE`;
+it cannot be combined with `--no-backup`.
 
 ## The record and the log
 
@@ -1896,10 +1932,13 @@ The script checks:
 8. **Backup.** The installer the install put in `/usr/local/sbin` backs up to a folder of the run's own, never
    `RIG_RESULTS_DIR`: the archive is root's and `0600`, its manifest comes first, and it holds the record, the CA, the
    certificate and the keys. No secret is in the output or the log.
-9. **Restore.** `uninstall --purge --no-backup` stops the controller with a verified Stop and removes the containers,
-   their images, the data, the record and the installer. `restore` then puts the backup back and installs from its
-   record: the same keys, CA and certificate, the first admin signing in with the same password, and the time scale
-   of step 5. `upgrade` to the same release then changes nothing.
+9. **Restore.** An encrypted backup is also taken with `--passphrase-file`. `uninstall --purge --backup FILE`
+   with the same option writes another encrypted archive, then stops the controller with a verified Stop and removes
+   the containers, their images, the data, the record and the installer. An encrypted restore plan first proves it
+   changes nothing; `restore --passphrase-file FILE` then puts the purge's backup back and installs from its record:
+   the same keys, CA, certificate and `alpaca-devices.json`, the first admin signing in with the same password, and
+   the time scale of step 5. No passphrase reaches the output, log or record. `upgrade` to the same release then
+   changes nothing.
 10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
     that release, pulling its images from the run's registry. Its `upgrade` shows the new release's upgrade notes and
     hands over to the new installer, which it puts in `/usr/local/sbin` and which loads the new images from their

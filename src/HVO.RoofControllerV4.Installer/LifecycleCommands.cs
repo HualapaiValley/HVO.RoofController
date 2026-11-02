@@ -93,6 +93,7 @@ internal static partial class LifecycleCommands
 
     private static Command Uninstall(InstallerHost host)
     {
+        var passphrase = BackupCommands.PassphraseFileOption();
         var plan = new Option<bool>("--plan") { Description = "Print what it would remove, and remove nothing." };
         var purge = new Option<bool>("--purge")
         {
@@ -118,6 +119,7 @@ internal static partial class LifecycleCommands
         uninstall.Options.Add(plan);
         uninstall.Options.Add(purge);
         uninstall.Options.Add(backup);
+        uninstall.Options.Add(passphrase);
         uninstall.Options.Add(noBackup);
         uninstall.Options.Add(confirm);
         uninstall.Options.Add(yes);
@@ -131,7 +133,8 @@ internal static partial class LifecycleCommands
                     parseResult.GetValue(backup),
                     parseResult.GetValue(noBackup),
                     parseResult.GetValue(confirm),
-                    parseResult.GetValue(yes)),
+                    parseResult.GetValue(yes),
+                    parseResult.GetValue(passphrase)),
                 token),
             token));
         return uninstall;
@@ -366,7 +369,7 @@ internal static partial class LifecycleCommands
         return await RunPlanAsync(host, session, checkedPlan, planOnly, $"release {previous}", "rolling back", cancellationToken).ConfigureAwait(false);
     }
 
-    private sealed record UninstallOptions(bool PlanOnly, bool Purge, string? Backup, bool NoBackup, string? Confirm, bool Yes);
+    private sealed record UninstallOptions(bool PlanOnly, bool Purge, string? Backup, bool NoBackup, string? Confirm, bool Yes, string? PassphraseFile);
 
     /// <summary>
     /// <c>uninstall</c>: what the record says is installed here, removed, once the person agrees (or gave <c>--yes</c>).
@@ -376,6 +379,10 @@ internal static partial class LifecycleCommands
     {
         var machine = host.Machine;
         CertificateCommands.RefuseRootOnMac(machine, "uninstall");
+        if (options.PassphraseFile is not null && (!options.Purge || options.NoBackup || options.Backup is null))
+        {
+            throw new InstallerUsageException("--passphrase-file goes with --purge --backup FILE.");
+        }
         if (!options.Purge && (options.Backup is not null || options.NoBackup || options.Confirm is not null))
         {
             throw new InstallerUsageException("--backup, --no-backup and --confirm go with --purge.");
@@ -489,7 +496,7 @@ internal static partial class LifecycleCommands
 
         if (backup is not null)
         {
-            var written = await BackupCommands.WriteAsync(host, session, backup.Length == 0 ? null : backup, cancellationToken).ConfigureAwait(false);
+            var written = await BackupCommands.WriteAsync(host, session, backup.Length == 0 ? null : backup, cancellationToken, options.PassphraseFile).ConfigureAwait(false);
             host.Out.WriteLine();
             session.Log.Write($"Backed up to {written} before removing the data.");
         }

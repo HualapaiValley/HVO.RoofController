@@ -222,7 +222,7 @@ cleanup() {
         "${folder}/release.json" | xargs -r docker rmi >/dev/null 2>&1
     done
     (( made_interface == 0 )) || sudo -n ip link delete "${interface}" >/dev/null 2>&1
-    sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof "${install_log}" "${installed}" "${installed}.previous" "${upgrade_backups}"
+    sudo -n rm -rf /etc/hvo-roof /var/lib/hvo-roof /var/lib/hvo-roof-alpaca "${install_log}" "${installed}" "${installed}.previous" "${upgrade_backups}"
     [[ -z "${backup_dir}" ]] || sudo -n rm -rf "${backup_dir}"
   fi
   if (( previous_worktree == 1 )); then
@@ -652,9 +652,9 @@ setup() {
   daemon=$(docker info -f '{{.ID}}') || fail "docker cannot reach this machine's Docker daemon"
   [[ -n "${daemon}" && "${daemon}" == "$(sudo -n docker info -f '{{.ID}}' 2>/dev/null)" ]] \
     || fail "sudo reaches another Docker daemon than this shell's, or none: run the scenario where both reach this machine's"
-  if sudo -n test -e /etc/hvo-roof || sudo -n test -e /var/lib/hvo-roof || sudo -n test -e "${install_log}" \
+  if sudo -n test -e /etc/hvo-roof || sudo -n test -e /var/lib/hvo-roof || sudo -n test -e /var/lib/hvo-roof-alpaca || sudo -n test -e "${install_log}" \
     || sudo -n test -e "${installed}"; then
-    fail "/etc/hvo-roof, /var/lib/hvo-roof, ${install_log} or ${installed} exists: this machine has a controller or a rig. Run the scenario where there is none."
+    fail "/etc/hvo-roof, /var/lib/hvo-roof, /var/lib/hvo-roof-alpaca, ${install_log} or ${installed} exists: this machine has a controller or a rig. Run the scenario where there is none."
   fi
   # A purge keeps the backups, which hold a controller's secrets: never the scenario's to remove.
   ! sudo -n test -e "${upgrade_backups}" \
@@ -1317,6 +1317,24 @@ scenario_backup() {
   current_check="backup: one archive only root reads"
   backup_dir=$(sudo -n mktemp -d /var/tmp/hvo-roof-rig-backup.XXXXXX) || fail "could not make a folder for the backup"
   archive="${backup_dir}/rig.tar.gz"
+  encrypted_archive="${backup_dir}/rig.tar.gz.enc"
+  purge_archive="${backup_dir}/purge.tar.gz.enc"
+  backup_passphrase_file="${work}/backup-passphrase"
+  openssl rand -base64 48 | sudo -n sh -c 'umask 077; cat > "$1"' sh "${backup_passphrase_file}"
+  sudo -n cat "${backup_passphrase_file}" >> "${work}/secrets.txt"
+  mode_is 600 "${backup_passphrase_file}"
+  # Exercise #229's dedicated identity file even with the Alpaca listener left off in this rig.
+  sudo -n mkdir -m 755 /var/lib/hvo-roof-alpaca
+  sudo -n python3 - <<'PY'
+import json
+import os
+import uuid
+path = '/var/lib/hvo-roof-alpaca/alpaca-devices.json'
+with open(path, 'x') as output:
+    json.dump({key: str(uuid.uuid4()) for key in ('dome/0', 'safetymonitor/0')}, output)
+os.chmod(path, 0o644)
+PY
+  alpaca_before=$(sudo -n sha256sum /var/lib/hvo-roof-alpaca/alpaca-devices.json)
   keys_sha256 > "${work}/keys-before.txt"
   sudo -n cat "${ca}" > "${work}/ca-backup.crt"
   certificate_before=$(served_fingerprint)
@@ -1329,13 +1347,28 @@ scenario_backup() {
   sudo -n tar -tzf "${archive}" > "${work}/backup-entries.txt" || fail "the backup is not a tar.gz"
   [[ "$(head -n 1 "${work}/backup-entries.txt")" == hvo-roof-backup.json ]] || fail "the backup's first entry is not its manifest"
   local entry
-  for entry in etc/hvo-roof/install.json etc/hvo-roof/ca.crt etc/hvo-roof/https/roof-controller.pfx; do
+  for entry in etc/hvo-roof/install.json etc/hvo-roof/ca.crt etc/hvo-roof/https/roof-controller.pfx var/lib/hvo-roof-alpaca/alpaca-devices.json; do
     grep -qxF "${entry}" "${work}/backup-entries.txt" || fail "the backup lacks ${entry}"
   done
   grep -q '^etc/hvo-roof/secrets/RoofControllerSecurity__ApiKeys__' "${work}/backup-entries.txt" || fail "the backup lacks the controller's keys"
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
   no_secret_in "${work}/backup.txt" "${work}/install-log.txt" "${work}/backup-entries.txt"
   pass "$(grep -oE 'Backed up [0-9]+ files and [0-9]+ folders' "${work}/backup.txt") by the installed ${installed}: root's, 0600, its manifest first; no secret in the output or the log"
+
+  current_check="backup: optional encryption"
+  install_with "${installed}" backup-encrypted backup --output "${encrypted_archive}" --passphrase-file "${backup_passphrase_file}"
+  expect_installed "encrypted backup"
+  expect_output backup-encrypted "It is encrypted"
+  mode_is 600 "${encrypted_archive}"
+  sudo -n python3 - "${encrypted_archive}" <<'PY'
+import sys
+with open(sys.argv[1], 'rb') as archive:
+    assert archive.readline(128) == b'HVO-ROOF-BACKUP-AES256-GCM-v1\n', 'The backup is not encrypted'
+PY
+  sudo -n cat "${install_log}" > "${work}/install-log.txt"
+  sudo -n cat /etc/hvo-roof/install.json > "${work}/record.txt"
+  no_secret_in "${work}/backup-encrypted.txt" "${work}/install-log.txt" "${work}/record.txt"
+  pass "encrypted archive, root's and 0600; no secret in output, log or record"
 }
 
 scenario_restore() {
@@ -1349,7 +1382,7 @@ scenario_restore() {
     "${containers[@]}" 2>/dev/null | sed '/^$/d')
   [[ -n "${volumes}" ]] || fail "${controller} has no volume of its own for the web UI's keys"
   start_relay_monitor
-  install_with "${installed}" purge uninstall --purge --no-backup --confirm "$(hostname)" --yes
+  install_with "${installed}" purge uninstall --purge --backup "${purge_archive}" --passphrase-file "${backup_passphrase_file}" --confirm "$(hostname)" --yes
   expect_installed "uninstall --purge"
   expect_output purge "and removing its data:"
   # shellcheck disable=SC2086 # one argument per image
@@ -1362,16 +1395,22 @@ scenario_restore() {
   records=$(docker volume ls --quiet --filter "name=${controller}-limits" | grep -E "^${controller}-limits(-g[0-9]+)?\$" || true)
   [[ -z "${records}" ]] || fail "the desired limits' records are left: ${records//$'\n'/ }"
   relays_still
+  mode_is 600 "${purge_archive}"
+  sudo -n test ! -e /var/lib/hvo-roof-alpaca || fail "the purge kept Alpaca device identities"
   pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="restore: from the backup"
+  install encrypted-plan restore "${encrypted_archive}" --passphrase-file "${backup_passphrase_file}" --plan --release "${release_dir}"
+  expect_installed "encrypted restore plan"
+  sudo -n test ! -e /etc/hvo-roof || fail "the encrypted restore plan put files back"
   start_relay_monitor
-  install restore restore "${archive}" --release "${release_dir}"
+  install restore restore "${purge_archive}" --passphrase-file "${backup_passphrase_file}" --release "${release_dir}"
   expect_installed "restore"
   expect_output restore "Put back "
   wait_for "the controller" 60 ready
   keys_sha256 > "${work}/keys-after.txt"
   cmp -s "${work}/keys-before.txt" "${work}/keys-after.txt" || fail "the keys, the CA or the certificate are not the backup's"
+  [[ "$(sudo -n sha256sum /var/lib/hvo-roof-alpaca/alpaca-devices.json)" == "${alpaca_before}" ]] || fail "Alpaca device identities are not the backup's"
   [[ "$(served_fingerprint)" == "${certificate_before}" ]] || fail "the controller does not serve the certificate it had before the backup"
   openssl verify -CAfile "${work}/ca-backup.crt" <(served_certificate) >/dev/null || fail "the certificate served does not verify with the backup's CA"
   sign_in
@@ -1381,7 +1420,7 @@ scenario_restore() {
   [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] || fail "${installed} is not the release's installer"
   roof_still
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
-  no_secret_in "${work}/purge.txt" "${work}/restore.txt" "${work}/install-log.txt"
+  no_secret_in "${work}/purge.txt" "${work}/encrypted-plan.txt" "${work}/restore.txt" "${work}/install-log.txt"
   pass "$(grep -oE 'Put back [0-9]+ of the backup.s [0-9]+ files and folders' "${work}/restore.txt"), then installed as its record says: the same keys, CA and certificate, ${admin} signs in with the same password, hatMode Emulated at 20 times real time; relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="restore: again"
