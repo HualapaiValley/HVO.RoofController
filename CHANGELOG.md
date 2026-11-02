@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-11-01
+
 ### Added
 
 - An ASCOM Alpaca server for the roof, phase 1 (#220): `HVO.RoofControllerV4.Alpaca`, a process of its own, off by
