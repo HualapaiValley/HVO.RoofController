@@ -376,8 +376,9 @@ A grant is a person's decision, asked and answered at a terminal: run 'hvo-roof 
 
 On Linux, all three standard streams must be the same tty, the process must be in its foreground process group,
 and the tty's session must be the process's own session. On macOS, the same-tty and controlling foreground process
-group checks apply. Failed or unavailable terminal checks refuse the grant. Output redirection and piping through
-`tee` therefore refuse it too. The checks run again after confirmation, immediately before sending the grant.
+group checks are implemented, but remain untested on macOS; the real-pty regression suite currently runs on Linux
+only. Failed or unavailable terminal checks refuse the grant. Output redirection and piping through `tee` therefore
+refuse it too. The checks run again after confirmation, immediately before sending the grant.
 
 A nonempty `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `TF_BUILD`, `JENKINS_URL`, `TEAMCITY_VERSION`, `EXPECT`,
 `EXPECT_SCRIPT`, `PEXPECT`, `AUTOMATION` or `NONINTERACTIVE` refuses a grant, as do `TERM=dumb` and
@@ -688,6 +689,10 @@ Nothing here needs the Pi, the HAT or the roof.
 - **Commands** run in the test process against the controller's API with a mocked roof. The tests check their output,
   `--json` and exit codes (`tests/HVO.RoofControllerV4.RPi.Tests/Cli`), with a virtual clock for the stale status, the
   REST reads while live status is not connected, and the grace periods after a signal (`RoofCliTerminationTests`).
+- **Grant terminal admission** ([test_grant_terminal.py](../tests/cli/test_grant_terminal.py)) runs the built CLI
+  through real Linux ptys, covering the controlling terminal, foreground process group, all three standard streams
+  and automation markers. It is Linux-only and needs the Debug CLI build, or `HVO_ROOF_CLI` set to a built executable
+  or DLL. `ci.yml` runs it explicitly after the Debug build; script-only jobs skip it when no CLI build is available.
 - **The terminal interface** is drawn on Terminal.Gui's in-memory driver with a virtual clock (`RoofTerminalUiTests`).
   The tests check:
   - Stop on every page and over a prompt;

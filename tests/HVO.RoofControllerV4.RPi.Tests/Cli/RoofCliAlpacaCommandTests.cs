@@ -344,6 +344,47 @@ public sealed class RoofCliAlpacaCommandTests
     [TestMethod]
     [DataRow(RoofAlpacaCommandKind.Close)]
     [DataRow(RoofAlpacaCommandKind.Open)]
+    public async Task Grant_ReplayingAnEarlierConfirmation_DoesNotGrantWithAFreshValue(RoofAlpacaCommandKind kind)
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var alert = kind == RoofAlpacaCommandKind.Open
+            ? AlpacaCliSupport.RaiseOpenRefusal(host, "weather-unsafe:Sky")
+            : AlpacaCliSupport.RaiseRefusal(host, "scope-unknown:Main");
+        using var rig = new CliRig(host) { Interactive = true };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        var confirmations = new List<string>();
+        rig.AnswerPrompt = (prompt, secret) =>
+        {
+            confirmations.Add(AnswerGrant(prompt, secret));
+            return confirmations[0]; // A fixed-answer wrapper replays the first displayed answer.
+        };
+
+        // Individual random draws can legitimately collide. Eight prompts allow those collisions without a flaky
+        // one-in-900,000 assertion, while a fixed challenge must fail the distinct-values check below.
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var result = await rig.RunAsync("alpaca", "grant", "--alert", alert.Id);
+            if (confirmations[^1] == confirmations[0])
+            {
+                result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+                var revoke = await rig.RunAsync("alpaca", "revoke", "--kind", kind.ToString());
+                revoke.Code.Should().Be(RoofExitCode.Success, revoke.ToString());
+            }
+            else
+            {
+                result.Code.Should().Be(RoofExitCode.ConfirmationRequired, result.ToString());
+            }
+
+            AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty("a replay of the old value sends no new grant");
+        }
+
+        confirmations.Distinct(StringComparer.Ordinal).Count().Should().BeGreaterThan(1,
+            "each invocation must draw a fresh value, so a fixed-answer wrapper cannot keep granting");
+    }
+
+    [TestMethod]
+    [DataRow(RoofAlpacaCommandKind.Close)]
+    [DataRow(RoofAlpacaCommandKind.Open)]
     public async Task Grant_WrongKindOrMissingConfirmation_SendsNoGrant(RoofAlpacaCommandKind kind)
     {
         using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
@@ -399,6 +440,23 @@ public sealed class RoofCliAlpacaCommandTests
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         result.Json.GetProperty("revoked").GetString().Should().Be("Close");
         commands.Grants().Should().ContainSingle().Which.Kind.Should().Be(RoofAlpacaCommandKind.Open);
+    }
+
+    [TestMethod]
+    public async Task Revoke_WithoutKind_WhenNoGrantIsInForce_ReportsTheCloseDefault()
+    {
+        using var host = AlpacaCliSupport.CreateHost(settings: AlpacaOpenUiSupport.OpenAndClose());
+        var requests = new ConcurrentQueue<string>();
+        using var rig = new CliRig(host) { WrapHandler = inner => new RequestLog(inner, requests) };
+        await AlpacaCliSupport.SignInAsync(host, rig, "ada");
+        requests.Clear();
+
+        var result = await rig.RunAsync("alpaca", "revoke", "--json");
+
+        result.Code.Should().Be(RoofExitCode.Refused, result.ToString());
+        result.Json.GetProperty("error").GetProperty("detail").GetString().Should().Be("No Close grant is in force.");
+        requests.Should().Equal("GET /api/v4.0/alpaca/grants", "DELETE /api/v4.0/alpaca/grants/Close");
+        AlpacaCliSupport.Commands(host).Grants().Should().BeEmpty();
     }
 
     [TestMethod]

@@ -80,7 +80,7 @@ class GrantTerminalTests(unittest.TestCase):
             cls.command = [str(executable)]
 
     def run_cli(self, mode="foreground", redirect=None, markers=None):
-        with tempfile.TemporaryDirectory(prefix="t3-q23xb-grant-terminal-") as directory:
+        with tempfile.TemporaryDirectory(prefix="hvo-grant-terminal-") as directory:
             # Hold this port without listening, so no controller or other service
             # can receive a request even when admission intentionally succeeds.
             with socket.socket() as reservation:
