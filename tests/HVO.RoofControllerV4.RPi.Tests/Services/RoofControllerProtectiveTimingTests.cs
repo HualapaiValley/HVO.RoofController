@@ -34,8 +34,7 @@ public class RoofControllerProtectiveTimingTests
         finally
         {
             hat.Registers.BeforeRelayWrite = null;
-            SpinWait.SpinUntil(() => !service.IsHatIoOverrun && service.DeferredStopCount == 0,
-                TimeSpan.FromSeconds(10)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
         }
 
         logger.Entries.Should().Contain(e => e.Message.Contains("exceeded its allowed wait", StringComparison.Ordinal));
@@ -93,7 +92,7 @@ public class RoofControllerProtectiveTimingTests
             hat.Registers.BeforeLedWrite = null;
             if (cycle is not null) await cycle.WaitAsync(TimeSpan.FromSeconds(10));
             if (edge is not null) await edge.WaitAsync(TimeSpan.FromSeconds(10));
-            SpinWait.SpinUntil(() => service.DeferredStopCount == 0 && !service.IsHatIoOverrun, TimeSpan.FromSeconds(10)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
         }
 
         var status = service.GetCurrentStatusSnapshot();
@@ -139,7 +138,7 @@ public class RoofControllerProtectiveTimingTests
             hat.Registers.BeforeRelayWrite = null;
             await cycle.WaitAsync(TimeSpan.FromSeconds(10));
             await edge.WaitAsync(TimeSpan.FromSeconds(10));
-            SpinWait.SpinUntil(() => !service.IsHatIoOverrun && service.DeferredStopCount == 0, TimeSpan.FromSeconds(10)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
         }
 
         hat.RelayMask.Should().Be(0);
@@ -205,12 +204,17 @@ public class RoofControllerProtectiveTimingTests
             hat.Registers.BeforeRead = null;
             hat.Registers.BeforeRelayWrite = null;
             hat.Registers.FailRelayReads = false;
-            SpinWait.SpinUntil(() => !service.IsHatIoOverrun && service.DeferredStopCount == 0, TimeSpan.FromSeconds(10)).Should().BeTrue();
+            WaitForVerifiedOff(service, hat);
         }
 
         hat.RelayMask.Should().Be(0);
         service.GetCurrentStatusSnapshot().RelayRegisterState.Should().Be(RoofRelayRegisterState.Verified);
     }
+
+    private static void WaitForVerifiedOff(RoofControllerServiceV4 service, FakeRoofHat hat)
+        => SpinWait.SpinUntil(() => !service.IsHatIoOverrun && service.DeferredStopCount == 0
+            && service.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified && hat.RelayMask == 0,
+            TimeSpan.FromSeconds(10)).Should().BeTrue("lane recovery must complete its queued all-off verification");
 
     private static void PendingLedRetry(RoofControllerServiceV4 service)
     {

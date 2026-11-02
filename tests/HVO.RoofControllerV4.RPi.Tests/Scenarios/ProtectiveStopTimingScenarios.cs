@@ -151,7 +151,9 @@ public sealed class ProtectiveStopTimingScenarios
     }
 
     private static async Task WaitForDeferredStopsAsync(RoofControllerServiceV4 controller)
-        => (await Task.Run(() => SpinWait.SpinUntil(() => !controller.IsHatIoOverrun && controller.DeferredStopCount == 0,
+        => (await Task.Run(() => SpinWait.SpinUntil(() => !controller.IsHatIoOverrun && controller.DeferredStopCount == 0
+            && controller.GetCurrentStatusSnapshot().RelayRegisterState == RoofRelayRegisterState.Verified
+            && controller.GetCurrentStatusSnapshot().RelayRegisterMask == 0,
             TimeSpan.FromSeconds(10)))).Should().BeTrue("the relays-off continuation must finish and verify the register");
 
     private static void AssertStoppedPlant(TimingPlant rig)
