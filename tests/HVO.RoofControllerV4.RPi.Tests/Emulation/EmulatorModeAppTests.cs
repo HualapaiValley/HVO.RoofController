@@ -111,7 +111,7 @@ public sealed class EmulatorModeAppTests
     }
 
     [TestMethod]
-    public async Task ADriveTripAfterAnEmulatorReset_ReportsTheDriveFaultInsteadOfTheOldLimitStop()
+    public async Task ADriveTripAfterAnEmulatorReset_PreservesTheLastStop_AndReportsTheCurrentFault()
     {
         await using var rig = await EmulatedRoofRig.StartAsync();
         using var client = rig.CreateApiClient(TestApiKeys.Operator);
@@ -133,8 +133,10 @@ public sealed class EmulatorModeAppTests
         tripped.IsClosedLimitActive.Should().BeFalse();
         tripped.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
         tripped.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "the reset and idle trip did not stop another commanded motion");
-        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(tripped).Should().StartWith("Drive fault input active");
-        HVO.RoofControllerV4.Alpaca.Devices.AlpacaDome.DescribeStatus(tripped).Should().Contain("Last stop: Drive fault input active");
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(tripped).Should()
+            .StartWith("Limit switch reached").And.Contain("current fault: Drive fault input active; neither limit active");
+        HVO.RoofControllerV4.Alpaca.Devices.AlpacaDome.DescribeStatus(tripped).Should()
+            .Contain("Last stop: Limit switch reached").And.Contain("current fault: Drive fault input active; neither limit active");
         rig.Plant.RelayRegister.Should().Be(0);
     }
 

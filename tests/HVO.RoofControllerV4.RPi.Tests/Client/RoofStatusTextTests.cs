@@ -48,7 +48,7 @@ public sealed class RoofStatusTextTests
     }
 
     [TestMethod]
-    public void DescribeLastStop_HighlightsAnIdleDriveTripOnlyWhenThePreviousLimitIsInactive()
+    public void DescribeLastStop_PreservesMotionHistory_AndNamesTheCurrentIdleDriveFault()
     {
         var status = RoofServiceMock.Snapshot() with
         {
@@ -61,9 +61,10 @@ public sealed class RoofStatusTextTests
             IsClosedLimitActive = false
         };
         RoofStatusText.DescribeLastStop(status).Should().Be(
-            "Drive fault input active (previous motion stop: Limit switch reached, 2026-09-29 12:34:56Z)");
+            "Limit switch reached, 2026-09-29 12:34:56Z (current fault: Drive fault input active; neither limit active)");
         foreach (var other in new[]
         {
+            status with { IsMoving = true },
             status with { IsFaultLatched = false },
             status with { IsDriveFaultActive = false },
             status with { IsOpenLimitActive = true },

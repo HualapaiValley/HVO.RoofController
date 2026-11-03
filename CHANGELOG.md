@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Alpaca and CLI status highlight an active drive fault between the limits instead of presenting the previous
-  limit stop as its cause, while retaining the previous motion stop in the wording (#245).
+- Alpaca and CLI status preserve the last motion stop and distinguish an active idle drive fault between the
+  limits as the current fault alongside it (#245).
 - Clearing the Alpaca Stop hold records the current roof state in command history (#245).
 - Alpaca lowers expected controller connection failures to Debug during its first 30 seconds of startup;
   failures after that window or after a successful connection retain their normal severity (#245).
