@@ -278,7 +278,7 @@ public class Program
             StopTimeout = TimeSpan.FromSeconds(5),
             TimeProvider = provider.GetRequiredService<TimeProvider>(),
             ProgramAssembly = typeof(Program).Assembly,
-            LoggerFactory = provider.GetRequiredService<ILoggerFactory>(),
+            LoggerFactory = new AlpacaStartupLoggerFactory(provider.GetRequiredService<ILoggerFactory>(), provider.GetRequiredService<TimeProvider>()),
         }));
         services.AddSingleton<AlpacaRoof>();
         services.AddHostedService(provider => provider.GetRequiredService<AlpacaRoof>());

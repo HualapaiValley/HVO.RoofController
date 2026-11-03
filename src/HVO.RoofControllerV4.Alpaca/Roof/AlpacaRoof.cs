@@ -260,6 +260,11 @@ public sealed class AlpacaRoof : IHostedService, IAsyncDisposable
 
     private void OnStateChanged(object? sender, EventArgs e)
     {
+        if (_feed.State == RoofStatusFeedState.Connected && _client.Options.LoggerFactory is AlpacaStartupLoggerFactory startupLogging)
+        {
+            startupLogging.ControllerConnected();
+        }
+
         if (_feed.State == RoofStatusFeedState.Unauthorized)
         {
             _logger.LogError("The roof controller refused the Alpaca server's API key: every read answers {ErrorNumber} until it is fixed", AlpacaErrors.ControllerRefusedKey);

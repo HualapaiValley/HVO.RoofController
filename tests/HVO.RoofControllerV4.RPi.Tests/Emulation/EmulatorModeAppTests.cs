@@ -111,6 +111,34 @@ public sealed class EmulatorModeAppTests
     }
 
     [TestMethod]
+    public async Task ADriveTripAfterAnEmulatorReset_ReportsTheDriveFaultInsteadOfTheOldLimitStop()
+    {
+        await using var rig = await EmulatedRoofRig.StartAsync();
+        using var client = rig.CreateApiClient(TestApiKeys.Operator);
+        using var open = await client.PostAsync($"{RoofApi}/Open", content: null);
+        open.StatusCode.Should().Be(HttpStatusCode.OK);
+        var opened = await rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Open && !s.IsMoving,
+            MotionTimeout, "the roof to reach the open limit");
+        opened.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
+
+        rig.Session.Reset(initialPosition: 0.2);
+        await rig.WaitForControllerAsync(s => s.IsOpenLimitActive == false && s.IsClosedLimitActive == false,
+            MotionTimeout, "the reset roof to be between the limits");
+        rig.Session.Plant.TripDrive();
+        var tripped = await rig.WaitForControllerAsync(s => s.IsFaultLatched && s.IsDriveFaultActive == true,
+            MotionTimeout, "the drive fault to latch");
+
+        tripped.IsMoving.Should().BeFalse();
+        tripped.IsOpenLimitActive.Should().BeFalse();
+        tripped.IsClosedLimitActive.Should().BeFalse();
+        tripped.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+        tripped.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "the reset and idle trip did not stop another commanded motion");
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(tripped).Should().StartWith("Drive fault input active");
+        HVO.RoofControllerV4.Alpaca.Devices.AlpacaDome.DescribeStatus(tripped).Should().Contain("Last stop: Drive fault input active");
+        rig.Plant.RelayRegister.Should().Be(0);
+    }
+
+    [TestMethod]
     public async Task ALinkOutageWhileMoving_StopsTheRoof_AndLatchesAFault_UntilCleared()
     {
         await using var rig = await EmulatedRoofRig.StartAsync();

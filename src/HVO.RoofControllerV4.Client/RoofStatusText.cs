@@ -138,7 +138,14 @@ public static class RoofStatusText
     {
         ArgumentNullException.ThrowIfNull(status);
         var text = RoofText.DescribeStopReason(status.LastStopReason);
-        return status.LastTransitionUtc is { } at ? $"{text}, {Time(at)}" : text;
+        var previousStop = status.LastTransitionUtc is { } at ? $"{text}, {Time(at)}" : text;
+        // An emulator reset can put an idle roof between the limits after a completed move. A subsequent drive trip
+        // latches without another commanded stop; keep that historical stop, but do not present it as this fault's cause.
+        return status.LastStopReason == RoofControllerStopReason.LimitSwitchReached
+            && status.IsFaultLatched && status.LatchedFaultReason == RoofControllerStopReason.DriveFault
+            && status.IsDriveFaultActive == true && status.IsOpenLimitActive == false && status.IsClosedLimitActive == false
+            ? $"{RoofText.DescribeStopReason(RoofControllerStopReason.DriveFault)} (previous motion stop: {previousStop})"
+            : previousStop;
     }
 
     /// <summary>The controller's name, what it drives, and the snapshot.</summary>

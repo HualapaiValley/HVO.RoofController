@@ -48,6 +48,37 @@ public sealed class RoofStatusTextTests
     }
 
     [TestMethod]
+    public void DescribeLastStop_HighlightsAnIdleDriveTripOnlyWhenThePreviousLimitIsInactive()
+    {
+        var status = RoofServiceMock.Snapshot() with
+        {
+            LastStopReason = RoofControllerStopReason.LimitSwitchReached,
+            LastTransitionUtc = At,
+            IsFaultLatched = true,
+            LatchedFaultReason = RoofControllerStopReason.DriveFault,
+            IsDriveFaultActive = true,
+            IsOpenLimitActive = false,
+            IsClosedLimitActive = false
+        };
+        RoofStatusText.DescribeLastStop(status).Should().Be(
+            "Drive fault input active (previous motion stop: Limit switch reached, 2026-09-29 12:34:56Z)");
+        foreach (var other in new[]
+        {
+            status with { IsFaultLatched = false },
+            status with { IsDriveFaultActive = false },
+            status with { IsOpenLimitActive = true },
+            status with { IsClosedLimitActive = true },
+            status with { IsOpenLimitActive = null },
+            status with { LatchedFaultReason = RoofControllerStopReason.RelayVerificationFailed }
+        })
+        {
+            RoofStatusText.DescribeLastStop(other).Should().Be("Limit switch reached, 2026-09-29 12:34:56Z");
+        }
+        RoofStatusText.DescribeLastStop(status with { LastStopReason = RoofControllerStopReason.NormalStop })
+            .Should().Be("Stopped by operator, 2026-09-29 12:34:56Z");
+    }
+
+    [TestMethod]
     public void DescribeRows_LeavesOutWhatTheControllerDidNotSend()
     {
         var status = RoofServiceMock.Snapshot() with { LastTransitionUtc = null, LastError = "  ", ControllerName = null, HatMode = RoofHatMode.Emulated };

@@ -234,7 +234,7 @@ public sealed class AlpacaCommandsController : ControllerBase
     public ActionResult<RoofStopHoldState> ClearStopHold()
     {
         var state = _alpaca.ClearHold(User);
-        Record(RoofHistoryCommand.StopHoldClear, null, null);
+        Record(RoofHistoryCommand.StopHoldClear, TryGetSnapshot(), null);
         return Ok(state);
     }
 

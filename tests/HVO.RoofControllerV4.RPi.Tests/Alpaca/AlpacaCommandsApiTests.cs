@@ -319,6 +319,27 @@ public sealed class AlpacaCommandsApiTests
     }
 
     [TestMethod]
+    [DataRow(RoofControllerStatus.Closed)]
+    [DataRow(RoofControllerStatus.PartiallyOpen)]
+    public async Task ClearingTheStopHold_RecordsTheCurrentRoofState(RoofControllerStatus roofState)
+    {
+        using var host = CreateHost();
+        host.RoofService.Setup(service => service.GetCurrentStatusSnapshot())
+            .Returns(RoofServiceMock.Snapshot(roofState));
+        using var person = await PersonAsync(host);
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        (await person.PostAsync("/api/v4.0/RoofControl/Stop", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await person.DeleteAsync($"{Alpaca}/hold")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var history = await ApiJson.ReadAsync<RoofCommandHistoryPage>(await admin.GetAsync("/api/v4.0/RoofControl/History"));
+        var entry = history.Entries.Should().ContainSingle(row => row.Command == RoofHistoryCommand.StopHoldClear).Which;
+        entry.Accepted.Should().BeTrue();
+        entry.User.Should().Be("ada");
+        entry.Status.Should().Be(roofState, "clearing the Stop hold records the roof afterwards like other history rows");
+    }
+
+    [TestMethod]
     public async Task AnAlpacaClose_IsRecordedInTheHistory_WithTheReportedClient_AndNeverTheKey()
     {
         using var logs = new RecordingLoggerProvider();
