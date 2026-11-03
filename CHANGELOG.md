@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Optional installer backup encryption with `--passphrase-file`, also for `uninstall --purge --backup` (#89).
+  Restore detects encrypted archives, accepts a hidden passphrase prompt or a private passphrase file, and
+  authenticates them before restoring any files, including Alpaca device identities. Archives remain root-owned
+  and `0600`; passphrases are never command-line
+  secrets, and are kept out of output, logs and install records. Default and automatic upgrade backups are unchanged.
 - Opt-in Alpaca deployment in the controller image (#229): a separate unprivileged process, persistent device IDs,
   a LAN-bound TCP listener and credential-free host discovery responder. The installer adds an off-by-default option
   and preserves the IDs in backup/restore. System/About and `hvo-roof alpaca status` report the server's port, IDs and
