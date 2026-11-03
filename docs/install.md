@@ -1618,10 +1618,12 @@ the ASCII line `HVO-ROOF-BACKUP-AES256-GCM-v1` followed by LF, the salt, nonce, 
 header (line, salt and nonce) is authenticated as associated data. This is the installer's format, read by this
 release or newer, rather than an age or GPG archive. Public-key recipients are not part of this option.
 
-Restore recognises encryption from the contents, regardless of the filename. At a terminal it asks for the
-passphrase without echo when no file was supplied, including with `--plan`; cancelling changes nothing. The typed
-passphrase follows the same nonempty UTF-8 and 4096-byte limit, without any CR, LF or NUL. Without a terminal, give
-`--passphrase-file`; file input works without a prompt, including with `--plan`. A wrong
+Restore recognises encryption from the contents, regardless of the filename. With input and output both connected
+to a terminal, it asks for the passphrase without echo when no file was supplied, including with `--plan`;
+cancelling changes nothing. The typed passphrase follows the same nonempty UTF-8 and 4096-byte limit, without any
+CR, LF or NUL. If either input or output is redirected, or there is no terminal, give `--passphrase-file`; file
+input works without a prompt, including with `--plan`. The prompt omits control characters such as TAB: use a
+printable passphrase (such as the generated base64 above), or file input for a passphrase containing them. A wrong
 passphrase, unsupported encryption version or damaged archive is refused before any restored file is written or
 any install starts. Plain `.tar.gz` restores continue to work without the option. Upgrade and rollback's automatic
 backups keep their existing unencrypted format.
@@ -1647,7 +1649,8 @@ changes nothing; `--release DIR` reads the release from a folder.
 - A restore is for a machine with nothing installed. Uninstall first; a plain uninstall keeps the data, which the
   restore then replaces only with `--replace`, so the data is never overwritten by mistake.
 - The files go back with their modes and owners, and the install that follows checks them as any run does. The first
-  admin, the keys and the passwords are the backup's: the restore asks for none.
+  admin, the keys and the passwords are the backup's: the restore asks only for an encrypted backup's passphrase
+  when no passphrase file is given.
 - **The same machine name** keeps the CA and the certificate, so clients go on trusting the controller as before.
 - **Another name** (a new Pi called something else) gets a certificate for its own names. It comes from the backup's CA
   when that CA may issue for them, and otherwise from a new CA; the plan says which. Clients then trust the new CA in
@@ -1947,9 +1950,9 @@ The script checks:
    certificate and the keys. No secret is in the output or the log.
 9. **Restore.** An encrypted backup is also taken with `--passphrase-file`. `uninstall --purge --backup FILE`
    with the same option writes another encrypted archive, then stops the controller with a verified Stop and removes
-   the containers, their images, the data, the record and the installer. An encrypted restore plan first proves it
-   changes nothing; `restore --passphrase-file FILE` then puts the purge's backup back and installs from its record:
-   the same keys, CA, certificate and `alpaca-devices.json`, the first admin signing in with the same password, and
+   the containers, their images, the data, the record and the installer. A plain and an encrypted restore plan first
+   prove they change nothing; `restore --passphrase-file FILE` then puts the purge's backup back and installs from
+   its record: the same keys, CA, certificate and `alpaca-devices.json`, the first admin signing in with the same password, and
    the time scale of step 5. No passphrase reaches the output, log or record. `upgrade` to the same release then
    changes nothing.
 10. **Upgrade.** After another purge, the installer of the release before, built from `RIG_PREVIOUS_REF`, installs
