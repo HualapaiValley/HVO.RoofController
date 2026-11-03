@@ -1013,8 +1013,8 @@ public sealed class RoofSettingsStore
         {
             return new Refusal(
                 RoofControllerErrorCode.SettingNotPermitted,
-                $"{definition.Key} is local-only: change it at the controller, from the kiosk with an admin PIN or " +
-                "with a local admin API key.");
+                $"{definition.Key} is local-only: change it at the controller, using verified native Linux administrator authorization or " +
+                "a local admin API key. A kiosk PIN does not grant local-only rights.");
         }
 
         return null;

@@ -190,7 +190,8 @@ internal sealed class RoofCliContext
                     kind = code.ToString(),
                     message,
                     status = refusal is null ? (int?)null : (int)refusal.StatusCode,
-                    code = refusal?.CodeText,
+                    code = error is RoofLocalRouteUnavailableException ? "LocalRouteUnavailable"
+                        : error is RoofLocalAuthorizationException ? "LocalAuthorizationFailed" : refusal?.CodeText,
                     detail = refusal?.Detail,
                     retryAfterSeconds = refusal?.RetryAfter?.TotalSeconds,
                     errors = refusal?.Errors.Count > 0 ? refusal.Errors : null
@@ -237,6 +238,7 @@ internal sealed class RoofCliContext
 
     internal static (RoofExitCode Code, string Message) Classify(Exception error) => error switch
     {
+        RoofLocalRouteUnavailableException route => (RoofExitCode.Forbidden, route.Message),
         RoofLocalAuthorizationException local => (RoofExitCode.Forbidden, local.Message),
         RoofCliUsageException usage => (RoofExitCode.Usage, usage.Message),
         RoofCliRefusedException refused => (refused.Code, refused.Message),

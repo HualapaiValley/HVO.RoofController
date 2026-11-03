@@ -21,6 +21,13 @@ public sealed class RoofSettingsApi
         => _http.GetAsync<RoofSettingsResponse>(RoofApiRoutes.Settings, cancellationToken);
 
     /// <summary>
+    /// Reads the settings form using native configure authorization, so local-only write permissions describe
+    /// the credential that will submit a change. Remote credentials and server permission checks are unchanged.
+    /// </summary>
+    public Task<RoofSettingsResponse> GetForConfigurationAsync(CancellationToken cancellationToken = default)
+        => _http.GetAsync<RoofSettingsResponse>(RoofApiRoutes.Settings + "?forConfiguration=true", cancellationToken);
+
+    /// <summary>
     /// Changes settings in one group. Refused with ConfigurationVersionConflict when the settings changed since
     /// <see cref="RoofSettingsUpdateRequest.ExpectedVersion"/>.
     /// </summary>

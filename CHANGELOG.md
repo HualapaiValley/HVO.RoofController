@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `hvo-roof --local config show`, `get` and `set` now use native configure authorization for the settings form, so an
+  enrolled Linux controller administrator can change local-only settings with the existing safety confirmation and
+  audit checks. Local-only refusal messages no longer suggest that a kiosk PIN grants these rights (#243).
+
+- `hvo-roof --local alpaca status` now authorizes the system summary with read scope. Unmapped local routes report
+  their refusal reason and a structured JSON code instead of an unexpected error; route coverage guards new CLI
+  requests (#244).
+
 ## [4.5.0] - 2026-11-02
 
 ### Added

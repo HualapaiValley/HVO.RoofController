@@ -123,7 +123,7 @@ public sealed class RoofSettingsFormField
     public RoofControllerErrorCode? ReadOnlyCode => CanWrite ? null : State?.ReadOnlyCode;
 
     /// <summary>
-    /// A change needs a local credential: a configured admin key marked <c>Local</c>, or an admin PIN at a local kiosk.
+    /// A change needs a local credential: a configured admin key marked <c>Local</c>, or verified native Linux administrator authorization.
     /// </summary>
     public bool NeedsLocalCredential => Setting.LocalOnly;
 

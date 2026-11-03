@@ -446,6 +446,31 @@ public sealed class SettingsApiTests
     }
 
     [TestMethod]
+    public async Task AlpacaCommands_RemoteAdminAndKioskPinCannotChangeLocalOnlyPolicy()
+    {
+        const string key = "RoofController:Alpaca:AllowCommands";
+        using var host = StartHost(new RoofDouble(), extraSettings: LocalKeys());
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        var remote = await ReadGroupAsync(admin, RoofSettingsContract.AlpacaGroup);
+        var refused = await ProblemAsync(await PostGroupAsync(admin, RoofSettingsContract.AlpacaGroup,
+            remote with { Values = new(remote.Values!) { [key] = Json("\"CloseOnly\"") }, ConfirmSafetyCriticalChange = true }));
+        refused.Status.Should().Be(403);
+        refused.Code.Should().Be(nameof(RoofControllerErrorCode.SettingNotPermitted));
+        refused.Detail.Should().Contain("A kiosk PIN does not grant local-only rights.");
+
+        await AddUserAsync(host, "lena", RoofControllerApiContract.AdminRole);
+        foreach (var kioskKey in new[] { LocalKioskKey, RemoteKioskKey })
+        {
+            using var kiosk = await PinSessionAsync(host, kioskKey, "lena");
+            var current = await ReadGroupAsync(kiosk, RoofSettingsContract.AlpacaGroup);
+            var response = await PostGroupAsync(kiosk, RoofSettingsContract.AlpacaGroup,
+                current with { Values = new(current.Values!) { [key] = Json("\"CloseOnly\"") }, ConfirmSafetyCriticalChange = true });
+            response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+        State(await GetAsync(admin), key).Value!.Value.GetString().Should().Be("Off");
+    }
+
+    [TestMethod]
     public async Task ASecret_IsWriteOnly_KeptInTheManagedSecretsFile_AndNeverAnswered()
     {
         const string password = "test-camera-password-not-real-09";

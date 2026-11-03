@@ -207,6 +207,45 @@ public sealed class RoofCliProviderTests
         File.ReadAllBytes(files.CredentialsPath).Should().Equal(before);
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void UnmappedLocalRoute_ReportsTheReasonAndStructuredCode(bool json)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var context = new RoofCliContext(new RoofCliHost { Out = output, Error = error, ReadLine = (_, _) => null }, json, null, null);
+        Exception? rejected = null;
+        try { RoofLocalAuthorization.Operation(HttpMethod.Get, "api/v4.0/unknown"); }
+        catch (Exception ex) { rejected = ex; }
+        rejected.Should().NotBeNull();
+        context.Fail(rejected!).Should().Be((int)RoofExitCode.Forbidden);
+        if (json)
+        {
+            using var document = JsonDocument.Parse(output.ToString());
+            var failure = document.RootElement.GetProperty("error");
+            failure.GetProperty("kind").GetString().Should().Be("Forbidden");
+            failure.GetProperty("code").GetString().Should().Be("LocalRouteUnavailable");
+            failure.GetProperty("message").GetString().Should().Contain("unavailable in local authorization mode");
+        }
+        else error.ToString().Should().Contain("unavailable in local authorization mode");
+    }
+
+    [TestMethod]
+    public void NativeGateFailure_ReportsStructuredAuthorizationCode()
+    {
+        using var output = new StringWriter();
+        var context = new RoofCliContext(new RoofCliHost
+        {
+            Out = output, Error = TextWriter.Null, ReadLine = (_, _) => null
+        }, true, null, null);
+        context.Fail(new RoofLocalAuthorizationException()).Should().Be((int)RoofExitCode.Forbidden);
+        using var document = JsonDocument.Parse(output.ToString());
+        var failure = document.RootElement.GetProperty("error");
+        failure.GetProperty("kind").GetString().Should().Be("Forbidden");
+        failure.GetProperty("code").GetString().Should().Be("LocalAuthorizationFailed");
+    }
+
     internal static HttpResponseMessage Session() => new(HttpStatusCode.OK)
     {
         Content = JsonContent.Create(new RoofSessionResponse("test-local-session", "fixture", "ada", "RoofAdmin",

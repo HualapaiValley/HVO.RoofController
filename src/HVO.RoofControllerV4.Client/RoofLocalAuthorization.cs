@@ -55,6 +55,12 @@ internal static class RoofLocalAuthorization
             return "read";
         }
 
+        // The explicit settings form describes permissions for the native credential that will submit edits.
+        if (method == HttpMethod.Get && path == RoofApiRoutes.Settings + "?forConfiguration=true")
+        {
+            return "configure";
+        }
+
         if (path is RoofApiRoutes.Configuration or RoofApiRoutes.Settings or RoofApiRoutes.SettingsCatalogue
             or RoofApiRoutes.SettingsReload or RoofApiRoutes.SettingsDiscard or RoofApiRoutes.Restart
             || path.StartsWith(RoofApiRoutes.Settings + "/", StringComparison.Ordinal))
@@ -62,14 +68,14 @@ internal static class RoofLocalAuthorization
             return method == HttpMethod.Get ? "read" : "configure";
         }
 
-        if (method == HttpMethod.Get && (path is RoofApiRoutes.Health or RoofApiRoutes.Status or RoofApiRoutes.SystemInformation or RoofApiRoutes.SystemMetrics
+        if (method == HttpMethod.Get && (path is RoofApiRoutes.Health or RoofApiRoutes.Status or RoofApiRoutes.SystemSummary or RoofApiRoutes.SystemInformation or RoofApiRoutes.SystemMetrics
             || path.StartsWith(RoofApiRoutes.History + "?", StringComparison.Ordinal)
             || path.StartsWith("api/v1.0/Camera/", StringComparison.Ordinal)))
         {
             return "read";
         }
 
-        throw new InvalidOperationException("This request is unavailable in local authorization mode. Use explicit remote sign-in for account credentials.");
+        throw new RoofLocalRouteUnavailableException();
     }
 }
 
@@ -79,6 +85,16 @@ public sealed class RoofLocalAuthorizationException : Exception
 {
     public RoofLocalAuthorizationException()
         : base("Local Linux authorization failed. The installed helper and current sudo authorization are required; saved web credentials are not used.")
+    {
+    }
+}
+
+/// <summary>The request has no native authorization category and was refused before sending it.</summary>
+public sealed class RoofLocalRouteUnavailableException : InvalidOperationException
+{
+    /// <summary>Creates a refusal without including the request path or credentials.</summary>
+    public RoofLocalRouteUnavailableException()
+        : base("This request is unavailable in local authorization mode. Use explicit remote sign-in for account credentials.")
     {
     }
 }
