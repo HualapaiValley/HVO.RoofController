@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-11-02
+
 ### Added
 
 - Optional installer backup encryption with `--passphrase-file`, also for `uninstall --purge --backup` (#89).
