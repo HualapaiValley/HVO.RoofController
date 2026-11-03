@@ -1400,6 +1400,9 @@ scenario_restore() {
   pass "the containers (with their volumes), the network, the release's images, the data, the record and ${installed} removed after a verified Stop; relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="restore: from the backup"
+  install plain-plan restore "${archive}" --plan --release "${release_dir}"
+  expect_installed "plain restore plan"
+  sudo -n test ! -e /etc/hvo-roof || fail "the plain restore plan put files back"
   install encrypted-plan restore "${encrypted_archive}" --passphrase-file "${backup_passphrase_file}" --plan --release "${release_dir}"
   expect_installed "encrypted restore plan"
   sudo -n test ! -e /etc/hvo-roof || fail "the encrypted restore plan put files back"
@@ -1420,7 +1423,7 @@ scenario_restore() {
   [[ "$(sudo -n sha256sum "${installed}" | cut -d' ' -f1)" == "${installer_sha256}" ]] || fail "${installed} is not the release's installer"
   roof_still
   sudo -n cat "${install_log}" > "${work}/install-log.txt"
-  no_secret_in "${work}/purge.txt" "${work}/encrypted-plan.txt" "${work}/restore.txt" "${work}/install-log.txt"
+  no_secret_in "${work}/purge.txt" "${work}/plain-plan.txt" "${work}/encrypted-plan.txt" "${work}/restore.txt" "${work}/install-log.txt"
   pass "$(grep -oE 'Put back [0-9]+ of the backup.s [0-9]+ files and folders' "${work}/restore.txt"), then installed as its record says: the same keys, CA and certificate, ${admin} signs in with the same password, hatMode Emulated at 20 times real time; relay register 0 in ${ROOF_SAMPLES} samples"
 
   current_check="restore: again"

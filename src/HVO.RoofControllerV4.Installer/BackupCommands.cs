@@ -663,16 +663,16 @@ internal static class BackupCommands
         return path;
     }
 
-    internal static void RefuseRemovedOutput(string path)
+    internal static void RefuseRemovedOutput(string path, string subject = "backup")
     {
         if (Folders.Concat(Files).Append(KioskSteps.ProgramFolder).Append(KioskSteps.StateFolder).Append(KioskSteps.CacheFolder).FirstOrDefault(root => Within(path, root)) is { } inside)
         {
-            throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the backup somewhere else.");
+            throw new InstallerRefusedException($"{path} is in {inside}, which the backup holds or uninstall --purge removes: keep the {subject} somewhere else.");
         }
 
         if (LegacyExtractionStep.FolderHolding(path) is { } extraction)
         {
-            throw new InstallerRefusedException($"{path} is in {extraction}, which uninstall removes: keep the backup somewhere else.");
+            throw new InstallerRefusedException($"{path} is in {extraction}, which uninstall removes: keep the {subject} somewhere else.");
         }
     }
 
@@ -709,7 +709,7 @@ internal static class BackupCommands
         if (BackupEncryption.IsEncrypted(archive))
         {
             using var encryption = await BackupEncryption.LoadAsync(machine, passphraseFile, cancellationToken).ConfigureAwait(false)
-                ?? throw new InstallerRefusedException("This is an encrypted backup: give --passphrase-file FILE, the root-owned 0600/0400 file containing its passphrase. Nothing was restored.");
+                ?? BackupEncryption.Prompt(host);
             var plaintext = encryption.Decrypt(archive, cancellationToken);
             try { backup = await ParseAsync(plaintext, path, cancellationToken).ConfigureAwait(false); }
             finally { CryptographicOperations.ZeroMemory(plaintext); }
@@ -1035,7 +1035,7 @@ internal static class BackupCommands
     /// (<see cref="ParseAsync"/>), never the path opened again. A file in <see cref="DefaultFolder"/> is read only while
     /// that folder is trusted (<see cref="FolderProblemAsync"/>).
     /// </summary>
-    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, int maxBytes = (int)MaxBytes)
+    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, int maxBytes = (int)MaxBytes, string subject = "backup")
     {
         ArgumentNullException.ThrowIfNull(machine);
         if (Path.GetDirectoryName(path) == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
@@ -1066,7 +1066,7 @@ internal static class BackupCommands
 
             if (stream.Length > maxBytes)
             {
-                throw Unreadable(path, $"it is more than {maxBytes} bytes");
+                throw TooLarge();
             }
 
             using var copy = new MemoryStream();
@@ -1076,7 +1076,7 @@ internal static class BackupCommands
             {
                 if (copy.Length + read > maxBytes)
                 {
-                    throw Unreadable(path, $"it is more than {maxBytes} bytes");
+                    throw TooLarge();
                 }
 
                 copy.Write(buffer, 0, read);
@@ -1084,6 +1084,10 @@ internal static class BackupCommands
 
             return copy.ToArray();
         }
+
+        InstallerRefusedException TooLarge() => subject == "backup"
+            ? Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB")
+            : new InstallerRefusedException($"The {subject} {path} is more than {maxBytes} bytes. Nothing was changed.");
     }
 
     /// <summary>

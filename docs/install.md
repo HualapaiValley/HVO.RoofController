@@ -383,9 +383,14 @@ including in a `--plan` you run without `sudo`, and your own for the rest ([The 
 |------|---------|
 | 0 | Installed. With `--plan`, the plan can be carried out. |
 | 1 | A step failed. The log says which step, and what the installer did before it. Nothing after that step changed; running the installer again carries on. |
-| 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file, `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
+| 2 | The command line or the answers file was not valid, or a question had no one to answer it: a password with no file (including an encrypted restore without a terminal or `--passphrase-file`), `uninstall` without `--yes`, or `--purge` without `--confirm` and `--backup` or `--no-backup`. |
 | 3 | Refused, and nothing was changed. The reason is one of these: a role this machine cannot have, or a choice the guards refuse ([The guards](#the-guards)); a missing prerequisite (`sudo`, Docker, Docker's limits); something the installer will not replace; a certificate the controller could not serve; a controller CA that could not be fetched, or whose SHA-256 is not the one given; a folder you cannot write to; the keychain over SSH; a release installed here, or one an unfinished upgrade was installing, that is newer than the installer, or an unfinished upgrade to another release; or, for `--plan` from a record an earlier release wrote, an answer the record does not give. For the commands after an install: nothing recorded as installed; an upgrade to an older release, or to another release while an upgrade has not finished; a rollback with no release before; a release with no installer for this machine to upgrade to; a restore on a machine with something installed, of a backup that is not root's alone, that a newer release made, or that was made during an unfinished upgrade to a release other than the installer's, or over different files without `--replace`; a backup into a file that is there, or into a folder a purge removes, or of a folder someone other than root can change; a backup written to or read from `/var/backups/hvo-roof` when it, or a folder above it, is a link or a folder someone other than root can change; or a `--purge` confirmed with another machine's name, or under a controller it does not stop. |
 | 130 | You quit before installing, or the installer was interrupted. Ctrl+C stops between steps, and never kills a deploy script that has started. It stops that script too, which puts the old controller back, unless the new controller has already passed its checks: the script then runs to its end, and the installer exits 130 only when steps were left ([Running it again](#running-it-again)). |
+
+Encrypted backup and restore also refuse with code 3 for an unsafe, invalid or oversized passphrase file, a
+passphrase file inside a folder backed up or removed by uninstall (including a folder alias), an invalid typed
+passphrase, a wrong passphrase, a damaged archive or an unsupported encryption version. Cancelling the hidden
+passphrase prompt exits 130. Giving `--passphrase-file` to restore a plain archive is a usage error (2).
 
 ## Roles
 
@@ -1595,10 +1600,11 @@ The passphrase file must be a regular file owned by root, mode `0600` or `0400`,
 (at most 4096 bytes, with an optional final LF or CRLF). Links and files readable by others are refused; the opened
 file is checked too. Keep it outside the folders backed up or removed by uninstall; their symbolic-link aliases
 are refused too. There is no option accepting the passphrase itself on the command line. For example, generate a
-strong passphrase directly into a private file, then back up:
+strong passphrase directly into a new private file, then back up. Create this file once and reuse it; generation
+refuses an existing file instead of replacing a recovery passphrase:
 
 ```bash
-sudo sh -c 'umask 077; openssl rand -base64 48 > /root/roof-backup-passphrase'
+sudo sh -c 'umask 077; set -C; openssl rand -base64 48 > /root/roof-backup-passphrase'
 sudo hvo-roof-install backup --output /root/roofpi.tar.gz.enc --passphrase-file /root/roof-backup-passphrase
 sudo hvo-roof-install restore /root/roofpi.tar.gz.enc --passphrase-file /root/roof-backup-passphrase --plan
 ```
@@ -1612,15 +1618,22 @@ the ASCII line `HVO-ROOF-BACKUP-AES256-GCM-v1` followed by LF, the salt, nonce, 
 header (line, salt and nonce) is authenticated as associated data. This is the installer's format, read by this
 release or newer, rather than an age or GPG archive. Public-key recipients are not part of this option.
 
-Restore recognises encryption from the contents, regardless of the filename, and explains that it needs
-`--passphrase-file` when none was supplied. File input works without a prompt, including with `--plan`. A wrong
+Restore recognises encryption from the contents, regardless of the filename. At a terminal it asks for the
+passphrase without echo when no file was supplied, including with `--plan`; cancelling changes nothing. The typed
+passphrase follows the same nonempty UTF-8 and 4096-byte limit, without any CR, LF or NUL. Without a terminal, give
+`--passphrase-file`; file input works without a prompt, including with `--plan`. A wrong
 passphrase, unsupported encryption version or damaged archive is refused before any restored file is written or
 any install starts. Plain `.tar.gz` restores continue to work without the option. Upgrade and rollback's automatic
 backups keep their existing unencrypted format.
 
 **Keep the passphrase separately.** Store a recovery copy in a password manager or another protected place off the
 Pi, separate from the archive and from any media carrying it. Losing it makes the encrypted backup unusable;
-copying it beside the archive defeats the protection. Encryption does not change Roof's root-only ownership rules.
+copying it beside the archive defeats the protection. Keep verified recovery copies of both off the Pi, in separate
+protected places. The `/root` paths above are working copies: after verifying the off-Pi copies, remove the local
+passphrase file and any local archive copies, particularly after a purge or a restore onto a replacement Pi. For a
+manual restore, the hidden prompt avoids making a passphrase file on the replacement Pi. If you rotate the
+passphrase, preserve every previous passphrase needed by older archives; a new passphrase does not change an
+existing archive. Encryption does not change Roof's root-only ownership rules.
 
 `sudo hvo-roof-install restore FILE` puts a backup back, on a new Pi or on this one after an uninstall, then installs
 what the backup's record says, with this installer's release. Download the installer first ([Getting it](#getting-it)):

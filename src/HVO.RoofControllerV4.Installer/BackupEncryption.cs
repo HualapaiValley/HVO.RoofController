@@ -26,25 +26,45 @@ internal sealed class BackupEncryption(byte[] passphrase) : IDisposable
         if (file is null) return null;
         var path = Path.GetFullPath(file, machine.CurrentDirectory);
         // A purge must not remove the only way to decrypt the archive. Nor should a backup collect its own password.
-        BackupCommands.RefuseRemovedOutput(path);
-        BackupCommands.RefuseRemovedOutput(Path.Join(machine.ResolveFolder(Path.GetDirectoryName(path)!), Path.GetFileName(path)));
-        var bytes = await BackupCommands.ReadPrivateAsync(machine, path, cancellationToken, maxBytes: 4096).ConfigureAwait(false);
+        BackupCommands.RefuseRemovedOutput(path, subject: "passphrase file");
+        BackupCommands.RefuseRemovedOutput(Path.Join(machine.ResolveFolder(Path.GetDirectoryName(path)!), Path.GetFileName(path)), subject: "passphrase file");
+        var bytes = await BackupCommands.ReadPrivateAsync(machine, path, cancellationToken, maxBytes: 4096, subject: "passphrase file").ConfigureAwait(false);
         try
         {
             var length = bytes.Length;
             if (length > 0 && bytes[length - 1] == '\n') length--;
             if (length > 0 && bytes[length - 1] == '\r') length--;
-            var value = bytes.AsSpan(0, length);
-            if (value.IsEmpty || value.ContainsAny((byte)'\n', (byte)'\r', (byte)0))
-                throw new InstallerRefusedException("The passphrase file must contain one nonempty UTF-8 line, at most 4096 bytes. Nothing was changed.");
-            try { _ = new UTF8Encoding(false, true).GetCharCount(value); }
-            catch (DecoderFallbackException)
-            {
-                throw new InstallerRefusedException("The passphrase file must contain one nonempty UTF-8 line. Nothing was changed.");
-            }
-            return new BackupEncryption(value.ToArray());
+            return FromBytes(bytes.AsSpan(0, length));
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    internal static BackupEncryption Prompt(InstallerHost host)
+    {
+        if (!host.IsInteractive)
+            throw new InstallerUsageException("This is an encrypted backup: give --passphrase-file FILE when there is no terminal to read its passphrase. Nothing was restored.");
+        var typed = host.ReadSecret("the backup's passphrase")
+            ?? throw new InstallerException("Restore cancelled. Nothing was restored.", InstallerExitCode.Cancelled);
+        byte[] bytes;
+        try { bytes = new UTF8Encoding(false, true).GetBytes(typed); }
+        catch (EncoderFallbackException)
+        {
+            throw new InstallerRefusedException("The passphrase must be one nonempty UTF-8 line, at most 4096 bytes. Nothing was restored.");
+        }
+        try { return FromBytes(bytes); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    private static BackupEncryption FromBytes(ReadOnlySpan<byte> value)
+    {
+        if (value.IsEmpty || value.Length > 4096 || value.ContainsAny((byte)'\n', (byte)'\r', (byte)0))
+            throw new InstallerRefusedException("The passphrase must be one nonempty UTF-8 line, at most 4096 bytes. Nothing was changed.");
+        try { _ = new UTF8Encoding(false, true).GetCharCount(value); }
+        catch (DecoderFallbackException)
+        {
+            throw new InstallerRefusedException("The passphrase must be one nonempty UTF-8 line. Nothing was changed.");
+        }
+        return new BackupEncryption(value.ToArray());
     }
 
     internal byte[] Encrypt(ReadOnlySpan<byte> plaintext, CancellationToken cancellationToken)
