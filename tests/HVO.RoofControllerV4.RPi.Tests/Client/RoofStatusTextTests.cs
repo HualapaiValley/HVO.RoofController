@@ -35,7 +35,7 @@ public sealed class RoofStatusTextTests
 
         RoofStatusText.DescribeRows(status).Select(row => $"{row.Label}: {row.Value}").ToList().Should().Equal(
             "Roof: Opening, commanded to open",
-            "Last stop: Limit switch reached, 2026-09-29 12:34:56Z",
+            "Last stop: Limit switch reached",
             "Fault: none",
             "Limits: open inactive, closed unknown",
             "Drive fault: inactive",
@@ -61,7 +61,10 @@ public sealed class RoofStatusTextTests
             IsClosedLimitActive = false
         };
         RoofStatusText.DescribeLastStop(status).Should().Be(
-            "Limit switch reached, 2026-09-29 12:34:56Z (current fault: Drive fault input active; neither limit active)");
+            "Limit switch reached (current fault: Drive fault input active; neither limit active)");
+        // Status transitions while idle have their own time; they are not another motion stop.
+        RoofStatusText.DescribeLastStop(status with { LastTransitionUtc = At.AddSeconds(5) }).Should()
+            .Be(RoofStatusText.DescribeLastStop(status));
         foreach (var other in new[]
         {
             status with { IsMoving = true },
@@ -73,10 +76,10 @@ public sealed class RoofStatusTextTests
             status with { LatchedFaultReason = RoofControllerStopReason.RelayVerificationFailed }
         })
         {
-            RoofStatusText.DescribeLastStop(other).Should().Be("Limit switch reached, 2026-09-29 12:34:56Z");
+            RoofStatusText.DescribeLastStop(other).Should().Be("Limit switch reached");
         }
         RoofStatusText.DescribeLastStop(status with { LastStopReason = RoofControllerStopReason.NormalStop })
-            .Should().Be("Stopped by operator, 2026-09-29 12:34:56Z");
+            .Should().Be("Stopped by operator");
     }
 
     [TestMethod]

@@ -121,13 +121,18 @@ public sealed class EmulatorModeAppTests
             MotionTimeout, "the roof to reach the open limit");
         opened.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
 
+        await Task.Delay(TimeSpan.FromMilliseconds(1100));
         rig.Session.Reset(initialPosition: 0.2);
         await rig.WaitForControllerAsync(s => s.IsOpenLimitActive == false && s.IsClosedLimitActive == false,
             MotionTimeout, "the reset roof to be between the limits");
+        await Task.Delay(TimeSpan.FromMilliseconds(1100));
         rig.Session.Plant.TripDrive();
         var tripped = await rig.WaitForControllerAsync(s => s.IsFaultLatched && s.IsDriveFaultActive == true,
             MotionTimeout, "the drive fault to latch");
 
+        tripped.LastTransitionUtc.Should().NotBe(opened.LastTransitionUtc, "the idle reset and fault are later status transitions, not another motion stop");
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(opened).Should().Be("Limit switch reached",
+            "the API exposes a status transition time, not a durable historical stop time");
         tripped.IsMoving.Should().BeFalse();
         tripped.IsOpenLimitActive.Should().BeFalse();
         tripped.IsClosedLimitActive.Should().BeFalse();

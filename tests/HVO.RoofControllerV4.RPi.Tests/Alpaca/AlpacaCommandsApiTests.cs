@@ -340,6 +340,42 @@ public sealed class AlpacaCommandsApiTests
     }
 
     [TestMethod]
+    [DataRow(RoofHistoryCommand.OverrideGrant)]
+    [DataRow(RoofHistoryCommand.OverrideRevoke)]
+    [DataRow(RoofHistoryCommand.AlertAcknowledge)]
+    public async Task AlpacaAdministrativeHistory_RecordsTheRoofAfterwards(RoofHistoryCommand command)
+    {
+        using var host = CreateHost();
+        host.RoofService.Setup(service => service.GetCurrentStatusSnapshot())
+            .Returns(RoofServiceMock.Snapshot(RoofControllerStatus.Closed));
+        using var person = await PersonAsync(host);
+        using var admin = host.CreateApiClient(TestApiKeys.Admin);
+        if (command == RoofHistoryCommand.AlertAcknowledge)
+        {
+            using var server = host.CreateApiClient(ServerKey);
+            (await server.PostAsJsonAsync($"{Alpaca}/events", new RoofAlpacaEvent("Close", "NotAuthorised", "127.0.0.1", 12, 34)))
+                .StatusCode.Should().Be(HttpStatusCode.NoContent);
+            var alerts = await ApiJson.ReadAsync<RoofAlpacaAlert[]>(await person.GetAsync($"{Alpaca}/alerts"));
+            (await person.PostAsync($"{Alpaca}/alerts/{alerts.Single().Id}/acknowledge", null))
+                .StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+        else
+        {
+            (await person.PostAsJsonAsync($"{Alpaca}/grants", new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Close, ["scope-unknown:Main"])))
+                .StatusCode.Should().Be(HttpStatusCode.Created);
+            if (command == RoofHistoryCommand.OverrideRevoke)
+            {
+                (await person.DeleteAsync($"{Alpaca}/grants/Close")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+            }
+        }
+
+        var history = await ApiJson.ReadAsync<RoofCommandHistoryPage>(await admin.GetAsync("/api/v4.0/RoofControl/History"));
+        var entry = history.Entries.Should().ContainSingle(row => row.Command == command).Which;
+        entry.Accepted.Should().BeTrue();
+        entry.Status.Should().Be(RoofControllerStatus.Closed);
+    }
+
+    [TestMethod]
     public async Task AnAlpacaClose_IsRecordedInTheHistory_WithTheReportedClient_AndNeverTheKey()
     {
         using var logs = new RecordingLoggerProvider();

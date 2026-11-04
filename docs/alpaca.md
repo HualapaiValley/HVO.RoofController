@@ -78,10 +78,12 @@ stop, as the roof coasts to a halt.
 | `OpenShutter` | Opens the roof when the controller allows it, with the client's own key ([Alpaca Open](#alpaca-open)). Answers once the controller has started the Open, refused it, or found nothing to do. |
 | `Action` | `status` only: a line describing the shutter, the roof, the last stop, the fault latch, the last error, the safety conditions, the Alpaca commands' state (on or off, the human Stop hold, a person's operator lease), and which controller answers (its name, instance and HAT mode). Any other action is `0x40C`. No action moves the roof or clears a fault. |
 
-When an idle drive trip follows an emulator reset between the limits, “Last stop” keeps the true cause and time of
-the last motion stop. The shared status text identifies the drive fault separately as the current fault and says
-neither limit is active. Neither the reset nor an idle trip records another motion stop; a drive trip during
-commanded motion records `DriveFault`.
+“Last stop” reports the cause of the last commanded motion stop. It shows no timestamp: the API’s
+`LastTransitionUtc` is the last status change, which can be an idle reset or fault, not a motion stop.
+When an idle drive trip follows a limit stop and an emulator reset between the limits, the shared status text
+labels the drive fault as the current fault and says neither limit is active. After any other stop, the Fault
+and Drive fault rows still show the trip. Neither a reset nor an idle trip records another motion stop; a drive
+trip during commanded motion records `DriveFault`.
 
 ### Connecting
 

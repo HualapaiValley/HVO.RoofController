@@ -192,7 +192,7 @@ public sealed class AlpacaCommandsController : ControllerBase
         RoofCommandHistory.NoteAlpaca(HttpContext, new RoofHistoryAlpacaNote(ReasonKeys: outcome.Grant?.ReasonKeys ?? request.ReasonKeys, GrantId: outcome.Grant?.Id));
         if (outcome.Grant is { } grant)
         {
-            Record(RoofHistoryCommand.OverrideGrant, null, null);
+            Record(RoofHistoryCommand.OverrideGrant, TryGetSnapshot(), null);
             return StatusCode(StatusCodes.Status201Created, grant);
         }
 
@@ -219,7 +219,7 @@ public sealed class AlpacaCommandsController : ControllerBase
             return RoofProblemResults.Create(this, RoofControllerErrorCode.IdentityNotFound, $"No {parsed} grant is in force.");
         }
 
-        Record(RoofHistoryCommand.OverrideRevoke, null, null);
+        Record(RoofHistoryCommand.OverrideRevoke, TryGetSnapshot(), null);
         return NoContent();
     }
 
@@ -279,7 +279,7 @@ public sealed class AlpacaCommandsController : ControllerBase
             return RoofProblemResults.Create(this, RoofControllerErrorCode.IdentityNotFound, "No alert has that id.");
         }
 
-        Record(RoofHistoryCommand.AlertAcknowledge, null, null);
+        Record(RoofHistoryCommand.AlertAcknowledge, TryGetSnapshot(), null);
         return Ok(alert);
     }
 

@@ -55,6 +55,44 @@ public sealed class AlpacaStartupLoggingTests
     }
 
     [TestMethod]
+    public async Task AlpacaRoof_FirstSuccessfulFeedConnection_EndsGraceBeforeThirtySeconds()
+    {
+        var time = new ManualTimeProvider();
+        using var host = HVO.RoofControllerV4.RPi.Tests.Client.RoofClientApiTests.CreateHost();
+        using var logs = new RecordingLoggerProvider();
+        using var inner = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(logs));
+        using var factory = new AlpacaStartupLoggerFactory(inner, time);
+        using var connected = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            Credential = new RoofApiKeyCredential(HVO.RoofControllerV4.RPi.Tests.Controllers.TestApiKeys.Viewer),
+            CreateHandler = () => host.Server.CreateHandler(),
+            WebSocketFactory = HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.WebSocketFactory(() => host.Server),
+            LoggerFactory = factory,
+            TimeProvider = time
+        });
+        await using var roof = new AlpacaRoof(connected, inner.CreateLogger<AlpacaRoof>());
+        await roof.StartAsync(CancellationToken.None);
+        await HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.WaitUntilAsync(
+            () => roof.FeedState == RoofStatusFeedState.Connected && roof.TryGetCurrent() is not null, "the Alpaca roof to receive status");
+        await roof.StopAsync(CancellationToken.None);
+
+        using var refused = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = new Uri("http://localhost/"),
+            CreateHandler = () => new RefusedHandler(),
+            LoggerFactory = factory,
+            TimeProvider = time
+        });
+        await using var feed = refused.CreateStatusFeed();
+        feed.Start();
+        await HVO.RoofControllerV4.RPi.Tests.Client.ClientTestSupport.WaitUntilAsync(
+            () => feed.LastError is not null, "a new connection to be refused before the clock advances");
+        logs.Serious.Should().Contain(entry => entry.Category.EndsWith(".HttpConnection", StringComparison.Ordinal)
+            && entry.Message.Contains("Failed to start connection", StringComparison.Ordinal) && entry.Level == LogLevel.Error);
+    }
+
+    [TestMethod]
     public void ConnectionFailure_IsQuietUntilGraceExpires_ThenReportsAnUnreachableController()
     {
         var time = new ManualTimeProvider();
