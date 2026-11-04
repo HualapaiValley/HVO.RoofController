@@ -78,6 +78,13 @@ stop, as the roof coasts to a halt.
 | `OpenShutter` | Opens the roof when the controller allows it, with the client's own key ([Alpaca Open](#alpaca-open)). Answers once the controller has started the Open, refused it, or found nothing to do. |
 | `Action` | `status` only: a line describing the shutter, the roof, the last stop, the fault latch, the last error, the safety conditions, the Alpaca commands' state (on or off, the human Stop hold, a person's operator lease), and which controller answers (its name, instance and HAT mode). Any other action is `0x40C`. No action moves the roof or clears a fault. |
 
+“Last stop” reports the cause of the last commanded motion stop. It shows no timestamp: the API’s
+`LastTransitionUtc` is the last status change, which can be an idle reset or fault, not a motion stop.
+When an idle drive trip follows a limit stop and an emulator reset between the limits, the shared status text
+labels the drive fault as the current fault and says neither limit is active. After any other stop, the Fault
+and Drive fault rows still show the trip. Neither a reset nor an idle trip records another motion stop; a drive
+trip during commanded motion records `DriveFault`.
+
 ### Connecting
 
 A client connects with `Connected=true` or `Connect`. Connecting is a flag the server keeps for that client, its
@@ -390,6 +397,10 @@ does not hold them.
 The log levels are the usual `Logging__LogLevel__*`. The server logs each `AbortSlew` and each `CloseShutter` with the
 client's address, `ClientID` and `ClientTransactionID` and what came of it, the refused requests (at most once a minute
 per address and reason), and which key it reaches the controller with. It never logs a key or a credential.
+Status-hub connection failures are logged at Debug for the first 30 seconds while the controller starts alongside
+Alpaca. The first successful connection ends that grace period early; later failures keep their usual warning/error
+levels, including a controller that remains unreachable after startup. Reads still report the controller unavailable
+until a current status arrives, and connection retries continue throughout.
 
 The server's settings and the controller's can share one environment (one container's): each reads only its own
 section, `Alpaca` here and `RoofController:Alpaca` and `RoofController:Lease` at the controller.
@@ -1006,7 +1017,9 @@ on the runner's loopback, never against hardware, and never before its chain gua
 - **Then the client matrix** ([The client matrix](#the-client-matrix)).
 
 Run it locally from the repository root with `tests/alpaca/conformu.sh` (it builds the three programs and the client
-matrix; `--no-build` uses the last build). It uses ports 47210 to 47232 (`HVO_ALPACA_TEST_PORT_BASE` moves them) and
+matrix; `--no-build` uses the last build). Its fixed endpoints use ports 47210, 47211, 47220 and 47230
+(`HVO_ALPACA_TEST_PORT_BASE` moves them). Each capturing proxy binds an OS-allocated loopback port before its
+client starts, so an earlier profile's outbound sockets cannot claim a later proxy's planned port. The harness
 keeps its logs and ConformU's reports in the directory it names. `tests/alpaca/check-conformu-results.py` and the
 harness's helpers (`test_alpaca_ci.py`: the modes file, the relay-write checks, alert matching and refusing anything but
 loopback) have their own tests (`python3 -m unittest discover -s tests/alpaca -p 'test_*.py'`).

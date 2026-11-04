@@ -39,8 +39,8 @@
 # Usage: tests/alpaca/conformu.sh [--no-build]
 # Environment:
 #   HVO_ALPACA_TEST_PORT_BASE  the first of the ports used, default 47200: +10 the emulator's control API, +11 its
-#                              registers, +20 the controller, +30 the Alpaca server, +31 and +32 the client matrix's
-#                              capturing proxies
+#                              registers, +20 the controller, +30 the Alpaca server. The client matrix's proxies
+#                              use OS-allocated loopback ports, reserved by binding before clients use them.
 #   HVO_ALPACA_TEST_DIR        where the logs, settings and results go (default: a new temporary directory, kept)
 #   HVO_CONFORMU_DIR           a ConformU already unpacked (default: downloaded and checked against its SHA-256)
 #   CONFIGURATION              Debug (default) or Release
@@ -57,7 +57,6 @@ control_port=$((base + 10))
 register_port=$((base + 11))
 controller_port=$((base + 20))
 alpaca_port=$((base + 30))
-proxy_ports=($((base + 31)) $((base + 32)))
 build=true
 if [[ "${1:-}" == "--no-build" ]]; then
   build=false
@@ -112,7 +111,7 @@ wait_for() {
   done
 }
 
-for port in "${control_port}" "${register_port}" "${controller_port}" "${alpaca_port}" "${proxy_ports[@]}"; do
+for port in "${control_port}" "${register_port}" "${controller_port}" "${alpaca_port}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
     fail "Port ${port} is in use; set HVO_ALPACA_TEST_PORT_BASE to a free range"
   fi
@@ -298,9 +297,9 @@ python3 "${repo}/tests/alpaca/check-conformu-results.py" \
 
 # The client matrix: ASCOM's own Alpaca client library as the Dynamic Client (NINA through it, the External key as its user
 # name and password) and as NINA's native client (no credential), each through a capturing proxy on loopback.
-echo "The Alpaca client matrix (proxies ${proxy_ports[*]})"
+echo "The Alpaca client matrix (OS-allocated loopback proxy ports)"
 dotnet "${matrix}" --alpaca "${alpaca}" --controller "${controller}" --emulator "${emulator}" \
   --token "${private}/session" --external-key "${private}/external-key" \
-  --proxy-port "${proxy_ports[0]}" --proxy-port "${proxy_ports[1]}" --results "${work}/client-matrix.json" 2>&1 \
+  --proxy-port 0 --proxy-port 0 --results "${work}/client-matrix.json" 2>&1 \
   | tee "${work}/client-matrix.log"
 "${ci[@]}" no-secret "${secret_args[@]}" "${work}"/*.log "${work}"/*.json "${work}"/*.txt

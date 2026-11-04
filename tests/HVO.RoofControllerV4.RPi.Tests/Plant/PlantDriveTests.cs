@@ -39,6 +39,9 @@ public class PlantDriveTests
         h.RunFor(TimeSpan.FromSeconds(1));
 
         h.Snapshot.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+        h.Snapshot.LastStopReason.Should().Be(RoofControllerStopReason.DriveFault);
+        h.Snapshot.IsOpenLimitActive.Should().BeFalse();
+        h.Snapshot.IsClosedLimitActive.Should().BeFalse();
         h.RelayRegister.Should().Be(0);
         h.Plant.Velocity.Should().Be(0);
         h.Open().ErrorCode().Should().Be(RoofControllerErrorCode.FaultLatched);

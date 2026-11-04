@@ -35,7 +35,7 @@ public sealed class RoofStatusTextTests
 
         RoofStatusText.DescribeRows(status).Select(row => $"{row.Label}: {row.Value}").ToList().Should().Equal(
             "Roof: Opening, commanded to open",
-            "Last stop: Limit switch reached, 2026-09-29 12:34:56Z",
+            "Last stop: Limit switch reached",
             "Fault: none",
             "Limits: open inactive, closed unknown",
             "Drive fault: inactive",
@@ -45,6 +45,41 @@ public sealed class RoofStatusTextTests
             "Watchdog: 59 s left",
             "Controller: roof-pi, physical HAT, snapshot 42 at 2026-09-29 12:35:00Z",
             "Last error: Relay 3 read back high");
+    }
+
+    [TestMethod]
+    public void DescribeLastStop_PreservesMotionHistory_AndNamesTheCurrentIdleDriveFault()
+    {
+        var status = RoofServiceMock.Snapshot() with
+        {
+            LastStopReason = RoofControllerStopReason.LimitSwitchReached,
+            LastTransitionUtc = At,
+            IsFaultLatched = true,
+            LatchedFaultReason = RoofControllerStopReason.DriveFault,
+            IsDriveFaultActive = true,
+            IsOpenLimitActive = false,
+            IsClosedLimitActive = false
+        };
+        RoofStatusText.DescribeLastStop(status).Should().Be(
+            "Limit switch reached (current fault: Drive fault input active; neither limit active)");
+        // Status transitions while idle have their own time; they are not another motion stop.
+        RoofStatusText.DescribeLastStop(status with { LastTransitionUtc = At.AddSeconds(5) }).Should()
+            .Be(RoofStatusText.DescribeLastStop(status));
+        foreach (var other in new[]
+        {
+            status with { IsMoving = true },
+            status with { IsFaultLatched = false },
+            status with { IsDriveFaultActive = false },
+            status with { IsOpenLimitActive = true },
+            status with { IsClosedLimitActive = true },
+            status with { IsOpenLimitActive = null },
+            status with { LatchedFaultReason = RoofControllerStopReason.RelayVerificationFailed }
+        })
+        {
+            RoofStatusText.DescribeLastStop(other).Should().Be("Limit switch reached");
+        }
+        RoofStatusText.DescribeLastStop(status with { LastStopReason = RoofControllerStopReason.NormalStop })
+            .Should().Be("Stopped by operator");
     }
 
     [TestMethod]

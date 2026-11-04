@@ -44,7 +44,7 @@ try
         Console.WriteLine($"Client profile: {profile}");
         await using var proxy = await CapturingProxy.StartAsync(port, alpaca, key);
         var withKey = profile == Profiles.DynamicClient;
-        using (var dome = Profiles.Dome(port, withKey ? 31u : 32u, withKey ? key : string.Empty, withKey ? key : string.Empty, profile))
+        using (var dome = Profiles.Dome(proxy.Port, withKey ? 31u : 32u, withKey ? key : string.Empty, withKey ? key : string.Empty, profile))
         {
             var session = new ClientSession(profile, dome, rig, timings);
             if (withKey)

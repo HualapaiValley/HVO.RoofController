@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Shared UI status (including Alpaca and CLI) preserves the last motion stop and labels an active idle drive
+  fault between the limits as current alongside it. “Last stop” omits the status-transition timestamp, which
+  could otherwise mislabel an idle trip’s time as the previous stop’s time (#245).
+- Clearing the Alpaca Stop hold, granting/revoking an override, and acknowledging an alert record the current
+  roof state in command history (#245).
+- Alpaca lowers expected controller connection failures to Debug during its first 30 seconds of startup;
+  failures after that window or after a successful connection retain their normal severity (#245).
+
 - Native local Admin settings forms now report local-only change permissions correctly in the CLI and terminal
   interface. Viewer and Operator reads remain available; writes still require configure authorization, safety
   confirmation and audit. Local-only refusal messages no longer suggest that a kiosk PIN grants these rights (#243).
