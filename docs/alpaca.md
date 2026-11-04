@@ -1017,7 +1017,9 @@ on the runner's loopback, never against hardware, and never before its chain gua
 - **Then the client matrix** ([The client matrix](#the-client-matrix)).
 
 Run it locally from the repository root with `tests/alpaca/conformu.sh` (it builds the three programs and the client
-matrix; `--no-build` uses the last build). It uses ports 47210 to 47232 (`HVO_ALPACA_TEST_PORT_BASE` moves them) and
+matrix; `--no-build` uses the last build). Its fixed endpoints use ports 47210, 47211, 47220 and 47230
+(`HVO_ALPACA_TEST_PORT_BASE` moves them). Each capturing proxy binds an OS-allocated loopback port before its
+client starts, so an earlier profile's outbound sockets cannot claim a later proxy's planned port. The harness
 keeps its logs and ConformU's reports in the directory it names. `tests/alpaca/check-conformu-results.py` and the
 harness's helpers (`test_alpaca_ci.py`: the modes file, the relay-write checks, alert matching and refusing anything but
 loopback) have their own tests (`python3 -m unittest discover -s tests/alpaca -p 'test_*.py'`).

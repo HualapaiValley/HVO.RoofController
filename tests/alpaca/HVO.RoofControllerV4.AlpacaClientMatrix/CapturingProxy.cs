@@ -41,7 +41,8 @@ internal sealed class CapturingProxy : IAsyncDisposable
         _app.Run(context => ForwardAsync(context, upstream));
     }
 
-    public int Port { get; private init; }
+    /// <summary>The actual bound port, including the OS-assigned value when startup requested zero.</summary>
+    public int Port { get; private set; }
 
     /// <summary>What the client has sent so far, in order.</summary>
     public IReadOnlyList<ProxiedRequest> Requests
@@ -55,14 +56,15 @@ internal sealed class CapturingProxy : IAsyncDisposable
         }
     }
 
-    /// <summary>Starts a proxy listening on 127.0.0.1:<paramref name="port"/> that forwards to <paramref name="upstream"/>.</summary>
+    /// <summary>Starts a loopback proxy; zero allocates and reserves an available port atomically.</summary>
     public static async Task<CapturingProxy> StartAsync(int port, Uri upstream, string externalKey)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, port));
-        var proxy = new CapturingProxy(builder.Build(), upstream, externalKey) { Port = port };
+        var proxy = new CapturingProxy(builder.Build(), upstream, externalKey);
         await proxy._app.StartAsync();
+        proxy.Port = new Uri(proxy._app.Urls.Single()).Port;
         return proxy;
     }
 

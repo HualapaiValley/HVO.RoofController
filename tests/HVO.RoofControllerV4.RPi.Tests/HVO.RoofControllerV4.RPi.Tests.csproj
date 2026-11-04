@@ -36,6 +36,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Exercise the actual standalone matrix proxy without pulling its ASCOM client executable into the unit host. -->
+    <Compile Include="../alpaca/HVO.RoofControllerV4.AlpacaClientMatrix/CapturingProxy.cs" Link="Alpaca/ClientMatrixCapturingProxy.cs" />
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
     <AssemblyMetadata Include="C14BuildSdkVersion" Value="$(NETCoreSdkVersion)" />
     <AssemblyMetadata Include="C14BuildConfiguration" Value="$(Configuration)" />
