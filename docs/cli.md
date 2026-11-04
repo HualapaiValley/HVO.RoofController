@@ -457,6 +457,11 @@ heartbeat would take a new lease (and drop every grant) and none would ever laps
 
 ## Settings
 
+With `--local`, settings forms use native `read` authorization. For an enrolled Linux controller administrator with
+the Admin role, the controller reports local-only settings as changeable; submitting a change still requests fresh
+`configure` authorization and any required safety-critical confirmation. Viewer and Operator accounts retain their
+read access. The terminal Settings page uses the same permissions. A kiosk PIN never grants local-only rights.
+
 The settings are the controller's `appsettings.Local.json` (#42). `hvo-roof` reads and changes them through the API,
 one group at a time, and they can equally be edited in the file itself.
 
@@ -808,6 +813,11 @@ credentials cannot create these reusable personal keys.
 See [Authentication and interface rights](authentication-interfaces.md) for verified local Linux identity, enrolled Linux users, virtual passwords, kiosk PIN restrictions and first-install setup-user selection.
 
 ![Enrolled Linux users in the terminal People page](images/terminal/09-linux-users.svg)
+
+`alpaca status` uses native `read` authorization for both roof status and the system summary.
+A route unavailable in local mode is refused before sending it, with exit 6 and its reason;
+`--json` reports `kind: Forbidden` and `code: LocalRouteUnavailable`. A failed native gate
+reports `code: LocalAuthorizationFailed` and never substitutes a saved remote credential.
 
 Detailed health and the interactive System page use the native read operation with --local; they do not fall back to saved remote credentials. Readiness and liveness probes remain anonymous.
 

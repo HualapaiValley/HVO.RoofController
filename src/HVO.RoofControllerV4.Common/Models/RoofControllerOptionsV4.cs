@@ -82,7 +82,8 @@ public record class RoofControllerOptionsV4
     /// <summary>
     /// Local-configuration-only safeguard. <see cref="IgnorePhysicalLimitSwitches"/> is refused on physical hardware
     /// unless this is true. Local-only: the configuration endpoint never changes it, and the settings API changes it
-    /// only for a caller with a local credential (the kiosk admin PIN or a local admin API key).
+    /// only for a caller with a local admin API key or verified native Linux administrator authorization.
+    /// A kiosk PIN never grants local-only rights.
     /// </summary>
     public bool AllowIgnoringLimitSwitchesOnPhysicalHardware { get; set; }
 

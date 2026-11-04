@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Alpaca lowers expected controller connection failures to Debug during its first 30 seconds of startup;
   failures after that window or after a successful connection retain their normal severity (#245).
 
+- Native local Admin settings forms now report local-only change permissions correctly in the CLI and terminal
+  interface. Viewer and Operator reads remain available; writes still require configure authorization, safety
+  confirmation and audit. Local-only refusal messages no longer suggest that a kiosk PIN grants these rights (#243).
+
+- `hvo-roof --local alpaca status` now authorizes the system summary with read scope. Unmapped local routes report
+  their refusal reason and a structured JSON code instead of an unexpected error; route coverage guards new CLI
+  requests (#244).
+
 ## [4.5.0] - 2026-11-02
 
 ### Added
