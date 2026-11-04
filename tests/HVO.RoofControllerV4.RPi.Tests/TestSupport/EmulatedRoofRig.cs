@@ -378,7 +378,14 @@ internal sealed class EmulatedRoofApp(
             // Program.Run and the factory both dispose the same provider. The provider marks itself disposed before
             // awaiting its services, so the factory's second call can finish while Program.Run still disposes the
             // controller. Keep the emulator available until the controller's final all-off/read-back has finished.
-            await disposal.Completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            try
+            {
+                await disposal.Completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+            catch (TimeoutException ex)
+            {
+                throw new TimeoutException("The service provider disposal did not reach its completion marker within 30 seconds.", ex);
+            }
         }
 
         foreach (var limiter in limiters)

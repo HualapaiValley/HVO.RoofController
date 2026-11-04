@@ -172,11 +172,12 @@ build_command() {
   done
   [[ "${1:-}" == "--" ]] && shift
 
+  # Give the Python-backed probes scheduling room; SECONDS can leave a 1s deadline almost no time to run them.
   # shellcheck disable=SC2016 # expanded by the inner shell
   RUN_CMD=(env -i
     PATH="${WORK}/bin:${PATH}" HOME="${WORK}/home" TMPDIR="${WORK}" FAKE_STATE_DIR="${FAKE_STATE_DIR}"
     FAKE_EXPECTED_KEY="${KEY}" PI_HOST=pi.test DOCKER_CONTEXT=test-context IMAGE_TAG="${IMAGE}" ROOF_OPERATOR_API_KEY="${KEY}"
-    READY_TIMEOUT_SECONDS=1 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=30
+    READY_TIMEOUT_SECONDS=5 POLL_INTERVAL_SECONDS=0.1 STOP_TIMEOUT_SECONDS=30
     ${env_pairs[@]+"${env_pairs[@]}"}
     bash -c 'cd "$1" && echo "$$" > "${FAKE_STATE_DIR}/script.pid" && shift && exec bash "$@"'
     deploy-test "${WORK}" "${SCRIPT}" "$@")
@@ -967,7 +968,7 @@ test_rollback_uses_availability_when_supported_and_old_readiness_only_when_absen
       assert_output_contains "WARNING: PLANT FAULT DriveFault"
     else
       assert_status 1
-      assert_output_contains "did not become ready within 1s. It is left running"
+      assert_output_contains "did not become ready within 5s. It is left running"
       assert_output_not_contains "WARNING: PLANT FAULT"
     fi
   done
@@ -987,7 +988,7 @@ test_new_controller_never_ready_rolls_back_to_previous() {
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_READY=false
 
   assert_status 1
-  assert_output_contains "did not become ready within 1s"
+  assert_output_contains "did not become ready within 5s"
   assert_output_contains "fake controller log line"
   assert_output_contains "Rolled back: the previous controller is running and ready."
   assert_container roof-controller old true unless-stopped
@@ -1688,7 +1689,7 @@ test_web_ui_that_never_answers_inside_the_container_rolls_back() {
   deploy "${HTTPS_ENV[@]}" FAKE_NEW_WEB_LIVE=false
 
   assert_status_is 1
-  assert_output_contains "the web UI in roof-controller did not answer https://localhost:8088/health/live within 1s"
+  assert_output_contains "the web UI in roof-controller did not answer https://localhost:8088/health/live within 5s"
   assert_output_contains "Rolled back: the previous controller is running and ready."
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous missing false
@@ -1828,7 +1829,7 @@ test_rollback_to_a_version_whose_web_ui_fails_is_left_running() {
   deploy "${HTTPS_ENV[@]}" FAKE_OLD_WEB_LIVE=false -- --rollback
 
   assert_status_is 1
-  assert_output_contains "the web UI in roof-controller did not answer https://localhost:8088/health/live within 1s. It is left running. Run --rollback again to swap back."
+  assert_output_contains "the web UI in roof-controller did not answer https://localhost:8088/health/live within 5s. It is left running. Run --rollback again to swap back."
   assert_container roof-controller old true unless-stopped
   assert_container roof-controller-previous current false no
 }
@@ -3378,7 +3379,7 @@ test_rollback_to_an_emulator_version_that_does_not_become_ready_names_the_emulat
   deploy "${HTTPS_ENV[@]}" ALLOW_EMULATED_HAT=true FAKE_OLD_READY=false -- --rollback
 
   assert_status 1
-  assert_output_contains "roof-controller did not become ready within 1s (it was deployed for the HAT emulator at hat-emulator:5291: check that the emulator is running). It is left running. Run --rollback again to swap back."
+  assert_output_contains "roof-controller did not become ready within 5s (it was deployed for the HAT emulator at hat-emulator:5291: check that the emulator is running). It is left running. Run --rollback again to swap back."
 }
 
 test_rollback_that_cannot_read_the_previous_environment_changes_nothing() {
