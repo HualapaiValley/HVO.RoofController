@@ -27,7 +27,6 @@ public sealed class RoofLocalRouteCoverageTests
         (nameof(RoofApiRoutes.Configuration), "POST", RoofApiRoutes.Configuration, "configure"),
         (nameof(RoofApiRoutes.History), "GET", RoofApiRoutes.HistoryPage(new RoofHistoryQuery { Mine = true }), "read"),
         (nameof(RoofApiRoutes.Settings), "GET", RoofApiRoutes.Settings, "read"),
-        (nameof(RoofApiRoutes.Settings), "GET", RoofApiRoutes.Settings + "?forConfiguration=true", "configure"),
         (nameof(RoofApiRoutes.SettingsCatalogue), "GET", RoofApiRoutes.SettingsCatalogue, "read"),
         (nameof(RoofApiRoutes.Settings), "POST", RoofApiRoutes.SettingsGroup("alpaca"), "configure"),
         (nameof(RoofApiRoutes.SettingsReload), "POST", RoofApiRoutes.SettingsReload, "configure"),
@@ -64,6 +63,28 @@ public sealed class RoofLocalRouteCoverageTests
         (nameof(RoofApiRoutes.Sessions), "GET", RoofApiRoutes.Sessions, "identity"),
         (nameof(RoofApiRoutes.Sessions), "DELETE", RoofApiRoutes.IdentitySession("fixture-session"), "identity")
     ];
+
+    private static readonly (string Builder, string Method, string Path, string Scope)[] BuilderCalls =
+    [
+        (nameof(RoofApiRoutes.AlpacaGrant), "DELETE", RoofApiRoutes.AlpacaGrant(RoofAlpacaCommandKind.Close), "operate"),
+        (nameof(RoofApiRoutes.AcknowledgeAlpacaAlert), "POST", RoofApiRoutes.AcknowledgeAlpacaAlert("fixture-alert"), "operate"),
+        (nameof(RoofApiRoutes.User), "GET", RoofApiRoutes.User("fixture-user"), "identity"),
+        (nameof(RoofApiRoutes.UserPin), "PUT", RoofApiRoutes.UserPin("fixture-user"), "identity"),
+        (nameof(RoofApiRoutes.ApiKey), "DELETE", RoofApiRoutes.ApiKey("fixture-key"), "identity"),
+        (nameof(RoofApiRoutes.RotateApiKey), "POST", RoofApiRoutes.RotateApiKey("fixture-key"), "identity"),
+        (nameof(RoofApiRoutes.IdentitySession), "DELETE", RoofApiRoutes.IdentitySession("fixture-session"), "identity"),
+        (nameof(RoofApiRoutes.SettingsGroup), "POST", RoofApiRoutes.SettingsGroup("alpaca"), "configure"),
+        (nameof(RoofApiRoutes.Camera), "GET", RoofApiRoutes.Camera(1), "read"),
+        (nameof(RoofApiRoutes.HistoryPage), "GET", RoofApiRoutes.HistoryPage(new RoofHistoryQuery()), "read")
+    ];
+
+    public static IEnumerable<object[]> LocalBuiltRequests()
+        => BuilderCalls.Select(call => new object[] { call.Builder, call.Method, call.Path, call.Scope });
+
+    [TestMethod]
+    [DynamicData(nameof(LocalBuiltRequests))]
+    public void EveryLocalCliRouteBuilder_HasTheExpectedScope(string builder, string method, string path, string scope)
+        => RoofLocalAuthorization.Operation(new HttpMethod(method), path).Should().Be(scope, $"{method} {builder} must request only its declared category");
 
     private static readonly Dictionary<string, string> OutsideLocalCli = new()
     {
@@ -138,6 +159,16 @@ public sealed class RoofLocalRouteCoverageTests
         var classified = Calls.Select(call => call.Route).Distinct().Concat(OutsideLocalCli.Keys);
         classified.Should().BeEquivalentTo(routes, "new routes must declare their local authorization category or why local CLI never authorizes them");
         OutsideLocalCli.Values.Should().OnlyContain(reason => !string.IsNullOrWhiteSpace(reason));
+    }
+
+    [TestMethod]
+    public void EveryRouteBuilder_IsClassifiedForLocalCli()
+    {
+        var builders = typeof(RoofApiRoutes).GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Where(method => method.ReturnType == typeof(string)).Select(method => method.Name);
+        var classified = BuilderCalls.Select(call => call.Builder);
+        classified.Should().BeEquivalentTo(builders,
+            "every route builder, including query variants and cameras, needs a local CLI scope decision");
     }
 
     [TestMethod]

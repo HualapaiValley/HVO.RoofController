@@ -26,14 +26,7 @@ public sealed class RoofScopeAuthorizationHandler : AuthorizationHandler<RoofSco
                 if (context.User.HasClaim(RoofPrincipalFactory.OwnedKeyClaimType, "true")) return Task.CompletedTask;
                 scope = "identity";
             }
-            else if (HttpMethods.IsGet(http.Request.Method))
-            {
-                // Only a native settings form may request configure authorization for its permission metadata.
-                // Automation keys retain their existing read requirement, and no other GET gains configure access.
-                scope = context.User.HasClaim(RoofPrincipalFactory.LocalClaimType, "true")
-                    && string.Equals(path, "/api/v4.0/Settings", StringComparison.OrdinalIgnoreCase)
-                    && http.Request.Query["forConfiguration"] == "true" ? "configure" : "read";
-            }
+            else if (HttpMethods.IsGet(http.Request.Method)) scope = "read";
             else if (path.Contains("/Settings/", StringComparison.OrdinalIgnoreCase)) scope = "configure";
         }
         if (claims.Contains(scope, StringComparer.Ordinal)) context.Succeed(requirement);

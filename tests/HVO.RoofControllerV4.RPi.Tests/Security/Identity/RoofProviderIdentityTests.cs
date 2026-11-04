@@ -235,33 +235,6 @@ public sealed class RoofProviderIdentityTests
     }
 
     [TestMethod]
-    [DataRow(true, "configure", "/api/v4.0/Settings", true, true)]
-    [DataRow(true, "read", "/api/v4.0/Settings", true, false)]
-    [DataRow(true, "configure", "/api/v4.0/Settings", false, false)]
-    [DataRow(true, "read", "/api/v4.0/Settings", false, true)]
-    [DataRow(true, "configure", "/api/v4.0/Settings/Catalogue", true, false)]
-    [DataRow(true, "configure", "/api/v4.0/RoofControl/Status", true, false)]
-    [DataRow(false, "configure", "/api/v4.0/Settings", true, false)]
-    [DataRow(false, "read", "/api/v4.0/Settings", true, true)]
-    public async Task ConfigureSettingsForm_IsLimitedToNativeAuthorization(bool native, string scope, string path, bool configureForm, bool expected)
-    {
-        var claims = new List<System.Security.Claims.Claim>
-        {
-            new(RoofPrincipalFactory.ScopeClaimType, scope),
-            new(native ? RoofPrincipalFactory.LocalClaimType : RoofPrincipalFactory.OwnedKeyClaimType, "true")
-        };
-        var user = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(claims, "test"));
-        var requirement = new RoofScopeRequirement("operate");
-        var http = new DefaultHttpContext();
-        http.Request.Method = "GET";
-        http.Request.Path = path;
-        if (configureForm) http.Request.QueryString = new QueryString("?forConfiguration=true");
-        var context = new AuthorizationHandlerContext([requirement], user, http);
-        await new RoofScopeAuthorizationHandler().HandleAsync(context);
-        Assert.AreEqual(expected, context.HasSucceeded);
-    }
-
-    [TestMethod]
     public async Task ProductionHttpVirtualKeyReadStopAndOwnerIsolation()
     {
         using var directory = new TemporaryDirectory();

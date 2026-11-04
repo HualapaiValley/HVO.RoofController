@@ -457,9 +457,10 @@ heartbeat would take a new lease (and drop every grant) and none would ever laps
 
 ## Settings
 
-With `--local`, the settings form requests native `configure` authorization so `config show`, `get` and `set` report
-permissions for the same credential that submits changes. An enrolled Linux controller administrator can change
-local-only settings after any required safety-critical confirmation. A kiosk PIN never grants local-only rights.
+With `--local`, settings forms use native `read` authorization. For an enrolled Linux controller administrator with
+the Admin role, the controller reports local-only settings as changeable; submitting a change still requests fresh
+`configure` authorization and any required safety-critical confirmation. Viewer and Operator accounts retain their
+read access. The terminal Settings page uses the same permissions. A kiosk PIN never grants local-only rights.
 
 The settings are the controller's `appsettings.Local.json` (#42). `hvo-roof` reads and changes them through the API,
 one group at a time, and they can equally be edited in the file itself.

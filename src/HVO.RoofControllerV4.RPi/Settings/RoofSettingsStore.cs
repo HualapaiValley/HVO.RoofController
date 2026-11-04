@@ -530,7 +530,10 @@ public sealed class RoofSettingsStore
     private RoofSettingsResponse BuildResponse(Layers layers, ClaimsPrincipal user, HandEdit? edit)
     {
         var admin = user.IsInRole(RoofControllerApiContract.AdminRole);
-        var local = RoofLocalCredential.IsLocal(user, _keys);
+        // A read-scoped native Admin's form describes the later configure-authorized write. This is metadata
+        // only: Update, Reload and Restart still check IsLocal with the request's actual configure scope.
+        var local = RoofLocalCredential.IsLocal(user, _keys)
+            || (admin && user.Identity?.IsAuthenticated == true && user.HasClaim(RoofPrincipalFactory.LocalClaimType, "true"));
         var view = new RoofConfigurationView(layers.Providers);
         var roof = _roof.GetConfigurationSnapshot();
         var states = new List<RoofSettingState>();

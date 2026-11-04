@@ -450,8 +450,9 @@ The steps the installer takes, for a Pi set up without it:
    sudo systemctl start hvo-roof-kiosk
    ```
 
-4. **The device key.** Give the kiosk a key of its own, with the `RoofViewer` role, marked `Kiosk` (and `Local`, so an
-   admin may change the local-only settings here). Add it to the controller's secrets as any configured key
+4. **The device key.** Give the kiosk a key of its own, with the `RoofViewer` role, marked `Kiosk`. A kiosk PIN never
+   grants local-only settings rights; those require a local admin API key or verified native Linux administrator
+   authorization. Add the device key to the controller's secrets as any configured key
    ([Provisioning API keys](security.md#provisioning-api-keys)), under the next free index:
 
    ```bash

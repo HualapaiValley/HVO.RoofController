@@ -1,109 +1,218 @@
+using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using FluentAssertions;
 using HVO.RoofControllerV4.Cli;
+using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Security.Identity;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
+using HVO.RoofControllerV4.RPi.Tests.Client;
 using HVO.RoofControllerV4.RPi.Tests.Security;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Terminal.Gui.Input;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Views;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
-/// <summary>The real CLI and settings API with native helper issuance replaced by an enrolled test principal.</summary>
+/// <summary>The real CLI, native assertion exchange and settings API, with only native issuance/revalidation replaced.</summary>
 [TestClass]
+[DoNotParallelize]
 public sealed class RoofCliLocalSettingsTests
 {
     private const string AllowCommands = "RoofController:Alpaca:AllowCommands";
 
     [TestMethod]
+    [DataRow(RoofControllerApiContract.ViewerRole, "show")]
+    [DataRow(RoofControllerApiContract.ViewerRole, "get")]
+    [DataRow(RoofControllerApiContract.OperatorRole, "show")]
+    [DataRow(RoofControllerApiContract.OperatorRole, "get")]
+    public async Task LocalNonAdmin_SettingsRemainReadable_ThroughTheRealNativeExchange(string role, string command)
+    {
+        using var native = new NativeSettingsRig(role);
+        var arguments = command == "show" ? new[] { "config", "show" } : new[] { "config", "get", "RoofControllerUi:DefaultCamera" };
+
+        var read = await native.Cli.RunAsync(["--local", .. arguments]);
+
+        read.Code.Should().Be(RoofExitCode.Success, read.ToString());
+        read.Out.Should().Contain("DefaultCamera");
+        native.Operations.Should().OnlyContain(operation => operation == "read");
+        native.Cli.Stored!.Session.Should().BeNull();
+    }
+
+    [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
-    public async Task LocalAdmin_SettingsFormUsesConfigure_AndSetStillRequiresSafetyConfirmation(bool show)
+    public async Task LocalAdmin_SettingsFormDescribesTheConfigureWrite_AndSetStillRequiresSafetyConfirmation(bool show)
     {
-        if (!Socket.OSSupportsUnixDomainSockets) Assert.Inconclusive("Native sessions require Unix sockets.");
-        using var directory = new TemporaryDirectory();
-        var socketPath = directory.File("worker.sock");
-        var enrollment = new RoofPrincipalEnrollRequest
-        {
-            Provider = "linux", Subject = Guid.NewGuid().ToString("N"), Name = "fixture",
-            EnrollmentStamp = Guid.NewGuid().ToString("N"), Role = RoofControllerApiContract.AdminRole
-        };
-        var builder = WebApplication.CreateBuilder();
-        builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(options => options.ListenUnixSocket(socketPath));
-        await using var worker = builder.Build();
-        worker.MapPost("/v1/revalidate", () => Results.Json(new { valid = true, userName = enrollment.Name }));
-        await worker.StartAsync();
-        var logs = new RecordingLoggerProvider();
-        await using var controller = new RoofApiTestHost(configureServices: services => services.AddSingleton<ILoggerProvider>(logs), settings: new Dictionary<string, string?>
-        {
-            ["RoofControllerSecurity:Identity:StorePath"] = directory.File("identity.json"),
-            ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true",
-            ["RoofControllerSecurity:Identity:LinuxAuth:SocketPath"] = socketPath
-        });
-        using var rig = new CliRig(controller);
-        rig.UseApiKey(null);
-        var store = controller.Services.GetRequiredService<RoofIdentityStore>();
-        var principal = store.EnrollLinux(enrollment).Value!;
-        var linux = store.FindLinux(enrollment.Subject)!;
-        var operations = new List<string>();
-        rig.ObtainLocalAssertion = (operation, _) =>
-        {
-            operations.Add(operation);
-            var session = store.CreateProviderSession(principal.Id, linux.Stamp, operation,
-                new StoredAssertionNonce(Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), DateTimeOffset.UtcNow.AddSeconds(30))).Value!;
-            return Task.FromResult(session.Token);
-        };
-        rig.WrapHandler = inner => new LocalExchangeHandler(inner);
-
+        using var native = new NativeSettingsRig(RoofControllerApiContract.AdminRole);
         if (show)
         {
-            var shown = await rig.RunAsync("--local", "config", "show", "alpaca");
+            var shown = await native.Cli.RunAsync("--local", "config", "show", "alpaca");
             shown.Code.Should().Be(RoofExitCode.Success, shown.ToString());
             shown.Out.Split('\n').Single(line => line.Contains(AllowCommands)).Should().NotContain("read-only");
-            operations.Should().Equal("read", "configure");
+            native.Operations.Should().Equal("read", "read");
             return;
         }
 
-        operations.Clear();
-        var refused = await rig.RunAsync("--local", "config", "set", AllowCommands + "=CloseOnly");
+        var refused = await native.Cli.RunAsync("--local", "config", "set", AllowCommands + "=CloseOnly");
         refused.Code.Should().Be(RoofExitCode.ConfirmationRequired, refused.ToString());
-        operations.Should().Equal("read", "configure");
+        native.Operations.Should().Equal("read", "read");
 
-        operations.Clear();
-        var changed = await rig.RunAsync("--local", "config", "set", AllowCommands + "=CloseOnly", "--confirm-safety-critical");
+        native.Operations.Clear();
+        var changed = await native.Cli.RunAsync("--local", "config", "set", AllowCommands + "=CloseOnly", "--confirm-safety-critical");
         changed.Code.Should().Be(RoofExitCode.Success, changed.ToString());
-        operations.Should().Equal("read", "configure", "configure");
-        var reread = await rig.RunAsync("--local", "config", "get", AllowCommands);
+        native.Operations.Should().Equal("read", "read", "configure");
+        var reread = await native.Cli.RunAsync("--local", "config", "get", AllowCommands);
         reread.Out.Should().Contain("CloseOnly");
-        rig.Stored!.Session.Should().BeNull();
-        logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning
+        native.Cli.Stored!.Session.Should().BeNull();
+        native.Logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning
             && entry.Message.Contains("AUDIT settings") && entry.Message.Contains("fixture")
             && entry.Message.Contains(AllowCommands) && entry.Message.Contains("CloseOnly"));
     }
 
-    private sealed class LocalExchangeHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+    [TestMethod]
+    [DataRow("RoofControllerOptionsV4:AtSpeedConfirmationTimeout", "", false)]
+    [DataRow("RoofControllerOptionsV4:AllowIgnoringLimitSwitchesOnPhysicalHardware", "true", true)]
+    public void LocalAdmin_TerminalSettings_SendsTheWholeRoofGroup_AfterSafetyConfirmation(string key, string value, bool localOnly)
     {
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            if (request.RequestUri!.AbsolutePath != "/api/v4.0/Auth/LocalSession")
-                return await base.SendAsync(request, cancellationToken);
-            var body = await request.Content!.ReadFromJsonAsync<RoofLocalSignInRequest>(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new RoofSessionResponse(body!.Assertion, "fixture", "fixture", "RoofAdmin",
-                    RoofCredentialKind.Session, DateTimeOffset.UtcNow.AddSeconds(30), null), options: RoofClientJson.Options)
-            };
-        }
+        using var native = new NativeSettingsRig(RoofControllerApiContract.AdminRole);
+        using var tui = new TuiDriver(native.Cli);
+        tui.WaitIdle("the native local caller and initial status", () => tui.Ui.Status is not null && tui.Ui.Caller is not null);
+        tui.Press(Key.F2);
+        tui.WaitIdle("the settings form", () => ((RoofUiSettingsPage)tui.Ui.CurrentPage).Form is not null);
+        var page = (RoofUiSettingsPage)tui.Ui.CurrentPage;
+        var before = page.Form!.Version;
+        page.Select(key);
+        page.SelectedField!.Setting.LocalOnly.Should().Be(localOnly);
+        var change = FindButton(page, "Change") ?? throw new AssertFailedException("The Change button is missing.");
+        change.InvokeCommand(Command.Accept);
+        tui.Pump();
+        tui.Ui.Panel.Should().NotBeNull("a verified native administrator may edit this setting");
+        tui.Ui.Panel!.Fields[0].Text = value;
+        tui.Ui.Panel.Press("Save");
+        tui.Ui.Panel!.Prompt.Title.Should().Be("Safety-critical change");
+        tui.WaitIdle("the confirmation, with nothing sent yet");
+        page.Form.Version.Should().Be(before);
+
+        tui.Ui.Panel.Press("Confirm and send");
+        tui.WaitIdle("the complete roof-group update");
+
+        tui.Ui.Message.Should().StartWith("Saved", "the read form must include every field the configure write requires");
+        page.Form!.Version.Should().Be(before + 1);
+        native.Operations.Should().Contain("configure");
+        native.Logs.Entries.Should().Contain(entry => entry.Message.Contains("AUDIT settings") && entry.Message.Contains(key));
     }
+
+    [TestMethod]
+    public async Task LocalAdmin_ReadFormPreviewsLocalWrites_ButReadScopeCannotSubmitThem()
+    {
+        using var native = new NativeSettingsRig(RoofControllerApiContract.AdminRole);
+        using var exchange = ClientTestSupport.CreateClient(native.Controller);
+        using var client = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = ClientTestSupport.BaseAddress,
+            CreateHandler = () => ClientTestSupport.CreateHandler(() => native.Controller.Server),
+            LocalAuthorization = async (_, cancellationToken) => await exchange.Auth.SignInLocallyAsync(
+                await native.Cli.ObtainLocalAssertion!("read", cancellationToken), cancellationToken)
+        });
+        var form = RoofSettingsForm.Create(await client.Settings.GetCatalogueAsync(), await client.Settings.GetAsync());
+        form.FindField(AllowCommands)!.CanWrite.Should().BeTrue("the read form describes an admin's later configure write");
+        var edit = form.Edit(RoofSettingsContract.AlpacaGroup);
+        edit.TrySet(AllowCommands, "CloseOnly", out var problem).Should().BeTrue(problem);
+
+        Func<Task> write = () => client.Settings.UpdateAsync(RoofSettingsContract.AlpacaGroup, edit.ToRequest(true));
+        (await write.Should().ThrowAsync<RoofApiException>()).Which.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    private static Button? FindButton(View view, string label)
+    {
+        foreach (var child in view.SubViews)
+        {
+            if (child is Button button && button.Text == label) return button;
+            if (FindButton(child, label) is { } nested) return nested;
+        }
+        return null;
+    }
+}
+
+/// <summary>Real native signature verification, role/scope exchange, revalidation and API authorization; no PAM or sudo.</summary>
+internal sealed class NativeSettingsRig : IDisposable
+{
+    private readonly TemporaryDirectory _directory = new();
+    private readonly WebApplication _worker;
+    private readonly byte[] _assertionKey = RandomNumberGenerator.GetBytes(32);
+
+    public NativeSettingsRig(string role)
+    {
+        if (!Socket.OSSupportsUnixDomainSockets) Assert.Inconclusive("Native sessions require Unix sockets.");
+        var enrollment = new RoofPrincipalEnrollRequest
+        {
+            Provider = "linux", Subject = Guid.NewGuid().ToString("N"), Name = "fixture",
+            EnrollmentStamp = Guid.NewGuid().ToString("N"), Role = role
+        };
+        var socketPath = _directory.File("worker.sock");
+        var keyPath = _directory.File("assertion.key");
+        var keyOptions = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows()) keyOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using (var keyFile = new FileStream(keyPath, keyOptions)) keyFile.Write(_assertionKey);
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(options => options.ListenUnixSocket(socketPath));
+        _worker = builder.Build();
+        _worker.MapPost("/v1/revalidate", () => Microsoft.AspNetCore.Http.Results.Json(new { valid = true, userName = enrollment.Name }));
+        _worker.StartAsync().GetAwaiter().GetResult();
+        var roof = new SettingsApiTests.RoofDouble();
+        Controller = new RoofApiTestHost(roof.Mock,
+            configureServices: services => services.AddSingleton<ILoggerProvider>(Logs),
+            settings: new Dictionary<string, string?>
+            {
+                ["RoofControllerSecurity:Identity:StorePath"] = _directory.File("identity.json"),
+                ["RoofControllerSecurity:Identity:LinuxAuth:Enabled"] = "true",
+                ["RoofControllerSecurity:Identity:LinuxAuth:SocketPath"] = socketPath,
+                ["RoofControllerSecurity:Identity:LinuxAuth:AssertionKeyPath"] = keyPath,
+                ["RoofControllerSecurity:Identity:LinuxAuth:Audience"] = "native-settings-tests"
+            });
+        roof.StartFrom(Controller);
+        Controller.Services.GetRequiredService<RoofIdentityStore>().EnrollLinux(enrollment).Succeeded.Should().BeTrue();
+        Cli = new CliRig(Controller);
+        RoofCredentialStore.Save(Cli.CredentialsPath, new RoofStoredCredentials
+        {
+            Controller = new Uri("http://localhost/"), AuthMode = "local"
+        });
+        Cli.ObtainLocalAssertion = (operation, _) =>
+        {
+            Operations.Enqueue(operation);
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var claims = new RoofNativeAssertion(1, "local-admin", "linux", enrollment.Subject, enrollment.Name,
+                enrollment.EnrollmentStamp, "native-settings-tests", operation, now, now + 30,
+                Encode(RandomNumberGenerator.GetBytes(32)));
+            var payload = JsonSerializer.SerializeToUtf8Bytes(claims, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            return Task.FromResult(Encode(payload) + "." + Encode(HMACSHA256.HashData(_assertionKey, payload)));
+        };
+    }
+
+    public RoofApiTestHost Controller { get; }
+    public CliRig Cli { get; }
+    public ConcurrentQueue<string> Operations { get; } = new();
+    public RecordingLoggerProvider Logs { get; } = new();
+
+    public void Dispose()
+    {
+        Cli.Dispose();
+        Controller.Dispose();
+        _worker.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        CryptographicOperations.ZeroMemory(_assertionKey);
+        _directory.Dispose();
+    }
+
+    private static string Encode(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 }

@@ -55,12 +55,6 @@ internal static class RoofLocalAuthorization
             return "read";
         }
 
-        // The explicit settings form describes permissions for the native credential that will submit edits.
-        if (method == HttpMethod.Get && path == RoofApiRoutes.Settings + "?forConfiguration=true")
-        {
-            return "configure";
-        }
-
         if (path is RoofApiRoutes.Configuration or RoofApiRoutes.Settings or RoofApiRoutes.SettingsCatalogue
             or RoofApiRoutes.SettingsReload or RoofApiRoutes.SettingsDiscard or RoofApiRoutes.Restart
             || path.StartsWith(RoofApiRoutes.Settings + "/", StringComparison.Ordinal))

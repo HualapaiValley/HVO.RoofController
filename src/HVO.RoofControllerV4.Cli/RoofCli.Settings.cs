@@ -33,7 +33,7 @@ public static partial class RoofCli
         private static async Task<RoofSettingsForm> LoadFormAsync(RoofControllerClient client, CancellationToken cancellationToken)
         {
             var catalogue = await client.Settings.GetCatalogueAsync(cancellationToken).ConfigureAwait(false);
-            var settings = await client.Settings.GetForConfigurationAsync(cancellationToken).ConfigureAwait(false);
+            var settings = await client.Settings.GetAsync(cancellationToken).ConfigureAwait(false);
             return RoofSettingsForm.Create(catalogue, settings);
         }
 
