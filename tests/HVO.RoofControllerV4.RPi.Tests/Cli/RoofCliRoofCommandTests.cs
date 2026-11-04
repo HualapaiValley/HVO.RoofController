@@ -812,7 +812,7 @@ public sealed class RoofCliRoofCommandTests
         var result = await run.EndAsync();
 
         result.Code.Should().Be(RoofExitCode.Failed, result.ToString());
-        result.Error.Should().StartWith("The roof stopped before the end: Stopped. Stopped by operator, ");
+        result.Error.TrimEnd().Should().Be("The roof stopped before the end: Stopped. Stopped by operator.");
         result.Out.Should().NotContain("Done.");
     }
 
