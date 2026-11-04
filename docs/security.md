@@ -665,6 +665,11 @@ Only a local credential may change them:
 
 A kiosk PIN never grants these administrative rights, even when its device key is marked `Local`.
 
+A settings read uses `read` scope. For a verified native local Admin, its form reports local-only settings as
+changeable with a later configure-authorized request. This is permission metadata, not a write grant: each change
+still needs fresh `configure` authorization, the required role, a local credential, safety confirmation and audit.
+Viewer and Operator reads, API key permissions and kiosk rights are unchanged.
+
 A password session and a key added through the API are never local. The check is on the credential, never on the
 caller's address: behind Docker's port publishing, and with the web UI in the same container, an address does not show
 where a person is. Everyone else gets 403 `SettingNotPermitted` for these settings. `RoofControl/Configuration` never

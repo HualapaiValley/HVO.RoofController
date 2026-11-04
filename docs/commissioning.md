@@ -114,7 +114,8 @@ While the controller runs, it notices the edit but does not use it:
    from and to. Changes through the API are refused until the edit is reloaded or discarded.
 2. An admin reviews the edit and reloads it (`POST /api/v4.0/Settings/Reload` with its token). The reload is checked
    like a change through the API: a safety-critical change needs confirmation, and a local-only setting needs a local
-   credential (the kiosk with an admin PIN, or a local admin API key on the Pi).
+   credential (a local admin API key or verified native Linux administrator authorization). A kiosk PIN never grants
+   local-only rights.
 3. Or the admin discards it (`POST /api/v4.0/Settings/Discard`), which writes back the settings in effect.
 
 `POST /api/v4.0/System/Restart` also loads the edit, after the same checks. Restarting the container directly skips

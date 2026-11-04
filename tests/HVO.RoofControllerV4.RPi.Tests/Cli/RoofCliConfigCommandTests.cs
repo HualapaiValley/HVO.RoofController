@@ -269,7 +269,7 @@ public sealed class RoofCliConfigCommandTests
 
         result.Code.Should().Be(RoofExitCode.Success, result.ToString());
         Row(result.Out, "Change").Should().Be(
-            $"read-only: {Departure} is local-only: change it at the controller, from the kiosk with an admin PIN or with a local admin API key.");
+            $"read-only: {Departure} is local-only: change it at the controller, using verified native Linux administrator authorization or a local admin API key. A kiosk PIN does not grant local-only rights.");
         Row(result.Out, "Notes").Should().Be("read-only, safety-critical to turn off, local credential");
     }
 
