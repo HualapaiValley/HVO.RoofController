@@ -388,6 +388,9 @@ test_the_backoff_doubles_up_to_its_maximum() {
   echo 1 >"${FAKE_DIR}/controller.exit-at-start"
   start_supervisor HVO_SUPERVISOR_CRASH_LIMIT=10 HVO_SUPERVISOR_BACKOFF_MAX_SECONDS=4
   wait_until 20 "five controller starts (four crashes)" state_is .controller.starts 5 || return
+  # The supervisor publishes its start count before the stand-in logs its start. Its event follows the timestamp,
+  # so wait for that evidence before measuring all four backoffs.
+  wait_until 5 "five controller start events" started controller 5 || return
   grep 'The controller stopped' "${WORK}/supervisor.log" | grep -o 'starting it again in [0-9]*s' | head -n 4 \
     | tr '\n' ',' >"${WORK}/delays"
   expect_equal "backoff delays" "$(cat "${WORK}/delays")" \

@@ -28,24 +28,30 @@ public sealed class C5ClearFaultPulseScenarios
     [CommissioningCheck("C4", "5")]
     public async Task TheDefaultPulse_ClosesRly3ForItsLength_AndResetsTheTrippedDrive()
     {
-        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production());
-        using var client = rig.CreateApiClient(TestApiKeys.Operator);
-        await TripWhileOpeningAsync(rig, client);
+        using var harness = await PlantHarness.StartAsync();
+        harness.Open().IsSuccessful.Should().BeTrue();
+        harness.RunUntil(() => harness.Plant.Position > 0.08, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        TripIdle(harness);
+        harness.RunUntilStopped(TimeSpan.FromSeconds(5)).Should().BeTrue();
 
-        var cleared = await client.AcceptedAsync("ClearFault");
-
+        (await harness.ClearFaultAsync()).IsSuccessful.Should().BeTrue();
+        var cleared = harness.Snapshot;
         cleared.IsFaultLatched.Should().BeFalse();
         cleared.IsDriveFaultActive.Should().BeFalse();
         cleared.LastStopReason.Should().Be(RoofControllerStopReason.DriveFault, "the original cause is kept");
-        cleared.ShouldBeDeenergized(rig);
-        rig.Plant.DriveTrip.Should().Be(SmVectorTrip.None);
-        PulseLengths(rig).Should().ContainSingle().Which.TotalMilliseconds.Should().BeInRange(240, 350,
-            "RLY3 closes for the default 250 ms, plus the register round trips");
+        cleared.ShouldBeDeenergizedInTheRegister();
+        harness.RelayRegister.Should().Be(0, "the HAT's relay register is all off");
+        Enumerable.Range(1, 4).Should().OnlyContain(relay => !harness.Plant.Hat.IsContactClosed(relay),
+            "every relay contact is open");
+        harness.Plant.Drive.Trip.Should().Be(SmVectorTrip.None);
+        PulseLengths(harness).Should().ContainSingle().Which.TotalMilliseconds.Should().BeInRange(240, 350,
+            "RLY3 closes for the default 250 ms, plus the register round trips on the manual clock");
 
-        await client.AcceptedAsync("Close");
-        (await rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Closed && !s.IsMoving, "the roof to close"))
-            .LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
-        rig.Session.Plant.Violations.Should().BeEmpty();
+        harness.Close().IsSuccessful.Should().BeTrue();
+        harness.RunUntil(() => harness.Status == RoofControllerStatus.Closed && !harness.Snapshot.IsMoving,
+            TimeSpan.FromSeconds(10)).Should().BeTrue();
+        harness.Snapshot.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
+        harness.Violations.Should().BeEmpty();
     }
 
     [TestMethod]
@@ -63,7 +69,7 @@ public sealed class C5ClearFaultPulseScenarios
         // The requested 250 ms delay is 50 ms below the drive's minimum, but its timer starts after RLY3's
         // write/read-back. The measured contact pulse is about 283 ms here, leaving about 17 ms of margin.
         // A real-time host's scheduling can consume that margin. Keep this boundary on the manual clock;
-        // the other C5 scenarios exercise the HTTP host and its real-time pulses.
+        // C5 steps 5–6 exercise the HTTP host and its real-time pulses.
         var shortPulse = harness.Controller.ClearFault();
         await Task.Delay(150); // A scheduling pause beyond the contact pulse's margin must not advance it.
         harness.RunFor(TimeSpan.FromMilliseconds(RoofControllerLimits.DefaultClearFaultPulseMilliseconds));
@@ -140,16 +146,6 @@ public sealed class C5ClearFaultPulseScenarios
         // C5 step 6: another Stop does not clear it either; a completed pulse does.
         (await client.AcceptedAsync("Stop")).IsFaultLatched.Should().BeTrue();
         (await client.AcceptedAsync("ClearFault")).IsFaultLatched.Should().BeFalse();
-    }
-
-    private static async Task TripWhileOpeningAsync(EmulatedRoofRig rig, System.Net.Http.HttpClient client)
-    {
-        await client.AcceptedAsync("Open");
-        await rig.WaitForPlantAsync(p => p.PositionMeters > 0.08, "the roof to travel");
-        rig.Session.Plant.TripDrive(SmVectorTrip.External);
-        (await rig.WaitForControllerAsync(s => s.IsFaultLatched && !s.IsMoving, "the trip to latch"))
-            .LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
-        await rig.WaitForRestAsync("the trip");
     }
 
     private static async Task TripIdleAsync(EmulatedRoofRig rig)
