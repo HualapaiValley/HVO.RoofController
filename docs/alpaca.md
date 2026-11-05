@@ -699,8 +699,8 @@ after a relay mismatch or repeated failed relay reads. Routine reads keep their 
 fence moves: the section holding the lock then shares that fence's arrival deadline and skips remaining routine relay
 reads and LEDs to let the protective work take the lock promptly. Supervision also yields at cycle entry when a
 protective request is pending, before starting routine HAT work. If one arrives during an all-off retry, the cycle
-skips the following input read too; an access refused before it reaches the HAT does not count as an input transfer
-failure. Pending requests stay recorded until they are
+skips the following input read too, avoiding a read the pending deadline could refuse before it reaches the HAT.
+Because that read is skipped, it does not add an input transfer failure. Pending requests stay recorded until they are
 applied, including when they precede a section or pass to a queued worker; routine work uses the earliest foreign
 deadline. A caller that decides its own stop retains that stop's deadline for all-off and verification, so an overdue
 foreign request cannot suppress a fresh protective stop's writes. A routine retry of unverified all-off relays keeps
@@ -734,8 +734,8 @@ The supervision cycle reads the relay register back every second while the roof 
 while it moves. A register that does not match what was commanded (a late ON among them) stops the motion, or, idle,
 writes every relay off, and latches `RelayVerificationFailed`; while the relays are unverified, each cycle writes them
 off again until a read-back shows them off. A pending protective request takes priority: the cycle yields at entry,
-and if a request cuts an all-off retry, it skips the following input read as well as remaining routine relay reads
-and LEDs.
+and if a request is pending after an all-off retry, it skips the following input read as well as remaining routine
+relay reads and LEDs.
 
 ### Controller settings
 
