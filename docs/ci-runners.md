@@ -38,7 +38,9 @@ release assembler. See [terminal distributions](terminal-distributions.md) for t
 The managed workflow checks retain a 600-second bound per process. Installer backup, lifecycle and
 state contracts each run in their own process; the remaining contracts and the isolated render tests
 run separately, with no catalogue exclusions added. Per-test progress and durations survive failures
-and timeouts in each batch's `workflow-run.txt`; a timeout terminates its testhost as well as VSTest.
+and timeouts in each batch's `workflow-run.txt`; timeout, SIGINT and SIGTERM cleanup terminates
+its testhost as well as VSTest. The workflow-exercise step has a 20-minute limit inside the
+30-minute job, with runtime evidence uploaded on failure as well as success.
 The [Refs #264 investigation](ci-264-terminal-workflows.md) records the macOS runner-image change,
 historical timings and the confirmation still required from PR CI.
 

@@ -127,15 +127,17 @@ def run_phase(dotnet, staged, environment, test_filter, output, timeout=600):
                               start_new_session=True) as process:
             try:
                 code = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
+            except BaseException as error:
                 # vstest owns a separate testhost; killing only vstest leaves that host running.
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 process.wait()
-                raise RuntimeError(f'{output.parent.name}/{output.name}: distributed workflow check exceeded '
-                                   f'{timeout} seconds; see workflow-run.txt') from None
+                if isinstance(error, subprocess.TimeoutExpired):
+                    raise RuntimeError(f'{output.parent.name}/{output.name}: distributed workflow check exceeded '
+                                       f'{timeout} seconds; see workflow-run.txt') from None
+                raise
     if code:
         raise RuntimeError(f'{output.parent.name}/{output.name}: distributed workflow check failed; see workflow-run.txt')
     results = ET.parse(output / 'final-terminal-workflows.trx').getroot()
@@ -209,4 +211,6 @@ def main():
 
 
 if __name__ == '__main__':
+    # SIGINT already raises KeyboardInterrupt; give SIGTERM the same cleanup path.
+    signal.signal(signal.SIGTERM, lambda number, _frame: sys.exit(128 + number))
     main()

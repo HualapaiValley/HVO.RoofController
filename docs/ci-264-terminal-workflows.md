@@ -43,20 +43,46 @@ occupied approximately 158 seconds. The slowest individual test was
 `Renew_WhileTheRoofMoves_PutsTheCertificateInPlace_AndRedeploysOnlyOnceItIsIdle`
 at 7.52 seconds. These are fake-machine workflows, with real local file and
 certificate operations, rather than waits for a controller or real installation.
-The 513 CLI contract rows common to the Nov 6 artifact and the failing PR artifact
-also slowed from 100.21 to 209.53 summed seconds. Scaling the prior 338-second
-installer workload by that observed factor would exceed 600 seconds; that is a
-budget estimate, not a measurement of the interrupted installer tests.
+
+Both passing macOS baselines matter. The 515 CLI contract rows common to all seven
+artifacts show substantial variation, including between the two passing runs:
+
+| macOS run | Sum of the 515 common CLI test durations | `RoofCliCaCertificateTests` (33 tests) |
+| --- | --- | --- |
+| Nov 5 / 41997972151, installer passed | 183.91 s | 24.85 s |
+| Nov 6 / 42190870047, installer passed | 100.63 s | 12.39 s |
+| Nov 7 / 42354627755, installer timed out | 200.57 s | 60.19 s |
+| Nov 8 / 42463147445, installer timed out | 122.93 s | 58.97 s |
+| Nov 9 / 42589991644, installer timed out | 189.24 s | 57.31 s |
+| Nov 10 / 42788076162, installer timed out | 220.15 s | 59.11 s |
+| PR #259 / 42977458463, installer timed out | 210.06 s | 77.16 s |
+
+Rows are identified by class, method and display name. Two pairs of grant cases
+share class/display-name keys; omitting the method collapses the 515 cases into 513
+keys and gives the earlier Nov 5/Nov 10 totals of 183.46/219.64 seconds. The table
+above retains every common case.
+
+The Nov 5-to-Nov 10 comparison is much smaller than the Nov 6-to-PR comparison.
+The certificate class slows disproportionately; some other groups are faster than
+on Nov 5 (for example, `RoofCliRoofCommandTests`: 38.33 s on Nov 5, 33.14 s in the
+PR run). These observations do not support a uniform runner-slowdown multiplier or
+an extrapolation of CLI timing to the installer budget. The timeout's cause remains
+**UNPROVEN**: certificate costs, another installer operation, accumulated resource
+use or a stalled test cannot be distinguished without installer progress evidence.
 
 The correction partitions those three groups from a complement containing every
 remaining contract, including future classes. Each batch retains its own 600-second
 limit; render filters, command isolation, required contract assertions and exact
 bundled-assembly staging remain in force. This removes the single budget shared by
-all 1,011 tests without enlarging it. It does not certify that a hung test is repaired.
+all 1,011 tests without enlarging the per-process limit. The whole workflow-exercise
+step is bounded at 20 minutes within the unchanged 30-minute job, with evidence upload
+still configured for `always()`. Batching is a mitigation; it does not establish the
+timeout's cause or certify that a hung test is repaired.
 Console logging now saves each completed test's duration directly to
-`workflow-run.txt`, including on failure or timeout, and timeout cleanup kills the
-whole VSTest process group. Previously, capture was discarded when the timeout
-raised, and the failed PR artifact contained no installer TRX or progress log.
+`workflow-run.txt`, including on failure or timeout. Exception cleanup kills the
+whole VSTest process group, including on SIGINT or SIGTERM. Previously, capture was
+discarded when the timeout raised, and the failed PR artifact contained no installer
+TRX or progress log.
 
 macOS confirmation must come from CI on a PR, which Kepler handles. A successful
 macOS job on the corrected main-equivalent branch, and on PR #259 or its successor,

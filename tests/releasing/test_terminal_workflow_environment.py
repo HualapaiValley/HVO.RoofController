@@ -82,11 +82,13 @@ class WorkflowEnvironment(unittest.TestCase):
 
     def test_installer_catalogue_is_partitioned_once_without_admitting_host_installs(self):
         folder = Path(__file__).parents[1] / 'HVO.RoofControllerV4.RPi.Tests/Installer'
+        checked = set()
         for source in folder.glob('*.cs'):
             text = source.read_text()
-            if '[TestClass]' not in text:
+            if not re.search(r'\[TestClass\b', text):
                 continue
             for name in re.findall(r'public (?:sealed |partial )*class (\w+)', text):
+                checked.add(name)
                 with self.subTest(test_class=name):
                     phases = selected_phases('hvo-roof-install', name)
                     expected = 0 if name in ['InstallerKioskSystemTests', 'InstallerMacSystemTests'] else 1
@@ -95,6 +97,8 @@ class WorkflowEnvironment(unittest.TestCase):
                         self.assertEqual(['render'], phases)
                     for category in ['Scenario', 'Browser', 'Soak']:
                         self.assertEqual([], selected_phases('hvo-roof-install', name, category))
+        self.assertTrue({'InstallerBootstrapTests', 'InstallerKioskCommissioningTests'} <= checked,
+                        'Combined TestClass/platform attributes must be included in the guard')
 
     def test_large_contracts_have_separate_budgets_and_future_contracts_keep_the_remainder(self):
         for name, expected in [('InstallerBackupTests', 'contracts-backup'),
@@ -174,6 +178,81 @@ class WorkflowEnvironment(unittest.TestCase):
                            '<Results><UnitTestResult testName="Control" outcome="Passed"/></Results>'))
             self.assertEqual(['Control'], workflows.run_phase(host, home, dict(os.environ),
                                                              'ControlledDriver', home / 'recovery'))
+
+    def test_cli_signals_keep_progress_and_terminate_both_test_processes(self):
+        from bundle_fixture import make_bundle
+
+        for stop_signal in [signal.SIGINT, signal.SIGTERM]:
+            with self.subTest(signal=stop_signal), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp)
+                dist = home / 'dist'
+                dist.mkdir()
+                for program in ['hvo-roof', 'hvo-roof-install']:
+                    owned = [program + '.dll', 'HVO.RoofControllerV4.Client.dll',
+                             'HVO.RoofControllerV4.Common.dll']
+
+                    def dependencies(deps):
+                        target = deps['targets'][deps['runtimeTarget']['name']]
+                        for name in owned:
+                            library = name.removesuffix('.dll') + '/4.0.0'
+                            deps['libraries'][library] = {'type': 'project'}
+                            target[library] = {'runtime': {name: {}}}
+
+                    (dist / (program + '-linux-x64')).write_bytes(make_bundle(
+                        deps_edit=dependencies, extra=[(name, b'fixture IL', 1, False) for name in owned]))
+                tests = home / 'tests'
+                tests.mkdir()
+                commands = home / 'commands'
+                commands.mkdir()
+                host = commands / 'dotnet'
+                host.write_text('#!' + sys.executable + '\n' + textwrap.dedent('''\
+                    import json, os, subprocess, sys, time
+                    from pathlib import Path
+                    output = Path(next(a.split(':', 1)[1] for a in sys.argv if a.startswith('/ResultsDirectory:')))
+                    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+                    (output / 'processes.json').write_text(json.dumps([os.getpid(), child.pid]))
+                    print('Passed earlier contract [123 ms]', flush=True)
+                    print('diagnostic on stderr', file=sys.stderr, flush=True)
+                    (output / 'ready').touch()
+                    time.sleep(60)
+                    '''))
+                host.chmod(0o700)
+                output = home / 'proof'
+                phase = output / 'hvo-roof/contracts'
+                with (home / 'runner.log').open('wb') as log:
+                    runner = subprocess.Popen(
+                        [sys.executable, workflows.__file__, str(dist), '--rid', 'linux-x64',
+                         '--tests', str(tests), '--output', str(output)],
+                        env=dict(os.environ, PATH=str(commands)), stdout=log, stderr=subprocess.STDOUT)
+                    try:
+                        deadline = time.monotonic() + 5
+                        while not (phase / 'ready').exists() and runner.poll() is None and time.monotonic() < deadline:
+                            time.sleep(.01)
+                        self.assertTrue((phase / 'ready').exists(), (home / 'runner.log').read_text())
+                        os.kill(runner.pid, stop_signal)
+                        code = runner.wait(timeout=5)
+                        self.assertIn(code, [-int(stop_signal), 128 + int(stop_signal)])
+                        progress = (phase / 'workflow-run.txt').read_text()
+                        self.assertIn('Passed earlier contract [123 ms]', progress)
+                        self.assertIn('diagnostic on stderr', progress)
+                        for pid in json.loads((phase / 'processes.json').read_text()):
+                            for _ in range(100):
+                                status = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)],
+                                                        capture_output=True, text=True, check=False).stdout.strip()
+                                if not status or status.startswith('Z'):
+                                    break
+                                time.sleep(.01)
+                            self.assertTrue(not status or status.startswith('Z'), status)
+                    finally:
+                        processes = phase / 'processes.json'
+                        if processes.exists():
+                            try:
+                                os.killpg(json.loads(processes.read_text())[0], signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        if runner.poll() is None:
+                            runner.kill()
+                        runner.wait(timeout=5)
 
 
 if __name__ == '__main__':
