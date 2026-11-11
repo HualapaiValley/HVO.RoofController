@@ -25,7 +25,7 @@ using Terminal.Gui.Input;
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
 /// <summary>
-/// The closed-issue audit's reproducers for #255 (follow-up F2: BB-1 and BM-1, found at
+/// The closed-issue audit's reproducers (Refs #255; follow-up F2: BB-1 and BM-1, found at
 /// 6e044ef18fb63d07884a955659cd9c043ede3d9c), ported, with the exit-7 hint loop and V2-F1.
 /// <para>
 /// The real <c>hvo-roof</c> command line and terminal interface, in this process, against the real controller in
@@ -37,7 +37,7 @@ namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 /// <para>
 /// <c>Expected_*</c> asserts what the documentation says (docs/cli.md, docs/safety-service.md), each in both ways local
 /// mode is selected: <c>--local</c> on the command line, and <c>authMode: local</c> saved in the credentials file (what
-/// the installer writes). Before #255 they failed: the command line refused the two query variants itself (exit 6,
+/// the installer writes). Before the change (Refs #255) they failed: the command line refused the two query variants itself (exit 6,
 /// nothing sent), and the printed hint dropped an explicit <c>--local</c>. <c>Control_*</c> shows the same harness
 /// sends the neighbouring commands.
 /// </para>

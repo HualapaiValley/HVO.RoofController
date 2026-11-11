@@ -239,7 +239,7 @@ internal sealed class RoofCliContext
     internal static readonly string SafetyOverrideHint = DescribeSafetyOverrideHint(local: null);
 
     /// <summary>
-    /// The safety override hint, keeping the authorization mode this command line chose (#255): with <c>--local</c>
+    /// The safety override hint, keeping the authorization mode this command line chose (Refs #255): with <c>--local</c>
     /// (<paramref name="local"/> true) or <c>--remote</c> (false), the command it prints says so too, so running it as
     /// printed is authorized the same way. Without either (null), a mode saved in the credentials file applies to it as
     /// it did to this command.
