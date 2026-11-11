@@ -354,4 +354,6 @@ Decided here:
 Still open:
 
 12. **The settings in the catalogue.** `RoofSafety` is configuration only; changing the mode through the API would be a
-    safety-critical, admin-only setting with confirmation.
+    safety-critical, admin-only setting with confirmation. It is deferred, with the other work #207 deferred
+    (threshold weather sources read from `ObservingConditions`, and other proof that a scope is clear of the roof), and
+    tracked in [the deferrals comment on #220](https://github.com/HualapaiValley/HVO.RoofController/issues/220#issuecomment-6787432091).

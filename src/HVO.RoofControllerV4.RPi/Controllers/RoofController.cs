@@ -123,8 +123,9 @@ namespace HVO.RoofControllerV4.RPi.Controllers
         }
 
         /// <summary>
-        /// Starts opening the roof (Operator). The safety interlock checks it first (<c>RoofSafety:InterlockMode</c>;
-        /// Off by default, which only logs an Open while the safety conditions are not Safe).
+        /// Starts opening the roof (Operator). The safety interlock checks it first (<c>RoofSafety:InterlockMode</c>).
+        /// Warn, the default, refuses an Open while the safety conditions are not Safe unless the request overrides
+        /// them; Block refuses it; Off only reports the conditions.
         /// </summary>
         /// <param name="overrideSafety">
         /// Open even though the safety conditions are not Safe, when the interlock is in Warn mode and the caller has its

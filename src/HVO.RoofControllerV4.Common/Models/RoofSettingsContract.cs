@@ -92,8 +92,10 @@ public enum RoofSettingSafety
 /// <param name="Safety">When a change needs <c>ConfirmSafetyCriticalChange</c>.</param>
 /// <param name="AppliesAfterRestart">True when a change takes effect only after the controller restarts.</param>
 /// <param name="LocalOnly">
-/// True when only a local credential may change it: a configured API key marked <c>Local</c>, or a PIN session at a
-/// kiosk whose configured key is marked <c>Local</c>.
+/// True when only a local credential may change it: an admin API key configured with <c>Local: true</c>, or an
+/// explicitly enrolled Linux controller administrator using verified native local authorization. A kiosk PIN never
+/// grants this, even when the kiosk's device key is marked <c>Local</c>; nor does a password session or a key added
+/// through the API.
 /// </param>
 /// <param name="Secret">True for a write-only value, kept in the managed secrets file and never returned.</param>
 /// <param name="Nullable">True when null is allowed.</param>
