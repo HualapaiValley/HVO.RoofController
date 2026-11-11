@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using FluentAssertions;
 using FluentAssertions.Execution;
 using HVO.Core.Results;
@@ -110,9 +109,9 @@ public sealed class F2LocalRouteReproTests
         native.Reset();
 
         // Exactly as printed. The test adds only what its fixture needs: --no-wait (the mocked roof never finishes a
-        // motion) and the rig's own --credentials-file. Never --local.
+        // motion). Never --local, and no --credentials-file: the printed command names the rig's file itself (Refs #261).
         string[] followed = [.. displayed[1..], "--no-wait"];
-        var opened = await native.Cli.RunAsync(followed);
+        var opened = await native.Cli.RunAsIsAsync(followed);
         Evidence(native, opened, followed);
 
         using (new AssertionScope())
@@ -125,6 +124,9 @@ public sealed class F2LocalRouteReproTests
             {
                 displayed.Should().NotContain("--local", "the saved authMode already selects local mode for the printed command");
             }
+
+            displayed.Should().ContainInConsecutiveOrder(["--credentials-file", native.Cli.CredentialsPath],
+                "the rig's command line names its credentials file, so the printed command does too (Refs #261)");
 
             opened.ExitCode.Should().Be(0, "the hint's command opens with the override");
             native.Operations.Should().Equal(["operate"], "the native helper is asked for operate; no saved remote credential substitutes");
@@ -152,12 +154,12 @@ public sealed class F2LocalRouteReproTests
         native.Reset();
 
         string[] followed = [.. displayed[1..], "--no-wait"];
-        var opened = await native.Cli.RunAsync(followed);
+        var opened = await native.Cli.RunAsIsAsync(followed);
         Evidence(native, opened, followed);
 
         using (new AssertionScope())
         {
-            displayed.Should().Equal(RoofCli.CommandName, "--remote", "open", "--override-safety");
+            displayed.Should().Equal(RoofCli.CommandName, "--remote", "--credentials-file", native.Cli.CredentialsPath, "open", "--override-safety");
             opened.ExitCode.Should().Be(0, opened.ToString());
             native.Operations.Should().BeEmpty("remote mode never asks the native helper");
             native.ClientCredentials.Should().Equal($"POST {OpenWithOverride}: api-key");
@@ -264,7 +266,8 @@ public sealed class F2LocalRouteReproTests
         var refused = await keyed.Cli.RunAsync("open", "--no-wait");
         Evidence(keyed, refused, ["open", "--no-wait"]);
         refused.Code.Should().Be(RoofExitCode.Refused, refused.ToString());
-        refused.Error.Should().Contain("[SafetyOverrideRequired]").And.Contain(RoofCliContext.SafetyOverrideHint);
+        refused.Error.Should().Contain("[SafetyOverrideRequired]");
+        DisplayedCommand(refused.Error).Should().Equal(RoofCli.CommandName, "--credentials-file", keyed.Cli.CredentialsPath, "open", "--override-safety");
         keyed.ClientSent.Should().Equal($"POST {OpenRoute}");
         keyed.Calls(nameof(IRoofControllerServiceV4.Open)).Should().Be(0);
 
@@ -360,13 +363,8 @@ public sealed class F2LocalRouteReproTests
 
     private static string[] Local(bool viaFlag) => viaFlag ? ["--local"] : [];
 
-    /// <summary>The command in the exit-7 hint, split into its words, exactly as printed.</summary>
-    private static string[] DisplayedCommand(string error)
-    {
-        var match = Regex.Match(error, "To open anyway: '(?<command>[^']+)'");
-        match.Success.Should().BeTrue($"the refusal prints the hint:\n{error}");
-        return match.Groups["command"].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-    }
+    /// <summary>The command in the exit-7 hint, split into its words as a shell splits them, exactly as printed.</summary>
+    private static string[] DisplayedCommand(string error) => SafetyOverrideHintCommand.Words(error);
 
     private void Evidence(F2Recorders rig, CliResult result, string[] arguments)
     {

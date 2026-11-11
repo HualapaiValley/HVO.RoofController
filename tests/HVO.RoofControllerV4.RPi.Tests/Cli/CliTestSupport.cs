@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Net;
 using FluentAssertions;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using HVO.RoofControllerV4.Cli;
 using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
@@ -137,6 +139,32 @@ internal sealed class CliRig : IDisposable
         return new CliResult(code, output.ToString(), error.ToString());
     }
 
+    /// <summary>
+    /// The file a command reads when its command line gives no <c>--credentials-file</c>: under this rig's own
+    /// <c>XDG_CONFIG_HOME</c>, never the person's. Nothing is there until a test saves it.
+    /// </summary>
+    public string DefaultCredentialsPath
+    {
+        get
+        {
+            Environment["XDG_CONFIG_HOME"] = Path.Combine(Directory, "config");
+            return RoofCredentialStore.GetDefaultPath(name => Environment.GetValueOrDefault(name));
+        }
+    }
+
+    /// <summary>
+    /// Runs one command line exactly as given, without the rig's <c>--credentials-file</c>: a command that names no
+    /// file reads <see cref="DefaultCredentialsPath"/>.
+    /// </summary>
+    public async Task<CliResult> RunAsIsAsync(params string[] args)
+    {
+        _ = DefaultCredentialsPath;
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var code = await RoofCli.RunAsync(args, CreateHost(output, error));
+        return new CliResult(code, output.ToString(), error.ToString());
+    }
+
     /// <summary>Saves the in-process controller's address and <paramref name="apiKey"/>, as <c>setup</c> would.</summary>
     public void UseApiKey(string? apiKey) => RoofCredentialStore.Save(
         CredentialsPath,
@@ -164,6 +192,73 @@ internal sealed record CliResult(int ExitCode, string Out, string Error)
     public JsonElement Json => JsonDocument.Parse(Out).RootElement;
 
     public override string ToString() => $"exit {ExitCode}\n--- out ---\n{Out}\n--- error ---\n{Error}";
+}
+
+/// <summary>
+/// The command the safety override hint prints after a refused Open (exit 7), read as the person's shell reads it.
+/// </summary>
+internal static class SafetyOverrideHintCommand
+{
+    /// <summary>The command exactly as printed: the text between the hint's quotation marks.</summary>
+    public static string Text(string error)
+    {
+        var match = Regex.Match(error, @"To open anyway: '(?<command>.*)'\. The controller logs the override", RegexOptions.Singleline);
+        match.Success.Should().BeTrue($"the refusal prints the hint:\n{error}");
+        return match.Groups["command"].Value;
+    }
+
+    /// <summary>
+    /// The printed command's words, split by a POSIX shell (<c>/bin/sh</c>), not by this test: the first is
+    /// <c>hvo-roof</c>, and the rest is what running the command as printed gives it.
+    /// </summary>
+    public static string[] Words(string error) => PosixShell.Split(Text(error));
+}
+
+/// <summary>A real shell, to say how it reads a command line. The command itself is never run.</summary>
+internal static class PosixShell
+{
+    /// <summary>The POSIX shell, and the interactive shells a person may paste a command into, where installed.</summary>
+    public static IReadOnlyList<string> Installed { get; } =
+        [.. new[] { "/bin/sh", "/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh" }
+            .Where(File.Exists)
+            .GroupBy(shell => Path.GetFileName(shell))
+            .Select(shells => shells.First())];
+
+    /// <summary>
+    /// The words <paramref name="shell"/> makes of <paramref name="command"/>, with its quoting and expansions applied:
+    /// they become the shell's own arguments (<c>set --</c>) and each is written back, so a word that was not quoted
+    /// as it should be comes back changed.
+    /// </summary>
+    public static string[] Split(string command, string shell = "/bin/sh")
+    {
+        var start = new ProcessStartInfo(shell)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = Path.GetTempPath()
+        };
+        foreach (var argument in new[] { "-c", "eval \"set -- $1\" && printf '%s\\0' \"$@\"", "split", command })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(start)!;
+        var error = process.StandardError.ReadToEndAsync();
+        using var written = new MemoryStream();
+        process.StandardOutput.BaseStream.CopyTo(written);
+        if (!process.WaitForExit(10_000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            throw new AssertFailedException($"{shell} did not finish reading: {command}");
+        }
+
+        process.ExitCode.Should().Be(0, $"{shell} reads the command line: {command}\n{error.GetAwaiter().GetResult()}");
+        var words = Encoding.UTF8.GetString(written.ToArray()).Split('\0');
+        words[^1].Should().BeEmpty("each word ends with a NUL");
+        return words[..^1];
+    }
 }
 
 /// <summary>
