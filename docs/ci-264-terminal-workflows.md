@@ -1,0 +1,66 @@
+# Terminal workflow timeout evidence (Refs #264)
+
+The failing process is the entire installer contract catalogue: 1,011 tests, excluding
+render, Scenario, Browser, Soak and the opt-in host installation suites. It has one
+600-second wall-clock budget. CLI contracts and renders finish before it starts.
+This is reproducible on unchanged `main` at
+`6e044ef18fb63d07884a955659cd9c043ede3d9c`, independently of Refs #255 / PR #259.
+
+Read-only Actions logs establish the following failures. Every row ends with Python's
+`TimeoutExpired` for the installer contracts at 600 seconds. Step duration includes
+the earlier CLI phases and staging; it is not the installer process's duration.
+
+| Run | Job | Event | Whole workflow-exercise step |
+| --- | --- | --- | --- |
+| [42354627755](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42354627755) | 128351463895 | main schedule, Nov 7 | 866 s |
+| [42463147445](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42463147445) | 128678126199 | main schedule, Nov 8 | 769 s |
+| [42589991644](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42589991644) | 129071818445 | main schedule, Nov 9 | 886 s |
+| [42788076162](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42788076162) | 129737471338 | main schedule, Nov 10 | 896 s |
+| [42977458463](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42977458463/job/130382331099) | 130382331099 | PR #259 | 918 s |
+
+All five failures use image `macos-26-arm64`, version `20261102.0473.1`, macOS
+26.7.2 (25G332). The same main commit passed scheduled runs
+[41997972151](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41997972151)
+and [42190870047](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42190870047)
+on Nov 5–6. The Nov 6 job used image `20261026.0455.2`, macOS 26.6.2 (25G83).
+The image transition is a runner-condition correlation; the retained evidence does
+not establish an OS-level cause or rule out an individual stalled test.
+
+The uploaded `terminal-runtime-*` artifacts' TRX files measure the passing processes:
+
+| Host/run | Installer contracts passed | Process elapsed (TRX start to finish) | Sum of test durations |
+| --- | --- | --- | --- |
+| macOS arm64, Nov 5 / 41997972151 | 1,011 | 376.11 s | 1,118.82 s |
+| macOS arm64, Nov 6 / 42190870047 | 1,011 | 337.90 s | 1,004.94 s |
+| Linux x64, Nov 10 / 42788076162 | 1,011 | 25.59 s | 90.48 s |
+
+Tests run concurrently, so their summed durations are not process elapsed time.
+On Nov 6, `InstallerLifecycleTests` (78 tests), `InstallerBackupTests` (100), and
+`InstallerStateContractTests` (97) consumed 176.22, 175.13 and 172.76 summed
+seconds respectively: 524.11 seconds, over half the catalogue's total. Each group
+occupied about 60–61 seconds of that process's wall time; the remaining contracts
+occupied approximately 158 seconds. The slowest individual test was
+`Renew_WhileTheRoofMoves_PutsTheCertificateInPlace_AndRedeploysOnlyOnceItIsIdle`
+at 7.52 seconds. These are fake-machine workflows, with real local file and
+certificate operations, rather than waits for a controller or real installation.
+The 513 CLI contract rows common to the Nov 6 artifact and the failing PR artifact
+also slowed from 100.21 to 209.53 summed seconds. Scaling the prior 338-second
+installer workload by that observed factor would exceed 600 seconds; that is a
+budget estimate, not a measurement of the interrupted installer tests.
+
+The correction partitions those three groups from a complement containing every
+remaining contract, including future classes. Each batch retains its own 600-second
+limit; render filters, command isolation, required contract assertions and exact
+bundled-assembly staging remain in force. This removes the single budget shared by
+all 1,011 tests without enlarging it. It does not certify that a hung test is repaired.
+Console logging now saves each completed test's duration directly to
+`workflow-run.txt`, including on failure or timeout, and timeout cleanup kills the
+whole VSTest process group. Previously, capture was discarded when the timeout
+raised, and the failed PR artifact contained no installer TRX or progress log.
+
+macOS confirmation must come from CI on a PR, which Kepler handles. A successful
+macOS job on the corrected main-equivalent branch, and on PR #259 or its successor,
+remain required evidence for the issue's first two acceptance criteria. Linux
+validation cannot establish those results. No workflow was dispatched, retried or
+cancelled for this investigation, and no issue comment was posted; this document
+is the record available for Kepler's later issue update.

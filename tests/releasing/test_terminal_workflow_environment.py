@@ -3,14 +3,38 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 
 spec = importlib.util.spec_from_file_location('terminal_workflows', Path(__file__).with_name('check-terminal-workflows.py'))
 workflows = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflows)
+
+
+def selected_phases(program, class_name, category='Unit', namespace='Installer'):
+    """Evaluate the VSTest predicates against a representative method, including class boundaries."""
+    fields = dict(FullyQualifiedName=f'HVO.RoofControllerV4.RPi.Tests.{namespace}.{class_name}.Method',
+                  TestCategory=category)
+
+    def predicate(match):
+        field, operator, value = match.groups()
+        actual = fields[field]
+        result = value in actual if operator.endswith('~') else actual == value
+        return str(not result if operator.startswith('!') else result)
+
+    phases = []
+    for phase, test_filter in workflows.phase_filters(program):
+        expression = re.sub(r'(FullyQualifiedName|TestCategory)(!~|!=|~|=)([^&|()]+)', predicate, test_filter)
+        expression = expression.replace('&', ' and ').replace('|', ' or ')
+        if eval(expression, {'__builtins__': {}}, {}):
+            phases.append(phase)
+    return phases
 
 
 class WorkflowEnvironment(unittest.TestCase):
@@ -55,6 +79,101 @@ class WorkflowEnvironment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, 'absolute'):
                 workflows.run_phase('dotnet', Path(tmp), {}, 'ControlledDriver', Path(tmp) / 'proof')
+
+    def test_installer_catalogue_is_partitioned_once_without_admitting_host_installs(self):
+        folder = Path(__file__).parents[1] / 'HVO.RoofControllerV4.RPi.Tests/Installer'
+        for source in folder.glob('*.cs'):
+            text = source.read_text()
+            if '[TestClass]' not in text:
+                continue
+            for name in re.findall(r'public (?:sealed |partial )*class (\w+)', text):
+                with self.subTest(test_class=name):
+                    phases = selected_phases('hvo-roof-install', name)
+                    expected = 0 if name in ['InstallerKioskSystemTests', 'InstallerMacSystemTests'] else 1
+                    self.assertEqual(expected, len(phases), phases)
+                    if name in workflows.RENDER_CLASSES['hvo-roof-install']:
+                        self.assertEqual(['render'], phases)
+                    for category in ['Scenario', 'Browser', 'Soak']:
+                        self.assertEqual([], selected_phases('hvo-roof-install', name, category))
+
+    def test_large_contracts_have_separate_budgets_and_future_contracts_keep_the_remainder(self):
+        for name, expected in [('InstallerBackupTests', 'contracts-backup'),
+                               ('InstallerLifecycleTests', 'contracts-lifecycle'),
+                               ('InstallerStateContractTests', 'contracts-state'),
+                               ('FutureInstallerTests', 'contracts'),
+                               ('InstallerBackupTestsExtra', 'contracts')]:
+            with self.subTest(test_class=name):
+                self.assertEqual([expected], selected_phases('hvo-roof-install', name))
+        self.assertEqual([], selected_phases('hvo-roof-install', 'InstallerBackupTests', namespace='Other'))
+        self.assertEqual(['contracts'], selected_phases('hvo-roof', 'RoofCliSafetyTests', namespace='Cli'))
+        self.assertEqual(['render'], selected_phases('hvo-roof', 'RoofTerminalUiTests', namespace='Cli'))
+
+    def test_timeout_keeps_test_progress_and_terminates_the_testhost_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            host = home / 'host'
+            host.write_text('#!' + sys.executable + '\n' + textwrap.dedent('''\
+                import json, os, subprocess, sys, time
+                from pathlib import Path
+                output = Path(next(a.split(':', 1)[1] for a in sys.argv if a.startswith('/ResultsDirectory:')))
+                child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+                (output / 'processes.json').write_text(json.dumps([os.getpid(), child.pid]))
+                print('Passed earlier contract [123 ms]', flush=True)
+                print('diagnostic on stderr', file=sys.stderr, flush=True)
+                time.sleep(60)
+                '''))
+            host.chmod(0o700)
+            output = home / 'proof'
+            try:
+                with self.assertRaisesRegex(RuntimeError, 'exceeded 2 seconds; see workflow-run.txt'):
+                    workflows.run_phase(host, home, dict(os.environ), 'ControlledDriver', output, timeout=2)
+                log = (output / 'workflow-run.txt').read_text()
+                self.assertIn('Passed earlier contract [123 ms]', log)
+                self.assertIn('diagnostic on stderr', log)
+                parent, child = json.loads((output / 'processes.json').read_text())
+                # An orphan can briefly remain a zombie until init reaps it; it must not execute.
+                for _ in range(100):
+                    status = subprocess.run(['ps', '-o', 'stat=', '-p', str(child)],
+                                            capture_output=True, text=True, check=False).stdout.strip()
+                    if not status or status.startswith('Z'):
+                        break
+                    time.sleep(.01)
+                self.assertTrue(not status or status.startswith('Z'), status)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(parent, 0)
+            finally:
+                processes = output / 'processes.json'
+                if processes.exists():
+                    try:
+                        os.killpg(json.loads(processes.read_text())[0], signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_failed_and_empty_runs_keep_logs_and_never_report_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            host = home / 'host'
+            for code, result in [(1, '<UnitTestResult testName="Control" outcome="Passed"/>'),
+                                 (0, '')]:
+                with self.subTest(exit_code=code):
+                    host.write_text('#!' + sys.executable + '\n' + textwrap.dedent(f'''\
+                        from pathlib import Path
+                        import sys
+                        output = Path(next(a.split(':', 1)[1] for a in sys.argv if a.startswith('/ResultsDirectory:')))
+                        (output / 'final-terminal-workflows.trx').write_text('<TestRun><Results>{result}</Results></TestRun>')
+                        print('retained failure evidence', flush=True)
+                        sys.exit({code})
+                        '''))
+                    host.chmod(0o700)
+                    output = home / str(code)
+                    with self.assertRaisesRegex(RuntimeError, 'failed' if code else 'no workflow tests passed'):
+                        workflows.run_phase(host, home, dict(os.environ), 'ControlledDriver', output)
+                    self.assertIn('retained failure evidence', (output / 'workflow-run.txt').read_text())
+            # A later independent phase still succeeds after failure and empty-result paths.
+            host.write_text(host.read_text().replace('<Results></Results>',
+                           '<Results><UnitTestResult testName="Control" outcome="Passed"/></Results>'))
+            self.assertEqual(['Control'], workflows.run_phase(host, home, dict(os.environ),
+                                                             'ControlledDriver', home / 'recovery'))
 
 
 if __name__ == '__main__':
