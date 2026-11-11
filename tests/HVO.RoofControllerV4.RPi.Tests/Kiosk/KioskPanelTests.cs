@@ -597,6 +597,13 @@ public sealed class KioskPanelTests
         system.Question.Lines.Should().Contain("  RoofControllerOptionsV4:OpenRelayId: 1 -> 2  [SAFETY-CRITICAL]");
         system.Question.Answers.Select(answer => answer.Label).Should().Equal("Confirm and restart");
         // An accepted restart can dispose the provider before the caller reads the response.
+        // Known log noise, not a failure: the kiosk's live feed (StartLiveAsync above) is still connected when the host
+        // stops, so under a starved thread pool the host can log two SignalR "fail" entries during this restart:
+        // HubConnectionHandler[1] "Error when dispatching 'OnDisconnectedAsync'" and HttpConnectionManager[3] "Failed
+        // disposing connection", each an ObjectDisposedException ('IServiceProvider', from CreateScope()). The
+        // connection's own teardown lost to the provider's disposal; nothing the test checks depends on it. They were
+        // seen in 4 of 30 starved runs and 0 of 360 others, and the test passed every time. They are not the F7 restart
+        // race (Refs #239): that one is the caller reading the answer, which WaitForRestartDisposalAsync waits out.
         var services = harness.Host.Services;
         var signal = services.GetRequiredService<RoofRestartSignal>();
         var lifetime = services.GetRequiredService<IHostApplicationLifetime>();

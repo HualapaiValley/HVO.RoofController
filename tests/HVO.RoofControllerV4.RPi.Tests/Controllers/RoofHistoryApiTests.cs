@@ -242,12 +242,23 @@ public sealed class RoofHistoryApiTests
     {
         using var host = new RoofApiTestHost();
         using var anonymous = host.CreateApiClient();
+        using var unknown = host.CreateApiClient("not-a-key-the-controller-knows");
         using var viewer = host.CreateApiClient(TestApiKeys.Viewer);
+        using var operatorClient = host.CreateApiClient(TestApiKeys.Operator);
+        var history = host.Services.GetRequiredService<RoofCommandHistory>();
 
         (await anonymous.PostAsync("/api/v4.0/RoofControl/Open", null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await unknown.PostAsync("/api/v4.0/RoofControl/Open", null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await viewer.PostAsync("/api/v4.0/RoofControl/Open", null)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        // A request the API cannot read never reaches the roof either, whoever sends it.
+        (await operatorClient.PostAsync("/api/v4.0/RoofControl/Open?overrideSafety=perhaps", null)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
-        host.Services.GetRequiredService<RoofCommandHistory>().Count.Should().Be(0, "nobody unauthenticated can fill the history and push real commands out");
+        history.Count.Should().Be(0, "nobody unauthenticated can fill the history and push real commands out");
+        host.RoofService.Verify(service => service.Open(), Times.Never());
+
+        // The same history does record the command once it reaches the roof.
+        (await operatorClient.PostAsync("/api/v4.0/RoofControl/Open", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        history.Count.Should().Be(1);
     }
 
     [TestMethod]
