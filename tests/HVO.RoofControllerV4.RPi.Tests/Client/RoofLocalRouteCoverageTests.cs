@@ -176,6 +176,36 @@ public sealed class RoofLocalRouteCoverageTests
     [DataRow("DELETE", "api/v4.0/System/Summary")]
     [DataRow("GET", "api/v4.0/Unknown")]
     [DataRow("GET", "api/v4.0/alpaca/unknown")]
+    // With a query (#255): a query never makes an unknown route known.
+    [DataRow("GET", "api/v4.0/Unknown?x=1")]
+    [DataRow("POST", "api/v4.0/RoofControl/Unknown?x=1")]
+    [DataRow("POST", "api/v4.0/RoofControl/Unknown?overrideSafety=true")]
+    [DataRow("POST", "api/v4.0/RoofControl/Unknown?pulseMs=250")]
+    // Near misses of the two query variants: the path boundary holds (no bare prefix match) ...
+    [DataRow("POST", "api/v4.0/RoofControl/OpenExtra?overrideSafety=true")]
+    [DataRow("POST", "api/v4.0/RoofControl/Open/Extra?overrideSafety=true")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault/Extra?pulseMs=250")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFaultExtra?pulseMs=250")]
+    [DataRow("POST", "x/api/v4.0/RoofControl/Open?overrideSafety=true")]
+    [DataRow("POST", "x/api/v4.0/RoofControl/ClearFault?pulseMs=250")]
+    // ... and only the query the client builds is classified, never another one on the same route.
+    [DataRow("POST", "api/v4.0/RoofControl/Open?")]
+    [DataRow("POST", "api/v4.0/RoofControl/Open?x=1")]
+    [DataRow("POST", "api/v4.0/RoofControl/Open?overrideSafety=false")]
+    [DataRow("POST", "api/v4.0/RoofControl/Open?overrideSafety=true&x=1")]
+    [DataRow("POST", "api/v4.0/RoofControl/Open?x=1&overrideSafety=true")]
+    [DataRow("POST", "api/v4.0/RoofControl/Open?overrideSafety=True")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?pulseMs=")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?pulseMs=abc")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?pulseMs=0250")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?pulseMs=+250")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?pulseMs=250&x=1")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?x=1&pulseMs=250")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?pulse=250")]
+    [DataRow("POST", "api/v4.0/RoofControl/ClearFault?overrideSafety=true")]
+    [DataRow("POST", "api/v4.0/RoofControl/Close?overrideSafety=true")]
+    [DataRow("POST", "api/v4.0/RoofControl/Lease?pulseMs=250")]
     public void UnknownLocalRequests_FailClosed(string method, string path)
     {
         Action authorize = () => RoofLocalAuthorization.Operation(new HttpMethod(method), path);
