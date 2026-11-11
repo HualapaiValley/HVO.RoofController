@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace HVO.RoofControllerV4.Client;
 
 /// <summary>Maps protected application requests to native authorization categories. Unknown routes fail closed.</summary>
@@ -37,7 +39,8 @@ internal static class RoofLocalAuthorization
             return "identity";
         }
 
-        if (path is RoofApiRoutes.Open or RoofApiRoutes.Close or RoofApiRoutes.Lease or RoofApiRoutes.ClearFault)
+        if (path is RoofApiRoutes.Open or RoofApiRoutes.Close or RoofApiRoutes.Lease or RoofApiRoutes.ClearFault
+            || IsCommandWithQuery(path))
         {
             return "operate";
         }
@@ -70,6 +73,25 @@ internal static class RoofLocalAuthorization
         }
 
         throw new RoofLocalRouteUnavailableException();
+    }
+
+    /// <summary>
+    /// Open with the safety override and ClearFault with a pulse length (#255): the same operate commands as without
+    /// the query. Each matches only exactly as <see cref="RoofApiRoutes"/> builds it, so another path (a near miss such
+    /// as <c>OpenExtra</c> or <c>ClearFault/Extra</c>) or another query on the same path still fails closed.
+    /// </summary>
+    private static bool IsCommandWithQuery(string path)
+    {
+        if (path == RoofApiRoutes.OpenCommand(overrideSafety: true))
+        {
+            return true;
+        }
+
+        // The pulse length is the number after the last '='; the path must be what the builder makes of that number.
+        var value = path.LastIndexOf('=');
+        return value >= 0
+            && int.TryParse(path.AsSpan(value + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var pulse)
+            && path == RoofApiRoutes.ClearFaultCommand(pulse);
     }
 }
 

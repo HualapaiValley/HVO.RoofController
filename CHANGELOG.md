@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `hvo-roof` in local authorization mode (`--local`, or `authMode: local` saved by the installer) sends
+  `open --override-safety`, the terminal interface's **Open anyway** and `clear-fault --pulse-ms` under native `operate`
+  authorization; it had refused them before sending anything (exit 6). The exit-7 hint after a refused Open keeps an
+  explicit `--local` or `--remote`, so the command it prints is authorized the same way (#255).
+
 ## [4.5.1] - 2026-11-03
 
 ### Fixed
