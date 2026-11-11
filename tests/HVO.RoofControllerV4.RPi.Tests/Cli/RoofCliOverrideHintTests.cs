@@ -13,8 +13,9 @@ namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
 /// <summary>
 /// The exit-7 safety override hint keeps the <c>--credentials-file</c> and the <c>--controller</c> its command line gave
-/// (Refs #261), as it keeps <c>--local</c> and <c>--remote</c> (#255): the command it prints, run as printed, reads the
-/// same file and asks the same controller, so it does not change to the default file's mode or credential.
+/// (Refs #261), as it keeps <c>--local</c> and <c>--remote</c> (Refs #255): the command it prints, run as printed,
+/// reads the same file and asks the same controller, so it does not change to the default file's mode or credential.
+/// Each is printed as one word of a POSIX shell, which real shells read back here (<see cref="PosixShell"/>).
 /// <para>
 /// The real <c>hvo-roof</c> command line against the real controller in process, as in
 /// <see cref="F2LocalRouteReproTests"/> and with its rigs: a mocked roof (nothing can move), the test's own native
@@ -139,7 +140,6 @@ public sealed class RoofCliOverrideHintTests
 
         var printed = SafetyOverrideHintCommand.Text(refused.Error);
         TestContext.WriteLine($"[evidence] printed command: {printed}");
-        PosixShell.Installed.Should().Contain("/bin/sh");
         foreach (var shell in PosixShell.Installed)
         {
             PosixShell.Split(printed, shell).Should().Equal([RoofCli.CommandName, "--credentials-file", named, "open", "--override-safety"],
@@ -274,6 +274,52 @@ public sealed class RoofCliOverrideHintTests
     }
 
     [TestMethod]
+    public async Task TheDisplayedCommand_NeverPrintsTheEnvironment()
+    {
+        // The address and the key come from the environment, as a container or a script sets them: neither is printed,
+        // and the printed command, run in the same environment, uses them as the refused one did.
+        using var keyed = new F2KeyRig("Warn");
+        keyed.Cli.Environment[RoofCredentialStore.ControllerVariable] = ClientTestSupport.BaseAddress.ToString();
+        keyed.Cli.Environment[RoofCredentialStore.ApiKeyVariable] = TestApiKeys.Operator;
+
+        string[] first = ["open", "--no-wait"];
+        var refused = await keyed.Cli.RunAsIsAsync(first);
+        refused.Code.Should().Be(RoofExitCode.Refused, refused.ToString());
+        refused.Error.Should().Contain(RoofCliContext.SafetyOverrideHint).And.NotContain(TestApiKeys.Operator).And.NotContain("--controller");
+        File.Exists(keyed.Cli.DefaultCredentialsPath).Should().BeFalse("the credential is the environment's alone");
+
+        var displayed = Displayed(refused);
+        keyed.Reset();
+
+        string[] followed = [.. displayed[1..], "--no-wait"];
+        var opened = await keyed.Cli.RunAsIsAsync(followed);
+        Evidence(keyed, opened, followed);
+
+        using (new AssertionScope())
+        {
+            displayed.Should().Equal(RoofCli.CommandName, "open", "--override-safety");
+            opened.ExitCode.Should().Be(0, opened.ToString());
+            keyed.ClientCredentials.Should().Equal($"POST {OpenWithOverride}: api-key");
+            keyed.Calls(nameof(IRoofControllerServiceV4.Open)).Should().Be(1);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(RoofControllerErrorCode.SafetyInterlockActive, DisplayName = "Refused by the interlock in Block mode")]
+    [DataRow(RoofControllerErrorCode.FaultLatched, DisplayName = "Refused for a latched fault")]
+    public void ARefusalTheOverrideDoesNotLift_PrintsNoHint_WhateverTheCommandLineGave(RoofControllerErrorCode code)
+    {
+        using var rig = new CliRig();
+        using var error = new StringWriter();
+        var file = Path.Combine(Path.GetTempPath(), "credentials.json");
+        var context = new RoofCliContext(rig.CreateHost(TextWriter.Null, error), json: false, new Uri(Given + "/"), file, local: true);
+
+        context.Fail(new RoofApiException(HttpStatusCode.Conflict, code)).Should().Be((int)RoofExitCode.Refused);
+
+        error.ToString().Should().NotContain("To open anyway").And.NotContain("--override-safety").And.NotContain(file);
+    }
+
+    [TestMethod]
     public void TheHint_NamesTheFullPathOfACredentialsFileGivenRelativeToTheDirectory()
     {
         // The printed command may be run from another directory: it reads the same file there.
@@ -308,6 +354,133 @@ public sealed class RoofCliOverrideHintTests
         refused.Error.Should().BeEmpty();
         refused.Out.Should().NotContain("To open anyway");
         refused.Json.GetProperty("error").GetProperty("code").GetString().Should().Be("SafetyOverrideRequired");
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // The hint's words, and how a value is made one word of the shell's.
+    // ---------------------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void TheHint_PrintsWhatTheCommandLineChose_InOneOrder()
+    {
+        const string after = " The controller logs the override with your name; Close and Stop are never affected.";
+        const string file = "/srv/roof/credentials.json";
+        var controller = new Uri("https://roof.local:5001/");
+
+        using (new AssertionScope())
+        {
+            RoofCliContext.DescribeSafetyOverrideHint(null).Should().Be("To open anyway: 'hvo-roof open --override-safety'." + after)
+                .And.Be(RoofCliContext.SafetyOverrideHint);
+            RoofCliContext.DescribeSafetyOverrideHint(null, controller).Should()
+                .Be("To open anyway: 'hvo-roof --controller https://roof.local:5001/ open --override-safety'." + after);
+            RoofCliContext.DescribeSafetyOverrideHint(null, credentialsFile: file).Should()
+                .Be("To open anyway: 'hvo-roof --credentials-file /srv/roof/credentials.json open --override-safety'." + after, "docs/cli.md shows this one");
+            RoofCliContext.DescribeSafetyOverrideHint(true, controller, file).Should()
+                .Be("To open anyway: 'hvo-roof --local --controller https://roof.local:5001/ --credentials-file /srv/roof/credentials.json open --override-safety'." + after);
+            RoofCliContext.DescribeSafetyOverrideHint(false, controller, file).Should()
+                .Be("To open anyway: 'hvo-roof --remote --controller https://roof.local:5001/ --credentials-file /srv/roof/credentials.json open --override-safety'." + after);
+
+            // Values a shell would not take as they stand: in single quotes, a quote of their own as '\''.
+            RoofCliContext.DescribeSafetyOverrideHint(null, credentialsFile: "/srv/roof files/credentials.json").Should()
+                .Be("To open anyway: 'hvo-roof --credentials-file '/srv/roof files/credentials.json' open --override-safety'." + after, "docs/cli.md shows this one");
+            RoofCliContext.DescribeSafetyOverrideHint(null, new Uri("https://[2001:db8::1]:5001/"), "/home/roy's roof/credentials.json").Should()
+                .Be("To open anyway: 'hvo-roof --controller 'https://[2001:db8::1]:5001/' --credentials-file '/home/roy'\\''s roof/credentials.json' open --override-safety'." + after);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(null, DisplayName = "No mode")]
+    [DataRow(true, DisplayName = "--local")]
+    [DataRow(false, DisplayName = "--remote")]
+    public void ThePrintedCommand_IsACommandLineHvoRoofReads_WithTheSameChoices(bool? local)
+    {
+        // The words a shell gives hvo-roof, read by its own parser: Open with the override, and each choice as it was.
+        using var rig = new CliRig();
+        var controller = new Uri("https://[2001:db8::1]:5001/roof (east)/");
+        var file = Path.Combine(Path.GetTempPath(), "roy's roof $HOME", "the *credentials*.json");
+
+        var displayed = SafetyOverrideHintCommand.Words(RoofCliContext.DescribeSafetyOverrideHint(local, controller, file));
+        var read = RoofCli.CreateRootCommand(rig.CreateHost(TextWriter.Null, TextWriter.Null)).Parse(displayed[1..]);
+
+        using (new AssertionScope())
+        {
+            displayed[0].Should().Be(RoofCli.CommandName);
+            read.Errors.Should().BeEmpty();
+            read.CommandResult.Command.Name.Should().Be("open");
+            read.GetValue<bool>("--override-safety").Should().BeTrue();
+            read.GetValue<bool>("--local").Should().Be(local == true);
+            read.GetValue<bool>("--remote").Should().Be(local == false);
+            read.GetValue<Uri?>("--controller").Should().Be(controller);
+            read.GetValue<string?>("--credentials-file").Should().Be(file);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("https://roof.local:5001", DisplayName = "As typed, with no closing slash")]
+    [DataRow("http://192.0.2.10:5195/", DisplayName = "An IPv4 address")]
+    [DataRow("https://[2001:db8::1]:8443/roof", DisplayName = "An IPv6 address: brackets, which a shell matches names with")]
+    [DataRow("https://roof.local/east roof/it's (1)/", DisplayName = "A path with a space, an apostrophe and parentheses")]
+    [DataRow("https://ROOF.Local:443/", DisplayName = "Upper case, and the scheme's own port")]
+    public void TheHint_PrintsAController_ThatReadsBackAsTheSameAddress(string typed)
+    {
+        RoofCli.TryParseControllerAddress(typed, out var address, out _).Should().BeTrue();
+
+        var displayed = SafetyOverrideHintCommand.Words(RoofCliContext.DescribeSafetyOverrideHint(null, address));
+
+        displayed.Should().HaveCount(5);
+        displayed.Should().StartWith([RoofCli.CommandName, "--controller"]).And.EndWith(["open", "--override-safety"]);
+        RoofCli.TryParseControllerAddress(displayed[2], out var read, out _).Should().BeTrue($"the printed address is one hvo-roof takes: {displayed[2]}");
+        read.Should().Be(address);
+    }
+
+    [TestMethod]
+    public void QuoteForShell_MakesOneWord_ThatEveryShellReadsBackAsTheValue()
+    {
+        // Every ASCII character but NUL (no argument holds one): alone, first in a word and within one. Then words a
+        // shell would expand, split, or end the command at, and characters outside ASCII.
+        var values = new List<string>
+        {
+            string.Empty, " ", "  two  spaces  ", "/srv/roof/credentials.json", "/srv/roof files/credentials.json",
+            "'", "''", "it's", "'quoted'", "a'b'c", "\"double\"", "back\\slash", "trailing\\", "\\'", "'\\''",
+            "$HOME", "${HOME}", "$(printf expanded)", "`printf expanded`", "~", "~/credentials.json", "~root",
+            "*", "/tmp/*", "?", "[a-z]", "{a,b}", "!!", "!$", "#comment", "a #b", "=ls", "a=b",
+            "a;b", "a&b", "a|b", "a<b", "a>b", "(a)", "a\nb", "a\tb", "a\rb", "-", "--", "--credentials-file", "@file",
+            "\u00fc", "caf\u00e9 roof", "\u89b3\u6e2c\u6240", "\ud83d\udd2d"
+        };
+        for (var character = (char)1; character < 128; character++)
+        {
+            values.AddRange([character.ToString(), $"{character}x", $"/a{character}b"]);
+        }
+
+        var line = string.Join(' ', values.Select(RoofCliContext.QuoteForShell));
+
+        foreach (var shell in PosixShell.Installed)
+        {
+            TestContext.WriteLine($"[evidence] {values.Count} values read back by {shell}");
+            PosixShell.Split(line, shell).Should().Equal(values, $"{shell} reads each quoted value as one word, unchanged");
+        }
+    }
+
+    [TestMethod]
+    public void QuoteForShell_LeavesOnlyPlainWordsAsTheyAre()
+    {
+        const string plain = "_@%+:,./-";
+
+        using (new AssertionScope())
+        {
+            for (var character = (char)1; character < 128; character++)
+            {
+                var value = $"/a{character}b";
+                var asItIs = char.IsAsciiLetterOrDigit(character) || plain.Contains(character);
+                RoofCliContext.QuoteForShell(value).Should().Be(asItIs ? value : character == '\'' ? "'/a'\\''b'" : $"'{value}'",
+                    $"character {(int)character} is {(asItIs ? "plain" : "not plain")}");
+            }
+
+            RoofCliContext.QuoteForShell(string.Empty).Should().Be("''", "an empty value is still one word");
+            RoofCliContext.QuoteForShell("\u00fc").Should().Be("'\u00fc'", "only ASCII letters are plain");
+            RoofCliContext.QuoteForShell("/srv/roof/credentials.json").Should().Be("/srv/roof/credentials.json");
+            RoofCliContext.QuoteForShell("https://roof.local:5001/").Should().Be("https://roof.local:5001/");
+        }
     }
 
     // ---------------------------------------------------------------------------------------------------------------

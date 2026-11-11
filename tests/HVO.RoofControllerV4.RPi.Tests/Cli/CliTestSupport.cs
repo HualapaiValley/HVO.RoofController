@@ -139,26 +139,23 @@ internal sealed class CliRig : IDisposable
         return new CliResult(code, output.ToString(), error.ToString());
     }
 
-    /// <summary>
-    /// The file a command reads when its command line gives no <c>--credentials-file</c>: under this rig's own
-    /// <c>XDG_CONFIG_HOME</c>, never the person's. Nothing is there until a test saves it.
-    /// </summary>
-    public string DefaultCredentialsPath
-    {
-        get
-        {
-            Environment["XDG_CONFIG_HOME"] = Path.Combine(Directory, "config");
-            return RoofCredentialStore.GetDefaultPath(name => Environment.GetValueOrDefault(name));
-        }
-    }
+    /// <summary>This rig's own <c>XDG_CONFIG_HOME</c>, which <see cref="RunAsIsAsync"/> gives its commands.</summary>
+    private string ConfigHome => Path.Combine(Directory, "config");
 
     /// <summary>
-    /// Runs one command line exactly as given, without the rig's <c>--credentials-file</c>: a command that names no
-    /// file reads <see cref="DefaultCredentialsPath"/>.
+    /// The file a command run with <see cref="RunAsIsAsync"/> reads when its command line gives no
+    /// <c>--credentials-file</c>: the default file under this rig's own <c>XDG_CONFIG_HOME</c>, never the person's.
+    /// Nothing is there until a test saves it.
+    /// </summary>
+    public string DefaultCredentialsPath => RoofCredentialStore.GetDefaultPath(name => name == "XDG_CONFIG_HOME" ? ConfigHome : null);
+
+    /// <summary>
+    /// Runs one command line exactly as given, without the rig's <c>--credentials-file</c>, and with the rig's own
+    /// <c>XDG_CONFIG_HOME</c>: a command that names no file reads <see cref="DefaultCredentialsPath"/>.
     /// </summary>
     public async Task<CliResult> RunAsIsAsync(params string[] args)
     {
-        _ = DefaultCredentialsPath;
+        Environment["XDG_CONFIG_HOME"] = ConfigHome;
         using var output = new StringWriter();
         using var error = new StringWriter();
         var code = await RoofCli.RunAsync(args, CreateHost(output, error));
@@ -217,47 +214,85 @@ internal static class SafetyOverrideHintCommand
 /// <summary>A real shell, to say how it reads a command line. The command itself is never run.</summary>
 internal static class PosixShell
 {
-    /// <summary>The POSIX shell, and the interactive shells a person may paste a command into, where installed.</summary>
-    public static IReadOnlyList<string> Installed { get; } =
-        [.. new[] { "/bin/sh", "/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh" }
+    private const string Posix = "/bin/sh";
+
+    private static readonly string[] Found =
+        [.. new[] { Posix, "/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh" }
             .Where(File.Exists)
             .GroupBy(shell => Path.GetFileName(shell))
             .Select(shells => shells.First())];
+
+    /// <summary>
+    /// The POSIX shell (<c>/bin/sh</c>, always), and <c>bash</c> and <c>zsh</c> where installed: the shells a person
+    /// may paste a command into. Inconclusive on Windows, which has none and is not a platform of <c>hvo-roof</c>.
+    /// </summary>
+    public static IReadOnlyList<string> Installed
+    {
+        get
+        {
+            if (OperatingSystem.IsWindows()) Assert.Inconclusive("A POSIX shell reads the printed command; Windows has none.");
+            Found.Should().Contain(Posix, "Linux and macOS have a POSIX shell");
+            return Found;
+        }
+    }
 
     /// <summary>
     /// The words <paramref name="shell"/> makes of <paramref name="command"/>, with its quoting and expansions applied:
     /// they become the shell's own arguments (<c>set --</c>) and each is written back, so a word that was not quoted
     /// as it should be comes back changed.
     /// </summary>
-    public static string[] Split(string command, string shell = "/bin/sh")
+    public static string[] Split(string command, string shell = Posix)
     {
-        var start = new ProcessStartInfo(shell)
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = Path.GetTempPath()
-        };
-        foreach (var argument in new[] { "-c", "eval \"set -- $1\" && printf '%s\\0' \"$@\"", "split", command })
-        {
-            start.ArgumentList.Add(argument);
-        }
+        Installed.Should().Contain(shell);
 
-        using var process = Process.Start(start)!;
-        var error = process.StandardError.ReadToEndAsync();
-        using var written = new MemoryStream();
-        process.StandardOutput.BaseStream.CopyTo(written);
-        if (!process.WaitForExit(10_000))
+        // A directory of its own, with names a pattern left unquoted would match (so it comes back changed), and no
+        // input: a command that was not quoted as it should be leaves nothing behind and cannot wait to be typed at.
+        var directory = Directory.CreateTempSubdirectory("hvo-roof-shell-");
+        try
         {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-            throw new AssertFailedException($"{shell} did not finish reading: {command}");
-        }
+            foreach (var name in new[] { "a", "b", "x", "ax" })
+            {
+                File.WriteAllBytes(Path.Combine(directory.FullName, name), []);
+            }
 
-        process.ExitCode.Should().Be(0, $"{shell} reads the command line: {command}\n{error.GetAwaiter().GetResult()}");
-        var words = Encoding.UTF8.GetString(written.ToArray()).Split('\0');
-        words[^1].Should().BeEmpty("each word ends with a NUL");
-        return words[..^1];
+            var start = new ProcessStartInfo(shell)
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = directory.FullName
+            };
+            foreach (var argument in new[] { "-c", "eval \"set -- $1\" && printf '%s\\0' \"$@\"", "split", command })
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(start)!;
+            process.StandardInput.Close();
+            var error = process.StandardError.ReadToEndAsync();
+            var output = Task.Run(() =>
+            {
+                using var written = new MemoryStream();
+                process.StandardOutput.BaseStream.CopyTo(written);
+                return written.ToArray();
+            });
+            if (!process.WaitForExit(10_000) || !output.Wait(10_000))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+                throw new AssertFailedException($"{shell} did not finish reading: {command}");
+            }
+
+            process.ExitCode.Should().Be(0, $"{shell} reads the command line: {command}\n{error.GetAwaiter().GetResult()}");
+            var words = Encoding.UTF8.GetString(output.Result).Split('\0');
+            words[^1].Should().BeEmpty("each word ends with a NUL");
+            return words[..^1];
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
     }
 }
 
