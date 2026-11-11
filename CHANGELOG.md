@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   It was drawn in the dim "nothing to stop" red on History, System, People and the other pages during a move. Only
   the colour follows the roof: Stop works the same on every page, and is never disabled (Refs #258).
 
+### Fixed
+
+- `--passphrase-file` counts the passphrase alone against its 4096-byte limit, not the file's final LF or CRLF. A
+  4096-byte passphrase is accepted from a file as it is at the hidden prompt; a longer one is refused as before
+  (Refs #258).
+
 ## [4.5.1] - 2026-11-03
 
 ### Fixed
