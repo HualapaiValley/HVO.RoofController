@@ -38,8 +38,16 @@ Tests run concurrently, so their summed durations are not process elapsed time.
 On Nov 6, `InstallerLifecycleTests` (78 tests), `InstallerBackupTests` (100), and
 `InstallerStateContractTests` (97) consumed 176.22, 175.13 and 172.76 summed
 seconds respectively: 524.11 seconds, over half the catalogue's total. Each group
-occupied about 60–61 seconds of that process's wall time; the remaining contracts
-occupied approximately 158 seconds. The slowest individual test was
+occupied about 60–61 seconds of that process's wall time. The union of the remaining
+736 tests' execution intervals is **166.29 seconds**, across 78 merged intervals.
+To reproduce from run 42190870047's
+[artifact 13490308983](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42190870047/artifacts/13490308983),
+read `workflows/hvo-roof-install/contracts/final-terminal-workflows.trx`: map each
+`UnitTestResult.testId` to its `TestMethod.className`, exclude the three classes above,
+sort the remaining `[startTime, endTime]` intervals, merge overlapping intervals and
+sum their lengths. Class spans overlap, so subtracting them from process elapsed time
+does not calculate this union. The union excludes process startup and idle time; a
+fresh batch's elapsed time still needs measurement. The slowest individual test was
 `Renew_WhileTheRoofMoves_PutsTheCertificateInPlace_AndRedeploysOnlyOnceItIsIdle`
 at 7.52 seconds. These are fake-machine workflows, with real local file and
 certificate operations, rather than waits for a controller or real installation.
@@ -75,8 +83,18 @@ remaining contract, including future classes. Each batch retains its own 600-sec
 limit; render filters, command isolation, required contract assertions and exact
 bundled-assembly staging remain in force. This removes the single budget shared by
 all 1,011 tests without enlarging the per-process limit. The whole workflow-exercise
-step is bounded at 20 minutes within the unchanged 30-minute job, with evidence upload
-still configured for `always()`. Batching is a mitigation; it does not establish the
+step gets **24 minutes = 30 - 4 - 2** from the unchanged job budget: four minutes are
+reserved for pre-step preparation and two for evidence upload and cleanup. Evidence
+upload remains configured for `always()`.
+
+A conservative budget stress case is **316 + 376.11 × 2.4 + 67 + 15 + 30 = 1,330.66
+seconds** (about 22 minutes 11 seconds), within the step's 1,440 seconds. Its terms
+are the slow-image pre-installer allowance; the slower passing installer baseline
+under a hypothetical 2.4× workload; 67 seconds for installer renders (rounding up the
+Nov 5 run's 66.82 seconds); 15 for capture/staging; and 30 for added process startup
+variation. This case exceeds a 1,200-second limit. The 2.4× factor is a planning
+stress case; the timeout's cause remains **UNPROVEN**. macOS CI must establish actual
+batch and step durations. Batching is a mitigation; it does not establish the
 timeout's cause or certify that a hung test is repaired.
 Console logging now saves each completed test's duration directly to
 `workflow-run.txt`, including on failure or timeout. Exception cleanup kills the

@@ -39,10 +39,11 @@ The managed workflow checks retain a 600-second bound per process. Installer bac
 state contracts each run in their own process; the remaining contracts and the isolated render tests
 run separately, with no catalogue exclusions added. Per-test progress and durations survive failures
 and timeouts in each batch's `workflow-run.txt`; timeout, SIGINT and SIGTERM cleanup terminates
-its testhost as well as VSTest. The workflow-exercise step has a 20-minute limit inside the
-30-minute job, with runtime evidence uploaded on failure as well as success.
+its testhost as well as VSTest. The workflow-exercise step gets 24 minutes from the
+30-minute job: 30 minus four minutes for preparation and two for evidence upload and cleanup.
+Runtime evidence is uploaded on failure as well as success.
 The [Refs #264 investigation](ci-264-terminal-workflows.md) records the macOS runner-image change,
-historical timings and the confirmation still required from PR CI.
+historical timings, the step-budget arithmetic and the confirmation still required from PR CI.
 
 All workflows:
 

@@ -11,6 +11,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('terminal_workflows', Path(__file__).with_name('check-terminal-workflows.py'))
 workflows = importlib.util.module_from_spec(spec)
@@ -38,6 +39,21 @@ def selected_phases(program, class_name, category='Unit', namespace='Installer')
 
 
 class WorkflowEnvironment(unittest.TestCase):
+    def test_workflow_budget_reserves_setup_and_upload_and_fits_the_stress_case(self):
+        source = (Path(__file__).parents[2] / '.github/workflows/ci.yml').read_text()
+        job = source.split('  terminal-distributions:\n', 1)[1].split('\n  installer-kiosk:', 1)[0]
+        step = job.split('      - name: Exercise final distributed terminal workflows\n', 1)[1].split('      - name:', 1)[0]
+        job_minutes = int(re.search(r'^    timeout-minutes: (\d+)$', job, re.M).group(1))
+        step_minutes = int(re.search(r'^        timeout-minutes: (\d+)$', step, re.M).group(1))
+        self.assertLessEqual(step_minutes, job_minutes - 4 - 2,
+                             'Leave four minutes for preparation and two for evidence upload/cleanup')
+        # Budget stress only: both passing baselines remain evidence, not a diagnosed slowdown.
+        planning_seconds = 316 + 376.11 * 2.4 + 67 + 15 + 30
+        self.assertGreaterEqual(step_minutes * 60, planning_seconds,
+                                'The aggregate limit must admit the documented installer stress case')
+        upload = job.split('      - name: Upload exact-file runtime evidence\n', 1)[1]
+        self.assertIn('        if: always()\n', upload)
+
     def test_render_subprocess_starts_absolute_host_with_only_inert_bash(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -120,17 +136,34 @@ class WorkflowEnvironment(unittest.TestCase):
                 import json, os, subprocess, sys, time
                 from pathlib import Path
                 output = Path(next(a.split(':', 1)[1] for a in sys.argv if a.startswith('/ResultsDirectory:')))
+                time.sleep(2.5)  # Deliberately longer than the reported two-second command budget.
                 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
                 (output / 'processes.json').write_text(json.dumps([os.getpid(), child.pid]))
                 print('Passed earlier contract [123 ms]', flush=True)
                 print('diagnostic on stderr', file=sys.stderr, flush=True)
+                (output / 'ready').touch()
                 time.sleep(60)
                 '''))
             host.chmod(0o700)
             output = home / 'proof'
+            real_wait = subprocess.Popen.wait
+
+            def expire_after_ready(process, timeout=None):
+                if timeout == 2:
+                    # Fixture startup has its own generous bound. Force the real wait timeout
+                    # only after both processes and their flushed diagnostic output exist.
+                    deadline = time.monotonic() + 30
+                    ready = output / 'ready'
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(ready.exists(), 'The controlled host did not become ready in 30 seconds')
+                    return real_wait(process, timeout=0)
+                return real_wait(process, timeout=timeout)
+
             try:
-                with self.assertRaisesRegex(RuntimeError, 'exceeded 2 seconds; see workflow-run.txt'):
-                    workflows.run_phase(host, home, dict(os.environ), 'ControlledDriver', output, timeout=2)
+                with patch.object(workflows.subprocess.Popen, 'wait', expire_after_ready):
+                    with self.assertRaisesRegex(RuntimeError, 'exceeded 2 seconds; see workflow-run.txt'):
+                        workflows.run_phase(host, home, dict(os.environ), 'ControlledDriver', output, timeout=2)
                 log = (output / 'workflow-run.txt').read_text()
                 self.assertIn('Passed earlier contract [123 ms]', log)
                 self.assertIn('diagnostic on stderr', log)

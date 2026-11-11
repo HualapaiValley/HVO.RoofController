@@ -613,7 +613,7 @@ jobs:
         run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "FullyQualifiedName~UnixRegularFileReaderTests|FullyQualifiedName~AlpacaPublicFileSafetyTests|FullyQualifiedName~InstallerRegularFilesTests" -- RunConfiguration.TreatNoTestsAsError=true
       # #176 runs the complete controlled driver catalogue against assemblies from these exact final bundles.
       - name: Exercise final distributed terminal workflows
-        timeout-minutes: 20
+        timeout-minutes: 24
         working-directory: src
         run: |
           python3 ../tests/releasing/check-terminal-workflows.py "$RUNNER_TEMP/terminal-dist" \
