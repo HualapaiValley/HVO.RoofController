@@ -35,12 +35,15 @@ Linux arm64 and macOS arm64, after macOS signing. It checks offline notices, hel
 refusal and isolated PTY startup, and proves the notice document survives the actual installer copy
 and rollback paths on fake machines. Manifest/dependency validation also runs in the production
 release assembler. See [terminal distributions](terminal-distributions.md) for the inventory and bounds.
-The managed workflow checks retain a 600-second bound per process. Installer backup, lifecycle and
-state contracts each run in their own process; the remaining contracts and the isolated render tests
+The managed workflow checks retain a 600-second bound per process. Installer backup, lifecycle,
+state, resource-limit and certificate-redeploy contracts each run in their own process;
+the remaining contracts and the isolated render tests
 run separately, with no catalogue exclusions added. Per-test progress and durations survive failures
 and timeouts in each batch's `workflow-run.txt`; timeout, SIGINT and SIGTERM cleanup terminates
-its testhost as well as VSTest. The workflow-exercise step gets 24 minutes from the
-30-minute job: 30 minus four minutes for preparation and two for evidence upload and cleanup.
+its testhost as well as VSTest. The workflow-exercise step gets 38 minutes from the
+44-minute job, leaving four minutes for preparation and two for evidence upload and cleanup.
+The step covers the measured three-worker run at 1.45 times its cost, two extra process-start
+allowances and 10% margin: `(1,376 × 1.45 + 2 × 30) × 1.10 = 2,260.72` seconds.
 Runtime evidence is uploaded on failure as well as success.
 The [Refs #264 investigation](ci-264-terminal-workflows.md) records the macOS runner-image change,
 historical timings, the step-budget arithmetic and the confirmation still required from PR CI.

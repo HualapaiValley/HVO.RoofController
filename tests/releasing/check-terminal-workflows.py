@@ -50,13 +50,15 @@ RENDER_CLASSES = {
                          'InstallerWizardControllerTests', 'InstallerDesignTests',
                          'InstallerUpgradePrerequisiteTests']
 }
-# Refs #264: these three classes account for 524 of 1,005 aggregate test seconds in the
-# last passing macOS run. Give each a bounded process; the complement retains every other
-# contract (including future classes), without enlarging the 600-second process budget.
+# Refs #264: separate the largest installer groups, including the two largest classes
+# from attempt 2's 477-second remainder. The complement retains every other contract
+# (including future classes); each process keeps its 600-second budget.
 INSTALLER_CONTRACT_BATCHES = {
     'contracts-backup': 'InstallerBackupTests',
     'contracts-lifecycle': 'InstallerLifecycleTests',
     'contracts-state': 'InstallerStateContractTests',
+    'contracts-resource-limits': 'InstallerResourceLimitsTests',
+    'contracts-certificate-redeploy': 'InstallerCertificateRedeployTests',
 }
 CONTRACT_REQUIRED = {
     'hvo-roof-install': ['ACommandThatDoesNotInherit_GetsOnlyTheKeptVariables_AndItsOwn',

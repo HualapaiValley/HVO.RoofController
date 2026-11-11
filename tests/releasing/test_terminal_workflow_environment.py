@@ -47,8 +47,10 @@ class WorkflowEnvironment(unittest.TestCase):
         step_minutes = int(re.search(r'^        timeout-minutes: (\d+)$', step, re.M).group(1))
         self.assertLessEqual(step_minutes, job_minutes - 4 - 2,
                              'Leave four minutes for preparation and two for evidence upload/cleanup')
-        # Budget stress only: both passing baselines remain evidence, not a diagnosed slowdown.
-        planning_seconds = 316 + 376.11 * 2.4 + 67 + 15 + 30
+        # Refs #264: attempt 2 took 1,376 s; the slowest observed 3-worker render
+        # was 205.94 / 144.21 = 1.428x. Round up, allow two extra process starts
+        # at the target runner's speed, then retain at least ten percent margin.
+        planning_seconds = (1376 * 1.45 + 2 * 30) * 1.10
         self.assertGreaterEqual(step_minutes * 60, planning_seconds,
                                 'The aggregate limit must admit the documented installer stress case')
         upload = job.split('      - name: Upload exact-file runtime evidence\n', 1)[1]
@@ -120,13 +122,35 @@ class WorkflowEnvironment(unittest.TestCase):
         for name, expected in [('InstallerBackupTests', 'contracts-backup'),
                                ('InstallerLifecycleTests', 'contracts-lifecycle'),
                                ('InstallerStateContractTests', 'contracts-state'),
+                               ('InstallerResourceLimitsTests', 'contracts-resource-limits'),
+                               ('InstallerCertificateRedeployTests', 'contracts-certificate-redeploy'),
                                ('FutureInstallerTests', 'contracts'),
-                               ('InstallerBackupTestsExtra', 'contracts')]:
+                               ('InstallerBackupTestsExtra', 'contracts'),
+                               ('InstallerResourceLimitsTestsExtra', 'contracts'),
+                               ('InstallerCertificateRedeployTestsExtra', 'contracts')]:
             with self.subTest(test_class=name):
                 self.assertEqual([expected], selected_phases('hvo-roof-install', name))
         self.assertEqual([], selected_phases('hvo-roof-install', 'InstallerBackupTests', namespace='Other'))
         self.assertEqual(['contracts'], selected_phases('hvo-roof', 'RoofCliSafetyTests', namespace='Cli'))
         self.assertEqual(['render'], selected_phases('hvo-roof', 'RoofTerminalUiTests', namespace='Cli'))
+
+    def test_installer_process_budgets_fit_the_slowest_observed_runner(self):
+        # Attempt-2 TRX interval unions, with a 30 s startup/drain allowance per
+        # group. Remainder is measured by merging its result intervals, not by
+        # subtracting overlapping class spans from the old process elapsed time.
+        groups = [('InstallerBackupTests', 169.44), ('InstallerLifecycleTests', 171.16),
+                  ('InstallerStateContractTests', 212.96), ('InstallerResourceLimitsTests', 100.54),
+                  ('InstallerCertificateRedeployTests', 77.15), ('FutureInstallerTests', 322.93)]
+        budgets = {}
+        for name, seconds in groups:
+            phases = selected_phases('hvo-roof-install', name)
+            self.assertEqual(1, len(phases))
+            budgets.setdefault(phases[0], 0)
+            budgets[phases[0]] += seconds
+        for phase, seconds in budgets.items():
+            with self.subTest(phase=phase):
+                self.assertLessEqual((seconds + 30) * 1.45, 600 * .90,
+                                     'Each process needs at least ten percent headroom on the slow runner')
 
     def test_timeout_keeps_test_progress_and_terminates_the_testhost_too(self):
         with tempfile.TemporaryDirectory() as tmp:

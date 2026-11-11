@@ -1,7 +1,7 @@
 # Terminal workflow timeout evidence (Refs #264)
 
-The failing process is the entire installer contract catalogue: 1,011 tests, excluding
-render, Scenario, Browser, Soak and the opt-in host installation suites. It has one
+The historical failing process was the entire installer contract catalogue: 1,011 tests, excluding
+render, Scenario, Browser, Soak and the opt-in host installation suites. It had one
 600-second wall-clock budget. CLI contracts and renders finish before it starts.
 This is reproducible on unchanged `main` at
 `6e044ef18fb63d07884a955659cd9c043ede3d9c`, independently of Refs #255 / PR #259.
@@ -74,37 +74,70 @@ The Nov 5-to-Nov 10 comparison is much smaller than the Nov 6-to-PR comparison.
 The certificate class slows disproportionately; some other groups are faster than
 on Nov 5 (for example, `RoofCliRoofCommandTests`: 38.33 s on Nov 5, 33.14 s in the
 PR run). These observations do not support a uniform runner-slowdown multiplier or
-an extrapolation of CLI timing to the installer budget. The timeout's cause remains
-**UNPROVEN**: certificate costs, another installer operation, accumulated resource
-use or a stalled test cannot be distinguished without installer progress evidence.
+an extrapolation of CLI timing to the installer budget. At this stage the cause was
+**UNPROVEN**: the CLI observations could not distinguish accumulated installer cost
+from a stalled test. The subsequent installer measurements below add that evidence;
+the underlying OS/runtime mechanism is still unproven.
 
-The correction partitions those three groups from a complement containing every
-remaining contract, including future classes. Each batch retains its own 600-second
-limit; render filters, command isolation, required contract assertions and exact
-bundled-assembly staging remain in force. This removes the single budget shared by
-all 1,011 tests without enlarging the per-process limit. The whole workflow-exercise
-step gets **24 minutes = 30 - 4 - 2** from the unchanged job budget: four minutes are
-reserved for pre-step preparation and two for evidence upload and cleanup. Evidence
-upload remains configured for `always()`.
+Subsequent PR CI supplied installer evidence. Run
+[43088484364, attempt 1, job 130762597784](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/43088484364/job/130762597784)
+passed on image `20261102.0473.1` with five concurrent contract tests, whereas
+[attempt 2, job 130801977234](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/43088484364/job/130801977234)
+passed with three. These are peak overlaps of TRX result intervals, not a physical
+CPU inventory. All 1,011 installer identities matched on both attempts. The first
+attempt's four contract processes totalled 664.89 seconds; the second's took
+1,035.53 seconds, including a 477.44-second remainder. Its complete workflow step
+took 1,376 of the then-available 1,440 seconds, leaving only 64 seconds (4.44%).
 
-A conservative budget stress case is **316 + 376.11 × 2.4 + 67 + 15 + 30 = 1,330.66
-seconds** (about 22 minutes 11 seconds), within the step's 1,440 seconds. Its terms
-are the slow-image pre-installer allowance; the slower passing installer baseline
-under a hypothetical 2.4× workload; 67 seconds for installer renders (rounding up the
-Nov 5 run's 66.82 seconds); 15 for capture/staging; and 30 for added process startup
-variation. This case exceeds a 1,200-second limit. The 2.4× factor is a planning
-stress case; the timeout's cause remains **UNPROVEN**. macOS CI must establish actual
-batch and step durations. Batching is a mitigation; it does not establish the
-timeout's cause or certify that a hung test is repaired.
+The runner speed also varies within the three-worker group. Attempt 2's serial
+167-test CLI render took 144.205171 seconds; the slowest render in the reviewed
+three-worker sample took 205.942270 seconds, from run
+[42999709095](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42999709095),
+[artifact 13846153761](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42999709095/artifacts/13846153761).
+Both artifacts show three concurrent CLI contract tests and one render test at a
+time, with identical render identities. Their render ratio is approximately 1.42812; round it
+up to **1.45** for budget planning. This scales the measured step for the slowest
+observed runner; it does not establish the underlying OS/runtime mechanism or
+guarantee future runner speed. The installer per-test ratios also include changed
+concurrency: the Nov 6 baseline ran three tests at once, attempt 1 five. They are
+not isolated machine-speed measurements.
+
+The current partition separates Backup, Lifecycle, State, ResourceLimits and
+CertificateRedeploy from the complement containing every remaining contract,
+including future classes. ResourceLimits (78 tests) and CertificateRedeploy (27)
+are the two largest groups in attempt 2's former remainder. Reapplying the same
+TRX interval-union calculation above leaves 631 remainder tests with 322.93 seconds
+of active intervals; the two extracted groups have 100.54 and 77.15 seconds.
+These unions are planning inputs, not measurements of newly started processes.
+Allow **30 seconds per group** for startup/draining: the largest projected process
+is **(322.93 + 30) × 1.45 = 511.75 seconds**, below the 540-second planning ceiling
+and leaving over 10% of its unchanged **600-second** limit unused. The other
+groups also fit that ceiling; the budget test checks every group.
+
+The workflow step now gets **38 minutes (2,280 seconds)**:
+**(1,376 × 1.45 + 2 × 30) × 1.10 = 2,260.72 seconds**, rounded up to whole minutes.
+The 1,376 seconds include CLI, installer, render and capture/staging work. The two
+additional process starts each get a 30-second allowance at the target runner's
+speed; the final factor adds 10% to the whole projection. The job gets **44 minutes
+= 38 + 4 + 2**, retaining four minutes for preparation and two for evidence upload
+and cleanup. Raising the existing job's budget keeps the same cross-platform
+artifact, environment and evidence path; a parallel macOS job would duplicate that
+setup. Evidence upload remains `always()` and all per-process limits remain 600
+seconds, so an unresponsive process is still bounded.
+
+These calculations replace the earlier 24-minute step/30-minute job plan, which
+was based on a faster runner and did not cover the observed variation. A new
+passing macOS run must confirm the revised partition on a three-worker runner,
+preferably one whose serial CLI render exceeds 180 seconds. Kepler handles CI.
 Console logging now saves each completed test's duration directly to
 `workflow-run.txt`, including on failure or timeout. Exception cleanup kills the
 whole VSTest process group, including on SIGINT or SIGTERM. Previously, capture was
 discarded when the timeout raised, and the failed PR artifact contained no installer
 TRX or progress log.
 
-macOS confirmation must come from CI on a PR, which Kepler handles. A successful
-macOS job on the corrected main-equivalent branch, and on PR #259 or its successor,
-remain required evidence for the issue's first two acceptance criteria. Linux
-validation cannot establish those results. No workflow was dispatched, retried or
-cancelled for this investigation, and no issue comment was posted; this document
-is the record available for Kepler's later issue update.
+The diagnosis and its concurrency qualification are recorded in issue comments
+[6807133974](https://github.com/HualapaiValley/HVO.RoofController/issues/264#issuecomment-6807133974),
+[6807559356](https://github.com/HualapaiValley/HVO.RoofController/issues/264#issuecomment-6807559356)
+and [6808147231](https://github.com/HualapaiValley/HVO.RoofController/issues/264#issuecomment-6808147231).
+AC2's PR #259 half remains pending until its own macOS job passes after this work
+merges. Linux validation cannot establish that result or the revised macOS timings.
