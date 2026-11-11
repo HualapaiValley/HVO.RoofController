@@ -228,7 +228,13 @@ public sealed class AlpacaDome : AlpacaDevice
         text.Append("Fault: ").Append(RoofStatusText.DescribeFault(status)).Append('.');
         if (!string.IsNullOrWhiteSpace(status.LastError))
         {
-            text.Append(" Last error: ").Append(status.LastError.Trim()).Append('.');
+            // The controller's own sentence, which often ends its own way: it gets a full stop only when it has none.
+            var lastError = status.LastError.Trim();
+            text.Append(" Last error: ").Append(lastError);
+            if (lastError[^1] is not ('.' or '!' or '?'))
+            {
+                text.Append('.');
+            }
         }
 
         if (status.Safety is { } safety)

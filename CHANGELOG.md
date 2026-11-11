@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `--passphrase-file` counts the passphrase alone against its 4096-byte limit, not the file's final LF or CRLF. A
   4096-byte passphrase is accepted from a file as it is at the hidden prompt; a longer one is refused as before
   (Refs #258).
+- The Alpaca `status` action ends the controller's last error with one full stop, where an error that already had
+  one was shown with two (Refs #258).
 
 ## [4.5.1] - 2026-11-03
 
