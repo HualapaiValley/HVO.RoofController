@@ -13,6 +13,7 @@ using HVO.RoofControllerV4.RPi.Logic;
 using HVO.RoofControllerV4.RPi.Security;
 using HVO.RoofControllerV4.RPi.Services.HatEmulation;
 using HVO.RoofControllerV4.RPi.Tests.Controllers;
+using HVO.RoofControllerV4.RPi.Tests.Scenarios;
 using HVO.RoofControllerV4.RPi.Tests.TestSupport;
 using HVO.RoofControllerV4.Simulation;
 using HVO.RoofControllerV4.Simulation.Emulator;
@@ -111,12 +112,12 @@ public sealed class EmulatorModeAppTests
     }
 
     [TestMethod]
-    public async Task ADriveTripAfterAnEmulatorReset_PreservesTheLastStop_AndReportsTheCurrentFault()
+    public async Task ADriveTripAfterAnEmulatorReset_IsTheLastStop_UntilALaterMotionStop()
     {
+        // Refs #245 (item A) and #257: open to the limit, reset the emulated roof between the limits, trip the drive idle.
         await using var rig = await EmulatedRoofRig.StartAsync();
         using var client = rig.CreateApiClient(TestApiKeys.Operator);
-        using var open = await client.PostAsync($"{RoofApi}/Open", content: null);
-        open.StatusCode.Should().Be(HttpStatusCode.OK);
+        await client.AcceptedAsync("Open");
         var opened = await rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Open && !s.IsMoving,
             MotionTimeout, "the roof to reach the open limit");
         opened.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached);
@@ -125,24 +126,64 @@ public sealed class EmulatorModeAppTests
         rig.Session.Reset(initialPosition: 0.2);
         await rig.WaitForControllerAsync(s => s.IsOpenLimitActive == false && s.IsClosedLimitActive == false,
             MotionTimeout, "the reset roof to be between the limits");
+        (await client.StatusAsync()).LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "an emulator reset records no stop");
         await Task.Delay(TimeSpan.FromMilliseconds(1100));
         rig.Session.Plant.TripDrive();
-        var tripped = await rig.WaitForControllerAsync(s => s.IsFaultLatched && s.IsDriveFaultActive == true,
+        await rig.WaitForControllerAsync(s => s.IsFaultLatched && s.IsDriveFaultActive == true,
             MotionTimeout, "the drive fault to latch");
 
-        tripped.LastTransitionUtc.Should().NotBe(opened.LastTransitionUtc, "the idle reset and fault are later status transitions, not another motion stop");
-        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(opened).Should().Be("Limit switch reached",
-            "the API exposes a status transition time, not a durable historical stop time");
+        var tripped = await client.StatusAsync();
+        tripped.LastTransitionUtc.Should().NotBe(opened.LastTransitionUtc, "the idle reset and fault are later status transitions");
         tripped.IsMoving.Should().BeFalse();
         tripped.IsOpenLimitActive.Should().BeFalse();
         tripped.IsClosedLimitActive.Should().BeFalse();
         tripped.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
-        tripped.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "the reset and idle trip did not stop another commanded motion");
-        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(tripped).Should()
-            .StartWith("Limit switch reached").And.Contain("current fault: Drive fault input active; neither limit active");
-        HVO.RoofControllerV4.Alpaca.Devices.AlpacaDome.DescribeStatus(tripped).Should()
-            .Contain("Last stop: Limit switch reached").And.Contain("current fault: Drive fault input active; neither limit active");
+        tripped.LastStopReason.Should().Be(RoofControllerStopReason.DriveFault, "a drive trip is the last stop, idle or moving");
+        ShouldReadTheDriveFaultAsTheLastStop(tripped);
         rig.Plant.RelayRegister.Should().Be(0);
+
+        // The drive's power is cycled: its trip clears and IN3 reads healthy, while the controller's latch stays set.
+        rig.Session.Plant.SetDrivePower(false);
+        rig.Session.Plant.SetDrivePower(true);
+        await rig.WaitForControllerAsync(s => s.IsDriveFaultActive == false, MotionTimeout, "IN3 to clear after the drive's power cycle");
+        var inputCleared = await client.StatusAsync();
+        inputCleared.IsFaultLatched.Should().BeTrue("only Clear fault resets the latch");
+        inputCleared.LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+        inputCleared.LastStopReason.Should().Be(RoofControllerStopReason.DriveFault, "the input clearing is not another stop");
+        ShouldReadTheDriveFaultAsTheLastStop(inputCleared);
+
+        var cleared = await client.AcceptedAsync("ClearFault");
+        cleared.IsFaultLatched.Should().BeFalse();
+        cleared.LastStopReason.Should().Be(RoofControllerStopReason.DriveFault, "Clear fault keeps the last stop");
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(cleared).Should().Be(DriveFaultText);
+
+        // A start within 2 s of the drive's power-up trips it (F_UF): wait that out, in the plant's time.
+        await Task.Delay(TimeSpan.FromSeconds(3 / rig.Options.TimeScale));
+        await client.AcceptedAsync("Close");
+        var closed = await rig.WaitForControllerAsync(s => s.Status == RoofControllerStatus.Closed && !s.IsMoving,
+            MotionTimeout, "the roof to close");
+        closed.LastStopReason.Should().Be(RoofControllerStopReason.LimitSwitchReached, "a later motion stop records its own reason");
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(closed).Should().Be("Limit switch reached");
+        closed.IsFaultLatched.Should().BeFalse();
+        rig.Session.Plant.Violations.Should().BeEmpty();
+    }
+
+    private const string DriveFaultText = "Drive fault input active";
+
+    /// <summary>
+    /// Every surface's "Last stop" names the drive fault, with no limit and no current-fault note: <c>hvo-roof status</c>
+    /// and its <c>--watch</c> line, the Alpaca <c>status</c> action, and the rows the web UI and the kiosk show.
+    /// </summary>
+    private static void ShouldReadTheDriveFaultAsTheLastStop(RoofStatusResponse status)
+    {
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeLastStop(status).Should().Be(DriveFaultText);
+        HVO.RoofControllerV4.Client.RoofStatusText.DescribeRows(status).Should().ContainSingle(row => row.Label == "Last stop")
+            .Which.Value.Should().Be(DriveFaultText, "the web UI and the kiosk show these rows");
+        HVO.RoofControllerV4.Cli.RoofCliFormat.DescribeStatus(status).Should().Contain(("Last stop", DriveFaultText));
+        HVO.RoofControllerV4.Cli.RoofCliFormat.DescribeState(status).Should().Contain($"last stop: {DriveFaultText}")
+            .And.NotContain("Limit switch reached").And.NotContain("current fault");
+        HVO.RoofControllerV4.Alpaca.Devices.AlpacaDome.DescribeStatus(status).Should().Contain($"Last stop: {DriveFaultText}.")
+            .And.NotContain("Limit switch reached").And.NotContain("current fault");
     }
 
     [TestMethod]

@@ -40,7 +40,10 @@ public interface IRoofControllerServiceV4
         bool IsMoving { get; }
 
         /// <summary>
-        /// Gets the reason for the last stop operation.
+        /// Why the roof last stopped: the reason the last commanded motion stopped, or
+        /// <see cref="RoofControllerStopReason.DriveFault"/> once the drive fault input (IN3) is active while no motion is
+        /// commanded, as a trip during motion records. It stays until a later motion stop records another reason: the
+        /// input clearing, <see cref="ClearFault"/> and an idle Stop do not change it.
         /// </summary>
         RoofControllerStopReason LastStopReason { get; }
 
