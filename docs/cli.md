@@ -822,6 +822,10 @@ See [Authentication and interface rights](authentication-interfaces.md) for veri
 `alpaca status` uses native `read` authorization for both roof status and the system summary.
 `open --override-safety`, the terminal interface's **Open anyway** and `clear-fault --pulse-ms` use native `operate`
 authorization, as `open` and `clear-fault` do; the override and the pulse length are sent as the API's query.
+The `alpaca` requests only a person may send (override grants, the Stop hold, acknowledging an alert) have a native
+category only exactly as `hvo-roof` sends them: any other path, query or method under those routes is unavailable in
+local mode. So `alpaca ack .` and `alpaca ack ..`, whose request would go to another path, are refused before the native
+helper is asked.
 A route unavailable in local mode is refused before sending it, with exit 6 and its reason;
 `--json` reports `kind: Forbidden` and `code: LocalRouteUnavailable`. A failed native gate
 reports `code: LocalAuthorizationFailed` and never substitutes a saved remote credential.

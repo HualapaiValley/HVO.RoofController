@@ -54,7 +54,7 @@ public sealed class RoofAlpacaApi
     /// last one. A person's session with the Operator role.
     /// </summary>
     public Task<RoofOperatorLeaseState> HoldLeaseAsync(bool input, CancellationToken cancellationToken = default)
-        => _http.SendAsync<RoofOperatorLeaseState>(HttpMethod.Post, input ? $"{RoofApiRoutes.AlpacaLease}?input=true" : RoofApiRoutes.AlpacaLease, null, cancellationToken);
+        => _http.SendAsync<RoofOperatorLeaseState>(HttpMethod.Post, RoofApiRoutes.AlpacaLeaseHeartbeat(input), null, cancellationToken);
 
     /// <summary>Gives the operator lease up. A person's session.</summary>
     public Task ReleaseLeaseAsync(CancellationToken cancellationToken = default)

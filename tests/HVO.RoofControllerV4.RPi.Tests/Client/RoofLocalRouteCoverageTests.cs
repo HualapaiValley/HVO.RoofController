@@ -85,7 +85,12 @@ public sealed class RoofLocalRouteCoverageTests
         (nameof(RoofApiRoutes.ClearFaultCommand), "POST", RoofApiRoutes.ClearFaultCommand(250), "operate"),
         (nameof(RoofApiRoutes.ClearFaultCommand), "POST", RoofApiRoutes.ClearFaultCommand(RoofControllerLimits.MinClearFaultPulseMilliseconds), "operate"),
         (nameof(RoofApiRoutes.ClearFaultCommand), "POST", RoofApiRoutes.ClearFaultCommand(RoofControllerLimits.MaxClearFaultPulseMilliseconds), "operate"),
-        (nameof(RoofApiRoutes.ClearFaultCommand), "POST", RoofApiRoutes.ClearFaultCommand(null), "operate")
+        (nameof(RoofApiRoutes.ClearFaultCommand), "POST", RoofApiRoutes.ClearFaultCommand(null), "operate"),
+
+        // The operator lease's heartbeat (Refs #260), as RoofAlpacaApi builds it, and every kind's grant.
+        (nameof(RoofApiRoutes.AlpacaLeaseHeartbeat), "POST", RoofApiRoutes.AlpacaLeaseHeartbeat(input: true), "operate"),
+        (nameof(RoofApiRoutes.AlpacaLeaseHeartbeat), "POST", RoofApiRoutes.AlpacaLeaseHeartbeat(input: false), "operate"),
+        (nameof(RoofApiRoutes.AlpacaGrant), "DELETE", RoofApiRoutes.AlpacaGrant(RoofAlpacaCommandKind.Open), "operate")
     ];
 
     public static IEnumerable<object[]> LocalBuiltRequests()
@@ -322,6 +327,9 @@ public sealed class RoofLocalRouteCoverageTests
         sent[0].Credential.Should().Be("session");
     }
 
+    private const string SavedKey = "test-unused-saved-key";
+    private const string PassedOnKeyValue = "test-alpaca-client-key";
+
     private sealed record SentRequest(HttpMethod Method, string Path, string Query, string Credential)
     {
         public string Line => $"{Method} {Path}{Query}";
@@ -346,7 +354,7 @@ public sealed class RoofLocalRouteCoverageTests
         using var client = new RoofControllerClient(new RoofConnectionOptions
         {
             BaseAddress = new Uri("http://localhost/"),
-            Credential = new RoofApiKeyCredential("test-unused-saved-key"),
+            Credential = new RoofApiKeyCredential(SavedKey),
             LocalAuthorization = !local ? null : (operation, _) =>
             {
                 operations.Add(operation);
@@ -354,7 +362,9 @@ public sealed class RoofLocalRouteCoverageTests
             },
             CreateHandler = () => new RoofCliProviderTests.Handler((request, _) =>
             {
-                var credential = request.Headers.Contains("X-Api-Key") ? "api-key"
+                // Which credential, never its value: a key is the saved one, the one passed on for the call, or another.
+                var key = request.Headers.TryGetValues("X-Api-Key", out var keys) ? string.Join(',', keys) : null;
+                var credential = key == SavedKey ? "api-key" : key == PassedOnKeyValue ? "passed-on-key" : key is not null ? "other-key"
                     : request.Headers.Authorization is { Scheme: "Bearer", Parameter: "test-fresh-local-session" } ? "session"
                     : request.Headers.Authorization is not null ? "other" : "none";
                 sent.Add(new SentRequest(request.Method, request.RequestUri!.AbsolutePath, request.RequestUri.Query, credential));
@@ -381,7 +391,7 @@ public sealed class RoofLocalRouteCoverageTests
     private const string AlpacaClientKey = "(the Alpaca client's own key, passed on: no native authorization)";
 
     private static readonly string[] GrantReasons = ["scope-unknown:Main"];
-    private static readonly RoofCredential PassedOnKey = new RoofApiKeyCredential("test-alpaca-client-key");
+    private static readonly RoofCredential PassedOnKey = new RoofApiKeyCredential(PassedOnKeyValue);
     private static readonly RoofAlpacaForwarding Forwarded = new(7, 1, "192.0.2.50", "header");
     private static readonly RoofAlpacaCommandRequest Ticketed = new("fixture-ticket", "fixture-instance", 1);
     private static readonly RoofAlpacaEvent Refused = new("Close", "NotAuthorised", "192.0.2.50", 7, 1);
@@ -449,7 +459,7 @@ public sealed class RoofLocalRouteCoverageTests
             string[] asked = category == AlpacaClientKey ? [] : [category];
             error.Should().BeOfType<RoofApiException>("{0} is sent, and the test's handler refuses it", what);
             sent.Select(request => request.Line).Should().Equal([$"{method} /{path}"], "{0} sends exactly this request", what);
-            sent.Select(request => request.Credential).Should().Equal([category == AlpacaClientKey ? "api-key" : "session"],
+            sent.Select(request => request.Credential).Should().Equal([category == AlpacaClientKey ? "passed-on-key" : "session"],
                 "{0} in local mode carries the fresh native session, or the Alpaca client's own key, never the saved key", what);
             operations.Should().Equal(asked, "{0} asks the native helper for its own category only", what);
         }

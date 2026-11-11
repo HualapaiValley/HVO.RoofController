@@ -32,6 +32,12 @@ internal static class RoofApiRoutes
 
     public static string AlpacaGrant(Common.Models.RoofAlpacaCommandKind kind) => $"{AlpacaGrants}/{kind}";
 
+    /// <summary>
+    /// The operator lease's heartbeat, with <c>input=true</c> as its query when the person did something since the last
+    /// one.
+    /// </summary>
+    public static string AlpacaLeaseHeartbeat(bool input) => input ? AlpacaLease + "?input=true" : AlpacaLease;
+
     public static string AcknowledgeAlpacaAlert(string id) => $"{AlpacaAlerts}/{Segment(id)}/acknowledge";
 
     public const string Session = V4 + "Auth/Session";

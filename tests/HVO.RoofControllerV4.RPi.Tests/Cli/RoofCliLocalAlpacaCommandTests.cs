@@ -85,7 +85,8 @@ public sealed class RoofCliLocalAlpacaCommandTests
     {
         using var native = new F2LocalRig("Off", installedDefault: !viaFlag);
         var commands = AlpacaCliSupport.Commands(native.Controller);
-        commands.Grant(AlpacaCommandRig.Person("grace"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["scope-unknown:Main"])).Grant.Should().NotBeNull();
+        commands.Grant(AlpacaCommandRig.Person("grace"), new RoofOverrideGrantRequest(RoofAlpacaCommandKind.Open, ["scope-unknown:Main"]))
+            .Grant.Should().NotBeNull();
 
         var result = await native.Cli.RunAsync([.. Local(viaFlag), "alpaca", "revoke"]);
 
@@ -97,6 +98,36 @@ public sealed class RoofCliLocalAlpacaCommandTests
             native.ClientCredentials.Should().Equal(
                 $"POST {LocalSession}: none", $"GET {Grants}: session", $"POST {LocalSession}: none", $"DELETE {Grants}/Open: session");
             commands.Grants().Should().BeEmpty();
+        }
+    }
+
+    /// <summary>
+    /// <c>alpaca grant</c> in local mode: the status and the alerts are read, the person confirms, and the grant is sent
+    /// under operate with exactly the alert's reasons.
+    /// </summary>
+    [TestMethod]
+    [DataRow(true, DisplayName = "--local alpaca grant")]
+    [DataRow(false, DisplayName = "alpaca grant with authMode local saved")]
+    public async Task Grant_InLocalMode_ReadsThenAsksForOperate_AndGrantsExactlyTheAlertsReasons(bool viaFlag)
+    {
+        using var native = new F2LocalRig("Off", installedDefault: !viaFlag);
+        var alert = AlpacaCliSupport.RaiseRefusal(native.Controller, "scope-unknown:Main", "scope-not-clear:Guide");
+        native.Cli.Interactive = true;
+        native.Cli.AnswerPrompt = Confirm;
+
+        var result = await native.Cli.RunAsync([.. Local(viaFlag), "alpaca", "grant", "--alert", alert.Id]);
+
+        using (new AssertionScope())
+        {
+            result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+            native.Operations.Should().Equal(["read", "read", "operate"], "the status and the alerts are read; the grant is a person's command");
+            native.ClientCredentials.Should().Equal(
+                $"POST {LocalSession}: none", $"GET {Status}: session",
+                $"POST {LocalSession}: none", $"GET {Alerts}: session",
+                $"POST {LocalSession}: none", $"POST {Grants}: session");
+            var grants = AlpacaCliSupport.Commands(native.Controller).Grants();
+            grants.Select(grant => grant.Kind).Should().Equal(RoofAlpacaCommandKind.Close);
+            grants.SelectMany(grant => grant.ReasonKeys).Should().Equal(alert.ReasonKeys);
         }
     }
 
@@ -220,4 +251,13 @@ public sealed class RoofCliLocalAlpacaCommandTests
     }
 
     private static string[] Local(bool viaFlag) => viaFlag ? ["--local"] : [];
+
+    /// <summary>Types the confirmation the grant's prompt shows, as the person would.</summary>
+    private static string Confirm(string prompt, bool secret)
+    {
+        secret.Should().BeFalse("the challenge is a confirmation, not a credential");
+        var match = System.Text.RegularExpressions.Regex.Match(prompt, @"Type '(Open|Close) ([0-9]{6})' to confirm: $");
+        match.Success.Should().BeTrue("the typed confirmation includes its kind and a fresh displayed value");
+        return $"{match.Groups[1].Value} {match.Groups[2].Value}";
+    }
 }

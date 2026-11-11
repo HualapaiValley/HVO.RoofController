@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `hvo-roof` in local authorization mode asks the native helper for a person-only Alpaca request's category (override
+  grants, the Stop hold, the operator lease, acknowledging an alert) only for the exact request it sends, method
+  included. A path that only starts as one of those routes, or another query on one, is refused before the helper is
+  asked (exit 6, `LocalRouteUnavailable`), as every other unknown request is. So are `alpaca ack .` and `alpaca ack ..`,
+  whose request would go to another path (Refs #260).
+
 ### Fixed
 
 - `hvo-roof` in local authorization mode (`--local`, or `authMode: local` saved by the installer) sends
