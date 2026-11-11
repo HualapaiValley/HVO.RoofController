@@ -1,0 +1,143 @@
+# Terminal workflow timeout evidence (Refs #264)
+
+The historical failing process was the entire installer contract catalogue: 1,011 tests, excluding
+render, Scenario, Browser, Soak and the opt-in host installation suites. It had one
+600-second wall-clock budget. CLI contracts and renders finish before it starts.
+This is reproducible on unchanged `main` at
+`6e044ef18fb63d07884a955659cd9c043ede3d9c`, independently of Refs #255 / PR #259.
+
+Read-only Actions logs establish the following failures. Every row ends with Python's
+`TimeoutExpired` for the installer contracts at 600 seconds. Step duration includes
+the earlier CLI phases and staging; it is not the installer process's duration.
+
+| Run | Job | Event | Whole workflow-exercise step |
+| --- | --- | --- | --- |
+| [42354627755](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42354627755) | 128351463895 | main schedule, Nov 7 | 866 s |
+| [42463147445](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42463147445) | 128678126199 | main schedule, Nov 8 | 769 s |
+| [42589991644](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42589991644) | 129071818445 | main schedule, Nov 9 | 886 s |
+| [42788076162](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42788076162) | 129737471338 | main schedule, Nov 10 | 896 s |
+| [42977458463](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42977458463/job/130382331099) | 130382331099 | PR #259 | 918 s |
+
+All five failures use image `macos-26-arm64`, version `20261102.0473.1`, macOS
+26.7.2 (25G332). The same main commit passed scheduled runs
+[41997972151](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/41997972151)
+and [42190870047](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42190870047)
+on Nov 5–6. The Nov 6 job used image `20261026.0455.2`, macOS 26.6.2 (25G83).
+The image transition is a runner-condition correlation; the retained evidence does
+not establish an OS-level cause or rule out an individual stalled test.
+
+The uploaded `terminal-runtime-*` artifacts' TRX files measure the passing processes:
+
+| Host/run | Installer contracts passed | Process elapsed (TRX start to finish) | Sum of test durations |
+| --- | --- | --- | --- |
+| macOS arm64, Nov 5 / 41997972151 | 1,011 | 376.11 s | 1,118.82 s |
+| macOS arm64, Nov 6 / 42190870047 | 1,011 | 337.90 s | 1,004.94 s |
+| Linux x64, Nov 10 / 42788076162 | 1,011 | 25.59 s | 90.48 s |
+
+Tests run concurrently, so their summed durations are not process elapsed time.
+On Nov 6, `InstallerLifecycleTests` (78 tests), `InstallerBackupTests` (100), and
+`InstallerStateContractTests` (97) consumed 176.22, 175.13 and 172.76 summed
+seconds respectively: 524.11 seconds, over half the catalogue's total. Each group
+occupied about 60–61 seconds of that process's wall time. The union of the remaining
+736 tests' execution intervals is **166.29 seconds**, across 78 merged intervals.
+To reproduce from run 42190870047's
+[artifact 13490308983](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42190870047/artifacts/13490308983),
+read `workflows/hvo-roof-install/contracts/final-terminal-workflows.trx`: map each
+`UnitTestResult.testId` to its `TestMethod.className`, exclude the three classes above,
+sort the remaining `[startTime, endTime]` intervals, merge overlapping intervals and
+sum their lengths. Class spans overlap, so subtracting them from process elapsed time
+does not calculate this union. The union excludes process startup and idle time; a
+fresh batch's elapsed time still needs measurement. The slowest individual test was
+`Renew_WhileTheRoofMoves_PutsTheCertificateInPlace_AndRedeploysOnlyOnceItIsIdle`
+at 7.52 seconds. These are fake-machine workflows, with real local file and
+certificate operations, rather than waits for a controller or real installation.
+
+Both passing macOS baselines matter. The 515 CLI contract rows common to all seven
+artifacts show substantial variation, including between the two passing runs:
+
+| macOS run | Sum of the 515 common CLI test durations | `RoofCliCaCertificateTests` (33 tests) |
+| --- | --- | --- |
+| Nov 5 / 41997972151, installer passed | 183.91 s | 24.85 s |
+| Nov 6 / 42190870047, installer passed | 100.63 s | 12.39 s |
+| Nov 7 / 42354627755, installer timed out | 200.57 s | 60.19 s |
+| Nov 8 / 42463147445, installer timed out | 122.93 s | 58.97 s |
+| Nov 9 / 42589991644, installer timed out | 189.24 s | 57.31 s |
+| Nov 10 / 42788076162, installer timed out | 220.15 s | 59.11 s |
+| PR #259 / 42977458463, installer timed out | 210.06 s | 77.16 s |
+
+Rows are identified by class, method and display name. Two pairs of grant cases
+share class/display-name keys; omitting the method collapses the 515 cases into 513
+keys and gives the earlier Nov 5/Nov 10 totals of 183.46/219.64 seconds. The table
+above retains every common case.
+
+The Nov 5-to-Nov 10 comparison is much smaller than the Nov 6-to-PR comparison.
+The certificate class slows disproportionately; some other groups are faster than
+on Nov 5 (for example, `RoofCliRoofCommandTests`: 38.33 s on Nov 5, 33.14 s in the
+PR run). These observations do not support a uniform runner-slowdown multiplier or
+an extrapolation of CLI timing to the installer budget. At this stage the cause was
+**UNPROVEN**: the CLI observations could not distinguish accumulated installer cost
+from a stalled test. The subsequent installer measurements below add that evidence;
+the underlying OS/runtime mechanism is still unproven.
+
+Subsequent PR CI supplied installer evidence. Run
+[43088484364, attempt 1, job 130762597784](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/43088484364/job/130762597784)
+passed on image `20261102.0473.1` with five concurrent contract tests, whereas
+[attempt 2, job 130801977234](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/43088484364/job/130801977234)
+passed with three. These are peak overlaps of TRX result intervals, not a physical
+CPU inventory. All 1,011 installer identities matched on both attempts. The first
+attempt's four contract processes totalled 664.89 seconds; the second's took
+1,035.53 seconds, including a 477.44-second remainder. Its complete workflow step
+took 1,376 of the then-available 1,440 seconds, leaving only 64 seconds (4.44%).
+
+The runner speed also varies within the three-worker group. Attempt 2's serial
+167-test CLI render took 144.205171 seconds; the slowest render in the reviewed
+three-worker sample took 205.942270 seconds, from run
+[42999709095](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42999709095),
+[artifact 13846153761](https://github.com/HualapaiValley/HVO.RoofController/actions/runs/42999709095/artifacts/13846153761).
+Both artifacts show three concurrent CLI contract tests and one render test at a
+time, with identical render identities. Their render ratio is approximately 1.42812; round it
+up to **1.45** for budget planning. This scales the measured step for the slowest
+observed runner; it does not establish the underlying OS/runtime mechanism or
+guarantee future runner speed. The installer per-test ratios also include changed
+concurrency: the Nov 6 baseline ran three tests at once, attempt 1 five. They are
+not isolated machine-speed measurements.
+
+The current partition separates Backup, Lifecycle, State, ResourceLimits and
+CertificateRedeploy from the complement containing every remaining contract,
+including future classes. ResourceLimits (78 tests) and CertificateRedeploy (27)
+are the two largest groups in attempt 2's former remainder. Reapplying the same
+TRX interval-union calculation above leaves 631 remainder tests with 322.93 seconds
+of active intervals; the two extracted groups have 100.54 and 77.15 seconds.
+These unions are planning inputs, not measurements of newly started processes.
+Allow **30 seconds per group** for startup/draining: the largest projected process
+is **(322.93 + 30) × 1.45 = 511.75 seconds**, below the 540-second planning ceiling
+and leaving over 10% of its unchanged **600-second** limit unused. The other
+groups also fit that ceiling; the budget test checks every group.
+
+The workflow step now gets **38 minutes (2,280 seconds)**:
+**(1,376 × 1.45 + 2 × 30) × 1.10 = 2,260.72 seconds**, rounded up to whole minutes.
+The 1,376 seconds include CLI, installer, render and capture/staging work. The two
+additional process starts each get a 30-second allowance at the target runner's
+speed; the final factor adds 10% to the whole projection. The job gets **44 minutes
+= 38 + 4 + 2**, retaining four minutes for preparation and two for evidence upload
+and cleanup. Raising the existing job's budget keeps the same cross-platform
+artifact, environment and evidence path; a parallel macOS job would duplicate that
+setup. Evidence upload remains `always()` and all per-process limits remain 600
+seconds, so an unresponsive process is still bounded.
+
+These calculations replace the earlier 24-minute step/30-minute job plan, which
+was based on a faster runner and did not cover the observed variation. A new
+passing macOS run must confirm the revised partition on a three-worker runner,
+preferably one whose serial CLI render exceeds 180 seconds. Kepler handles CI.
+Console logging now saves each completed test's duration directly to
+`workflow-run.txt`, including on failure or timeout. Exception cleanup kills the
+whole VSTest process group, including on SIGINT or SIGTERM. Previously, capture was
+discarded when the timeout raised, and the failed PR artifact contained no installer
+TRX or progress log.
+
+The diagnosis and its concurrency qualification are recorded in issue comments
+[6807133974](https://github.com/HualapaiValley/HVO.RoofController/issues/264#issuecomment-6807133974),
+[6807559356](https://github.com/HualapaiValley/HVO.RoofController/issues/264#issuecomment-6807559356)
+and [6808147231](https://github.com/HualapaiValley/HVO.RoofController/issues/264#issuecomment-6808147231).
+AC2's PR #259 half remains pending until its own macOS job passes after this work
+merges. Linux validation cannot establish that result or the revised macOS timings.
