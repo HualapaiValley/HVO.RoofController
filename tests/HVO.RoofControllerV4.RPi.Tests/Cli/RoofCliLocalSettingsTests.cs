@@ -29,6 +29,142 @@ namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 public sealed class RoofCliLocalSettingsTests
 {
     private const string AllowCommands = "RoofController:Alpaca:AllowCommands";
+    private const string DefaultCamera = "RoofControllerUi:DefaultCamera";
+
+    public TestContext TestContext { get; set; } = null!;
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task LocalOperator_SettingsAreReadOnly_WithRemoteGuidance_InTextAndJson(bool explicitLocal)
+    {
+        using var native = new NativeSettingsRig(RoofControllerApiContract.OperatorRole);
+        string[] mode = explicitLocal ? ["--local"] : [];
+        var shown = await native.Cli.RunAsync([.. mode, "config", "show", "ui"]);
+        shown.Code.Should().Be(RoofExitCode.Success, shown.ToString());
+        shown.Out.Split('\n').Single(line => line.Contains(DefaultCamera)).Should().Contain("read-only");
+        shown.Out.Should().Contain("--remote");
+        var read = await native.Cli.RunAsync([.. mode, "config", "get", DefaultCamera]);
+        read.Code.Should().Be(RoofExitCode.Success, read.ToString());
+        read.Out.Should().Contain("read-only").And.Contain("Linux controller administrator").And.Contain("--remote")
+            .And.NotContain("you may change it");
+
+        var json = await native.Cli.RunAsync([.. mode, "--json", "config", "show", "ui"]);
+        json.Code.Should().Be(RoofExitCode.Success, json.ToString());
+        var fields = json.Json.GetProperty("groups")[0].GetProperty("settings").EnumerateArray().ToArray();
+        fields.Should().NotBeEmpty();
+        foreach (var field in fields)
+        {
+            field.GetProperty("canWrite").GetBoolean().Should().BeFalse();
+            field.GetProperty("readOnlyReason").GetString().Should().Contain("--remote");
+        }
+        native.Operations.Should().OnlyContain(operation => operation == "read");
+        native.Cli.Stored!.Session.Should().BeNull();
+    }
+
+    [TestMethod]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    public async Task LocalOperator_SettingsWriteIsRefusedSpecifically_WithoutRequestingConfigure(bool explicitLocal, bool json)
+    {
+        using var native = new NativeSettingsRig(RoofControllerApiContract.OperatorRole);
+        string[] mode = explicitLocal ? ["--local"] : [];
+        string[] format = json ? ["--json"] : [];
+        var before = await native.Cli.RunAsync([.. mode, "--json", "config", "get", DefaultCamera]);
+        native.Operations.Clear();
+
+        var refused = await native.Cli.RunAsync([.. mode, .. format, "config", "set", DefaultCamera + "=overview"]);
+
+        refused.Code.Should().Be(RoofExitCode.Forbidden, refused.ToString());
+        var message = json ? refused.Json.GetProperty("error").GetProperty("detail").GetString() : refused.Error;
+        message.Should().Contain("Linux controller administrator").And.Contain("--remote")
+            .And.NotContain("Local Linux authorization failed");
+        if (json) refused.Json.GetProperty("error").GetProperty("code").GetString().Should().Be("SettingNotPermitted");
+        native.Operations.Should().Equal("read", "read");
+        native.Logs.Entries.Should().NotContain(entry => entry.Message.Contains("AUDIT settings"));
+        var after = await native.Cli.RunAsync([.. mode, "--json", "config", "get", DefaultCamera]);
+        after.Json.GetProperty("value").GetRawText().Should().Be(before.Json.GetProperty("value").GetRawText());
+        native.Cli.Stored!.Session.Should().BeNull();
+    }
+
+    [TestMethod]
+    public void LocalOperator_TerminalSettings_ShowReadOnlyReason_AndDoNotOfferAnEdit()
+    {
+        using var native = new NativeSettingsRig(RoofControllerApiContract.OperatorRole);
+        using var tui = new TuiDriver(native.Cli);
+        tui.WaitIdle("the native local caller and initial status", () => tui.Ui.Status is not null && tui.Ui.Caller is not null);
+        tui.Press(Key.F2);
+        tui.WaitIdle("the settings form", () => ((RoofUiSettingsPage)tui.Ui.CurrentPage).Form is not null);
+        var page = (RoofUiSettingsPage)tui.Ui.CurrentPage;
+        page.Select(DefaultCamera);
+        page.SelectedField!.CanWrite.Should().BeFalse();
+        page.Describe().Should().Contain("(read-only)").And.Contain("Linux controller administrator").And.Contain("--remote")
+            .And.NotContain("You may change it.");
+        tui.Screen.Should().Contain("--remote");
+        var version = page.Form!.Version;
+        native.Operations.Clear();
+
+        (FindButton(page, "Change") ?? throw new AssertFailedException("The Change button is missing.")).InvokeCommand(Command.Accept);
+        tui.Pump();
+
+        tui.Ui.Panel.Should().BeNull("read-only settings must not open an editor");
+        tui.Ui.Message.Should().Contain("cannot be changed").And.Contain("--remote");
+        page.Form.Version.Should().Be(version);
+        native.Operations.Should().BeEmpty();
+        native.Logs.Entries.Should().NotContain(entry => entry.Message.Contains("AUDIT settings"));
+        tui.Render(TestContext, "256-local-operator-settings");
+    }
+
+    [TestMethod]
+    [DataRow(RoofControllerApiContract.ViewerRole)]
+    [DataRow(RoofControllerApiContract.OperatorRole)]
+    public async Task LocalNonAdmin_ConfigureScopeRemainsDenied(string role)
+    {
+        using var native = new NativeSettingsRig(role);
+        using var client = ClientTestSupport.CreateClient(native.Controller);
+        Func<Task> authorize = async () => await client.Auth.SignInLocallyAsync(
+            await native.Cli.ObtainLocalAssertion!("configure", CancellationToken.None));
+
+        var refusal = (await authorize.Should().ThrowAsync<RoofApiException>()).Which;
+
+        refusal.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        native.Logs.Entries.Should().NotContain(entry => entry.Message.Contains("opened session"));
+        native.Operations.Should().Equal("configure");
+        native.Cli.Stored!.Session.Should().BeNull();
+    }
+
+    [TestMethod]
+    public async Task LocalOperator_AfterRefusal_CanExplicitlyUseRemotePasswordSession_ThenReadLocallyAgain()
+    {
+        using var native = new NativeSettingsRig(RoofControllerApiContract.OperatorRole);
+        var refused = await native.Cli.RunAsync("--local", "config", "set", DefaultCamera + "=overview");
+        refused.Code.Should().Be(RoofExitCode.Forbidden, refused.ToString());
+
+        using var client = ClientTestSupport.CreateClient(native.Controller);
+        var session = await client.Auth.SignInWithProviderAsync("linux", "fixture", TestSecrets.Password);
+        session.Role.Should().Be(RoofControllerApiContract.OperatorRole);
+        RoofCredentialStore.Save(native.Cli.CredentialsPath, native.Cli.Stored! with
+        {
+            Session = new RoofStoredSession(session.Token, session.Name, session.Role, session.SessionId, session.ExpiresUtc)
+        });
+        native.Operations.Clear();
+        var remote = await native.Cli.RunAsync("--remote", "config", "get", DefaultCamera);
+        remote.Out.Should().Contain("you may change it");
+        var changed = await native.Cli.RunAsync("--remote", "config", "set", DefaultCamera + "=overview");
+        changed.Code.Should().Be(RoofExitCode.Success, changed.ToString());
+        native.Operations.Should().BeEmpty("explicit remote mode uses the password session");
+        native.Logs.Entries.Should().Contain(entry => entry.Message.Contains("AUDIT settings") && entry.Message.Contains(DefaultCamera));
+
+        var local = await native.Cli.RunAsync("--local", "config", "get", DefaultCamera);
+        local.Out.Should().Contain("overview").And.Contain("read-only").And.Contain("--remote");
+        native.Operations.Should().Equal("read", "read");
+        var localWrite = await native.Cli.RunAsync("--local", "config", "set", DefaultCamera + "=other");
+        localWrite.Code.Should().Be(RoofExitCode.Forbidden, localWrite.ToString());
+        localWrite.Error.Should().Contain("--remote").And.NotContain("Local Linux authorization failed");
+        native.Operations.Should().Equal("read", "read", "read", "read");
+    }
 
     [TestMethod]
     [DataRow(RoofControllerApiContract.ViewerRole, "show")]
@@ -159,6 +295,15 @@ internal sealed class NativeSettingsRig : IDisposable
             Provider = "linux", Subject = Guid.NewGuid().ToString("N"), Name = "fixture",
             EnrollmentStamp = Guid.NewGuid().ToString("N"), Role = role
         };
+        string Sign(string purpose, string operation)
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var claims = new RoofNativeAssertion(1, purpose, "linux", enrollment.Subject, enrollment.Name,
+                enrollment.EnrollmentStamp, "native-settings-tests", operation, now, now + 30,
+                Encode(RandomNumberGenerator.GetBytes(32)));
+            var payload = JsonSerializer.SerializeToUtf8Bytes(claims, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            return Encode(payload) + "." + Encode(HMACSHA256.HashData(_assertionKey, payload));
+        }
         var socketPath = _directory.File("worker.sock");
         var keyPath = _directory.File("assertion.key");
         var keyOptions = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
@@ -169,6 +314,7 @@ internal sealed class NativeSettingsRig : IDisposable
         builder.WebHost.ConfigureKestrel(options => options.ListenUnixSocket(socketPath));
         _worker = builder.Build();
         _worker.MapPost("/v1/revalidate", () => Microsoft.AspNetCore.Http.Results.Json(new { valid = true, userName = enrollment.Name }));
+        _worker.MapPost("/v1/password", () => Microsoft.AspNetCore.Http.Results.Json(new { assertion = Sign("linux-password", "login") }));
         _worker.StartAsync().GetAwaiter().GetResult();
         var roof = new SettingsApiTests.RoofDouble();
         Controller = new RoofApiTestHost(roof.Mock,
@@ -191,12 +337,7 @@ internal sealed class NativeSettingsRig : IDisposable
         Cli.ObtainLocalAssertion = (operation, _) =>
         {
             Operations.Enqueue(operation);
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var claims = new RoofNativeAssertion(1, "local-admin", "linux", enrollment.Subject, enrollment.Name,
-                enrollment.EnrollmentStamp, "native-settings-tests", operation, now, now + 30,
-                Encode(RandomNumberGenerator.GetBytes(32)));
-            var payload = JsonSerializer.SerializeToUtf8Bytes(claims, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-            return Task.FromResult(Encode(payload) + "." + Encode(HMACSHA256.HashData(_assertionKey, payload)));
+            return Task.FromResult(Sign("local-admin", operation));
         };
     }
 

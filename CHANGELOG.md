@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   action, the web UI and the kiosk, and the `status --watch` and motion-follow line now uses the same words. Open and
   Close decisions still follow the last motion stop (Refs #257, Refs #245).
 
+### Fixed
+
+- Native local Operators see UI settings as read-only in `hvo-roof` and its terminal Settings page. The read-only
+  reason and exit-6 write refusal explain that local settings changes need a Linux controller administrator and
+  name `--remote` for role-permitted edits with a password session. Native scopes are unchanged (Refs #256).
+
 ## [4.5.1] - 2026-11-03
 
 ### Fixed
