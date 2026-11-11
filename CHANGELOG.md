@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Native local Operators see UI settings as read-only in `hvo-roof` and its terminal Settings page. The read-only
+  reason and exit-6 write refusal explain that local settings changes need a Linux controller administrator and
+  name `--remote` for role-permitted edits with a password session. Native scopes are unchanged (Refs #256).
 - `--passphrase-file` counts the passphrase alone against its 4096-byte limit, not the file's final LF or CRLF. A
   4096-byte passphrase is accepted from a file as it is at the hidden prompt; a longer one is refused as before
   (Refs #258).

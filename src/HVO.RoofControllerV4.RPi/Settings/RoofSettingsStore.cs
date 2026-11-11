@@ -994,6 +994,14 @@ public sealed class RoofSettingsStore
             return new Refusal(RoofControllerErrorCode.SettingNotPermitted, $"{definition.Key} needs the {definition.WriteRole} role.");
         }
 
+        if (user.Identity?.IsAuthenticated == true && user.HasClaim(RoofPrincipalFactory.LocalClaimType, "true")
+            && !user.IsInRole(RoofControllerApiContract.AdminRole))
+        {
+            return new Refusal(RoofControllerErrorCode.SettingNotPermitted,
+                "Changing settings in local mode needs a Linux controller administrator with the Admin role. " +
+                "Use --remote with a password session to change settings permitted by your role.");
+        }
+
         var layer = layers.LayerOf(definition);
         if (layer is null)
         {
