@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Native local Operators see UI settings as read-only in `hvo-roof` and its terminal Settings page. The read-only
+  reason and exit-6 write refusal explain that local settings changes need a Linux controller administrator and
+  name `--remote` for role-permitted edits with a password session. Native scopes are unchanged (Refs #256).
+
 ## [4.5.1] - 2026-11-03
 
 ### Fixed

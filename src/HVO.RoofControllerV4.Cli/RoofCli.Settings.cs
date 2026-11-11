@@ -83,6 +83,12 @@ public static partial class RoofCli
                         context.Out,
                         ["SETTING", "VALUE", "DEFAULT", "NOTES"],
                         shown.Fields.Select(field => (IReadOnlyList<string>)[field.Key, field.DisplayValue, field.DefaultValue, RoofSettingsText.DescribeNotes(field)]));
+                    var reasons = shown.Fields.Select(field => field.CanWrite ? null : field.ReadOnlyReason)
+                        .Distinct(StringComparer.Ordinal).ToArray();
+                    if (reasons is [string reason])
+                    {
+                        context.Out.WriteLine($"Read-only: {reason}");
+                    }
                 }
 
                 return (int)RoofExitCode.Success;
