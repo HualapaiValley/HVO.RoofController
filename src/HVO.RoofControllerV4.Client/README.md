@@ -52,6 +52,26 @@ and `RoofCertificateAuthorityTests` check both over real HTTPS, against CAs and 
 `RoofClientCoverageTests` checks that every endpoint the controller maps has a call here, apart from the API
 description.
 
+### Local request coverage
+
+The coverage decision for Refs #263 is to extend the actual-call guard beyond `RoofControlApi` to every typed REST
+API property on `RoofControllerClient`, plus `StopAsync`. `RoofLocalClientCallCoverageTests` records real calls from
+Auth, Identity, Settings, System, Health, Camera and Alpaca in local mode. Reflection requires a decision for each
+public overload and each new API property. The table checks the HTTP method, complete path and query, native scope,
+and credential, including anonymous calls, requests refused before authorization or transport, and Alpaca calls
+that explicitly supply a client's key. Native denial sends nothing; recovery and subsequent calls obtain fresh
+sessions without substituting the saved credential. Its HTTP handler never contacts a device.
+
+`RoofLocalRouteCoverageTests` retains the actual-call guard for every `RoofControlApi` overload, including its Open
+and ClearFault query variants, alongside the separate route constant/builder catalogue. `GetSafetyAsync` is explicitly
+unavailable in local mode; production clients read safety from status snapshots and do not call it. Adding a local
+caller would require an explicit authorization decision and corresponding caller coverage.
+
+This guards representative arguments and path-changing variants, rather than every possible argument value. It
+does not record SignalR traffic or the independently trusted CA download; those have their own feed and certificate
+tests. Successful response parsing and controller-side permission enforcement remain in the existing API and CLI
+tests. Changes confined to tests and this contributor coverage description need no CHANGELOG entry.
+
 ## Errors
 
 A refusal throws `RoofApiException`. It carries the HTTP status, the controller's `code` (`RoofControllerErrorCode`),
