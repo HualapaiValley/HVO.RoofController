@@ -87,8 +87,9 @@ public sealed class DashboardTests
         });
     }
 
+    // Stop's own state is the layout's, on every page: WebStopMotionTests.
     [TestMethod]
-    public async Task StopOpenAndClose_CarryTheRoofsState_ForTheirColours()
+    public async Task OpenAndClose_CarryTheRoofsState_ForTheirColours()
     {
         using var harness = await WebRoofHarness.CreateAsync();
         harness.OpensTheRoof();
@@ -96,7 +97,6 @@ public sealed class DashboardTests
         var cut = context.Render<Dashboard>();
         await cut.WaitForAssertionAsync(() =>
         {
-            cut.Find("[data-testid=dashboard]").GetAttribute("data-roof-motion").Should().Be("idle", "app.css keeps Stop's dim red");
             cut.Find("[data-testid=open]").GetAttribute("data-state").Should().Be("available");
             cut.Find("[data-testid=open]").ClassList.Should().Contain("rc-action--available");
             cut.Find("[data-testid=close]").GetAttribute("data-state").Should().Be("disabled");
@@ -107,7 +107,6 @@ public sealed class DashboardTests
 
         await cut.WaitForAssertionAsync(() =>
         {
-            cut.Find("[data-testid=dashboard]").GetAttribute("data-roof-motion").Should().Be("moving", "app.css brightens Stop");
             cut.Find("[data-testid=open]").GetAttribute("data-state").Should().Be("running");
             cut.Find("[data-testid=open]").HasAttribute("disabled").Should().BeTrue("the roof is already opening");
             Text(cut.Find("[data-testid=open] strong")).Should().Be("Opening…");

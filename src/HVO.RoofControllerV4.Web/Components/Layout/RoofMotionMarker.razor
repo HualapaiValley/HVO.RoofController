@@ -1,0 +1,7 @@
+@inherits WebRoofComponent
+
+@* On every page (#208): what the Stop bar's colour follows. The bar is outside the live page (App.razor), so app.css
+   reads this marker alone: "moving" while the page's newest status, live or last known, shows the roof moving or
+   commanded to move (RoofActionStates.IsStopActive), "idle" otherwise and before the first status. Colour only: Stop
+   is never disabled, and its form and js/stop.js are unchanged. *@
+<span hidden data-testid="roof-motion" data-roof-motion="@(RoofActionStates.IsStopActive(View.Status) ? "moving" : "idle")"></span>

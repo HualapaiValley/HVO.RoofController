@@ -74,8 +74,8 @@ of them canonical roles (`roof_actions` in the data). Colour never decides eligi
 
 A stale status keeps Stop bright when it last showed motion (the roof may still be moving) but never shows Open or Close
 as running. The terminal uses the same roles in truecolour and ANSI-16; without colour a running button is reverse
-video and a disabled one faint. Web reads the dashboard's `data-roof-motion` in CSS alone, so the static Stop form and
-`stop.js` are unchanged. No new confirmation is imposed on Stop. Ordinary primary actions and selected tabs/items use focus treatment;
+video and a disabled one faint. Web reads the layout's `data-roof-motion` marker in CSS alone, on every signed-in
+page, so the static Stop form and `stop.js` are unchanged. No new confirmation is imposed on Stop. Ordinary primary actions and selected tabs/items use focus treatment;
 focus and selection also have an outline, marker or current-page text. Web `:focus-visible`, Avalonia keyboard focus,
 and terminal underline/reverse must survive disabled neighbours, overlays and every navigation path.
 

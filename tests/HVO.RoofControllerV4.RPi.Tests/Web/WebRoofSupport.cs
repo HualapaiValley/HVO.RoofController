@@ -51,8 +51,12 @@ internal sealed class WebRoofHarness : IDisposable
             settings);
         Logs = new RecordingLoggerProvider();
         LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => builder.AddProvider(Logs));
-        Store = new WebSessionStore(WebStopKey.None, new HostConnector(this), Clock, LoggerFactory.CreateLogger<WebSessionStore>());
+        Connector = new HostConnector(this);
+        Store = new WebSessionStore(WebStopKey.None, Connector, Clock, LoggerFactory.CreateLogger<WebSessionStore>());
     }
+
+    /// <summary>The web UI's clients of the in-process controller, as the layout and the session store make them.</summary>
+    public RoofControllerConnector Connector { get; }
 
     /// <summary>The roof the controller reports: its commands, its lease renewal and the hub's first message read it.</summary>
     public RoofStatusResponse Current => Volatile.Read(ref _current);

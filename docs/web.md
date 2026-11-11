@@ -361,9 +361,10 @@ is changed at a kiosk, after unlocking with it). The kiosk changes a PIN on its 
 **Stop roof** is on every page, the sign-in page too, in a bar fixed to the bottom of the screen. It is never
 disabled, needs no role and no PIN, and uses the same words as every other client. The page keeps room for the bar at
 its end, so the bar never covers the end of a page. It is a dim red while there is nothing to stop, and bright red
-while the Roof page's newest status, live or last known, shows the roof moving (the page's `data-roof-motion`, read
-by the stylesheet alone, so Stop's own script is unchanged); other pages, which show no roof status, keep the dim red.
-Only the colour changes.
+while the page's newest status, live or last known, shows the roof moving. That holds on every signed-in page, not
+only the Roof page: the layout carries the state (its `data-roof-motion` marker, read by the stylesheet alone, so
+Stop's own script is unchanged). The sign-in page, and a page opened without a session, are sent no roof status and
+keep the dim red. Only the colour changes.
 
 - The Stop bar is outside the live page. `wwwroot/js/stop.js` posts it (`POST /stop`) with `fetch` and shows the
   answer next to the button, so Stop works while the page's live connection is down. Without the script, the browser

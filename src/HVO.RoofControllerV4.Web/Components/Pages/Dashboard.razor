@@ -7,12 +7,12 @@
 @{
     var status = View.Status;
     var stale = View.IsStale;
-    // #208: the state colours every client shares; app.css brightens the Stop bar from data-roof-motion.
+    // #208: the state colours every client shares. The Stop bar's follows the layout's RoofMotionMarker, on every page.
     var openState = State(RoofActionStates.ForMotion(RoofMotionDirection.Opening, status, stale, View.OpenBlock));
     var closeState = State(RoofActionStates.ForMotion(RoofMotionDirection.Closing, status, stale, View.CloseBlock));
 }
 
-<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel" data-roof-motion="@(RoofActionStates.IsStopActive(status) ? "moving" : "idle")">
+<div class="rc2-shell" data-testid="dashboard" data-feed="@View.FeedLabel">
     <header class="rc2-header">
         <div class="rc2-header-text">
             <p class="web-eyebrow">Hualapai Valley Observatory</p>

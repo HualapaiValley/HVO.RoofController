@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Web UI: **Stop roof** is the bright red on every signed-in page while the roof moves, not only on the Roof page.
+  It was drawn in the dim "nothing to stop" red on History, System, People and the other pages during a move. Only
+  the colour follows the roof: Stop works the same on every page, and is never disabled (Refs #258).
+
 ## [4.5.1] - 2026-11-03
 
 ### Fixed
