@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   limits after an emulator reset, and keeps it after the input clears and after Clear fault until a later motion stop.
   It replaces 4.5.1's “Limit switch reached (current fault: …)” reading in `hvo-roof status`, the Alpaca `status`
   action, the web UI and the kiosk, and the `status --watch` and motion-follow line now uses the same words. Open and
-  Close decisions still follow the last motion stop (#257, Refs #245).
+  Close decisions still follow the last motion stop (Refs #257, Refs #245).
 
 ## [4.5.1] - 2026-11-03
 

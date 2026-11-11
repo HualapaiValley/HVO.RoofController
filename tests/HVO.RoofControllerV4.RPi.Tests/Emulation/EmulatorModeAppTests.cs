@@ -114,7 +114,7 @@ public sealed class EmulatorModeAppTests
     [TestMethod]
     public async Task ADriveTripAfterAnEmulatorReset_IsTheLastStop_UntilALaterMotionStop()
     {
-        // Refs #245 (item A) and #257: open to the limit, reset the emulated roof between the limits, trip the drive idle.
+        // Refs #257, Refs #245 (item A): open to the limit, reset the emulated roof between the limits, trip the drive idle.
         await using var rig = await EmulatedRoofRig.StartAsync();
         using var client = rig.CreateApiClient(TestApiKeys.Operator);
         await client.AcceptedAsync("Open");
