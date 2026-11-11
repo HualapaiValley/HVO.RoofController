@@ -31,6 +31,9 @@ public sealed class RoofCliLocalSettingsTests
     private const string AllowCommands = "RoofController:Alpaca:AllowCommands";
     private const string DefaultCamera = "RoofControllerUi:DefaultCamera";
 
+    // An Admin setting that is neither local-only nor safety-critical: for a native admin, only the scope decides it.
+    private const string WebServerLogLevel = "Logging:LogLevel:Microsoft.AspNetCore";
+
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
@@ -165,9 +168,6 @@ public sealed class RoofCliLocalSettingsTests
         localWrite.Error.Should().Contain("--remote").And.NotContain("Local Linux authorization failed");
         native.Operations.Should().Equal("read", "read", "read", "read");
     }
-
-    // An Admin setting that is neither local-only nor safety-critical: for a native admin, only the scope decides it.
-    private const string WebServerLogLevel = "Logging:LogLevel:Microsoft.AspNetCore";
 
     [TestMethod]
     [DataRow(RoofControllerApiContract.ViewerRole, "show")]
