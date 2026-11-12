@@ -1552,11 +1552,13 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
-    public void Setup_Pin_APersonChangesTheirOwn_KeepsTheSession_AndTheirOtherPinSessionsEnd()
+    [DataRow(false)]
+    [DataRow(true)]
+    public void Setup_Pin_APersonChangesTheirOwn_KeepsTheSession_AndTheirOtherPinSessionsEnd(bool pinInTempDirectory = false)
     {
         const string newPin = "8642";
         using var host = RoofClientApiTests.CreateHost();
-        using var rig = new CliRig(host);
+        using var rig = new CliRig(host, directorySuffix: pinInTempDirectory ? "-" + newPin : null);
         SignedIn(host, rig, "ada", TestSecrets.Pin);
         var kiosk = new RoofKioskCredential(RoofClientApiTests.KioskKey);
         using var atTheKiosk = ClientTestSupport.CreateClient(host, kiosk);
@@ -1586,7 +1588,16 @@ public sealed class RoofTerminalUiTests
         tui.Ui.Panel!.Press("Change");
         tui.WaitIdle("the PIN changed", () => tui.Ui.Message == RoofIdentityText.OwnPinChanged);
 
-        tui.Screen.Should().NotContainAny(TestSecrets.Pin, TestSecrets.OtherPin, newPin);
+        if (pinInTempDirectory)
+        {
+            // Reproduce the accidental match in the credentials-file path on the Setup page.
+            tui.Screen.Contains(newPin, StringComparison.Ordinal).Should().BeTrue();
+        }
+
+        // The Setup page also shows a random credentials-file path, which may contain PIN digits by chance.
+        // Check the PIN result itself and ensure the secret-entry fields have been removed.
+        tui.Ui.Message.Should().NotContainAny(TestSecrets.Pin, TestSecrets.OtherPin, newPin);
+        tui.Ui.Panel.Should().BeNull("the PIN-entry fields must not remain on screen after the change");
         RoofSessionInfoResponse[] sessions = [];
         OffTheLoop(async () =>
         {
