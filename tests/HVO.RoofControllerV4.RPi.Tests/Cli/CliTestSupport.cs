@@ -121,9 +121,12 @@ internal sealed class CliRig : IDisposable
         Termination = Termination
     };
 
-    /// <summary>A context as the command line would make it, with this rig's credentials file.</summary>
-    public RoofCliContext CreateContext(TextWriter? output = null, TextWriter? error = null)
-        => new(CreateHost(output ?? TextWriter.Null, error ?? TextWriter.Null), json: false, controller: null, credentialsFile: CredentialsPath);
+    /// <summary>
+    /// A context as the command line would make it, with this rig's credentials file; with <paramref name="local"/>, as
+    /// <c>--local</c> makes it.
+    /// </summary>
+    public RoofCliContext CreateContext(TextWriter? output = null, TextWriter? error = null, bool local = false)
+        => new(CreateHost(output ?? TextWriter.Null, error ?? TextWriter.Null), json: false, controller: null, credentialsFile: CredentialsPath, local: local);
 
     /// <summary>Runs one command line, with <c>--credentials-file</c> pointing at this rig's file.</summary>
     public async Task<CliResult> RunAsync(params string[] args)
@@ -175,7 +178,10 @@ internal sealed class TuiDriver : IDisposable
     internal static (string Mode, int Width, int Height, TestContext Context)? WorkflowProfile { get; set; }
     private static int _captureSequence;
 
-    public TuiDriver(CliRig rig, int width = 120, int height = 36)
+    /// <summary>
+    /// Starts the interface on a virtual screen; with <paramref name="local"/>, as <c>hvo-roof --local ui</c> does.
+    /// </summary>
+    public TuiDriver(CliRig rig, int width = 120, int height = 36, bool local = false)
     {
         if (WorkflowProfile is { } profile)
         {
@@ -186,7 +192,7 @@ internal sealed class TuiDriver : IDisposable
         App = Application.Create(Clock);
         App.Init(DriverRegistry.Names.ANSI);
         App.Driver!.SetScreenSize(width, height);
-        Ui = new RoofTerminalUi(rig.CreateContext(), App);
+        Ui = new RoofTerminalUi(rig.CreateContext(local: local), App);
         Ui.Start();
         _session = App.Begin(Ui.Window);
     }

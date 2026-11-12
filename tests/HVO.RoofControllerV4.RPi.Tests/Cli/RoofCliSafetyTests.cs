@@ -128,6 +128,17 @@ public sealed class RoofCliSafetyTests
     }
 
     [TestMethod]
+    public void TheOverrideHint_KeepsTheAuthorizationModeChosenOnTheCommandLine()
+    {
+        // #255: the printed command is authorized as the refused one was; a mode saved in the credentials file applies
+        // to the plain command as it did to the refused one.
+        RoofCliContext.SafetyOverrideHint.Should().Be(RoofCliContext.DescribeSafetyOverrideHint(local: null));
+        RoofCliContext.DescribeSafetyOverrideHint(local: null).Should().StartWith("To open anyway: 'hvo-roof open --override-safety'. ");
+        RoofCliContext.DescribeSafetyOverrideHint(local: true).Should().StartWith("To open anyway: 'hvo-roof --local open --override-safety'. ");
+        RoofCliContext.DescribeSafetyOverrideHint(local: false).Should().StartWith("To open anyway: 'hvo-roof --remote open --override-safety'. ");
+    }
+
+    [TestMethod]
     public async Task Close_TakesNoSafetyOverride()
     {
         using var host = RoofClientApiTests.CreateHost();

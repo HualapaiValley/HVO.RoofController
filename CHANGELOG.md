@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Native local Operators see UI settings as read-only in `hvo-roof` and its terminal Settings page. The read-only
   reason and exit-6 write refusal explain that local settings changes need a Linux controller administrator and
   name `--remote` for role-permitted edits with a password session. Native scopes are unchanged (Refs #256).
+- `hvo-roof` in local authorization mode (`--local`, or `authMode: local` saved by the installer) sends
+  `open --override-safety`, the terminal interface's **Open anyway** and `clear-fault --pulse-ms` under native `operate`
+  authorization; it had refused them before sending anything (exit 6). The exit-7 hint after a refused Open keeps an
+  explicit `--local` or `--remote`, so the command it prints is authorized the same way (#255).
 - `--passphrase-file` counts the passphrase alone against its 4096-byte limit, not the file's final LF or CRLF. A
   4096-byte passphrase is accepted from a file as it is at the hidden prompt; a longer one is refused as before
   (Refs #258).
