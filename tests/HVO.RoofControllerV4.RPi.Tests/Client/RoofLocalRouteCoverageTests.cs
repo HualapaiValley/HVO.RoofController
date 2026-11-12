@@ -79,7 +79,7 @@ public sealed class RoofLocalRouteCoverageTests
         (nameof(RoofApiRoutes.Camera), "GET", RoofApiRoutes.Camera(1), "read"),
         (nameof(RoofApiRoutes.HistoryPage), "GET", RoofApiRoutes.HistoryPage(new RoofHistoryQuery()), "read"),
 
-        // The roof commands' query variants (#255), as RoofControlApi builds them: the category without the query.
+        // The roof commands' query variants (Refs #255), as RoofControlApi builds them: the category without the query.
         (nameof(RoofApiRoutes.OpenCommand), "POST", RoofApiRoutes.OpenCommand(overrideSafety: true), "operate"),
         (nameof(RoofApiRoutes.OpenCommand), "POST", RoofApiRoutes.OpenCommand(overrideSafety: false), "operate"),
         (nameof(RoofApiRoutes.ClearFaultCommand), "POST", RoofApiRoutes.ClearFaultCommand(250), "operate"),
@@ -191,7 +191,7 @@ public sealed class RoofLocalRouteCoverageTests
     [DataRow("DELETE", "api/v4.0/System/Summary")]
     [DataRow("GET", "api/v4.0/Unknown")]
     [DataRow("GET", "api/v4.0/alpaca/unknown")]
-    // With a query (#255): a query never makes an unknown route known.
+    // With a query (Refs #255): a query never makes an unknown route known.
     [DataRow("GET", "api/v4.0/Unknown?x=1")]
     [DataRow("POST", "api/v4.0/RoofControl/Unknown?x=1")]
     [DataRow("POST", "api/v4.0/RoofControl/Unknown?overrideSafety=true")]
@@ -231,7 +231,7 @@ public sealed class RoofLocalRouteCoverageTests
     private const string Unavailable = "(refused before sending)";
 
     /// <summary>
-    /// Every public <see cref="RoofControlApi"/> call (#255), each overload, with what the real client code sends in
+    /// Every public <see cref="RoofControlApi"/> call (Refs #255), each overload, with what the real client code sends in
     /// local mode: the request (path and query, as the controller's contract has them) and the category the native
     /// helper is asked for. Each call is an expression, so the guard below can tell the overloads apart.
     /// </summary>
@@ -267,7 +267,7 @@ public sealed class RoofLocalRouteCoverageTests
     }
 
     /// <summary>
-    /// The guard over what the client library actually sends (#255): each RoofControlApi call, in local mode, either
+    /// The guard over what the client library actually sends (Refs #255): each RoofControlApi call, in local mode, either
     /// asks the native helper for its declared category and sends exactly its declared request with the fresh session
     /// (never the saved key), or is refused before anything is asked or sent. A query variant the classifier does not
     /// know fails here.
