@@ -5,6 +5,7 @@ using HVO.RoofControllerV4.Cli.Ui;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Tests.Alpaca;
+using HVO.RoofControllerV4.RPi.Tests.Client;
 
 namespace HVO.RoofControllerV4.RPi.Tests.Cli;
 
@@ -132,26 +133,51 @@ public sealed class RoofCliLocalAlpacaCommandTests
     }
 
     /// <summary>
-    /// What <c>alpaca ack</c> asks and sends in local mode. The controller's answer is not this test's subject: the
-    /// route is a Viewer's (its policy asks a native session for the read scope), and the category here is operate, as
-    /// it was before the routes were matched exactly.
+    /// Refs #267. <c>alpaca ack</c> must be authorized by the real Viewer route and acknowledge the alert, with a
+    /// fresh native read session in both ways local mode is selected.
     /// </summary>
     [TestMethod]
     [DataRow(true, DisplayName = "--local alpaca ack")]
     [DataRow(false, DisplayName = "alpaca ack with authMode local saved")]
-    public async Task Ack_InLocalMode_AsksForOperate_AndSendsTheAcknowledgementOfThatAlert(bool viaFlag)
+    public async Task Ack_InLocalMode_AsksForRead_AndAcknowledgesThatAlert(bool viaFlag)
     {
         using var native = new F2LocalRig("Off", installedDefault: !viaFlag);
         var alert = AlpacaCliSupport.RaiseRefusal(native.Controller, "scope-unknown:Main");
 
-        await native.Cli.RunAsync([.. Local(viaFlag), "alpaca", "ack", alert.Id]);
+        var result = await native.Cli.RunAsync([.. Local(viaFlag), "alpaca", "ack", alert.Id]);
 
         using (new AssertionScope())
         {
-            native.Operations.Should().Equal(["operate"], "acknowledging an alert keeps its category");
+            result.Code.Should().Be(RoofExitCode.Success, result.ToString());
+            native.Operations.Should().Equal(["read"], "the acknowledgment route requires the native read scope");
             native.ClientCredentials.Should().Equal($"POST {LocalSession}: none", $"POST {Alerts}/{alert.Id}/acknowledge: session");
             native.ServerSaw.Should().Equal($"POST {LocalSession}", $"POST {Alerts}/{alert.Id}/acknowledge");
+            AlpacaCliSupport.Commands(native.Controller).Alerts().Single(item => item.Id == alert.Id).Acknowledged.Should().BeTrue();
         }
+    }
+
+    /// <summary>
+    /// Refs #267. Lease release has the same Viewer policy as acknowledgment. The terminal UI sends no lease requests
+    /// in local mode, but the client library's release must still request read and pass the real route's policy.
+    /// </summary>
+    [TestMethod]
+    public async Task ReleaseLease_InLocalMode_AsksForRead_AndIsAuthorized()
+    {
+        using var native = new F2LocalRig("Off");
+        using var exchange = ClientTestSupport.CreateClient(native.Controller);
+        using var client = new RoofControllerClient(new RoofConnectionOptions
+        {
+            BaseAddress = ClientTestSupport.BaseAddress,
+            CreateHandler = () => ClientTestSupport.CreateHandler(() => native.Controller.Server),
+            LocalAuthorization = async (operation, cancellationToken) => await exchange.Auth.SignInLocallyAsync(
+                await native.Cli.ObtainLocalAssertion!(operation, cancellationToken), cancellationToken)
+        });
+
+        await client.Alpaca.ReleaseLeaseAsync();
+
+        native.Operations.Should().Equal(["read"], "releasing a lease is a Viewer request, even though taking it requires operate");
+        native.ServerSaw.Should().Equal($"POST {LocalSession}", "DELETE /api/v4.0/alpaca/lease");
+        AlpacaCliSupport.Commands(native.Controller).GetStatus().OperatorLease.Held.Should().BeFalse();
     }
 
     [TestMethod]

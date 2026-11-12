@@ -82,12 +82,20 @@ internal static class RoofLocalAuthorization
             return path is RoofApiRoutes.AlpacaGrants or RoofApiRoutes.AlpacaAlerts ? "read" : null;
         }
 
+        // Refs #267: both routes require ViewerPolicy's native read scope, despite POST/DELETE. Lease release has
+        // the same mismatch as acknowledgment; the local terminal UI sends no leases because each request has its
+        // own session, but the library's release must still match the route. Taking a lease remains operate.
+        if (method == HttpMethod.Post && IsAlertAcknowledgement(path)
+            || method == HttpMethod.Delete && path == RoofApiRoutes.AlpacaLease)
+        {
+            return "read";
+        }
+
         var known = method == HttpMethod.Post
             ? path == RoofApiRoutes.AlpacaGrants
                 || path == RoofApiRoutes.AlpacaLeaseHeartbeat(input: false) || path == RoofApiRoutes.AlpacaLeaseHeartbeat(input: true)
-                || IsAlertAcknowledgement(path)
             : method == HttpMethod.Delete
-                && (path is RoofApiRoutes.AlpacaHold or RoofApiRoutes.AlpacaLease || IsGrantOfOneKind(path));
+                && (path == RoofApiRoutes.AlpacaHold || IsGrantOfOneKind(path));
         return known ? "operate" : null;
     }
 
