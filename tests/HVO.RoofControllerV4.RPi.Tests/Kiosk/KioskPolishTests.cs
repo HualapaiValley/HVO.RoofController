@@ -11,9 +11,11 @@ using static HVO.RoofControllerV4.RPi.Tests.Kiosk.KioskAvalonia;
 namespace HVO.RoofControllerV4.RPi.Tests.Kiosk;
 
 /// <summary>
-/// #208's kiosk polish, drawn headless against the controller's real API and the emulated roof: Stop's and Open's and
-/// Close's state colours, the compact PIN pad and its people step, page controls only where contents overflow, About's
-/// labelled cards and the Terminal page's visible exit.
+/// #208's kiosk polish, drawn headless on <see cref="KioskHarness"/>: the controller's real API in process, with a
+/// mocked roof service (a move is a status the test reports, not a plant that travels). Stop's and Open's and Close's
+/// state colours, the compact PIN pad and its people step, page controls only where contents overflow, About's
+/// labelled cards and the Terminal page's visible exit. Stop's colours while the plant itself opens and closes are
+/// <see cref="KioskStopStateScenarios"/>.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -192,7 +194,7 @@ public sealed class KioskPolishTests
             screen.Visible("recent-notices-next").Should().BeFalse();
             screen.Shell.Update(harness.Console.View with
             {
-                Notices = Enumerable.Range(0, 20).Select(i => new KioskNotice($"Notice {i}: the emulated roof reported a change.", KioskNoticeLevel.Info, KioskHarness.Start)).ToArray()
+                Notices = Enumerable.Range(0, 20).Select(i => new KioskNotice($"Notice {i}: the controller reported a change.", KioskNoticeLevel.Info, KioskHarness.Start)).ToArray()
             });
         });
         await screen.DrawAsync();
@@ -312,7 +314,8 @@ public sealed class KioskPolishTests
         await OnUiAsync(() => exit.IsConfirming.Should().BeFalse());
     }
 
-    private static void ShouldBeIdle(KioskShell shell)
+    /// <summary>Stop as the shell draws it with nothing to stop: the dim red, and enabled.</summary>
+    internal static void ShouldBeIdle(KioskShell shell)
     {
         shell.StopActive.Should().BeFalse("there is nothing to stop");
         shell.Stop.IsEffectivelyEnabled.Should().BeTrue("Stop is never disabled");
@@ -320,7 +323,8 @@ public sealed class KioskPolishTests
         Colour(shell.Stop, "ButtonBackgroundPressed").Should().Be(Color.Parse(RoofUiPalette.StopButton));
     }
 
-    private static void ShouldBeActive(KioskShell shell)
+    /// <summary>Stop as the shell draws it while the roof moves: the bright red, and enabled.</summary>
+    internal static void ShouldBeActive(KioskShell shell)
     {
         shell.StopActive.Should().BeTrue("the roof is moving");
         shell.Stop.IsEffectivelyEnabled.Should().BeTrue("Stop is never disabled");

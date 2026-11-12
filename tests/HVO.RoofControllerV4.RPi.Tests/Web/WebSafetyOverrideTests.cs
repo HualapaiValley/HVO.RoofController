@@ -229,8 +229,11 @@ public sealed class WebSafetyOverrideTests
 
     // ---- The roof page ---------------------------------------------------------------------------------------------
 
+    // Stop is not part of the roof page (it is in App.razor, outside the live page), so it is not rendered here: Stop
+    // withdrawing the question is StopAndClose_WithdrawTheQuestion, and Stop enabled and uncovered beside the open
+    // question is checked in a browser (Browser/WebScreenshotTests).
     [TestMethod]
-    public async Task TheRoofPage_AsksTheQuestion_AndOpenAnywayOpensTheRoof_WhileStopStaysOnThePage()
+    public async Task TheRoofPage_AsksTheQuestion_AndOpenAnywayOpensTheRoof()
     {
         using var harness = await WebRoofHarness.CreateAsync(settings: Warn);
         harness.OpensTheRoof();

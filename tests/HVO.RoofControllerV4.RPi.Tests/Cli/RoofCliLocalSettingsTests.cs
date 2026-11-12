@@ -31,6 +31,9 @@ public sealed class RoofCliLocalSettingsTests
     private const string AllowCommands = "RoofController:Alpaca:AllowCommands";
     private const string DefaultCamera = "RoofControllerUi:DefaultCamera";
 
+    // An Admin setting that is neither local-only nor safety-critical: for a native admin, only the scope decides it.
+    private const string WebServerLogLevel = "Logging:LogLevel:Microsoft.AspNetCore";
+
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
@@ -248,26 +251,77 @@ public sealed class RoofCliLocalSettingsTests
         native.Logs.Entries.Should().Contain(entry => entry.Message.Contains("AUDIT settings") && entry.Message.Contains(key));
     }
 
+    // PR #247 review F7: two independent guards would each answer 403 to a read-scoped write of a local-only setting,
+    // the scope guard (the session lacks configure) and the settings store's local-credential check
+    // (SettingNotPermitted). So the scope guard is isolated twice over: the refusal carries no settings code, and a
+    // setting only the scope guard could refuse is refused the same way. The same requests with configure scope are
+    // then accepted, so nothing but the scope stood in their way.
     [TestMethod]
     public async Task LocalAdmin_ReadFormPreviewsLocalWrites_ButReadScopeCannotSubmitThem()
     {
         using var native = new NativeSettingsRig(RoofControllerApiContract.AdminRole);
         using var exchange = ClientTestSupport.CreateClient(native.Controller);
-        using var client = new RoofControllerClient(new RoofConnectionOptions
+        // Whatever a request needs, this client's native session has the read scope alone.
+        using var client = NativeClient(native, exchange, _ => "read");
+        var form = RoofSettingsForm.Create(await client.Settings.GetCatalogueAsync(), await client.Settings.GetAsync());
+        var localOnly = form.FindField(AllowCommands)!;
+        localOnly.Setting.LocalOnly.Should().BeTrue();
+        localOnly.CanWrite.Should().BeTrue("the read form describes an admin's later configure write");
+        var ordinary = form.FindField(WebServerLogLevel)!;
+        ordinary.Setting.Should().BeEquivalentTo(
+            new { LocalOnly = false, Safety = RoofSettingSafety.None, WriteRole = RoofControllerApiContract.AdminRole },
+            "an Admin setting no local-credential or confirmation check can refuse");
+        ordinary.CanWrite.Should().BeTrue();
+        var alpaca = form.Edit(RoofSettingsContract.AlpacaGroup);
+        alpaca.TrySet(AllowCommands, "CloseOnly", out var problem).Should().BeTrue(problem);
+        var logging = form.Edit(RoofSettingsContract.LoggingGroup);
+        logging.TrySet(WebServerLogLevel, nameof(LogLevel.Error), out problem).Should().BeTrue(problem);
+        native.Operations.Clear();
+
+        Func<Task> writeLocalOnly = () => client.Settings.UpdateAsync(RoofSettingsContract.AlpacaGroup, alpaca.ToRequest(true));
+        Func<Task> writeOrdinary = () => client.Settings.UpdateAsync(RoofSettingsContract.LoggingGroup, logging.ToRequest());
+        foreach (var (write, setting) in new[] { (writeLocalOnly, AllowCommands), (writeOrdinary, WebServerLogLevel) })
+        {
+            var refusal = (await write.Should().ThrowAsync<RoofApiException>("{0} needs the configure scope", setting)).Which;
+            refusal.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            // The store's own refusal (the role, or a local-only setting) is SettingNotPermitted; the scope guard's has no code.
+            refusal.Code.Should().BeNull("the scope guard refuses {0} before the settings store sees it", setting);
+        }
+
+        native.Operations.Should().Equal(["read", "read"], "each write was sent with a read-scoped session");
+        native.Logs.Entries.Should().NotContain(entry => entry.Message.Contains("AUDIT settings"), "a refused write changes and audits nothing");
+        var unchanged = RoofSettingsForm.Create(await client.Settings.GetCatalogueAsync(), await client.Settings.GetAsync());
+        unchanged.Version.Should().Be(form.Version);
+        unchanged.FindField(AllowCommands)!.EditText.Should().Be(localOnly.EditText);
+        unchanged.FindField(WebServerLogLevel)!.EditText.Should().Be(ordinary.EditText);
+
+        // The control: the same two changes, each sent with the scope the request needs.
+        using var configuring = NativeClient(native, exchange, operation => operation);
+        native.Operations.Clear();
+        await configuring.Settings.UpdateAsync(RoofSettingsContract.LoggingGroup, logging.ToRequest());
+        var afterFirst = RoofSettingsForm.Create(await configuring.Settings.GetCatalogueAsync(), await configuring.Settings.GetAsync());
+        var alpacaAgain = afterFirst.Edit(RoofSettingsContract.AlpacaGroup);
+        alpacaAgain.TrySet(AllowCommands, "CloseOnly", out problem).Should().BeTrue(problem);
+        await configuring.Settings.UpdateAsync(RoofSettingsContract.AlpacaGroup, alpacaAgain.ToRequest(true));
+
+        native.Operations.Should().Contain("configure").And.OnlyContain(operation => operation == "configure" || operation == "read");
+        var changed = RoofSettingsForm.Create(await configuring.Settings.GetCatalogueAsync(), await configuring.Settings.GetAsync());
+        changed.FindField(WebServerLogLevel)!.EditText.Should().Be(nameof(LogLevel.Error));
+        changed.FindField(AllowCommands)!.EditText.Should().Be("CloseOnly");
+        native.Logs.Entries.Should().Contain(entry => entry.Message.Contains("AUDIT settings") && entry.Message.Contains(WebServerLogLevel))
+            .And.Contain(entry => entry.Message.Contains("AUDIT settings") && entry.Message.Contains(AllowCommands));
+    }
+
+    // A client whose every protected request signs in natively with the scope <paramref name="scope"/> gives for the
+    // operation the request needs.
+    private static RoofControllerClient NativeClient(NativeSettingsRig native, RoofControllerClient exchange, Func<string, string> scope)
+        => new(new RoofConnectionOptions
         {
             BaseAddress = ClientTestSupport.BaseAddress,
             CreateHandler = () => ClientTestSupport.CreateHandler(() => native.Controller.Server),
-            LocalAuthorization = async (_, cancellationToken) => await exchange.Auth.SignInLocallyAsync(
-                await native.Cli.ObtainLocalAssertion!("read", cancellationToken), cancellationToken)
+            LocalAuthorization = async (operation, cancellationToken) => await exchange.Auth.SignInLocallyAsync(
+                await native.Cli.ObtainLocalAssertion!(scope(operation), cancellationToken), cancellationToken)
         });
-        var form = RoofSettingsForm.Create(await client.Settings.GetCatalogueAsync(), await client.Settings.GetAsync());
-        form.FindField(AllowCommands)!.CanWrite.Should().BeTrue("the read form describes an admin's later configure write");
-        var edit = form.Edit(RoofSettingsContract.AlpacaGroup);
-        edit.TrySet(AllowCommands, "CloseOnly", out var problem).Should().BeTrue(problem);
-
-        Func<Task> write = () => client.Settings.UpdateAsync(RoofSettingsContract.AlpacaGroup, edit.ToRequest(true));
-        (await write.Should().ThrowAsync<RoofApiException>()).Which.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
 
     private static Button? FindButton(View view, string label)
     {

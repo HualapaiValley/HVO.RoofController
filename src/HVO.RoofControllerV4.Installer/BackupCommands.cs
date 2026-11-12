@@ -1035,7 +1035,17 @@ internal static class BackupCommands
     /// (<see cref="ParseAsync"/>), never the path opened again. A file in <see cref="DefaultFolder"/> is read only while
     /// that folder is trusted (<see cref="FolderProblemAsync"/>).
     /// </summary>
-    internal static async Task<byte[]> ReadPrivateAsync(InstallerMachine machine, string path, CancellationToken cancellationToken, int maxBytes = (int)MaxBytes, string subject = "backup")
+    /// <param name="machine">The machine the file is on.</param>
+    /// <param name="path">The file.</param>
+    /// <param name="cancellationToken">Ends the read.</param>
+    /// <param name="maxBytes">The most the file may hold; a larger one is refused before it is read whole.</param>
+    /// <param name="subject">What the file is, in a refusal.</param>
+    /// <param name="limit">
+    /// How a refusal of a file that is not a backup states its limit, when the limit is not on the whole file (a
+    /// passphrase file's is on the passphrase, without its line ending); null states <paramref name="maxBytes"/>.
+    /// </param>
+    internal static async Task<byte[]> ReadPrivateAsync(
+        InstallerMachine machine, string path, CancellationToken cancellationToken, int maxBytes = (int)MaxBytes, string subject = "backup", string? limit = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         if (Path.GetDirectoryName(path) == DefaultFolder && await FolderProblemAsync(machine, cancellationToken).ConfigureAwait(false) is { } problem)
@@ -1087,7 +1097,7 @@ internal static class BackupCommands
 
         InstallerRefusedException TooLarge() => subject == "backup"
             ? Unreadable(path, $"it is more than {MaxBytes / 1024 / 1024} MB")
-            : new InstallerRefusedException($"The {subject} {path} is more than {maxBytes} bytes. Nothing was changed.");
+            : new InstallerRefusedException($"The {subject} {path} is more than {limit ?? $"{maxBytes} bytes"}. Nothing was changed.");
     }
 
     /// <summary>

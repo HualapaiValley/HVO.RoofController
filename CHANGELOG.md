@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   It replaces 4.5.1's “Limit switch reached (current fault: …)” reading in `hvo-roof status`, the Alpaca `status`
   action, the web UI and the kiosk, and the `status --watch` and motion-follow line now uses the same words. Open and
   Close decisions still follow the last motion stop (Refs #257, Refs #245).
+- Web UI: **Stop roof** is the bright red on every signed-in page while the roof moves, not only on the Roof page.
+  It was drawn in the dim "nothing to stop" red on History, System, People and the other pages during a move. Only
+  the colour follows the roof: Stop works the same on every page, and is never disabled (Refs #258).
 
 ### Fixed
 
@@ -35,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   controller and reads the same credentials file. It had printed neither, so the printed command read the default
   file instead, and could change to that file's authorization mode or credential, or ask another controller
   (Refs #261).
+- `--passphrase-file` counts the passphrase alone against its 4096-byte limit, not the file's final LF or CRLF. A
+  4096-byte passphrase is accepted from a file as it is at the hidden prompt; a longer one is refused as before
+  (Refs #258).
+- The Alpaca `status` action ends the controller's last error with one full stop, where an error that already had
+  one was shown with two (Refs #258).
 
 ## [4.5.1] - 2026-11-03
 

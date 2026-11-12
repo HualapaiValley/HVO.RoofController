@@ -39,6 +39,9 @@ public sealed class InstallerBackupTests
 
     private const string PassphraseFile = "/root/backup-passphrase";
 
+    // The documented limit (docs/install.md): the longest passphrase, in UTF-8 bytes, from a file or the prompt.
+    private const int LongestPassphraseBytes = 4096;
+
     private static void Passphrase(FakeMachine pi, string path = PassphraseFile)
     {
         pi.Write(path, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) + "\n");
@@ -190,6 +193,64 @@ public sealed class InstallerBackupTests
         pi.Exists(Kept + ".partial").Should().BeFalse();
         pi.Exists(InstallPaths.SystemRecord).Should().BeTrue();
         pi.Containers.Should().ContainKey(MachineSurveyor.ControllerContainer);
+    }
+
+    // The limit is on the passphrase, not on the file: its final LF or CRLF is not counted, so the longest passphrase
+    // the prompt accepts is accepted from a file however the file ends, and is the same passphrase.
+    [TestMethod]
+    [DataRow("", DisplayName = "4096 bytes of passphrase, no line ending")]
+    [DataRow("\n", DisplayName = "4096 bytes of passphrase, then LF")]
+    [DataRow("\r\n", DisplayName = "4096 bytes of passphrase, then CRLF")]
+    public async Task EncryptedBackup_AcceptsTheLongestPassphrase_FromAFileWithAnyLineEnding_AndThePromptRestoresIt(string ending)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Folder("/srv/keep");
+        // 3072 random bytes are exactly 4096 base64 characters, with no padding.
+        var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(3072));
+        Encoding.UTF8.GetByteCount(secret).Should().Be(LongestPassphraseBytes);
+        pi.Write(PassphraseFile, secret + ending);
+        File.SetUnixFileMode(pi.OnDisk(PassphraseFile), Modes.PrivateFile);
+        new FileInfo(pi.OnDisk(PassphraseFile)).Length.Should().Be(LongestPassphraseBytes + ending.Length);
+
+        var backup = await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile);
+
+        backup.ExitCode.Should().Be(0, backup.ToString());
+        File.ReadAllBytes(pi.OnDisk(Kept)).Take(2).Should().NotEqual(new byte[] { 0x1f, 0x8b }, "the backup is encrypted");
+        (await pi.RunAsync("uninstall", "--purge", "--yes", "--no-backup", "--confirm", "roofpi")).ExitCode.Should().Be(0);
+        File.Delete(pi.OnDisk(PassphraseFile));
+        pi.Interactive = true;
+        pi.Asked.Clear();
+        pi.Types = _ => secret;
+
+        var restore = await RestoreAsync(pi, Kept);
+
+        restore.ExitCode.Should().Be(0, restore.ToString());
+        pi.Asked.Should().ContainSingle().Which.Should().Contain("passphrase");
+        pi.Exists(ManagedSecret).Should().BeTrue("the line ending was never part of the passphrase");
+        foreach (var text in new[] { backup.ToString(), restore.ToString(), pi.Read(InstallPaths.SystemLog), pi.Read(InstallPaths.SystemRecord) })
+            Assert.IsFalse(text.Contains(secret, StringComparison.Ordinal), "The passphrase reached output, the log or the record.");
+    }
+
+    [TestMethod]
+    [DataRow(4097, "", DisplayName = "4097 bytes of passphrase, no line ending")]
+    [DataRow(4097, "\n", DisplayName = "4097 bytes of passphrase, then LF (4098-byte file)")]
+    [DataRow(4097, "\r\n", DisplayName = "4097 bytes of passphrase, then CRLF (4099-byte file)")]
+    [DataRow(4098, "", DisplayName = "4098 bytes of passphrase: the largest file that is read")]
+    [DataRow(8192, "\n", DisplayName = "8192 bytes of passphrase, then LF")]
+    public async Task EncryptedBackup_RefusesAPassphraseLongerThanTheLimit_HoweverTheFileEnds(int bytes, string ending)
+    {
+        using var pi = await InstalledPiAsync();
+        pi.Folder("/srv/keep");
+        pi.Write(PassphraseFile, new string('x', bytes) + ending);
+        File.SetUnixFileMode(pi.OnDisk(PassphraseFile), Modes.PrivateFile);
+
+        var backup = await pi.RunAsync("backup", "--output", Kept, "--passphrase-file", PassphraseFile);
+
+        backup.ExitCode.Should().Be((int)InstallerExitCode.Refused, backup.ToString());
+        backup.Error.Should().Contain($"The passphrase file {PassphraseFile} is more than 4096 bytes of passphrase (a final LF or CRLF is not counted)");
+        backup.Error.Should().NotContain("not a backup");
+        pi.Exists(Kept).Should().BeFalse();
+        pi.Exists(Kept + ".partial").Should().BeFalse();
     }
 
     [TestMethod]

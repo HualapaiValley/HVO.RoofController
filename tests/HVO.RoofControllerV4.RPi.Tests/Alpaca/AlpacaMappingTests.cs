@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using HVO.RoofControllerV4.Alpaca.Devices;
 using HVO.RoofControllerV4.Alpaca.Protocol;
@@ -122,6 +123,41 @@ public sealed class AlpacaMappingTests
         });
 
         text.Should().StartWith("Shutter: Error.").And.Contain("LATCHED").And.Contain("The drive reported a fault");
+    }
+
+    [TestMethod]
+    [DataRow("Speed too high.", "Last error: Speed too high.")]
+    [DataRow("  Speed too high.  ", "Last error: Speed too high.")]
+    [DataRow("Speed too high", "Last error: Speed too high.")]
+    [DataRow("Is the drive powered?", "Last error: Is the drive powered?")]
+    [DataRow("Relay state is unknown!", "Last error: Relay state is unknown!")]
+    public void TheStatusText_EndsTheLastErrorWithOneFullStop_WhetherOrNotItHasItsOwn(string lastError, string expected)
+    {
+        // A latched drive fault with the conditions and the Alpaca state too: every sentence the action can append.
+        var status = RoofServiceMock.Snapshot(RoofControllerStatus.Error, faultLatched: true) with
+        {
+            LatchedFaultReason = RoofControllerStopReason.DriveFault,
+            LastError = lastError,
+            Safety = new RoofSafetyStatus { State = RoofSafetyState.Unsafe, Reasons = ["Telescope 'Main' is not parked"], InterlockMode = RoofSafetyInterlockMode.Warn },
+            Alpaca = new RoofAlpacaStatus(),
+        };
+
+        var text = AlpacaDome.DescribeStatus(status);
+
+        Regex.Matches(text, Regex.Escape(expected)).Should().ContainSingle("the last error is said once, as the controller wrote it");
+        text.Should().NotContain("..", "no sentence ends in two full stops").And.NotContain("?.").And.NotContain("!.");
+        text.Should().Contain($"{expected} Safety: UNSAFE", "the next sentence follows the last error's own ending");
+    }
+
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("")]
+    [DataRow("   ")]
+    public void TheStatusText_SaysNoLastError_WhenThereIsNone(string? lastError)
+    {
+        var text = AlpacaDome.DescribeStatus(RoofServiceMock.Snapshot() with { LastError = lastError });
+
+        text.Should().NotContain("Last error").And.NotContain("..").And.EndWith(".");
     }
 
     private static RoofApiException Refusal(HttpStatusCode status, RoofControllerErrorCode? code)

@@ -17,6 +17,13 @@ internal sealed class BackupEncryption(byte[] passphrase) : IDisposable
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
     private const int Iterations = 600_000;
+
+    /// <summary>The longest passphrase, in UTF-8 bytes, from a file or the prompt alike.</summary>
+    internal const int MaxPassphraseBytes = 4096;
+
+    // What a passphrase file may hold beyond the passphrase: its final LF or CRLF, which is not part of it.
+    private const int LineEndingBytes = 2;
+    private static readonly string FileLimit = $"{MaxPassphraseBytes} bytes of passphrase (a final LF or CRLF is not counted)";
     private static int HeaderBytes => Magic.Length + SaltBytes + NonceBytes;
 
     internal static bool IsEncrypted(ReadOnlySpan<byte> archive) => archive.StartsWith(Family);
@@ -28,12 +35,20 @@ internal sealed class BackupEncryption(byte[] passphrase) : IDisposable
         // A purge must not remove the only way to decrypt the archive. Nor should a backup collect its own password.
         BackupCommands.RefuseRemovedOutput(path, subject: "passphrase file");
         BackupCommands.RefuseRemovedOutput(Path.Join(machine.ResolveFolder(Path.GetDirectoryName(path)!), Path.GetFileName(path)), subject: "passphrase file");
-        var bytes = await BackupCommands.ReadPrivateAsync(machine, path, cancellationToken, maxBytes: 4096, subject: "passphrase file").ConfigureAwait(false);
+        // The limit is on the passphrase, as at the prompt, so the file is read with room for its line ending: a
+        // passphrase of exactly the limit followed by LF or CRLF is the same passphrase the prompt accepts.
+        var bytes = await BackupCommands.ReadPrivateAsync(
+            machine, path, cancellationToken, maxBytes: MaxPassphraseBytes + LineEndingBytes, subject: "passphrase file", limit: FileLimit).ConfigureAwait(false);
         try
         {
             var length = bytes.Length;
             if (length > 0 && bytes[length - 1] == '\n') length--;
             if (length > 0 && bytes[length - 1] == '\r') length--;
+            if (length > MaxPassphraseBytes)
+            {
+                throw new InstallerRefusedException($"The passphrase file {path} is more than {FileLimit}. Nothing was changed.");
+            }
+
             return FromBytes(bytes.AsSpan(0, length));
         }
         finally { CryptographicOperations.ZeroMemory(bytes); }
@@ -57,7 +72,7 @@ internal sealed class BackupEncryption(byte[] passphrase) : IDisposable
 
     private static BackupEncryption FromBytes(ReadOnlySpan<byte> value)
     {
-        if (value.IsEmpty || value.Length > 4096 || value.ContainsAny((byte)'\n', (byte)'\r', (byte)0))
+        if (value.IsEmpty || value.Length > MaxPassphraseBytes || value.ContainsAny((byte)'\n', (byte)'\r', (byte)0))
             throw new InstallerRefusedException("The passphrase must be one nonempty UTF-8 line, at most 4096 bytes. Nothing was changed.");
         try { _ = new UTF8Encoding(false, true).GetCharCount(value); }
         catch (DecoderFallbackException)

@@ -105,6 +105,9 @@ public sealed class WebScreenshotTests
         await Expect(page.GetByTestId("safety-override")).ToBeVisibleAsync();
         await Expect(page.GetByTestId("safety-override")).ToContainTextAsync("The safety conditions are UNKNOWN: No safety sources configured.");
         browser.Rig.Controller.GetCurrentStatusSnapshot().IsMoving.Should().BeFalse("nothing is sent before Open anyway");
+        // Stop stays on the page while the question is open: enabled, in view and not covered by the question.
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        (await browser.PlacementOfAsync(browser.Stop)).Reachable.Should().BeTrue("Stop is in view and uncovered beside the safety question on the {0}", name);
         await shots.TakeAsync("19-safety-override");
         await page.GetByTestId("safety-override-confirm").ClickAsync();
         await browser.Rig.WaitForControllerAsync(s => s.IsMoving, "the roof to open");

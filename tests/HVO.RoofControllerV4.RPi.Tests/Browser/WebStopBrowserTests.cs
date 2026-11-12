@@ -148,6 +148,54 @@ public sealed class WebStopBrowserTests
     }
 
     /// <summary>
+    /// Stop's colour follows the roof on every signed-in page, not only the Roof page (#208): a move started on the Roof
+    /// page is still under way on History (reached by its link, on the same live connection) and on System and People
+    /// (each loaded afresh), where Stop is the bright red, enabled and uncovered. Stopped there, it is the dim red again.
+    /// </summary>
+    [TestMethod]
+    public async Task WhileTheRoofMoves_StopIsBrightOnPagesOtherThanTheRoofPage_AndDimAgainOnceStopped()
+    {
+        var browser = _browser = await WebBrowser.StartAsync(TestContext, Scenario.Production(travelMeters: 2.0), WebDevices.Desktop);
+        var rig = browser.Rig;
+        var page = browser.Page;
+        await browser.SignInAsync(WebBrowser.Admin);
+        await ExpectStopColoursAsync(browser, moving: false, "the Roof page before the move");
+
+        await browser.Open.ClickAsync();
+        await rig.WaitForControllerAsync(s => s.IsMoving, "the roof to open");
+        await ExpectStopColoursAsync(browser, moving: true, "the Roof page");
+
+        await page.Locator(".web-nav-links .nav-link", new() { HasTextString = "History" }).ClickAsync();
+        await Expect(page).ToHaveURLAsync(new Regex("/history$"));
+        await Expect(page.GetByTestId("history")).ToBeVisibleAsync();
+        await ExpectBrightOnAsync("/history");
+
+        foreach (var (path, loaded) in Pages.Where(other => other.Path is "/system" or "/people"))
+        {
+            await page.GotoAsync(path);
+            await Expect(page.Locator(loaded).First).ToBeVisibleAsync();
+            await ExpectBrightOnAsync(path);
+        }
+
+        await browser.Stop.ClickAsync();
+
+        await Expect(browser.StopOutcome).ToHaveTextAsync(RoofStopText.AcknowledgedVerified);
+        var stopped = await rig.WaitForRestAsync("Stop on a page other than the Roof page");
+        stopped.LastStopReason.Should().Be(RoofControllerStopReason.NormalStop);
+        stopped.ShouldBeDeenergized(rig);
+        rig.Plant.OpenLimitActuated.Should().BeFalse("Stop ended the move before the open limit");
+        await ExpectStopColoursAsync(browser, moving: false, "the page the roof was stopped from");
+        rig.Session.Plant.Violations.Should().BeEmpty();
+
+        async Task ExpectBrightOnAsync(string path)
+        {
+            await Expect(browser.Dashboard).ToHaveCountAsync(0);
+            await ExpectStopColoursAsync(browser, moving: true, path);
+            rig.Controller.GetCurrentStatusSnapshot().IsMoving.Should().BeTrue("the roof must still be moving when Stop is checked on {0}", path);
+        }
+    }
+
+    /// <summary>
     /// Stop is on every page, the sign-in page too, in view and uncovered as the page loads, and no page scrolls
     /// sideways; and the Stop bar never covers the end of a page: scrolled to the bottom, the page's content ends above
     /// the bar, with the bar as tall as it gets (showing the answer to a Stop).
@@ -272,6 +320,25 @@ public sealed class WebStopBrowserTests
 
                 return next(context);
             };
+    }
+
+    // Stop as the browser draws it for its state (RoofUiPalette's idle or active text, background and edge), enabled,
+    // in view and uncovered. The colours follow the page's status, so they are waited for.
+    private static async Task ExpectStopColoursAsync(WebBrowser browser, bool moving, string where)
+    {
+        var (text, background, border) = moving
+            ? (RoofUiPalette.StopButtonActiveText, RoofUiPalette.StopButtonActive, RoofUiPalette.StopButtonActiveBorder)
+            : (RoofUiPalette.StopButtonText, RoofUiPalette.StopButton, RoofUiPalette.StopButtonBorder);
+        // Bootstrap fades a button from one colour to the next, and in the first frame of a fade the colour read is
+        // still the old one: a fade already under way is let finish, so what is read is where Stop settles.
+        await browser.NextFrameAsync();
+        await browser.Stop.EvaluateAsync("stop => Promise.allSettled(stop.getAnimations().map(fade => fade.finished))");
+        await Expect(browser.Stop).ToHaveCSSAsync("background-color", WebBrowser.Rgb(background), new() { Timeout = 15_000 });
+        await Expect(browser.Stop).ToHaveCSSAsync("color", WebBrowser.Rgb(text));
+        await Expect(browser.Stop).ToHaveCSSAsync("border-top-color", WebBrowser.Rgb(border));
+        await Expect(browser.Stop).ToBeEnabledAsync();
+        var stop = await browser.PlacementOfAsync(browser.Stop);
+        stop.Reachable.Should().BeTrue("Stop must be in view and uncovered on {0}: Stop is at {1}", where, stop);
     }
 
     private static async Task ExpectStopPlacedAsync(WebBrowser browser, string path, string answer)

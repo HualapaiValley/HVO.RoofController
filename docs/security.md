@@ -534,6 +534,12 @@ and `ClientTransactionID` as the Alpaca server reported them (shown, never match
 address the controller saw itself, the override grant it used and the reasons; a grant is recorded with its reasons
 and who made it. Never a key, a Basic header or any part of one.
 
+- **What is left out, on purpose.** An accepted lease renewal: it is a keep-alive sent every few seconds of a motion
+  whose own command is already recorded, and would crowd real commands out of the entries kept (a refused renewal is
+  recorded). And a request refused before it reaches the roof, which is not a command: one with no credential or with
+  one the controller does not know (401), one whose role is too low (403), and one the API cannot read (400: an
+  `overrideSafety` that is neither `true` nor `false`, say). Recording those would let anyone who can reach the
+  controller, signed in or not, fill the history and push real commands out of it.
 - **Identifiers, never names.** The history matches who sent a command by an identifier, never by a name alone:
   `principal:<id>` for a person the identity store gives a principal ID (schema 2 and later, and every Linux principal),
   `person:<name>@<created>` for one it does not (schema 1; a person keeps this one when the store later gives them a

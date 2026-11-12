@@ -1596,8 +1596,9 @@ goes with the Pi's SD card. Back up after each change: a new person, a new key, 
 is ever printed or logged: only paths and counts.
 
 **Optional encryption (#89).** Add `--passphrase-file FILE` to `backup`, or to `uninstall --purge --backup FILE`.
-The passphrase file must be a regular file owned by root, mode `0600` or `0400`, containing one nonempty UTF-8 line
-(at most 4096 bytes, with an optional final LF or CRLF). Links and files readable by others are refused; the opened
+The passphrase file must be a regular file owned by root, mode `0600` or `0400`, containing one nonempty UTF-8 line:
+a passphrase of at most 4096 bytes, with an optional final LF or CRLF that is not part of the passphrase and is not
+counted, so the limit is the same as at the hidden prompt. Links and files readable by others are refused; the opened
 file is checked too. Keep it outside the folders backed up or removed by uninstall; their symbolic-link aliases
 are refused too. There is no option accepting the passphrase itself on the command line. For example, generate a
 strong passphrase directly into a new private file, then back up. Create this file once and reuse it; generation

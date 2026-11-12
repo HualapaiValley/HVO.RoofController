@@ -160,6 +160,7 @@ models exactly that register.
 | `Kiosk/KioskRenderTests` | The kiosk's screens drawn headless at 1280 x 720 (8.2 px/mm) and 800 x 480 (5.2 px/mm), and the screenshots in `docs/kiosk.md` ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
 | `Kiosk/MacConsoleTests`, `MacScreenTests`, `MacProgramTests`, `MacAppTests` | The Mac app (#48): the screens with a plain viewer key and a password sign-in, the idle sign-out and the session the controller ends, the sign-in page and a setting typed in a text box drawn headless at 1280 x 800 and 960 x 600 (the screenshots in `docs/mac.md`), the program's settings folder, settings, device key and exit code 78, the refusal window, `--check`, the bundle's `Info.plist`, and the icon, drawn in code, against `bundle/AppIcon.icns` |
 | `Kiosk/KioskSoakScenarios`, `KioskSoakResultsTests` | The kiosk and its screen against the emulated roof through controller restarts, with its heap, threads and reconnects, and the soak's results when it fails ([Kiosk renders and soak](#kiosk-renders-and-soak)) |
+| `Kiosk/KioskStopStateScenarios` | Stop's colours on the kiosk's screen against the emulated roof: dim and enabled while the roof rests, bright while it opens and while it closes, each move commanded through the controller by a touch on the screen. `Kiosk/KioskPolishTests` draws the same states, and the rest of the kiosk's polish, on `KioskHarness`, whose roof is a mock |
 | `Installer/InstallerSurveyTests` | What the installer (#67) finds on a fake machine (`FakeMachine`): the Pi and the HAT's devices, Docker and Compose, the containers and who made them, the kiosk's service, `hvo-roof`, the Mac app, the install records and `/etc/hvo-roof` set up by hand |
 | `Installer/InstallerGuardTests` | Which roles each machine may have and why not: the real HAT only on a 64-bit Pi with its devices, never a rig where the real HAT is, the rig's typed host name, root for the machine's roles and never for the person's, the kiosk with its controller, Docker |
 | `Installer/InstallerPlanTests` | The plan for each role on a Pi, a Linux workstation and a Mac; the container adopted, a Compose container, a busy port and a file where a folder goes blocking it; applying it, then a second run that changes nothing; a step not yet built refused before anything changes; only reading commands, and never moving the roof |
@@ -282,6 +283,18 @@ three samples within 10 % and 4 MB of the first three) and the process's threads
 `HVO_SOAK_RESULTS_DIR`, or the test's results (`kiosk-soak/`), before the checks fail it; the last screen (the pump's
 draws, then a render with the layout and Stop checks) is one of the checks, so a fault there is written with the rest
 (`KioskSoakResultsTests`).
+
+## Known log noise
+
+`Kiosk/KioskPanelTests.ARestartThatLoadsASafetyCriticalHandEdit_IsConfirmed` restarts the in-process controller while
+the kiosk's live feed is still connected. With the thread pool starved (a loaded runner), the host can log two SignalR
+`fail` entries as it stops: `HubConnectionHandler[1]` ("Error when dispatching 'OnDisconnectedAsync'") and
+`HttpConnectionManager[3]` ("Failed disposing connection"), each an `ObjectDisposedException` for `IServiceProvider`
+from `CreateScope()`. The connection's own teardown lost to the provider's disposal. Nothing the test checks depends
+on it, and it passes: in the audit's stress runs the two lines appeared in 4 of 30 starved runs and in none of 360
+others. They are not the restart race of review finding F7 (Refs #239): that one was the caller reading the restart's
+answer, which `ClientTestSupport.WaitForRestartDisposalAsync` waits out. Whether a real Kestrel host logs them during a
+restart was not assessed; a restart is accepted only after a verified stop, so they have no bearing on the roof.
 
 ## Installer renders
 
