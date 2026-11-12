@@ -822,31 +822,223 @@ and each profile goes through a capturing proxy that records what the client sen
 | **Dynamic Client** (NINA through it): the External key as user name and password | A NINA-like session, in the order the program runs it: connects; finds the shutter in Error and closes first (NINA's Error recovery); opens, and polls until Open; parks the mount, then closes (park-then-close); a refusal while the weather is unsafe (the client gets InvalidOperation with the controller's reason, and nothing moves); a person's Open grant through the session API, then the Open goes; `AbortSlew` during a motion (stops, reads Error part way); disconnects and connects again, and recovers from the Error once more. | Passes. Every request carried HTTP Basic, the first (`PUT connected`) included, and none was challenged. Open answered in 160 to 204 ms, Close in 145 to 162 ms, `AbortSlew` in 97 ms, a refused Open in 25 ms, against the controller's 1 s deadline, the server's 2 s wait and the library's 10 s. |
 | **NINA native**: no credential | Reads, `Connected`, `AbortSlew`; then `OpenShutter` and `CloseShutter`. | Passes. No request carried a credential; reads and `AbortSlew` work, and `OpenShutter` and `CloseShutter` answer `0x40B` "Not authorised" with nothing moving. |
 
-No Windows PC, NINA or ASCOM Platform takes part in CI. **Before Alpaca Open is turned on at the observatory**, repeat
-the session with the real NINA and the Dynamic Client on the Windows PC, against a HAT-emulator rig, never the roof:
+#### Windows client acceptance run (emulator only)
 
-1. Set up a [rig](emulator.md) on a computer not wired to the roof: its controller with `OpenAndClose`, the emulator's
-   Alpaca mount as a blocking telescope and its safety monitor as a required weather source, and an External key; its
-   Alpaca server on the rig's LAN address, with `Alpaca:Location` "EMULATOR RIG, not the roof" and `AllowedNetworks`
-   narrowed to the PC. The emulator's control port (its fake mount and weather monitor, and the controls below) listens
-   on loopback only, and it has no authentication. On a rig the installer made, work the emulator's mount from the rig
-   itself, through that control API (its container publishes it on `127.0.0.1` only). Only an emulator started with
-   `dotnet run` can be served on the rig's address for the test network alone (`--urls http://<rig>:<port>`,
-   [Settings](emulator.md#settings)), so that NINA's mount can connect to its telescope. Clear the Stop hold in the
-   rig's web UI.
-2. On the PC, open `http://<rig>:11111/setup`: it must show the HAT emulated and the rig's controller.
-3. In a NINA profile of its own, never the observatory's, open the ASCOM Chooser, **Alpaca**, **Create Alpaca Driver
-   (Admin)**, named "HVO roof EMULATOR", with the rig's address, port `11111` and device `0`, and the External key as
-   both user name and password (no discovery).
-4. Run the session on the rig: reset the emulator part way (the shutter reads Error), close, then open; unpark the
-   emulator's mount and park it again (from NINA's mount connected to the emulator's Alpaca telescope, when its control
-   port is served on the test network, or through the rig's control API), then close; make the weather unsafe and open (NINA shows the controller's reason; nothing moves);
-   grant the Open from the rig's alert and open again (it opens); stop the dome during a motion (the shutter reads
-   Error); disconnect, connect again, close.
-5. Check the rig's History: every Open and Close shows the `Alpaca` source, `basic`, the PC's address, and the
-   server's log says `accepted by the controller`.
-6. Optionally, NINA's own discovered Alpaca dome: its Open and Close must be "Not authorised". Connect it only after
-   checking the device it lists is the rig's (its `Location`).
+No Windows PC, NINA or ASCOM Platform takes part in CI. **Roy must pass this session with the real Windows clients
+before `OpenAndClose` is enabled at the observatory** (Refs #233, item 4). CI's library matrix does not complete this
+check. Use a separate NINA profile and a computer with no connection to the real HAT or roof. This recipe runs four
+source-built processes on Linux or macOS arm64; no installer, deployment, discovery, gateway or observatory settings
+are involved. Install the SDK selected by `src/global.json`, Git and Python 3 first.
+
+1. **Build main in a new checkout**, not in an observatory installation. Record the printed commit for the result:
+
+   ```bash
+   git clone https://github.com/HualapaiValley/HVO.RoofController.git HVO.RoofController-client-rig
+   cd HVO.RoofController-client-rig
+   git fetch origin
+   git switch --detach origin/main
+   git rev-parse HEAD
+   export HVO_RIG_SRC="$PWD/src"
+   cd "$HVO_RIG_SRC"
+   dotnet build HVO.RoofController.sln -c Release
+   ```
+
+2. **Prepare private, disposable state outside the checkout.** In this shell, enter the rig's private IPv4 **LAN**
+   address and the Windows PC's private IPv4 LAN address when prompted. Keep these values and all keys on the hosts;
+   do not include them in a report. The control API and controller API stay on loopback. Only the web UI (5188) and
+   Alpaca (11111) listen on the rig's LAN address, and Alpaca answers only that PC. Stop if either port is already in
+   use; do not replace an existing service. Do not use an overlay or public address.
+
+   ```bash
+   umask 077
+   export HVO_CLIENT_RIG="$(mktemp -d "${TMPDIR:-/tmp}/hvo-alpaca-client.XXXXXX")"
+   printf 'Rig LAN IPv4: '; read -r HVO_RIG_LAN
+   printf 'Windows LAN IPv4: '; read -r HVO_WINDOWS_LAN
+   export HVO_RIG_LAN HVO_WINDOWS_LAN
+   python3 - <<'PYRIG'
+   import hashlib, ipaddress, json, os, pathlib, secrets, shlex, shutil, uuid
+   rig = pathlib.Path(os.environ["HVO_CLIENT_RIG"])
+   for name in ("HVO_RIG_LAN", "HVO_WINDOWS_LAN"):
+       address = ipaddress.IPv4Address(os.environ[name])
+       assert any(address in ipaddress.ip_network(n) for n in
+                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")), "Use private LAN IPv4"
+   controller = rig / "controller"
+   controller.mkdir()
+   shutil.copyfile(pathlib.Path(os.environ["HVO_RIG_SRC"]) /
+                   "HVO.RoofControllerV4.RPi/appsettings.json", controller / "appsettings.json")
+   keys = []
+   for name, role in (("admin", "RoofAdmin"), ("server", "RoofAlpacaServer"),
+                      ("external", "RoofAlpacaCommander")):
+       value = secrets.token_hex(24)
+       (rig / (name + "-key")).write_text(value + "\n")
+       keys.append({"Name": "rig-" + name, "Role": role,
+                    "KeySha256": hashlib.sha256(value.encode()).hexdigest()})
+   ids = {"dome/0": str(uuid.uuid4()), "safetymonitor/0": str(uuid.uuid4())}
+   (rig / "alpaca-data").mkdir()
+   (rig / "alpaca-data/alpaca-devices.json").write_text(json.dumps(ids))
+   settings = {
+       "HatEmulator": {"Enabled": True, "Host": "127.0.0.1", "Port": 5291},
+       "BlueIris": {"BaseUrl": "http://127.0.0.1:5290", "UserName": "", "Password": ""},
+       "RoofControllerSecurity": {"RequireHttps": False, "ApiKeys": keys,
+                                  "Identity": {"StorePath": str(rig / "identity.json")}},
+       "RoofController": {"Alpaca": {"AllowCommands": "OpenAndClose",
+                                   "AllowOpenWithoutBlockingScopes": False}},
+       "RoofSafety": {"InterlockMode": "Warn", "PollInterval": "00:00:01",
+                      "OwnAlpacaUniqueIds": list(ids.values()),
+                      "Telescopes": [{"Name": "Emulated mount", "Url": "http://127.0.0.1:5290",
+                                      "BlocksRoof": True}],
+                      "WeatherSources": [{"Name": "Emulated weather", "Url": "http://127.0.0.1:5290",
+                                          "Requirement": "Required"}]}}
+   (controller / "appsettings.Development.json").write_text(json.dumps(settings, indent=2))
+   names = ("HVO_CLIENT_RIG", "HVO_RIG_SRC", "HVO_RIG_LAN", "HVO_WINDOWS_LAN")
+   (rig / "env.sh").write_text("".join("export " + n + "=" + shlex.quote(os.environ[n]) + "\n" for n in names))
+   PYRIG
+   ```
+
+   The directory is mode 700 and its files mode 600 through `umask 077`. Keep shell tracing off. Each new terminal
+   below must source this run's `env.sh` by its absolute path (stored in `$HVO_CLIENT_RIG` in the preparing shell).
+   Do not dump configuration, key files, request headers or bodies to logs.
+
+3. **Start the processes**, each in its own terminal with that environment loaded. Leave each running in the
+   foreground so Ctrl-C stops only this run. Start the emulator first and wait for its status URL to answer before
+   starting the controller; wait for the controller's `/health/ready` before starting Alpaca and the web UI.
+
+   ```bash
+   # Terminal 1: emulator; GET http://127.0.0.1:5290/api/emulator/status must answer 200.
+   dotnet "$HVO_RIG_SRC/HVO.RoofControllerV4.Emulator/bin/Release/net10.0/HVO.RoofControllerV4.Emulator.dll" \
+     --urls http://127.0.0.1:5290
+   ```
+
+   ```bash
+   # Terminal 2: controller; GET http://127.0.0.1:5195/health/ready must answer 200.
+   ASPNETCORE_ENVIRONMENT=Development \
+   dotnet "$HVO_RIG_SRC/HVO.RoofControllerV4.RPi/bin/Release/net10.0/HVO.RoofControllerV4.RPi.dll" \
+     --contentRoot "$HVO_CLIENT_RIG/controller" --urls http://127.0.0.1:5195
+   ```
+
+   ```bash
+   # Terminal 3: Alpaca; Windows opens http://<rig-LAN>:11111/setup.
+   Alpaca__Enabled=true Alpaca__ListenAddresses__0="$HVO_RIG_LAN" \
+   Alpaca__AllowedNetworks__0="$HVO_WINDOWS_LAN/32" Alpaca__Port=11111 \
+   Alpaca__ControllerUrl=http://127.0.0.1:5195 \
+   Alpaca__ControllerApiKeyFile="$HVO_CLIENT_RIG/server-key" \
+   Alpaca__DataPath="$HVO_CLIENT_RIG/alpaca-data" \
+   Alpaca__Location='EMULATOR RIG, not the roof' Alpaca__Discovery__Enabled=false \
+   dotnet "$HVO_RIG_SRC/HVO.RoofControllerV4.Alpaca/bin/Release/net10.0/HVO.RoofControllerV4.Alpaca.dll"
+   ```
+
+   ```bash
+   # Terminal 4: web UI; Windows opens http://<rig-LAN>:5188.
+   ASPNETCORE_ENVIRONMENT=Development \
+   RoofWeb__Urls="http://$HVO_RIG_LAN:5188" RoofWeb__ControllerUrl=http://127.0.0.1:5195 \
+   dotnet "$HVO_RIG_SRC/HVO.RoofControllerV4.Web/bin/Release/net10.0/HVO.RoofControllerV4.Web.dll"
+   ```
+
+   The web UI needs Development to serve its build-output static assets. Terminal 2 already selects Development
+   for the controller's rig settings; the emulator and Alpaca serve APIs and inline HTML without a development asset
+   manifest. Before continuing, open the web UI's `/signin`: its five stylesheets and three scripts must each return
+   HTTP 200 with a non-empty body, including `/_framework/blazor.web.js`, so the interactive status and grant controls
+   can run.
+
+4. **Create the rig's person**, from the preparing shell after the controller is ready. This prompts for a new
+   test-only password without echo; the admin key is read from its file, and no credential is printed:
+
+   ```bash
+   python3 - <<'PYRIG'
+   import getpass, json, os, pathlib, urllib.request
+   rig = pathlib.Path(os.environ["HVO_CLIENT_RIG"])
+   body = json.dumps({"name": "rig-admin", "role": "RoofAdmin",
+                      "password": getpass.getpass("Rig admin password: ")}).encode()
+   request = urllib.request.Request("http://127.0.0.1:5195/api/v4.0/Identity/Users", data=body,
+       headers={"Content-Type": "application/json", "X-Api-Key": (rig / "admin-key").read_text().strip()},
+       method="POST")
+   with urllib.request.urlopen(request) as response:
+       assert response.status == 201
+   print("Rig admin created")
+   PYRIG
+   ```
+
+5. **Verify the chain before any command.** From Windows, the setup page must show the rig's controller and HAT
+   `Emulated`; `/management/v1/description` must give Location `EMULATOR RIG, not the roof`. The controller's anonymous
+   `GET http://127.0.0.1:5195/api/v4.0/RoofControl/Mode` on the rig must also say `hatMode: "Emulated"`. Sign in to the
+   rig's web UI as `rig-admin`: it must show `EMULATED HAT`, healthy I/O, no fault, verified all-off relays, safe weather
+   and a clear blocking telescope. Clear the human Stop hold. **Sign out of every operator UI** before NINA commands,
+   and allow 30 s for an interrupted UI's operator lease to expire; leaving an operator page open yields `LeaseHeld`.
+   A grant confirmation offers the UI's step-away flow; use it or sign out after granting too.
+
+6. **Configure Windows clients**, recording NINA, Windows and ASCOM Platform versions. Install ASCOM Platform 7 or
+   later. In a new NINA profile, choose the dome via the ASCOM Chooser: **Alpaca → Create Alpaca Driver (Admin)**,
+   named `HVO roof EMULATOR`, with the rig's LAN address, TCP port **11111**, Dome device **0**, explicit address
+   (no discovery). In that driver's Properties, enter this run's `external-key` as both user name and password,
+   transferring it privately from the host's protected file, never through a report or console output. Select this
+   Dynamic Client driver in NINA, connect, and read `Connected`, `ShutterStatus` and `Slewing`. Never select the
+   observatory profile or its devices. The emulator mount stays on loopback; change its park state from the rig below,
+   so Windows needs no mount connection and no control-port exposure.
+
+7. **Run this checklist in order.** Use NINA's dome Open, Close and Stop/Abort controls through the Dynamic Client.
+   All `POST`s below are to `http://127.0.0.1:5290/api/emulator` **on the rig**, with JSON and
+   `Content-Type: application/json`; for example:
+
+   ```bash
+   curl -fsS -X POST http://127.0.0.1:5290/api/emulator/reset \
+     -H 'Content-Type: application/json' -d '{"positionMeters":1.0,"wiring":"None"}' >/dev/null
+   ```
+
+   Wait for each movement to finish before the next row unless it explicitly calls for Stop during movement. At a
+   destination expect `Slewing=false`, the destination limit active and relays off; during motion expect
+   `Slewing=true` and Opening/Closing. On a refusal, check the position is unchanged and relays remain off in emulator
+   `GET /status`. Reopen the operator UI only when a row requires it, then sign out/step away before the next command.
+
+   | Pass | Action | Required result |
+   |---|---|---|
+   | [ ] | With relays off, `POST /reset` with `{"positionMeters":1.0,"wiring":"None"}`. Poll the shutter. | Part way reads **Error (4)**, `Slewing=false`; no fault is latched. |
+   | [ ] | NINA Close (Error recovery), wait, then Open and wait. | Closing (3) → **Closed (1)**; Opening (2) → **Open (0)**. Both commands succeed before the client's timeout, without a retry. |
+   | [ ] | `POST /alpaca/telescope` with `{"parked":false}`, then NINA Close. | InvalidOperation (`0x40B`), telescope-not-clear reason, nothing moves. |
+   | [ ] | `POST /alpaca/telescope` with `{"parked":true}`, then immediately NINA Close. | Accepted; the Close re-read sees the parked mount; reaches Closed. |
+   | [ ] | `POST /alpaca/safetymonitor` with `{"safe":false}`; wait until the web UI reports unsafe weather, sign out, then NINA Open. | InvalidOperation (`0x40B`), weather reason visible to NINA, nothing moves. |
+   | [ ] | In the web UI's refused-Open alert, confirm one **Open** grant for the displayed weather reason, step away/sign out, then NINA Open. | Opens under Warn, grant consumed; a Close grant would not authorise this Open. |
+   | [ ] | While weather is still unsafe, NINA Close. | Accepted and reaches Closed; weather never gates Close. Restore weather with `POST /alpaca/safetymonitor`, `{"safe":true}`; wait for a fresh Safe reading. |
+   | [ ] | NINA Open, then Stop/Abort part way through travel, before the open limit. | `AbortSlew` stops the roof; after coasting stops, `Slewing=false`, shutter Error, relays off. The Alpaca Abort does not set the human Stop hold. |
+   | [ ] | Disconnect the Dynamic Client in NINA, reconnect, then Close. | Reconnect succeeds; the part-way shutter still reads Error until Close recovers it to Closed. No manual ClearFault is needed. |
+   | [ ] | From the web UI, press Stop, sign out, then NINA Open. Clear the hold as a person, sign out, retry Open, then Close. | With the hold set, `StopHold` refusal and no movement; after clear, normal Open and Close work. |
+   | [ ] | Inspect History as `rig-admin`, the protected history JSON with the command below, and the local Alpaca log. | History shows the Alpaca source and outcome; JSON additionally shows `authMethod: "basic"`, `alpacaClientId` and `alpacaClientTransactionId` for every tested Open/Close. Accepted commands say `accepted by the controller` in the log; refusals retain the tested reason. No key or Basic header is logged. |
+   | [ ] | Optional separate NINA native Alpaca connection, with no credential, to this same rig and Location. | Reads, Connected and Abort work; Open and Close are “Not authorised” (`0x40B`) and move nothing. Record skipped if not tried. |
+   | [ ] | Final NINA Close; rig `GET /status` and `GET /violations`. | Closed limit, stationary, all relays off, no fault and no plant invariant violations. |
+
+   For the audit row, run this in the rig's preparing shell before the optional native-client check. The History UI
+   does not display the auth method or transaction ID, and the Alpaca log does not record the auth method; read those
+   fields from the protected API instead. This reads the admin key from its private file and prints only the relevant
+   non-secret fields, omitting client addresses. Do not dump the full response or request headers.
+
+   ```bash
+   python3 - <<'PYRIG'
+   import json, os, pathlib, urllib.request
+   rig = pathlib.Path(os.environ["HVO_CLIENT_RIG"])
+   request = urllib.request.Request("http://127.0.0.1:5195/api/v4.0/RoofControl/History?take=500",
+       headers={"X-Api-Key": (rig / "admin-key").read_text().strip()})
+   with urllib.request.urlopen(request) as response:
+       page = json.load(response)
+   assert page["totalCount"] <= 500, "Use skip=500, skip=1000, ... to inspect every page of a longer run"
+   entries = [e for e in page["entries"] if e.get("source") == "Alpaca" and e["command"] in ("Open", "Close")]
+   assert entries, "No Alpaca Open/Close history found"
+   fields = ("id", "command", "accepted", "source", "authMethod", "alpacaClientId",
+             "alpacaClientTransactionId", "code", "alpacaRefusal")
+   for entry in reversed(entries):
+       print(json.dumps({key: entry.get(key) for key in fields}))
+       assert entry.get("authMethod") == "basic", "Expected the Dynamic Client's Basic authentication"
+       assert entry.get("alpacaClientId") is not None and entry.get("alpacaClientTransactionId") is not None
+   PYRIG
+   ```
+
+8. **Record pass/fail before enabling anything at the observatory.** Keep the date, main commit, Windows/NINA/ASCOM
+   versions, Dynamic Client name, each required row's pass/fail, optional native-client result or skip, and command
+   timings in a sanitized result for Kepler. Any required failure, retry/timeout, missing reason, wrong rig identity
+   or unperformed required row leaves the Windows acceptance **incomplete**: keep observatory Alpaca Open disabled
+   and report the failing row. Passing this run is evidence for Roy's separate enablement decision; this recipe never
+   changes the observatory. Do not attach addresses, keys, passwords, raw traffic or unredacted client logs/screenshots.
+   Finish with Ctrl-C in the Alpaca, web UI, controller, then emulator terminals; keep the emulator running until the
+   controller exits so its shutdown Stop can verify. Remove only this run's private directory after recording the
+   sanitized result; do not reuse its keys or Dynamic Client profile for the observatory.
 
 ## Alpaca Open
 
