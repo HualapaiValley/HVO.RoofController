@@ -1552,9 +1552,10 @@ public sealed class RoofTerminalUiTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public void Setup_Pin_APersonChangesTheirOwn_KeepsTheSession_AndTheirOtherPinSessionsEnd(bool pinInTempDirectory = false)
+    [DataRow(false, 120)]
+    [DataRow(true, 120)]
+    [DataRow(true, 80)]
+    public void Setup_Pin_APersonChangesTheirOwn_KeepsTheSession_AndTheirOtherPinSessionsEnd(bool pinInTempDirectory = false, int width = 120)
     {
         const string newPin = "8642";
         using var host = RoofClientApiTests.CreateHost();
@@ -1563,7 +1564,7 @@ public sealed class RoofTerminalUiTests
         var kiosk = new RoofKioskCredential(RoofClientApiTests.KioskKey);
         using var atTheKiosk = ClientTestSupport.CreateClient(host, kiosk);
         OffTheLoop(async () => await atTheKiosk.Auth.SignInWithPinAsync("ada", TestSecrets.Pin));
-        using var tui = Started(rig);
+        using var tui = Started(rig, width);
         tui.Ui.ShowPage(4);
 
         Click(tui, "PIN");
@@ -1595,9 +1596,20 @@ public sealed class RoofTerminalUiTests
         }
 
         // The Setup page also shows a random credentials-file path, which may contain PIN digits by chance.
-        // Check the PIN result itself and ensure the secret-entry fields have been removed.
+        // Keep both the result/prompt checks and the rendered-screen check below.
         tui.Ui.Message.Should().NotContainAny(TestSecrets.Pin, TestSecrets.OtherPin, newPin);
         tui.Ui.Panel.Should().BeNull("the PIN-entry fields must not remain on screen after the change");
+        AssertPinNotRendered(tui, rig.CredentialsPath, TestSecrets.Pin, TestSecrets.OtherPin, newPin);
+
+        // A leak elsewhere must still be rejected, even when the same digits are legitimately in the path.
+        using (var leak = new Label { Text = newPin, X = 0, Y = 0, Width = 12, Height = 1 })
+        {
+            tui.Ui.CurrentPage.Add(leak);
+            Action check = () => AssertPinNotRendered(tui, rig.CredentialsPath, TestSecrets.Pin, TestSecrets.OtherPin, newPin);
+            check.Should().Throw<AssertFailedException>("a PIN in another visible label must fail the screen check");
+            tui.Ui.CurrentPage.Remove(leak);
+        }
+
         RoofSessionInfoResponse[] sessions = [];
         OffTheLoop(async () =>
         {
@@ -1607,6 +1619,48 @@ public sealed class RoofTerminalUiTests
         sessions.Should().ContainSingle("the kiosk's PIN session ended; this password session stays open")
             .Which.Kind.Should().Be(RoofCredentialKind.Session);
         OffTheLoop(async () => (await atTheKiosk.Auth.SignInWithPinAsync("ada", newPin)).Name.Should().Be("ada"));
+    }
+
+    private static void AssertPinNotRendered(TuiDriver tui, string credentialsPath, params string[] pins)
+    {
+        tui.Ui.Message.Should().NotContainAny(pins);
+        tui.Ui.Panel.Should().BeNull();
+        var screen = tui.Screen.Split('\n').Select(line => line.ToCharArray()).ToArray();
+        var reading = tui.Ui.CurrentPage.SubViews.OfType<FrameView>().Single()
+            .SubViews.OfType<TerminalReadingView>().Single();
+        reading.Lines.Should().Contain("Credentials file: " + credentialsPath);
+        var maskedPath = new string(credentialsPath.Select(c => char.IsAsciiDigit(c) ? '*' : c).ToArray());
+        var row = 0;
+        foreach (var line in reading.Lines)
+        {
+            // The path also appears in the credential's "from" description. Replace only that exact path,
+            // preserving character widths and spaces so its wrapping and clipping stay identical.
+            var wrapped = TerminalReadingView.Wrap(line, reading.Viewport.Width).ToArray();
+            var masked = TerminalReadingView.Wrap(line.Replace(credentialsPath, maskedPath, StringComparison.Ordinal),
+                reading.Viewport.Width).ToArray();
+            for (var part = 0; part < wrapped.Length; part++, row++)
+            {
+                var cells = TerminalCells.Graphemes(wrapped[part]).ToArray();
+                var maskedCells = TerminalCells.Graphemes(masked[part]).ToArray();
+                var column = 0;
+                for (var i = 0; i < cells.Length; i++)
+                {
+                    var content = new System.Drawing.Point(column, row);
+                    // Only the path's digit cells at their actual visible coordinates are excluded.
+                    if (cells[i] != maskedCells[i] && reading.Viewport.Contains(content))
+                    {
+                        var at = reading.ContentToScreen(content);
+                        if (at.Y >= 0 && at.Y < screen.Length && at.X >= 0 && at.X < screen[at.Y].Length
+                            && screen[at.Y][at.X] == cells[i][0])
+                        {
+                            screen[at.Y][at.X] = '*';
+                        }
+                    }
+                    column += TerminalCells.Width(cells[i]);
+                }
+            }
+        }
+        string.Join('\n', screen.Select(line => new string(line))).Should().NotContainAny(pins);
     }
 
     [TestMethod]
@@ -2348,9 +2402,9 @@ public sealed class RoofTerminalUiTests
     /// The interface with its first status live and the caller known. The hub can deliver the first status just before it
     /// reports itself connected: until then the status is stale, and Open and Close are not offered.
     /// </summary>
-    private static TuiDriver Started(CliRig rig)
+    private static TuiDriver Started(CliRig rig, int width = 120)
     {
-        var tui = new TuiDriver(rig);
+        var tui = new TuiDriver(rig, width: width);
         try
         {
             tui.WaitIdle("the first status", () => tui.Ui.Status is not null && !tui.Ui.IsStale && tui.Ui.Caller is not null);
