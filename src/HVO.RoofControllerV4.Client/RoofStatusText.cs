@@ -133,18 +133,15 @@ public static class RoofStatusText
         return status.LatchedFaultReason is { } reason ? $"LATCHED: {RoofText.DescribeStopReason(reason)}" : "LATCHED";
     }
 
-    /// <summary>Why motion last stopped, distinguished from a current idle drive fault. The status transition time is not a stop time.</summary>
+    /// <summary>
+    /// Why the roof last stopped, as the controller reports it: the last motion stop's reason, or the drive fault once
+    /// the drive fault input trips, idle or moving. Every client's "Last stop" uses these words. The status transition
+    /// time is not a stop time, so none is shown.
+    /// </summary>
     public static string DescribeLastStop(RoofStatusResponse status)
     {
         ArgumentNullException.ThrowIfNull(status);
-        var text = RoofText.DescribeStopReason(status.LastStopReason);
-        // An emulator reset can put an idle roof between the limits after a completed move. A subsequent drive trip
-        // latches without another commanded stop; keep that historical stop first and distinguish the current fault from its cause.
-        return !status.IsMoving && status.LastStopReason == RoofControllerStopReason.LimitSwitchReached
-            && status.IsFaultLatched && status.LatchedFaultReason == RoofControllerStopReason.DriveFault
-            && status.IsDriveFaultActive == true && status.IsOpenLimitActive == false && status.IsClosedLimitActive == false
-            ? $"{text} (current fault: {RoofText.DescribeStopReason(RoofControllerStopReason.DriveFault)}; neither limit active)"
-            : text;
+        return RoofText.DescribeStopReason(status.LastStopReason);
     }
 
     /// <summary>The controller's name, what it drives, and the snapshot.</summary>

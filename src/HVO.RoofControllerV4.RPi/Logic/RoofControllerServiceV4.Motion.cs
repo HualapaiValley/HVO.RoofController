@@ -273,7 +273,7 @@ public partial class RoofControllerServiceV4
 
                 // The inputs re-read at an input deadline can show the destination limit: the roof arrived, so a
                 // repeat has nothing left to do.
-                if (repeat && _commandedMotion == RoofMotionDirection.None && _lastStopReason == RoofControllerStopReason.LimitSwitchReached
+                if (repeat && _commandedMotion == RoofMotionDirection.None && _lastMotionStopReason == RoofControllerStopReason.LimitSwitchReached
                     && !_faultLatched && _relayRegisterState == RoofRelayRegisterState.Verified)
                 {
                     FinishMutation_NoLock();
@@ -949,16 +949,16 @@ public partial class RoofControllerServiceV4
         if (_relayRegisterState == RoofRelayRegisterState.Unverified)
         {
             return Reject_NoLock<T>(RoofControllerErrorCode.RelayStateUnverified,
-                $"Motion had passed a deadline ({_lastStopReason}) and the stop could not verify the relay register. Use the independent hardware stop.");
+                $"Motion had passed a deadline ({_lastMotionStopReason}) and the stop could not verify the relay register. Use the independent hardware stop.");
         }
 
         if (_faultLatched)
         {
             return Reject_NoLock<T>(RoofControllerErrorCode.FaultLatched,
-                $"Motion had passed a safety deadline ({_lastStopReason}); motion stopped and the fault is latched.");
+                $"Motion had passed a safety deadline ({_lastMotionStopReason}); motion stopped and the fault is latched.");
         }
 
-        if (_lastStopReason == RoofControllerStopReason.LimitSwitchReached)
+        if (_lastMotionStopReason == RoofControllerStopReason.LimitSwitchReached)
         {
             return Reject_NoLock<T>(RoofControllerErrorCode.LeaseNotActive, "Motion had already ended at the destination limit.");
         }

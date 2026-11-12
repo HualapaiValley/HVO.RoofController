@@ -76,8 +76,10 @@ Rules for latched faults:
   4. The relay register is verified all-off (otherwise `RelayStateUnverified`).
 
   A failed, preempted or cancelled `ClearFault` leaves the latch unchanged.
-- **Stop reason is separate.** `LastStopReason` records why motion last stopped. `ClearFault` does not change it, and a
-  `Stop` while idle does not change it either.
+- **Stop reason is separate.** `LastStopReason` records why motion last stopped, or `DriveFault` once IN3 is active
+  while idle (as a trip during motion records). IN3 clearing, `ClearFault` and a `Stop` while idle do not change it;
+  only a later motion stop does. The repeat-Open and lease decisions read the last motion stop's own reason, which an
+  idle drive fault never changes.
 
 A start that finds IN3 active or both limits active is refused with `InterlockActive`, and the same evaluation
 latches `DriveFault` or `ContradictoryLimitInputs`. The next start is refused with `FaultLatched`. A start while IN4

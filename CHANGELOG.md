@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   included. A path that only starts as one of those routes, or another query on one, is refused before the helper is
   asked (exit 6, `LocalRouteUnavailable`), as every other unknown request is. So are `alpaca ack .` and `alpaca ack ..`,
   whose request would go to another path (Refs #260).
+- “Last stop” names the drive fault when the drive fault input trips, idle or moving: the controller's
+  `lastStopReason` becomes `DriveFault` (“Drive fault input active”) for an idle trip too, including between the
+  limits after an emulator reset, and keeps it after the input clears and after Clear fault until a later motion stop.
+  It replaces 4.5.1's “Limit switch reached (current fault: …)” reading in `hvo-roof status`, the Alpaca `status`
+  action, the web UI and the kiosk, and the `status --watch` and motion-follow line now uses the same words. Open and
+  Close decisions still follow the last motion stop (Refs #257, Refs #245).
 
 ### Fixed
 
