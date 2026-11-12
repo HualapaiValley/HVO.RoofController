@@ -929,9 +929,16 @@ are involved. Install the SDK selected by `src/global.json`, Git and Python 3 fi
 
    ```bash
    # Terminal 4: web UI; Windows opens http://<rig-LAN>:5188.
+   ASPNETCORE_ENVIRONMENT=Development \
    RoofWeb__Urls="http://$HVO_RIG_LAN:5188" RoofWeb__ControllerUrl=http://127.0.0.1:5195 \
    dotnet "$HVO_RIG_SRC/HVO.RoofControllerV4.Web/bin/Release/net10.0/HVO.RoofControllerV4.Web.dll"
    ```
+
+   The web UI needs Development to serve its build-output static assets. Terminal 2 already selects Development
+   for the controller's rig settings; the emulator and Alpaca serve APIs and inline HTML without a development asset
+   manifest. Before continuing, open the web UI's `/signin`: its five stylesheets and three scripts must each return
+   HTTP 200 with a non-empty body, including `/_framework/blazor.web.js`, so the interactive status and grant controls
+   can run.
 
 4. **Create the rig's person**, from the preparing shell after the controller is ready. This prompts for a new
    test-only password without echo; the admin key is read from its file, and no credential is printed:
