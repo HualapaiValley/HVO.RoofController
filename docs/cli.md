@@ -303,6 +303,11 @@ With the safety interlock in Warn mode (the controller's default) and the condit
 To open anyway: 'hvo-roof open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.
 ```
 
+When the refused command chose its authorization mode on the command line, the hint keeps it, so the command it prints
+is authorized the same way: after `hvo-roof --local open` it says `'hvo-roof --local open --override-safety'`, and after
+`--remote`, `'hvo-roof --remote open --override-safety'`. A mode saved in the credentials file (`authMode: local`)
+applies to the printed command as it did to the refused one.
+
 `open --override-safety` sends it. The terminal interface asks instead: **Open** shows a `Safety override` prompt over
 the page with the conditions and **Open anyway** or **Cancel**; nothing is sent until Open anyway, Esc answers Cancel,
 and F9 still sends Stop while it is open.
@@ -829,6 +834,8 @@ See [Authentication and interface rights](authentication-interfaces.md) for veri
 ![Enrolled Linux users in the terminal People page](images/terminal/09-linux-users.svg)
 
 `alpaca status` uses native `read` authorization for both roof status and the system summary.
+`open --override-safety`, the terminal interface's **Open anyway** and `clear-fault --pulse-ms` use native `operate`
+authorization, as `open` and `clear-fault` do; the override and the pulse length are sent as the API's query.
 A route unavailable in local mode is refused before sending it, with exit 6 and its reason;
 `--json` reports `kind: Forbidden` and `code: LocalRouteUnavailable`. A failed native gate
 reports `code: LocalAuthorizationFailed` and never substitutes a saved remote credential.

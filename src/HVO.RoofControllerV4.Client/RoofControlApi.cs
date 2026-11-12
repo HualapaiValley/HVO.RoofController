@@ -1,4 +1,3 @@
-using System.Globalization;
 using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Client;
@@ -31,8 +30,7 @@ public sealed class RoofControlApi
     /// override). Without the override, Warn mode refuses with SafetyOverrideRequired. Operator role.
     /// </summary>
     public Task<RoofStatusResponse> OpenAsync(bool overrideSafety, CancellationToken cancellationToken = default)
-        => _http.SendAsync<RoofStatusResponse>(
-            HttpMethod.Post, overrideSafety ? $"{RoofApiRoutes.Open}?overrideSafety=true" : RoofApiRoutes.Open, null, cancellationToken);
+        => _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, RoofApiRoutes.OpenCommand(overrideSafety), null, cancellationToken);
 
     /// <summary>Starts closing. Operator role.</summary>
     public Task<RoofStatusResponse> CloseAsync(CancellationToken cancellationToken = default)
@@ -47,12 +45,7 @@ public sealed class RoofControlApi
     /// controller's default and must lie within <see cref="RoofControllerLimits"/>.
     /// </summary>
     public Task<RoofStatusResponse> ClearFaultAsync(int? pulseMilliseconds = null, CancellationToken cancellationToken = default)
-    {
-        var path = pulseMilliseconds is { } pulse
-            ? $"{RoofApiRoutes.ClearFault}?pulseMs={pulse.ToString(CultureInfo.InvariantCulture)}"
-            : RoofApiRoutes.ClearFault;
-        return _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, path, null, cancellationToken);
-    }
+        => _http.SendAsync<RoofStatusResponse>(HttpMethod.Post, RoofApiRoutes.ClearFaultCommand(pulseMilliseconds), null, cancellationToken);
 
     /// <summary>
     /// A page of the roof command history, newest first. Viewer role: an admin reads everyone's commands (one person's or

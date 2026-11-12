@@ -209,7 +209,7 @@ internal sealed class RoofCliContext
             if (RoofCommandRules.IsSafetyOverrideRequest(error))
             {
                 // The controller's detail names the API's overrideSafety=true; on the command line it is the flag.
-                Host.Error.WriteLine(SafetyOverrideHint);
+                Host.Error.WriteLine(DescribeSafetyOverrideHint(_modeOverride));
             }
 
             if (error is RoofApiException { Errors.Count: > 0 } invalid)
@@ -232,9 +232,23 @@ internal sealed class RoofCliContext
         return (int)code;
     }
 
-    /// <summary>Said after a refusal for want of the safety override (SafetyOverrideRequired): how to give it here.</summary>
-    internal static readonly string SafetyOverrideHint =
-        $"To open anyway: '{RoofCli.CommandName} open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.";
+    /// <summary>
+    /// Said after a refusal for want of the safety override (SafetyOverrideRequired) when this command line chose no
+    /// authorization mode: how to give the override here.
+    /// </summary>
+    internal static readonly string SafetyOverrideHint = DescribeSafetyOverrideHint(local: null);
+
+    /// <summary>
+    /// The safety override hint, keeping the authorization mode this command line chose (#255): with <c>--local</c>
+    /// (<paramref name="local"/> true) or <c>--remote</c> (false), the command it prints says so too, so running it as
+    /// printed is authorized the same way. Without either (null), a mode saved in the credentials file applies to it as
+    /// it did to this command.
+    /// </summary>
+    internal static string DescribeSafetyOverrideHint(bool? local)
+    {
+        var mode = local switch { true => "--local ", false => "--remote ", null => string.Empty };
+        return $"To open anyway: '{RoofCli.CommandName} {mode}open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.";
+    }
 
     internal static (RoofExitCode Code, string Message) Classify(Exception error) => error switch
     {
