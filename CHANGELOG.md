@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `hvo-roof` in local authorization mode asks the native helper for a person-only Alpaca request's category (override
+  grants, the Stop hold, the operator lease, acknowledging an alert) only for the exact request it sends, method
+  included. A path that only starts as one of those routes, or another query on one, is refused before the helper is
+  asked (exit 6, `LocalRouteUnavailable`), as every other unknown request is. So are `alpaca ack .` and `alpaca ack ..`,
+  whose request would go to another path (Refs #260).
 - “Last stop” names the drive fault when the drive fault input trips, idle or moving: the controller's
   `lastStopReason` becomes `DriveFault` (“Drive fault input active”) for an idle trip too, including between the
   limits after an emulator reset, and keeps it after the input clears and after Clear fault until a later motion stop.
@@ -28,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `open --override-safety`, the terminal interface's **Open anyway** and `clear-fault --pulse-ms` under native `operate`
   authorization; it had refused them before sending anything (exit 6). The exit-7 hint after a refused Open keeps an
   explicit `--local` or `--remote`, so the command it prints is authorized the same way (#255).
+- The exit-7 hint after a refused Open also keeps a `--controller` and a `--credentials-file` given on the command
+  line (the file with its full path, each quoted where a shell needs it), so the command it prints asks the same
+  controller and reads the same credentials file. It had printed neither, so the printed command read the default
+  file instead, and could change to that file's authorization mode or credential, or ask another controller
+  (Refs #261).
 - `--passphrase-file` counts the passphrase alone against its 4096-byte limit, not the file's final LF or CRLF. A
   4096-byte passphrase is accepted from a file as it is at the hidden prompt; a longer one is refused as before
   (Refs #258).
