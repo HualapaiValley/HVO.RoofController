@@ -111,14 +111,18 @@ public sealed class RoofCliSafetyTests
             configureServices: services => services.AddSingleton<ITelescopeParkSource>(mount),
             settings: new Dictionary<string, string?> { ["RoofSafety:InterlockMode"] = "Warn" });
         using var rig = new CliRig(host);
-        rig.UseApiKey(TestApiKeys.Operator);
+
+        // The default credentials file, and a command line that gives no global option: the hint is the plain command.
+        HVO.RoofControllerV4.Client.RoofCredentialStore.Save(
+            rig.DefaultCredentialsPath,
+            new HVO.RoofControllerV4.Client.RoofStoredCredentials { Controller = BaseAddress, ApiKey = TestApiKeys.Operator });
         using (var client = CreateClient(host, new HVO.RoofControllerV4.Client.RoofApiKeyCredential(TestApiKeys.Viewer)))
         {
             await WaitUntilAsync(() => client.Roof.GetSafetyAsync().GetAwaiter().GetResult().State == RoofSafetyState.Unsafe, "the mount to be read");
         }
 
-        var refused = await rig.RunAsync("open", "--no-wait");
-        var opened = await rig.RunAsync("open", "--no-wait", "--override-safety");
+        var refused = await rig.RunAsIsAsync("open", "--no-wait");
+        var opened = await rig.RunAsIsAsync("open", "--no-wait", "--override-safety");
 
         refused.Code.Should().Be(RoofExitCode.Refused, refused.ToString());
         refused.Error.Should().Contain("Open needs a safety override. [SafetyOverrideRequired]").And.Contain("Telescope 'Main' is not parked")

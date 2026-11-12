@@ -305,8 +305,22 @@ To open anyway: 'hvo-roof open --override-safety'. The controller logs the overr
 
 When the refused command chose its authorization mode on the command line, the hint keeps it, so the command it prints
 is authorized the same way: after `hvo-roof --local open` it says `'hvo-roof --local open --override-safety'`, and after
-`--remote`, `'hvo-roof --remote open --override-safety'`. A mode saved in the credentials file (`authMode: local`)
-applies to the printed command as it did to the refused one.
+`--remote`, `'hvo-roof --remote open --override-safety'`.
+
+It keeps a `--controller` and a `--credentials-file` given on the command line too, in that order after the mode, so
+the command it prints asks the same controller and reads the same file: after
+`hvo-roof --credentials-file /srv/roof/credentials.json open` it says
+`'hvo-roof --credentials-file /srv/roof/credentials.json open --override-safety'`. The file is printed with its full
+path, so the command reads it from any directory. An address or a path that a shell would not take as it stands (one
+with a space, say) is printed in single quotes, as `sh`, `bash` and `zsh` read them, so the command between the hint's
+own quotation marks can be pasted as it is:
+`'hvo-roof --credentials-file '/srv/roof files/credentials.json' open --override-safety'`.
+
+So a mode saved in the credentials file (`authMode: local`) applies to the printed command as it did to the refused
+one, because both read the same file: the default file when the command line named none, and the named file
+otherwise. Nothing else is printed. The printed command follows the motion, whether or not the refused one had
+`--no-wait`. The environment, which may hold a key, is left out: a variable set for the refused command alone has to
+be set again for the printed one.
 
 `open --override-safety` sends it. The terminal interface asks instead: **Open** shows a `Safety override` prompt over
 the page with the conditions and **Open anyway** or **Cancel**; nothing is sent until Open anyway, Esc answers Cancel,
@@ -713,6 +727,8 @@ Nothing here needs the Pi, the HAT or the roof.
 - **Commands** run in the test process against the controller's API with a mocked roof. The tests check their output,
   `--json` and exit codes (`tests/HVO.RoofControllerV4.RPi.Tests/Cli`), with a virtual clock for the stale status, the
   REST reads while live status is not connected, and the grace periods after a signal (`RoofCliTerminationTests`).
+  The command the safety override hint prints is split into its words by a real shell (`sh`, and `bash` and `zsh`
+  where installed) and run as printed (`RoofCliOverrideHintTests`).
 - **Grant terminal admission** ([test_grant_terminal.py](../tests/cli/test_grant_terminal.py)) runs the built CLI
   through real Linux ptys, covering the controlling terminal, foreground process group, all three standard streams
   and automation markers. It is Linux-only and needs the Debug CLI build, or `HVO_ROOF_CLI` set to a built executable

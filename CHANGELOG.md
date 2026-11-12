@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `open --override-safety`, the terminal interface's **Open anyway** and `clear-fault --pulse-ms` under native `operate`
   authorization; it had refused them before sending anything (exit 6). The exit-7 hint after a refused Open keeps an
   explicit `--local` or `--remote`, so the command it prints is authorized the same way (#255).
+- The exit-7 hint after a refused Open also keeps a `--controller` and a `--credentials-file` given on the command
+  line (the file with its full path, each quoted where a shell needs it), so the command it prints asks the same
+  controller and reads the same credentials file. It had printed neither, so the printed command read the default
+  file instead, and could change to that file's authorization mode or credential, or ask another controller
+  (Refs #261).
 
 ## [4.5.1] - 2026-11-03
 
