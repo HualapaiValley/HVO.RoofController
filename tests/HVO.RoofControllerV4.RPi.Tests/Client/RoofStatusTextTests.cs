@@ -48,11 +48,12 @@ public sealed class RoofStatusTextTests
     }
 
     [TestMethod]
-    public void DescribeLastStop_PreservesMotionHistory_AndNamesTheCurrentIdleDriveFault()
+    public void DescribeLastStop_NamesTheDriveFault_WithoutALimitOrACurrentFaultNote()
     {
-        var status = RoofServiceMock.Snapshot() with
+        // Refs #257: the controller reports an idle drive trip between the limits as the last stop.
+        var tripped = RoofServiceMock.Snapshot(RoofControllerStatus.Error) with
         {
-            LastStopReason = RoofControllerStopReason.LimitSwitchReached,
+            LastStopReason = RoofControllerStopReason.DriveFault,
             LastTransitionUtc = At,
             IsFaultLatched = true,
             LatchedFaultReason = RoofControllerStopReason.DriveFault,
@@ -60,26 +61,45 @@ public sealed class RoofStatusTextTests
             IsOpenLimitActive = false,
             IsClosedLimitActive = false
         };
-        RoofStatusText.DescribeLastStop(status).Should().Be(
-            "Limit switch reached (current fault: Drive fault input active; neither limit active)");
-        // Status transitions while idle have their own time; they are not another motion stop.
-        RoofStatusText.DescribeLastStop(status with { LastTransitionUtc = At.AddSeconds(5) }).Should()
-            .Be(RoofStatusText.DescribeLastStop(status));
-        foreach (var other in new[]
+
+        RoofStatusText.DescribeLastStop(tripped).Should().Be("Drive fault input active");
+        RoofStatusText.DescribeRows(tripped).Should().ContainSingle(row => row.Label == "Last stop")
+            .Which.Value.Should().Be("Drive fault input active");
+        foreach (var later in new[]
         {
-            status with { IsMoving = true },
-            status with { IsFaultLatched = false },
-            status with { IsDriveFaultActive = false },
-            status with { IsOpenLimitActive = true },
-            status with { IsClosedLimitActive = true },
-            status with { IsOpenLimitActive = null },
-            status with { LatchedFaultReason = RoofControllerStopReason.RelayVerificationFailed }
+            // The input clears while the latch stays; Clear fault; the roof at a limit; another transition time.
+            tripped with { IsDriveFaultActive = false },
+            tripped with { IsDriveFaultActive = false, IsFaultLatched = false, LatchedFaultReason = null, Status = RoofControllerStatus.PartiallyOpen },
+            tripped with { IsOpenLimitActive = true },
+            tripped with { LastTransitionUtc = At.AddSeconds(5) }
         })
         {
-            RoofStatusText.DescribeLastStop(other).Should().Be("Limit switch reached");
+            RoofStatusText.DescribeLastStop(later).Should().Be("Drive fault input active");
         }
-        RoofStatusText.DescribeLastStop(status with { LastStopReason = RoofControllerStopReason.NormalStop })
-            .Should().Be("Stopped by operator");
+    }
+
+    [TestMethod]
+    public void DescribeLastStop_IsTheControllersReason_AndAddsNothing()
+    {
+        // A limit stop reported with a latched, active idle drive fault (what a 4.5.1 controller sends) reads as the
+        // controller reports it; the Fault and Drive fault rows carry the latch and the input.
+        var status = RoofServiceMock.Snapshot(RoofControllerStatus.Error) with
+        {
+            LastStopReason = RoofControllerStopReason.LimitSwitchReached,
+            IsFaultLatched = true,
+            LatchedFaultReason = RoofControllerStopReason.DriveFault,
+            IsDriveFaultActive = true,
+            IsOpenLimitActive = false,
+            IsClosedLimitActive = false
+        };
+        RoofStatusText.DescribeLastStop(status).Should().Be("Limit switch reached");
+        RoofStatusText.DescribeFault(status).Should().Be("LATCHED: Drive fault input active");
+
+        foreach (var reason in Enum.GetValues<RoofControllerStopReason>())
+        {
+            RoofStatusText.DescribeLastStop(status with { LastStopReason = reason })
+                .Should().Be(RoofText.DescribeStopReason(reason), "every client shows the controller's reason as it is");
+        }
     }
 
     [TestMethod]

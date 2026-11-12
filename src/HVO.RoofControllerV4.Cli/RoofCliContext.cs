@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json;
 using HVO.RoofControllerV4.Client;
 
@@ -42,14 +43,18 @@ internal sealed class RoofCliContext
         _modeOverride = local ? true : remote ? false : null;
         Json = json;
         ControllerOverride = controller;
-        CredentialsPath = string.IsNullOrWhiteSpace(credentialsFile)
-            ? RoofCredentialStore.GetDefaultPath(host.GetEnvironmentVariable)
-            : Path.GetFullPath(credentialsFile);
+        _credentialsFileGiven = !string.IsNullOrWhiteSpace(credentialsFile);
+        CredentialsPath = _credentialsFileGiven
+            ? Path.GetFullPath(credentialsFile!)
+            : RoofCredentialStore.GetDefaultPath(host.GetEnvironmentVariable);
     }
 
     public RoofCliHost Host { get; }
 
     private readonly bool? _modeOverride;
+
+    /// <summary>True when the command line named the credentials file; false when <see cref="CredentialsPath"/> is the default.</summary>
+    private readonly bool _credentialsFileGiven;
     private bool? _resolvedLocal;
     public bool Local => _resolvedLocal ??= _modeOverride ?? RoofCredentialStore.Load(CredentialsPath)?.AuthMode == "local";
 
@@ -209,7 +214,7 @@ internal sealed class RoofCliContext
             if (RoofCommandRules.IsSafetyOverrideRequest(error))
             {
                 // The controller's detail names the API's overrideSafety=true; on the command line it is the flag.
-                Host.Error.WriteLine(DescribeSafetyOverrideHint(_modeOverride));
+                Host.Error.WriteLine(DescribeSafetyOverrideHint(_modeOverride, ControllerOverride, _credentialsFileGiven ? CredentialsPath : null));
             }
 
             if (error is RoofApiException { Errors.Count: > 0 } invalid)
@@ -234,21 +239,52 @@ internal sealed class RoofCliContext
 
     /// <summary>
     /// Said after a refusal for want of the safety override (SafetyOverrideRequired) when this command line chose no
-    /// authorization mode: how to give the override here.
+    /// authorization mode, controller or credentials file: how to give the override here.
     /// </summary>
     internal static readonly string SafetyOverrideHint = DescribeSafetyOverrideHint(local: null);
 
     /// <summary>
-    /// The safety override hint, keeping the authorization mode this command line chose (Refs #255): with <c>--local</c>
-    /// (<paramref name="local"/> true) or <c>--remote</c> (false), the command it prints says so too, so running it as
-    /// printed is authorized the same way. Without either (null), a mode saved in the credentials file applies to it as
-    /// it did to this command.
+    /// The safety override hint, keeping what this command line chose, so that the command it prints, run as printed,
+    /// asks the same controller, reads the same credentials file and is authorized the same way.
+    /// <para>
+    /// The authorization mode (Refs #255): with <c>--local</c> (<paramref name="local"/> true) or <c>--remote</c>
+    /// (false), the printed command says so too. Without either (null), a mode saved in the credentials file applies to
+    /// it as it did to this command, because both read the same file.
+    /// </para>
+    /// <para>
+    /// The controller and the credentials file (Refs #261): a <c>--controller</c> (<paramref name="controller"/>) and
+    /// a <c>--credentials-file</c> (<paramref name="credentialsFile"/>, the file's full path) given on the command line
+    /// are printed too, each as one word of a POSIX shell (<see cref="QuoteForShell"/>). Without them (null) the
+    /// printed command names neither, and reads the default file and the environment as this command did.
+    /// </para>
     /// </summary>
-    internal static string DescribeSafetyOverrideHint(bool? local)
+    internal static string DescribeSafetyOverrideHint(bool? local, Uri? controller = null, string? credentialsFile = null)
     {
-        var mode = local switch { true => "--local ", false => "--remote ", null => string.Empty };
-        return $"To open anyway: '{RoofCli.CommandName} {mode}open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.";
+        var options = new StringBuilder(local switch { true => "--local ", false => "--remote ", null => string.Empty });
+        if (controller is not null)
+        {
+            var address = controller.IsAbsoluteUri ? controller.AbsoluteUri : controller.OriginalString;
+            options.Append("--controller ").Append(QuoteForShell(address)).Append(' ');
+        }
+
+        if (credentialsFile is not null)
+        {
+            options.Append("--credentials-file ").Append(QuoteForShell(credentialsFile)).Append(' ');
+        }
+
+        return $"To open anyway: '{RoofCli.CommandName} {options}open --override-safety'. The controller logs the override with your name; Close and Stop are never affected.";
     }
+
+    /// <summary>
+    /// <paramref name="value"/> as one word of a command for a POSIX shell (<c>sh</c>, <c>bash</c>, <c>zsh</c>), so a
+    /// command printed with it can be pasted as it is. A value of ASCII letters, digits and <c>_ @ % + : , . / -</c>
+    /// alone is that word. Any other is put in single quotes, where the shell takes every character as it is, with each
+    /// single quote of its own written <c>'\''</c>.
+    /// </summary>
+    internal static string QuoteForShell(string value)
+        => value.Length > 0 && value.All(character => char.IsAsciiLetterOrDigit(character) || "_@%+:,./-".Contains(character))
+            ? value
+            : $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
     internal static (RoofExitCode Code, string Message) Classify(Exception error) => error switch
     {

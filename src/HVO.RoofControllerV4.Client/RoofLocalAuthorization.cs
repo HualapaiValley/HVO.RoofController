@@ -1,4 +1,5 @@
 using System.Globalization;
+using HVO.RoofControllerV4.Common.Models;
 
 namespace HVO.RoofControllerV4.Client;
 
@@ -46,16 +47,9 @@ internal static class RoofLocalAuthorization
         }
 
         // The person-only Alpaca routes (#220): grants, the Stop hold, the operator lease, acknowledging alerts.
-        if (path.StartsWith(RoofApiRoutes.AlpacaGrants, StringComparison.Ordinal) || path == RoofApiRoutes.AlpacaHold
-            || path.StartsWith(RoofApiRoutes.AlpacaLease, StringComparison.Ordinal)
-            || (path.StartsWith(RoofApiRoutes.AlpacaAlerts + "/", StringComparison.Ordinal) && method == HttpMethod.Post))
+        if (AlpacaOperation(method, path) is { } alpaca)
         {
-            return method == HttpMethod.Get ? "read" : "operate";
-        }
-
-        if (method == HttpMethod.Get && path == RoofApiRoutes.AlpacaAlerts)
-        {
-            return "read";
+            return alpaca;
         }
 
         if (path is RoofApiRoutes.Configuration or RoofApiRoutes.Settings or RoofApiRoutes.SettingsCatalogue
@@ -73,6 +67,61 @@ internal static class RoofLocalAuthorization
         }
 
         throw new RoofLocalRouteUnavailableException();
+    }
+
+    /// <summary>
+    /// The person-only Alpaca requests and the two reads beside them (Refs #260): each has its category only exactly as
+    /// <see cref="RoofApiRoutes"/> builds its path and <see cref="RoofAlpacaApi"/> sends it, method included. So a path
+    /// that only starts as one of them (<c>leaseExtra</c>, <c>grants/Extra</c>, <c>alerts/1/acknowledge/Extra</c>),
+    /// another query on one, or another method has none here, and fails closed as every unknown request does.
+    /// </summary>
+    private static string? AlpacaOperation(HttpMethod method, string path)
+    {
+        if (method == HttpMethod.Get)
+        {
+            return path is RoofApiRoutes.AlpacaGrants or RoofApiRoutes.AlpacaAlerts ? "read" : null;
+        }
+
+        var known = method == HttpMethod.Post
+            ? path == RoofApiRoutes.AlpacaGrants
+                || path == RoofApiRoutes.AlpacaLeaseHeartbeat(input: false) || path == RoofApiRoutes.AlpacaLeaseHeartbeat(input: true)
+                || IsAlertAcknowledgement(path)
+            : method == HttpMethod.Delete
+                && (path is RoofApiRoutes.AlpacaHold or RoofApiRoutes.AlpacaLease || IsGrantOfOneKind(path));
+        return known ? "operate" : null;
+    }
+
+    /// <summary>The grant of one command kind, exactly as <see cref="RoofApiRoutes.AlpacaGrant"/> names it.</summary>
+    private static bool IsGrantOfOneKind(string path)
+    {
+        foreach (var kind in Enum.GetValues<RoofAlpacaCommandKind>())
+        {
+            if (path == RoofApiRoutes.AlpacaGrant(kind))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Acknowledging one alert. The ID is the one segment between the alerts and <c>acknowledge</c>, and the path must
+    /// be what <see cref="RoofApiRoutes.AcknowledgeAlpacaAlert"/> makes of that ID. An ID that is a dot segment has no
+    /// category: the request's address resolves it away, so the request would go to another path than this one.
+    /// </summary>
+    private static bool IsAlertAcknowledgement(string path)
+    {
+        const string before = RoofApiRoutes.AlpacaAlerts + "/";
+        const string after = "/acknowledge";
+        if (path.Length <= before.Length + after.Length
+            || !path.StartsWith(before, StringComparison.Ordinal) || !path.EndsWith(after, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var id = Uri.UnescapeDataString(path[before.Length..^after.Length]);
+        return id is not ("." or "..") && path == RoofApiRoutes.AcknowledgeAlpacaAlert(id);
     }
 
     /// <summary>
