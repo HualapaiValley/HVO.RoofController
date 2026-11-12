@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Text.Json;
 using FluentAssertions;
+using FluentAssertions.Execution;
 using HVO.RoofControllerV4.Client;
 using HVO.RoofControllerV4.Common.Models;
 using HVO.RoofControllerV4.RPi.Safety;
@@ -135,11 +136,58 @@ public sealed class RoofCommandHistoryTests
         TestContext.WriteLine($"{entries} ordinary command entries retain {retained:N0} bytes ({bytesPerEntry:N1} bytes/entry).");
         // The earlier soak estimate was about 485 bytes/entry (4–5 MB at 10,000). Keep 640, about 32% above that
         // estimate, for runtime/layout growth and the pending-write list (measured with the writer not started).
-        // The deterministic graph currently measures about 341 bytes/entry, 367 with pending writes, on arm64.
+        // The deterministic graph measures about 485 bytes/entry, 511 with pending writes, on 64-bit CoreCLR.
         // The ceiling caps the default at 6.4 MB.
         // This is an ordinary-command budget, not a worst-case text bound. The lower bound detects undercounting.
-        bytesPerEntry.Should().BeInRange(256, 640,
-            "ordinary commands at the default limit should fit within 6.4 MB, with a guard against undercounting (Refs #233, item 5)");
+        AssertOrdinaryCommandBudget(bytesPerEntry);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void AnExtra200CharacterStringPerEntry_FailsTheSameMemoryBudget(bool persistent)
+    {
+        using var directory = new TemporaryDirectory();
+        using var history = Create(new ManualTimeProvider(Start),
+            new RoofCommandHistoryOptions { StorePath = persistent ? directory.File("history.jsonl") : null },
+            logger: NullLogger<RoofCommandHistory>.Instance);
+        var entries = RoofCommandHistoryContract.DefaultMaximumEntries;
+        var before = RetainedGraphBytes(history);
+
+        RecordOrdinaryCommands(history, entries, retainExtraDetail: true);
+
+        var retained = RetainedGraphBytes(history) - before;
+        history.Count.Should().Be(entries);
+        history.IsPersistent.Should().Be(persistent);
+        var bytesPerEntry = (double)retained / entries;
+        TestContext.WriteLine($"{entries} entries with a distinct extra 200-character string retain {retained:N0} bytes ({bytesPerEntry:N1} bytes/entry).");
+        bytesPerEntry.Should().BeGreaterThan(640, "this negative control must exceed the ordinary-command ceiling");
+        string[] failures;
+        using (var rejection = new AssertionScope())
+        {
+            AssertOrdinaryCommandBudget(bytesPerEntry);
+            failures = rejection.Discard().ToArray();
+        }
+
+        failures.Should().ContainSingle("the same assertion used for ordinary commands must reject the added retained strings");
+    }
+
+    [TestMethod]
+    [DataRow(0, 24L)]
+    [DataRow(20, 64L)]
+    [DataRow(200, 424L)]
+    public void ShallowMeasurement_StringsHaveIndependentlyKnownSizes(int length, long expected)
+    {
+        IntPtr.Size.Should().Be(8, "every supported platform uses the 64-bit CoreCLR layout");
+        ShallowBytes(new string('x', length)).Should().Be(expected,
+            "a string has a 16-byte header, 4-byte length, UTF-16 characters plus a terminator, aligned to 8 bytes");
+    }
+
+    [TestMethod]
+    public void ShallowMeasurement_AnOrdinaryObjectHasAnIndependentlyKnownSize()
+    {
+        ShallowBytes(new RetainedSizeFixture()).Should().Be(40,
+            "the 16-byte object header, two 8-byte references and one 8-byte integer occupy 40 bytes");
     }
 
     [TestMethod]
@@ -154,8 +202,8 @@ public sealed class RoofCommandHistoryTests
         root[2] = equalText;
         pairs[0] = new(root, text);
 
-        RetainedGraphBytes(root).Should().Be(ShallowBytes(root) + ShallowBytes(pairs) + 2 * ShallowBytes(text),
-            "arrays include unused capacity, embedded structs add no boxes, and references are counted by identity once");
+        RetainedGraphBytes(root).Should().Be(432,
+            "two arrays of 152 bytes each and two distinct 64-byte strings count once; embedded structs add no boxes");
     }
 
     [TestMethod]
@@ -797,6 +845,17 @@ public sealed class RoofCommandHistoryTests
 
     // ---- Support --------------------------------------------------------------------------------------------------
 
+    private static void AssertOrdinaryCommandBudget(double bytesPerEntry)
+        => bytesPerEntry.Should().BeInRange(256, 640,
+            "ordinary commands at the default limit should fit within 6.4 MB, with a guard against undercounting (Refs #233, item 5)");
+
+    private sealed class RetainedSizeFixture
+    {
+        public object First { get; } = new();
+        public object Second { get; } = new();
+        public long Number { get; } = 1;
+    }
+
     private static long RetainedGraphBytes(object root)
     {
         // Walk only instance references reachable from this store. Static caches, temporary request objects and
@@ -832,8 +891,18 @@ public sealed class RoofCommandHistoryTests
 
     private static long ShallowBytes(object value)
     {
-        // MemberwiseClone allocates exactly one object of the runtime's actual size, including headers, alignment,
-        // string data and array capacity. Warm the accessor first; bracket ONLY the clone with the thread-local
+        if (value is string text)
+        {
+            // CoreCLR excludes strings from MemberwiseClone: their component count cannot be cloned that way.
+            // Use the supported platforms' layout: two pointer-sized header words, a 4-byte length, UTF-16
+            // characters plus the terminating char, rounded up to pointer alignment. Never clone a string,
+            // even to warm the accessor: that can produce an undersized object and corrupt the test host.
+            var stringBytes = 2L * IntPtr.Size + sizeof(int) + sizeof(char) * ((long)text.Length + 1);
+            return (stringBytes + IntPtr.Size - 1) / IntPtr.Size * IntPtr.Size;
+        }
+
+        // For non-string objects MemberwiseClone allocates the actual size, including headers and array capacity.
+        // Warm the accessor first; bracket ONLY the clone with the thread-local
         // allocation counter, so reflection/boxing/traversal and other test threads cannot enter the measurement.
         _ = ShallowClone(value);
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -846,7 +915,7 @@ public sealed class RoofCommandHistoryTests
     [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "MemberwiseClone")]
     private static extern object ShallowClone(object value);
 
-    private static void RecordOrdinaryCommands(RoofCommandHistory history, int count)
+    private static void RecordOrdinaryCommands(RoofCommandHistory history, int count, bool retainExtraDetail = false)
     {
         // Reuse what a server reuses (identity and status), while Describe creates each request's retained strings.
         var user = Session("ada", RoofCredentialKind.Session, RoofControllerApiContract.OperatorRole);
@@ -855,7 +924,8 @@ public sealed class RoofCommandHistoryTests
         for (var i = 0; i < count; i++)
         {
             var context = Context(user, IPAddress.Parse("192.0.2.10"), "hvo-roof/4.4.0");
-            history.Record(history.Describe(context, RoofHistoryCommand.Stop, status, null));
+            var entry = history.Describe(context, RoofHistoryCommand.Stop, status, null);
+            history.Record(retainExtraDetail ? entry with { Detail = new string('x', 200) } : entry);
         }
     }
 

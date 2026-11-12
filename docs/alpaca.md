@@ -994,9 +994,34 @@ are involved. Install the SDK selected by `src/global.json`, Git and Python 3 fi
    | [ ] | NINA Open, then Stop/Abort part way through travel, before the open limit. | `AbortSlew` stops the roof; after coasting stops, `Slewing=false`, shutter Error, relays off. The Alpaca Abort does not set the human Stop hold. |
    | [ ] | Disconnect the Dynamic Client in NINA, reconnect, then Close. | Reconnect succeeds; the part-way shutter still reads Error until Close recovers it to Closed. No manual ClearFault is needed. |
    | [ ] | From the web UI, press Stop, sign out, then NINA Open. Clear the hold as a person, sign out, retry Open, then Close. | With the hold set, `StopHold` refusal and no movement; after clear, normal Open and Close work. |
-   | [ ] | Inspect History as `rig-admin` and the local Alpaca log. | Every Open/Close, accepted or refused, has source `Alpaca`, auth `basic`, the Windows client and transaction IDs. Accepted ones say `accepted by the controller`; refused ones retain the tested reason. No key or Basic header is logged. |
+   | [ ] | Inspect History as `rig-admin`, the protected history JSON with the command below, and the local Alpaca log. | History shows the Alpaca source and outcome; JSON additionally shows `authMethod: "basic"`, `alpacaClientId` and `alpacaClientTransactionId` for every tested Open/Close. Accepted commands say `accepted by the controller` in the log; refusals retain the tested reason. No key or Basic header is logged. |
    | [ ] | Optional separate NINA native Alpaca connection, with no credential, to this same rig and Location. | Reads, Connected and Abort work; Open and Close are “Not authorised” (`0x40B`) and move nothing. Record skipped if not tried. |
    | [ ] | Final NINA Close; rig `GET /status` and `GET /violations`. | Closed limit, stationary, all relays off, no fault and no plant invariant violations. |
+
+   For the audit row, run this in the rig's preparing shell before the optional native-client check. The History UI
+   does not display the auth method or transaction ID, and the Alpaca log does not record the auth method; read those
+   fields from the protected API instead. This reads the admin key from its private file and prints only the relevant
+   non-secret fields, omitting client addresses. Do not dump the full response or request headers.
+
+   ```bash
+   python3 - <<'PYRIG'
+   import json, os, pathlib, urllib.request
+   rig = pathlib.Path(os.environ["HVO_CLIENT_RIG"])
+   request = urllib.request.Request("http://127.0.0.1:5195/api/v4.0/RoofControl/History?take=500",
+       headers={"X-Api-Key": (rig / "admin-key").read_text().strip()})
+   with urllib.request.urlopen(request) as response:
+       page = json.load(response)
+   assert page["totalCount"] <= 500, "Use skip=500, skip=1000, ... to inspect every page of a longer run"
+   entries = [e for e in page["entries"] if e.get("source") == "Alpaca" and e["command"] in ("Open", "Close")]
+   assert entries, "No Alpaca Open/Close history found"
+   fields = ("id", "command", "accepted", "source", "authMethod", "alpacaClientId",
+             "alpacaClientTransactionId", "code", "alpacaRefusal")
+   for entry in reversed(entries):
+       print(json.dumps({key: entry.get(key) for key in fields}))
+       assert entry.get("authMethod") == "basic", "Expected the Dynamic Client's Basic authentication"
+       assert entry.get("alpacaClientId") is not None and entry.get("alpacaClientTransactionId") is not None
+   PYRIG
+   ```
 
 8. **Record pass/fail before enabling anything at the observatory.** Keep the date, main commit, Windows/NINA/ASCOM
    versions, Dynamic Client name, each required row's pass/fail, optional native-client result or skip, and command
