@@ -856,6 +856,10 @@ The `alpaca` requests only a person may send (override grants, the Stop hold, ac
 category only exactly as `hvo-roof` sends them: any other path, query or method under those routes is unavailable in
 local mode. So `alpaca ack .` and `alpaca ack ..`, whose request would go to another path, are refused before the native
 helper is asked.
+`alpaca ack ID` uses native `read` authorization to match the controller's Viewer policy. The client library's
+`DELETE api/v4.0/alpaca/lease` uses `read` for the same reason; taking or renewing that lease still uses `operate`.
+The terminal interface sends no lease requests in local mode: every request gets its own native session, while the
+controller keeps leases per session.
 A route unavailable in local mode is refused before sending it, with exit 6 and its reason;
 `--json` reports `kind: Forbidden` and `code: LocalRouteUnavailable`. A failed native gate
 reports `code: LocalAuthorizationFailed` and never substitutes a saved remote credential.

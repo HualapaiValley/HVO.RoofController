@@ -44,9 +44,9 @@ public sealed class RoofLocalRouteCoverageTests
         (nameof(RoofApiRoutes.AlpacaHold), "DELETE", RoofApiRoutes.AlpacaHold, "operate"),
         (nameof(RoofApiRoutes.AlpacaLease), "POST", RoofApiRoutes.AlpacaLease, "operate"),
         (nameof(RoofApiRoutes.AlpacaLease), "POST", RoofApiRoutes.AlpacaLease + "?input=true", "operate"),
-        (nameof(RoofApiRoutes.AlpacaLease), "DELETE", RoofApiRoutes.AlpacaLease, "operate"),
+        (nameof(RoofApiRoutes.AlpacaLease), "DELETE", RoofApiRoutes.AlpacaLease, "read"),
         (nameof(RoofApiRoutes.AlpacaAlerts), "GET", RoofApiRoutes.AlpacaAlerts, "read"),
-        (nameof(RoofApiRoutes.AlpacaAlerts), "POST", RoofApiRoutes.AcknowledgeAlpacaAlert("fixture-alert"), "operate"),
+        (nameof(RoofApiRoutes.AlpacaAlerts), "POST", RoofApiRoutes.AcknowledgeAlpacaAlert("fixture-alert"), "read"),
         (nameof(RoofApiRoutes.Principals), "GET", RoofApiRoutes.Principals, "identity"),
         (nameof(RoofApiRoutes.Principals), "POST", RoofApiRoutes.Principals, "identity"),
         (nameof(RoofApiRoutes.Principals), "PUT", RoofApiRoutes.Principals + "/fixture-principal", "identity"),
@@ -69,7 +69,7 @@ public sealed class RoofLocalRouteCoverageTests
     private static readonly (string Builder, string Method, string Path, string Scope)[] BuilderCalls =
     [
         (nameof(RoofApiRoutes.AlpacaGrant), "DELETE", RoofApiRoutes.AlpacaGrant(RoofAlpacaCommandKind.Close), "operate"),
-        (nameof(RoofApiRoutes.AcknowledgeAlpacaAlert), "POST", RoofApiRoutes.AcknowledgeAlpacaAlert("fixture-alert"), "operate"),
+        (nameof(RoofApiRoutes.AcknowledgeAlpacaAlert), "POST", RoofApiRoutes.AcknowledgeAlpacaAlert("fixture-alert"), "read"),
         (nameof(RoofApiRoutes.User), "GET", RoofApiRoutes.User("fixture-user"), "identity"),
         (nameof(RoofApiRoutes.UserPin), "PUT", RoofApiRoutes.UserPin("fixture-user"), "identity"),
         (nameof(RoofApiRoutes.ApiKey), "DELETE", RoofApiRoutes.ApiKey("fixture-key"), "identity"),
@@ -412,10 +412,10 @@ public sealed class RoofLocalRouteCoverageTests
         (api => api.ClearHoldAsync(CancellationToken.None), "DELETE", "api/v4.0/alpaca/hold", "operate"),
         (api => api.HoldLeaseAsync(false, CancellationToken.None), "POST", "api/v4.0/alpaca/lease", "operate"),
         (api => api.HoldLeaseAsync(true, CancellationToken.None), "POST", "api/v4.0/alpaca/lease?input=true", "operate"),
-        (api => api.ReleaseLeaseAsync(CancellationToken.None), "DELETE", "api/v4.0/alpaca/lease", "operate"),
+        (api => api.ReleaseLeaseAsync(CancellationToken.None), "DELETE", "api/v4.0/alpaca/lease", "read"),
         (api => api.GetAlertsAsync(CancellationToken.None), "GET", "api/v4.0/alpaca/alerts", "read"),
-        (api => api.AcknowledgeAlertAsync("1", CancellationToken.None), "POST", "api/v4.0/alpaca/alerts/1/acknowledge", "operate"),
-        (api => api.AcknowledgeAlertAsync("a/b c?d", CancellationToken.None), "POST", "api/v4.0/alpaca/alerts/a%2Fb%20c%3Fd/acknowledge", "operate"),
+        (api => api.AcknowledgeAlertAsync("1", CancellationToken.None), "POST", "api/v4.0/alpaca/alerts/1/acknowledge", "read"),
+        (api => api.AcknowledgeAlertAsync("a/b c?d", CancellationToken.None), "POST", "api/v4.0/alpaca/alerts/a%2Fb%20c%3Fd/acknowledge", "read"),
         (api => api.RequestTicketAsync(RoofAlpacaCommandKind.Close, PassedOnKey, Forwarded, AnswerWithin, CancellationToken.None), "POST",
             "api/v4.0/alpaca/shutter/ticket?kind=Close", AlpacaClientKey),
         (api => api.CloseAsync(Ticketed, PassedOnKey, Forwarded, AnswerWithin, CancellationToken.None), "POST", "api/v4.0/alpaca/shutter/close", AlpacaClientKey),
@@ -501,7 +501,7 @@ public sealed class RoofLocalRouteCoverageTests
     {
         var path = RoofApiRoutes.AcknowledgeAlpacaAlert(id);
 
-        RoofLocalAuthorization.Operation(HttpMethod.Post, path).Should().Be("operate", $"POST {path} acknowledges one alert");
+        RoofLocalAuthorization.Operation(HttpMethod.Post, path).Should().Be("read", $"POST {path} acknowledges one alert under ViewerPolicy");
         Action read = () => RoofLocalAuthorization.Operation(HttpMethod.Get, path);
         read.Should().Throw<RoofLocalRouteUnavailableException>($"only POST acknowledges: GET {path} is no request of the client's");
     }

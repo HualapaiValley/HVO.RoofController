@@ -90,9 +90,10 @@ public sealed class RoofLocalClientCallCoverageTests
         (c => c.Alpaca.ClearHoldAsync(CancellationToken.None), "DELETE", "api/v4.0/alpaca/hold", "operate"),
         (c => c.Alpaca.HoldLeaseAsync(false, CancellationToken.None), "POST", "api/v4.0/alpaca/lease", "operate"),
         (c => c.Alpaca.HoldLeaseAsync(true, CancellationToken.None), "POST", "api/v4.0/alpaca/lease?input=true", "operate"),
-        (c => c.Alpaca.ReleaseLeaseAsync(CancellationToken.None), "DELETE", "api/v4.0/alpaca/lease", "operate"),
+        // Refs #267: lease release and alert acknowledgment require ViewerPolicy's read scope.
+        (c => c.Alpaca.ReleaseLeaseAsync(CancellationToken.None), "DELETE", "api/v4.0/alpaca/lease", "read"),
         (c => c.Alpaca.GetAlertsAsync(CancellationToken.None), "GET", "api/v4.0/alpaca/alerts", "read"),
-        (c => c.Alpaca.AcknowledgeAlertAsync("fixture/id", CancellationToken.None), "POST", "api/v4.0/alpaca/alerts/fixture%2Fid/acknowledge", "operate"),
+        (c => c.Alpaca.AcknowledgeAlertAsync("fixture/id", CancellationToken.None), "POST", "api/v4.0/alpaca/alerts/fixture%2Fid/acknowledge", "read"),
         (c => c.Alpaca.RequestTicketAsync(RoofAlpacaCommandKind.Close, new RoofApiKeyCredential(ClientKey), Forwarding, TimeSpan.FromSeconds(1), CancellationToken.None), "POST", "api/v4.0/alpaca/shutter/ticket?kind=Close", ExplicitKey),
         (c => c.Alpaca.RequestTicketAsync(RoofAlpacaCommandKind.Open, new RoofApiKeyCredential(ClientKey), Forwarding, TimeSpan.FromSeconds(1), CancellationToken.None), "POST", "api/v4.0/alpaca/shutter/ticket?kind=Open", ExplicitKey),
         (c => c.Alpaca.CloseAsync(new RoofAlpacaCommandRequest(null, null, null), new RoofApiKeyCredential(ClientKey), Forwarding, TimeSpan.FromSeconds(1), CancellationToken.None), "POST", "api/v4.0/alpaca/shutter/close", ExplicitKey),

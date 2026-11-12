@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `hvo-roof --local alpaca ack ID` (also with `authMode: local` saved) requests native `read` authorization to match
+  the controller's Viewer policy, so acknowledgment succeeds instead of returning HTTP 403 (exit 6). The client
+  library's operator-lease release uses `read` for the same reason; taking or renewing the lease still requires
+  `operate` (Refs #267).
 - Native local Operators see UI settings as read-only in `hvo-roof` and its terminal Settings page. The read-only
   reason and exit-6 write refusal explain that local settings changes need a Linux controller administrator and
   name `--remote` for role-permitted edits with a password session. Native scopes are unchanged (Refs #256).
