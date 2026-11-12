@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -49,6 +50,16 @@ RENDER_CLASSES = {
                          'InstallerWizardControllerTests', 'InstallerDesignTests',
                          'InstallerUpgradePrerequisiteTests']
 }
+# Refs #264: separate the largest installer groups, including the two largest classes
+# from attempt 2's 477-second remainder. The complement retains every other contract
+# (including future classes); each process keeps its 600-second budget.
+INSTALLER_CONTRACT_BATCHES = {
+    'contracts-backup': 'InstallerBackupTests',
+    'contracts-lifecycle': 'InstallerLifecycleTests',
+    'contracts-state': 'InstallerStateContractTests',
+    'contracts-resource-limits': 'InstallerResourceLimitsTests',
+    'contracts-certificate-redeploy': 'InstallerCertificateRedeployTests',
+}
 CONTRACT_REQUIRED = {
     'hvo-roof-install': ['ACommandThatDoesNotInherit_GetsOnlyTheKeptVariables_AndItsOwn',
                          'Openssl_VerifiesTheChain_ForAServer_ByNameAndAddress']
@@ -78,11 +89,15 @@ def extract_owned(program, rid):
 
 
 def phase_filters(name):
-    """Disjoint render and remaining contract filters together retain the original catalogue."""
+    """Disjoint bounded batches together retain the original contract/render catalogue."""
     render = '|'.join('FullyQualifiedName~.' + item + '.' for item in RENDER_CLASSES[name])
     contracts = '&'.join('FullyQualifiedName!~.' + item + '.' for item in RENDER_CLASSES[name])
-    return [('contracts', f'({FILTERS[name]})&({contracts})'),
-            ('render', f'({FILTERS[name]})&({render})')]
+    contract_filter = f'({FILTERS[name]})&({contracts})'
+    batches = INSTALLER_CONTRACT_BATCHES if name == 'hvo-roof-install' else {}
+    separate = [(phase, f'{contract_filter}&FullyQualifiedName~.{item}.') for phase, item in batches.items()]
+    remaining = ''.join('&FullyQualifiedName!~.' + item + '.' for item in batches.values())
+    return separate + [('contracts', contract_filter + remaining),
+                       ('render', f'({FILTERS[name]})&({render})')]
 
 
 def phase_environment(base, home, render):
@@ -99,16 +114,33 @@ def phase_environment(base, home, render):
     return environment
 
 
-def run_phase(dotnet, staged, environment, test_filter, output):
+def run_phase(dotnet, staged, environment, test_filter, output, timeout=600):
     if not Path(dotnet).is_absolute():
         raise ValueError('The managed workflow host must be absolute before restricting PATH')
     output.mkdir(parents=True, exist_ok=True)
     command = [str(dotnet), 'vstest', str(staged / 'HVO.RoofControllerV4.RPi.Tests.dll'),
                '/TestCaseFilter:' + test_filter, '/Logger:trx;LogFileName=final-terminal-workflows.trx',
+               '/Logger:console;verbosity=normal',
                '/ResultsDirectory:' + str(output.resolve())]
-    result = subprocess.run(command, env=environment, capture_output=True, timeout=600)
-    (output / 'workflow-run.txt').write_bytes(result.stdout + result.stderr)
-    if result.returncode:
+    # Write as tests finish, including their durations: TimeoutExpired otherwise discards
+    # captured output and leaves no evidence of which contracts consumed the budget.
+    with (output / 'workflow-run.txt').open('wb') as log:
+        with subprocess.Popen(command, env=environment, stdout=log, stderr=subprocess.STDOUT,
+                              start_new_session=True) as process:
+            try:
+                code = process.wait(timeout=timeout)
+            except BaseException as error:
+                # vstest owns a separate testhost; killing only vstest leaves that host running.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                if isinstance(error, subprocess.TimeoutExpired):
+                    raise RuntimeError(f'{output.parent.name}/{output.name}: distributed workflow check exceeded '
+                                       f'{timeout} seconds; see workflow-run.txt') from None
+                raise
+    if code:
         raise RuntimeError(f'{output.parent.name}/{output.name}: distributed workflow check failed; see workflow-run.txt')
     results = ET.parse(output / 'final-terminal-workflows.trx').getroot()
     names = [item.attrib.get('testName', '') for item in results.iter()
@@ -181,4 +213,6 @@ def main():
 
 
 if __name__ == '__main__':
+    # SIGINT already raises KeyboardInterrupt; give SIGTERM the same cleanup path.
+    signal.signal(signal.SIGTERM, lambda number, _frame: sys.exit(128 + number))
     main()
