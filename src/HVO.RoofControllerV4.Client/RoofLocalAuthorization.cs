@@ -133,7 +133,7 @@ internal static class RoofLocalAuthorization
     }
 
     /// <summary>
-    /// Open with the safety override and ClearFault with a pulse length (#255): the same operate commands as without
+    /// Open with the safety override and ClearFault with a pulse length (Refs #255): the same operate commands as without
     /// the query. Each matches only exactly as <see cref="RoofApiRoutes"/> builds it, so another path (a near miss such
     /// as <c>OpenExtra</c> or <c>ClearFault/Extra</c>) or another query on the same path still fails closed.
     /// </summary>
