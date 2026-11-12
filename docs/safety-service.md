@@ -238,7 +238,7 @@ sends nothing.
 | Web UI | A panel in the controls card, above Open and Close. Stop stays at the bottom of the page. |
 | Kiosk and Mac app | In the motion controls' place on the roof page, with the two answers side by side; Stop stays at the right. Esc answers Cancel. |
 | `hvo-roof ui` | A prompt over the page; Esc answers Cancel, and F9 still stops the roof. |
-| `hvo-roof open` | No prompt: the controller's refusal ends with "To open anyway: 'hvo-roof open --override-safety'", and `--override-safety` sends the override. |
+| `hvo-roof open` | No prompt: the controller's refusal ends with "To open anyway: 'hvo-roof open --override-safety'" (with `--local` or `--remote` kept when the refused command gave it), and `--override-safety` sends the override. |
 
 - The question is asked only of an Open that would be sent (not of one blocked for another reason, which says why).
 - Stop, Close, the end of the person's session, and the kiosk locking withdraw it: a question asked of one person is

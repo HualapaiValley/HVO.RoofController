@@ -84,6 +84,16 @@ internal static class RoofApiRoutes
 
     public static string Camera(int cameraId) => $"{V1}Camera/{cameraId}/mjpeg";
 
+    /// <summary>
+    /// Open, with the safety override (<c>overrideSafety=true</c>) as its query when <paramref name="overrideSafety"/>.
+    /// </summary>
+    public static string OpenCommand(bool overrideSafety) => overrideSafety ? Open + "?overrideSafety=true" : Open;
+
+    /// <summary>ClearFault, with the fault-reset pulse length (<c>pulseMs</c>) as its query when given.</summary>
+    public static string ClearFaultCommand(int? pulseMilliseconds) => pulseMilliseconds is { } pulse
+        ? $"{ClearFault}?pulseMs={pulse.ToString(CultureInfo.InvariantCulture)}"
+        : ClearFault;
+
     /// <summary>The command history with <paramref name="query"/>'s filters as the query string.</summary>
     public static string HistoryPage(RoofHistoryQuery query)
     {
