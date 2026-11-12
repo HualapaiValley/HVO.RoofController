@@ -51,7 +51,7 @@ internal static class RoofCliFormat
             parts.Add($"lease {Seconds(lease)}");
         }
 
-        parts.Add($"last stop: {RoofText.DescribeStopReason(status.LastStopReason)}");
+        parts.Add($"last stop: {DescribeLastStop(status)}");
         if (status.Safety is { } safety)
         {
             parts.Add("safety " + RoofStatusText.DescribeSafetyState(safety.State).ToLowerInvariant()

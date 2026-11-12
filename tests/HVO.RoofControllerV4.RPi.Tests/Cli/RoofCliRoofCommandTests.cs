@@ -176,6 +176,31 @@ public sealed class RoofCliRoofCommandTests
     }
 
     [TestMethod]
+    public void TheWatchLine_ShowsTheLastStop_InTheStatusRowsWords()
+    {
+        // Refs #257 (audit BM-2): the line status --watch writes, and open and close write while they follow the motion,
+        // names the last stop as the full status rows do. An idle drive trip between the limits reads as the drive fault.
+        var tripped = RoofServiceMock.Snapshot(RoofControllerStatus.Error, faultLatched: true) with
+        {
+            LastStopReason = RoofControllerStopReason.DriveFault,
+            LatchedFaultReason = RoofControllerStopReason.DriveFault,
+            IsDriveFaultActive = true,
+            IsOpenLimitActive = false,
+            IsClosedLimitActive = false
+        };
+        RoofCliFormat.DescribeState(tripped).Should().Be("Error; fault LATCHED: Drive fault input active; last stop: Drive fault input active");
+        RoofCliFormat.DescribeLine(tripped).Should().EndWith("  Error; fault LATCHED: Drive fault input active; last stop: Drive fault input active");
+
+        foreach (var status in Enum.GetValues<RoofControllerStopReason>().Select(reason => tripped with { LastStopReason = reason })
+            .Append(tripped with { IsDriveFaultActive = false })
+            .Append(RoofServiceMock.Snapshot(RoofControllerStatus.Opening, RoofMotionDirection.Opening)))
+        {
+            var row = RoofCliFormat.DescribeStatus(status).Single(row => row.Label == "Last stop").Value;
+            RoofCliFormat.DescribeState(status).Should().Contain($"; last stop: {row}");
+        }
+    }
+
+    [TestMethod]
     public async Task StatusWatch_Json_WritesAChangeThatTheTextLineDoesNotShow_ButNotTheSameStatusAgain()
     {
         var first = RoofServiceMock.Snapshot() with

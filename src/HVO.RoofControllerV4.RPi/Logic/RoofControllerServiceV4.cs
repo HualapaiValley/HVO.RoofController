@@ -165,7 +165,14 @@ public partial class RoofControllerServiceV4 : IRoofControllerServiceV4, IAsyncD
     private bool _faultLatched;
     private RoofControllerStopReason? _latchedFaultReason;
     private string? _lastError;
+
+    // The reported last stop: the last motion stop's reason, or DriveFault once the drive fault input (IN3) is active
+    // while idle (Refs #257).
     private RoofControllerStopReason _lastStopReason = RoofControllerStopReason.None;
+
+    // The last motion stop's reason alone, which an idle drive fault never changes. The repeat and lease decisions, and
+    // their refusal texts, are keyed to it.
+    private RoofControllerStopReason _lastMotionStopReason = RoofControllerStopReason.None;
     private DateTimeOffset? _lastMotionStopUtc;
     private bool _driveRunningAfterStopReported;
 
