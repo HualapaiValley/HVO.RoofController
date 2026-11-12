@@ -134,7 +134,7 @@ public partial class RoofControllerServiceV4
                         }
                         else
                         {
-                            Latch_NoLock(RoofControllerStopReason.DriveFault, error);
+                            LatchIdleDriveFault_NoLock(error);
                         }
 
                         FinishMutation_NoLock();
@@ -159,7 +159,7 @@ public partial class RoofControllerServiceV4
     /// <summary>
     /// Applies the safety rules to the cached inputs. While moving: contradictory limits, destination limit, departure
     /// limit reassertion and drive fault stop motion, and the drive run input (IN4) is tracked. While idle: an active drive
-    /// fault or contradictory limits latch.
+    /// fault latches and becomes the last stop, and contradictory limits latch.
     /// </summary>
     private void Evaluate_NoLock(DateTimeOffset now)
     {
@@ -204,7 +204,7 @@ public partial class RoofControllerServiceV4
 
             if (DriveFaultActive_NoLock == true)
             {
-                Latch_NoLock(RoofControllerStopReason.DriveFault, "Drive fault input (IN3) is active.");
+                LatchIdleDriveFault_NoLock("Drive fault input (IN3) is active.");
             }
 
             if (LimitsContradictory_NoLock)
@@ -314,6 +314,23 @@ public partial class RoofControllerServiceV4
         RoofControllerStopReason.DepartureLimitNotReleased;
 
     /// <summary>
+    /// The drive fault input (IN3) is active while no motion is commanded: latches
+    /// <see cref="RoofControllerStopReason.DriveFault"/> and reports it as the last stop, as a trip during motion does
+    /// (Refs #257). The last motion stop's reason, which the repeat and lease decisions read, is kept as it was.
+    /// </summary>
+    private void LatchIdleDriveFault_NoLock(string message)
+    {
+        if (_lastStopReason != RoofControllerStopReason.DriveFault)
+        {
+            _logger.LogInformation("Drive fault input (IN3) active while idle; the last stop is now {Reason} (was {Previous})",
+                RoofControllerStopReason.DriveFault, _lastStopReason);
+            _lastStopReason = RoofControllerStopReason.DriveFault;
+        }
+
+        Latch_NoLock(RoofControllerStopReason.DriveFault, message);
+    }
+
+    /// <summary>
     /// Latches a safety fault. The first latched reason is kept, except that a relay verification failure always takes
     /// precedence because relay state is then unknown.
     /// </summary>
@@ -364,6 +381,7 @@ public partial class RoofControllerServiceV4
         {
             _lastMotionDirection = direction;
             _lastStopReason = reason;
+            _lastMotionStopReason = reason;
             _lastMotionStopUtc = now;
             _driveRunningAfterStopReported = false;
         }
@@ -1420,7 +1438,7 @@ public partial class RoofControllerServiceV4
         _driveRunningAfterStopReported = true;
         _lastError = $"Drive still reports running (IN4) {(now - stoppedAt).TotalSeconds:0.#} s after the relays were released.";
         _logger.LogCritical("Drive still reports running (IN4) {Seconds:0.#}s after stop ({Reason}); relays read back off. Check the drive and use the independent hardware stop",
-            (now - stoppedAt).TotalSeconds, _lastStopReason);
+            (now - stoppedAt).TotalSeconds, _lastMotionStopReason);
     }
 
     /// <summary>When the drive-stop check is due, or null when it is off or already reported for the last stop.</summary>
