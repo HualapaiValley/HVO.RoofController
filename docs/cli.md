@@ -465,7 +465,11 @@ heartbeat would take a new lease (and drop every grant) and none would ever laps
 With `--local`, settings forms use native `read` authorization. For an enrolled Linux controller administrator with
 the Admin role, the controller reports local-only settings as changeable; submitting a change still requests fresh
 `configure` authorization and any required safety-critical confirmation. Viewer and Operator accounts retain their
-read access. The terminal Settings page uses the same permissions. A kiosk PIN never grants local-only rights.
+read access. In local mode, an Operator's UI settings are read-only too: changing settings needs a Linux controller
+administrator with the Admin role. To change UI settings as an Operator, sign in with a password session and select
+`--remote` explicitly. The read-only reason in `config show`, `config get` and the terminal Settings page explains
+this; a local write attempt is refused with exit 6 before requesting `configure`. A kiosk PIN never grants
+local-only rights.
 
 The settings are the controller's `appsettings.Local.json` (#42). `hvo-roof` reads and changes them through the API,
 one group at a time, and they can equally be edited in the file itself.
@@ -485,8 +489,8 @@ until then). Examples are relay mapping, limit or fault polarity, and turning of
 check. The same rule applies to a pending hand edit that contains such a change (`config apply`), and to a restart that
 would load one (`restart`).
 
-Operators may change only the UI group (for example the [kiosk](kiosk.md)'s screen timeout and the default camera). Every other
-group needs an admin. A setting you may not change is refused before anything is sent, with the exit code the
+In remote mode, Operators may change only the UI group (for example the [kiosk](kiosk.md)'s screen timeout and the
+default camera). Every other group needs an admin. A setting you may not change is refused before anything is sent, with the exit code the
 controller's own refusal would give, in the controller's order. The code is 6 for the role. For a setting in a group
 you may change, it is 7 while a hand edit is pending (even for a local-only setting), and 6 for a local-only setting
 otherwise.
@@ -666,6 +670,16 @@ the controller verified.
 and description below. A setting that cannot be changed here says why (for example, read-only).
 
 ![The Settings page, with the Roof group selected](images/terminal/02-settings.svg)
+
+The native local Operator view is captured by
+`RoofCliLocalSettingsTests.LocalOperator_TerminalSettings_ShowReadOnlyReason_AndDoNotOfferAnEdit`, using the
+in-process controller and a mocked roof. It shows the read-only reason and refuses Change without an edit prompt.
+
+![A local Operator's read-only Settings page with remote editing guidance](images/terminal/02-settings-local-operator.svg)
+
+To reproduce this capture, run that test from `src/` with `HVO_CLI_RENDERS_DIR` set to a temporary directory. From the
+repository root, convert its `256-local-operator-settings.ans` with `tests/cli/ansi-to-svg.py`, passing the matching
+`.cells.json` as `--cells`, `--mask-local-host`, and `--title 'Local Operator settings (read-only)'`.
 
 **People (F3), System (F4) and Setup (F5).**
 
