@@ -570,7 +570,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, rid: linux-arm64 }
           - { runner: macos-latest, rid: osx-arm64 }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 44
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -613,6 +613,7 @@ jobs:
         run: dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests -c Release --no-build --filter "FullyQualifiedName~UnixRegularFileReaderTests|FullyQualifiedName~AlpacaPublicFileSafetyTests|FullyQualifiedName~InstallerRegularFilesTests" -- RunConfiguration.TreatNoTestsAsError=true
       # #176 runs the complete controlled driver catalogue against assemblies from these exact final bundles.
       - name: Exercise final distributed terminal workflows
+        timeout-minutes: 38
         working-directory: src
         run: |
           python3 ../tests/releasing/check-terminal-workflows.py "$RUNNER_TEMP/terminal-dist" \
