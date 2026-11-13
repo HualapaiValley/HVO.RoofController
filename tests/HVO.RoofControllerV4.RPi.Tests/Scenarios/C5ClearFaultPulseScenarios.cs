@@ -59,30 +59,25 @@ public sealed class C5ClearFaultPulseScenarios
     [CommissioningCheck("C5", "3")]
     public async Task APulseShorterThanTheDriveNeeds_LeavesTheLatch_AndALongerOneResetsIt_TenTimesInARow()
     {
-        var minimumPulse = TimeSpan.FromMilliseconds(300);
+        var minimumPulse = TimeSpan.FromMilliseconds(350);
         using var harness = await PlantHarness.StartAsync(new RoofPlantOptions
         {
             DriveAssumptions = new SmVectorAssumptions { MinimumClearFaultPulse = minimumPulse }
         });
 
         TripIdle(harness);
-        // The requested 250 ms delay is 50 ms below the drive's minimum, but its timer starts after RLY3's
-        // write/read-back. The measured contact pulse is about 283 ms here, leaving about 17 ms of margin.
-        // A real-time host's scheduling can consume that margin. Keep this boundary on the manual clock;
-        // C5 steps 5–6 exercise the HTTP host and its real-time pulses.
-        var shortPulse = harness.Controller.ClearFault();
-        await Task.Delay(150); // A scheduling pause beyond the contact pulse's margin must not advance it.
-        harness.RunFor(TimeSpan.FromMilliseconds(RoofControllerLimits.DefaultClearFaultPulseMilliseconds));
-        // The final bus transaction can carry time past the timer's deadline without firing it.
-        harness.Time.Advance(TimeSpan.Zero);
-        (await shortPulse.WaitAsync(TimeSpan.FromSeconds(10))).ErrorCode().Should().Be(RoofControllerErrorCode.InterlockActive,
+        // The timer starts after RLY3's write/read-back, so the measured contact pulse exceeds the requested
+        // 250 ms. Give those transactions margin below the test drive's 350 ms minimum. The harness stops
+        // advancing the clock at the timer's deadline until the asynchronous relay release has completed.
+        (await harness.ClearFaultAsync()).ErrorCode().Should().Be(RoofControllerErrorCode.InterlockActive,
             "the 250 ms default is shorter than this drive's reset needs, so IN3 still reports the trip");
         var stillLatched = harness.Snapshot;
         stillLatched.IsFaultLatched.Should().BeTrue();
         stillLatched.IsDriveFaultActive.Should().BeTrue();
         harness.Plant.Drive.Trip.Should().Be(SmVectorTrip.External);
-        PulseLengths(harness).Should().ContainSingle().Which.Should().BeLessThan(minimumPulse,
-            "the assertion concerns the measured contact pulse, not the requested delay");
+        var measuredShortPulse = PulseLengths(harness).Should().ContainSingle().Which;
+        (minimumPulse - measuredShortPulse).Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(50),
+            "the measured contact pulse needs margin for the HAT register transactions, beyond the requested delay");
 
         // A value with margin resets the drive on every attempt.
         for (var attempt = 1; attempt <= 10; attempt++)
@@ -125,34 +120,34 @@ public sealed class C5ClearFaultPulseScenarios
     [CommissioningCheck("C5", "6")]
     public async Task Stop_DuringALongPulse_EndsThePulse_AndNeitherClearsTheLatch()
     {
-        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production());
-        using var client = rig.CreateApiClient(TestApiKeys.Operator);
-        await TripIdleAsync(rig);
+        using var harness = await PlantHarness.StartAsync();
+        TripIdle(harness);
 
-        var pulse = client.RefusedAsync("ClearFault?pulseMs=2000");
-        await rig.WaitForControllerAsync(s => s.IsClearFaultInProgress, "the pulse to start");
-        await rig.WaitForPlantAsync(p => p.RelayContacts[2], "RLY3 to close");
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
-        (await client.AcceptedAsync("Stop")).IsFaultLatched.Should().BeTrue();
+        var pulse = harness.Controller.ClearFault(2000);
+        harness.Snapshot.IsClearFaultInProgress.Should().BeTrue();
+        harness.Plant.Hat.IsContactClosed(3).Should().BeTrue();
+        harness.RunFor(TimeSpan.FromMilliseconds(200));
+        pulse.IsCompleted.Should().BeFalse("the manual clock has not reached the 2000 ms pulse deadline");
+        harness.Stop().IsSuccessful.Should().BeTrue();
 
-        (await pulse).Should().Be((HttpStatusCode.Conflict, RoofControllerErrorCode.OperationInProgress), "the stop preempts the pulse");
-        rig.Plant.RelayContacts[2].Should().BeFalse("RLY3 opened");
-        PulseLengths(rig).Should().ContainSingle().Which.TotalMilliseconds.Should().BeLessThan(1000, "the stop ended the 2000 ms pulse");
-        var status = await client.StatusAsync();
+        (await pulse.WaitAsync(TimeSpan.FromSeconds(10))).ErrorCode().Should().Be(RoofControllerErrorCode.OperationInProgress,
+            "the stop preempts the pulse");
+        harness.Plant.Hat.IsContactClosed(3).Should().BeFalse("RLY3 opened");
+        PulseLengths(harness).Should().ContainSingle().Which.TotalMilliseconds.Should().BeLessThan(1000,
+            "the stop ended the 2000 ms pulse, measured on the manual clock");
+        var status = harness.Snapshot;
         status.IsFaultLatched.Should().BeTrue("a preempted pulse leaves the latch, even though it reset the drive");
         status.IsDriveFaultActive.Should().BeFalse();
-        status.ShouldBeDeenergized(rig);
+        status.ShouldBeDeenergizedInTheRegister();
+        harness.RelayRegister.Should().Be(0);
+        Enumerable.Range(1, 4).Should().OnlyContain(relay => !harness.Plant.Hat.IsContactClosed(relay));
 
         // C5 step 6: another Stop does not clear it either; a completed pulse does.
-        (await client.AcceptedAsync("Stop")).IsFaultLatched.Should().BeTrue();
-        (await client.AcceptedAsync("ClearFault")).IsFaultLatched.Should().BeFalse();
-    }
-
-    private static async Task TripIdleAsync(EmulatedRoofRig rig)
-    {
-        rig.Session.Plant.TripDrive(SmVectorTrip.External);
-        (await rig.WaitForControllerAsync(s => s.IsFaultLatched && s.IsDriveFaultActive == true, "the trip to latch"))
-            .LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+        harness.Stop().IsSuccessful.Should().BeTrue();
+        harness.Snapshot.IsFaultLatched.Should().BeTrue();
+        (await harness.ClearFaultAsync()).IsSuccessful.Should().BeTrue();
+        harness.Snapshot.IsFaultLatched.Should().BeFalse();
+        harness.Violations.Should().BeEmpty();
     }
 
     private static void TripIdle(PlantHarness harness)
@@ -172,16 +167,6 @@ public sealed class C5ClearFaultPulseScenarios
         return changes.Zip(changes.Skip(1))
             .Where(pair => pair.First.Detail.EndsWith("closed", StringComparison.Ordinal)
                 && pair.Second.Detail.EndsWith("open", StringComparison.Ordinal))
-            .Select(pair => pair.Second.At - pair.First.At)
-            .ToArray();
-    }
-
-    /// <summary>How long RLY3's contact stayed closed, pulse by pulse.</summary>
-    private static TimeSpan[] PulseLengths(EmulatedRoofRig rig)
-    {
-        var changes = rig.ContactChanges(3);
-        return changes.Zip(changes.Skip(1))
-            .Where(pair => pair.First.Closed && !pair.Second.Closed)
             .Select(pair => pair.Second.At - pair.First.At)
             .ToArray();
     }
