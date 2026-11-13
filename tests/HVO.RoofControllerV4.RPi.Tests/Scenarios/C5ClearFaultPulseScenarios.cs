@@ -150,6 +150,40 @@ public sealed class C5ClearFaultPulseScenarios
         harness.Violations.Should().BeEmpty();
     }
 
+    [TestMethod]
+    [CommissioningCheck("C5", "5")]
+    [CommissioningCheck("C5", "6")]
+    public async Task HttpStop_DuringAnHttpClearFault_EndsThePulse_AndNeitherStopClearsTheLatch()
+    {
+        await using var rig = await EmulatedRoofRig.StartAsync(Scenario.Production());
+        using var client = rig.CreateApiClient(TestApiKeys.Operator);
+        await TripIdleAsync(rig);
+
+        var pulse = client.RefusedAsync("ClearFault?pulseMs=2000");
+        await rig.WaitForControllerAsync(s => s.IsClearFaultInProgress, "the pulse to start");
+        await rig.WaitForPlantAsync(p => p.RelayContacts[2], "RLY3 to close");
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        (await client.AcceptedAsync("Stop")).IsFaultLatched.Should().BeTrue();
+
+        (await pulse).Should().Be((HttpStatusCode.Conflict, RoofControllerErrorCode.OperationInProgress), "the stop preempts the pulse");
+        rig.Plant.RelayContacts[2].Should().BeFalse("RLY3 opened");
+        var status = await client.StatusAsync();
+        status.IsFaultLatched.Should().BeTrue("a preempted pulse leaves the latch, even though it reset the drive");
+        status.IsDriveFaultActive.Should().BeFalse();
+        status.ShouldBeDeenergized(rig);
+
+        // C5 step 6: another Stop does not clear it either; a completed pulse does.
+        (await client.AcceptedAsync("Stop")).IsFaultLatched.Should().BeTrue();
+        (await client.AcceptedAsync("ClearFault")).IsFaultLatched.Should().BeFalse();
+    }
+
+    private static async Task TripIdleAsync(EmulatedRoofRig rig)
+    {
+        rig.Session.Plant.TripDrive(SmVectorTrip.External);
+        (await rig.WaitForControllerAsync(s => s.IsFaultLatched && s.IsDriveFaultActive == true, "the trip to latch"))
+            .LatchedFaultReason.Should().Be(RoofControllerStopReason.DriveFault);
+    }
+
     private static void TripIdle(PlantHarness harness)
     {
         harness.Plant.TripDrive(SmVectorTrip.External);

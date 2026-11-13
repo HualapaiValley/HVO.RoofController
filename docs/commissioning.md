@@ -261,8 +261,9 @@ moved. The emulated HAT reports both.
 
 All pulse measurements, including Stop during a pulse, use the production controller and HAT library with the
 emulated plant on a manual clock, so CPU scheduling cannot distort the contact duration. The ClearFault-while-moving
-refusal in step 5 uses the full HTTP host. The short-pulse case raises only the emulated drive's minimum reset pulse
-to 350 ms and checks at least 50 ms of margin above the measured default contact pulse; a 500 ms request then resets
+refusal and a separate Stop-during-ClearFault scenario in steps 5–6 use the full HTTP host. The HTTP
+scenario checks preemption and latch retention without a wall-clock pulse-duration assertion. The short-pulse case
+raises only the emulated drive's minimum reset pulse to 350 ms and checks at least 50 ms of margin above the measured default contact pulse; a 500 ms request then resets
 the drive ten times in a row.
 
 The API accepts `POST .../ClearFault?pulseMs=N`, with N from 50 to 2000 (default 250). The hardware overview, section
@@ -274,8 +275,8 @@ The API accepts `POST .../ClearFault?pulseMs=N`, with N from 50 to 2000 (default
 | 2 | A pulse shorter than the drive needs leaves the latch, and a longer one resets the drive ten times in a row | `C5ClearFaultPulseScenarios.APulseShorterThanTheDriveNeeds_LeavesTheLatch_AndALongerOneResetsIt_TenTimesInARow` |
 | 3 | If IN3 still reports a fault after the pulse, the latch remains | `C5ClearFaultPulseScenarios.APulseShorterThanTheDriveNeeds_LeavesTheLatch_AndALongerOneResetsIt_TenTimesInARow` |
 | 4 | With healthy inputs, `isFaultLatched` becomes `false` and `lastStopReason` keeps the original cause | `C5ClearFaultPulseScenarios.TheDefaultPulse_ClosesRly3ForItsLength_AndResetsTheTrippedDrive` |
-| 5 | ClearFault during a move is refused. A Stop during a 2000 ms pulse ends the pulse, and RLY3 opens. | `C5ClearFaultPulseScenarios.ClearFault_WhileMoving_IsRefused`, `C5ClearFaultPulseScenarios.Stop_DuringALongPulse_EndsThePulse_AndNeitherClearsTheLatch` |
-| 6 | Stop alone does not clear the latch | `C5ClearFaultPulseScenarios.Stop_DuringALongPulse_EndsThePulse_AndNeitherClearsTheLatch` |
+| 5 | ClearFault during a move is refused. A Stop during a 2000 ms pulse ends the pulse, and RLY3 opens. | `C5ClearFaultPulseScenarios.ClearFault_WhileMoving_IsRefused`, `C5ClearFaultPulseScenarios.Stop_DuringALongPulse_EndsThePulse_AndNeitherClearsTheLatch`, `C5ClearFaultPulseScenarios.HttpStop_DuringAnHttpClearFault_EndsThePulse_AndNeitherStopClearsTheLatch` |
+| 6 | Stop alone does not clear the latch | `C5ClearFaultPulseScenarios.Stop_DuringALongPulse_EndsThePulse_AndNeitherClearsTheLatch`, `C5ClearFaultPulseScenarios.HttpStop_DuringAnHttpClearFault_EndsThePulse_AndNeitherStopClearsTheLatch` |
 
 **Installation assumptions**
 
