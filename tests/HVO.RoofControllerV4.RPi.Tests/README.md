@@ -150,7 +150,7 @@ models exactly that register.
 | `Emulation/SocketI2cRegisterClientTests`, `RoofHatConnectionTests` | The controller's socket register client (Hello check, time bounds, reconnects, disposal, `Host` rules) and emulator mode selection, refusal, warning and telemetry |
 | `Emulation/EmulatorModeAppTests` | The whole controller in emulator mode over TCP: open and close through the API, a link outage while moving, a start before the emulator, the start's warning, the telemetry marks and the Degraded health |
 | `Emulation/DevelopmentConfigurationTests` | `appsettings.Development.json`: the HAT emulator, with the limit switches in force and the production wiring |
-| `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API; C5's pulse measurements (also C4 step 5) use the manual-clock plant harness, while C5's refusal during motion uses the host; `ProtectiveStopTimingScenarios` (C3 5–6, C4 6–7, C7 7–8) use `TimingPlant` with a manual controller clock and test-default settings with production polarity (the plant and stop bounds run in real time) ([Commissioning scenarios](#commissioning-scenarios)) |
+| `Scenarios/C1IndependentStopPathScenarios` to `C14SoakScenarios`, `LifecycleScenarios` | The commissioning checks: the whole host with the production settings against the emulated plant, through the API; C5's pulse measurements (also C4 step 5) use the manual-clock plant harness, while C5's refusal during motion and its HTTP Stop-during-ClearFault scenario (steps 5–6) use the host; `ProtectiveStopTimingScenarios` (C3 5–6, C4 6–7, C7 7–8) use `TimingPlant` with a manual controller clock and test-default settings with production polarity (the plant and stop bounds run in real time) ([Commissioning scenarios](#commissioning-scenarios)) |
 | `Scenarios/CameraProxyScenarios` | The camera proxy against the emulated camera: frames relayed, a refusing camera, a frozen one, a camera server restart |
 | `Scenarios/ScenarioCoverageTests` | `docs/commissioning.md` and the scenarios agree: every check has a scenario that CI runs, and every step and assumption is listed |
 | `Client/…` | The client library (#44) against the controller in process: every endpoint's answer and refusal, sign-in, sessions and kiosks, Stop beside a stuck command, the status feed through restarts and silence, settings forms, credentials files, certificate pins over real HTTPS (`RoofCertificatePinTests`), the shared wording and the web UI's Stop texts, and that every endpoint has a client call; `RoofClientScenarios` against the emulated roof |
@@ -224,11 +224,12 @@ the "Emulator image" workflow. `SMOKE_NO_BUILD=1` reuses images already built.
 scenarios. `EmulatedRoofRig` starts the whole controller host with the production `appsettings.json` against an
 in-process HAT emulator and plant. A scenario drives it through the API as an operator does, then checks the plant:
 contacts, drive output, roof position and invariant violations. The roof is 25 cm long by default (about 3.5 s from
-limit to limit) and runs in real time, so the controller's windows keep their production values. C5's default,
-deliberately short and Stop-preempted pulses use `PlantHarness` instead: it measures the contact duration on a manual
-clock and waits for the asynchronous relay release before advancing further. The short-pulse drive minimum is
-350 ms, with at least 50 ms of measured margin; the longer pulse requests 500 ms. The default-pulse scenario also
-covers C4 step 5. C5's ClearFault-while-moving refusal retains the HTTP host.
+limit to limit) and runs in real time, so the controller's windows keep their production values. C5's default and
+deliberately short pulses, and its Stop-preempted pulse measurement, use `PlantHarness` instead: it measures the
+contact duration on a manual clock and waits for the asynchronous relay release before advancing further. The
+short-pulse drive minimum is 350 ms, with at least 50 ms of measured margin; the longer pulse requests 500 ms. The
+default-pulse scenario also covers C4 step 5. C5's ClearFault-while-moving refusal and its HTTP Stop-during-ClearFault
+scenario (steps 5–6) keep the HTTP host.
 `ProtectiveStopTimingScenarios` (C3 5–6, C4 6–7, C7 7–8) use `TimingPlant` with a manual controller clock and
 test-default settings with production polarity, rather than the production host. The plant and stop bounds run in
 real time.
