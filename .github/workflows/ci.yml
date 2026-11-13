@@ -63,7 +63,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
@@ -266,7 +266,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
@@ -421,7 +421,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
@@ -598,7 +598,7 @@ jobs:
         run: |
           chmod +x "$RUNNER_TEMP/terminal-dist/"*
           python3 tests/releasing/published-terminal.py "$RUNNER_TEMP/terminal-dist" --rid "${{ matrix.rid }}" --output "$RUNNER_TEMP/terminal-evidence"
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
         with:
@@ -657,7 +657,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
@@ -712,7 +712,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
@@ -870,7 +870,7 @@ jobs:
           fi
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         # Keep CI on the current product SDK even while the dev-container minimum is older.
         env:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/roof-dotnet
