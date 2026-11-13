@@ -18,7 +18,7 @@ assumption of its own; `SmVectorAssumptions` and `PlantDocumentedFiguresTests` h
 
 | Runs | Covers | Command (the `dotnet` commands run from `src/`) |
 |---|---|---|
-| `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant; C5's pulse measurements (also C4 step 5) run the controller and HAT library on a manual clock, while C5's refusal during motion uses the host. `ProtectiveStopTimingScenarios` (C3 5–6, C4 6–7, C7 7–8) use `TimingPlant` with a manual controller clock and test-default settings with production polarity; the plant and stop bounds run in real time. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
+| `Scenario` tests | C1-C11 and C13, plus a 90 s C14 that does not assess resources. The production host and settings run in process against the emulated plant; C5's pulse measurements (also C4 step 5) run the controller and HAT library on a manual clock, while C5's refusal during motion and its HTTP Stop-during-ClearFault scenario (steps 5–6) use the host. `ProtectiveStopTimingScenarios` (C3 5–6, C4 6–7, C7 7–8) use `TimingPlant` with a manual controller clock and test-default settings with production polarity; the plant and stop bounds run in real time. | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Scenario` |
 | `Browser` tests | C9 step 4 and C15, plus the web UI in Chromium on phones, tablets and a desktop window | `dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Browser`, after building the tests (`dotnet build ../tests/HVO.RoofControllerV4.RPi.Tests`) and installing Chromium once from that build with `pwsh ../tests/HVO.RoofControllerV4.RPi.Tests/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium` (without `--with-deps` when its system libraries are installed) |
 | [Container scenarios](emulator.md#container-scenarios) | C11 in a real container (with the container's supervisor), C12, and the move between Compose and the deploy script, on real Docker | `tests/emulator/deploy-scenarios.sh` (from the repository root) |
 | Nightly soak | C14 for two hours. Its invariant results go to the run summary and an artifact. | `HVO_SOAK_DURATION=02:00:00 HVO_SOAK_RESULTS_DIR="$PWD/soak" dotnet test ../tests/HVO.RoofControllerV4.RPi.Tests --filter TestCategory=Soak` |
@@ -261,10 +261,10 @@ moved. The emulated HAT reports both.
 
 All pulse measurements, including Stop during a pulse, use the production controller and HAT library with the
 emulated plant on a manual clock, so CPU scheduling cannot distort the contact duration. The ClearFault-while-moving
-refusal and a separate Stop-during-ClearFault scenario in steps 5–6 use the full HTTP host. The HTTP
-scenario checks preemption and latch retention without a wall-clock pulse-duration assertion. The short-pulse case
-raises only the emulated drive's minimum reset pulse to 350 ms and checks at least 50 ms of margin above the measured default contact pulse; a 500 ms request then resets
-the drive ten times in a row.
+refusal and a separate Stop-during-ClearFault scenario in steps 5–6 use the full HTTP host. The HTTP scenario checks
+preemption and latch retention without a wall-clock pulse-duration assertion. The short-pulse case raises only the
+emulated drive's minimum reset pulse to 350 ms and checks at least 50 ms of margin above the measured default contact
+pulse; a 500 ms request then resets the drive ten times in a row.
 
 The API accepts `POST .../ClearFault?pulseMs=N`, with N from 50 to 2000 (default 250). The hardware overview, section
 8.3, recommends about 100-300 ms. The scenarios measure RLY3 on the emulated relay's contact.
