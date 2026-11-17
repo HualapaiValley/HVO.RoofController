@@ -1,5 +1,18 @@
 # Agent instructions: HVO.RoofController
 
+## Unified policy
+
+The [common policy](docs/development/policy/common.md),
+[RoofController profile](docs/development/policy/roofcontroller.md), and
+[adapters](docs/development/policy/adapters.md), version `2026-11-16.11`, govern designated pilot work,
+policy text and enforcement changes,
+with the scope and six rules for all agent work defined in common policy. Platform and security
+requirements take precedence, followed by common policy and the profile. Existing repository
+procedures remain in force as specified there. Draft checks precede independent review; review
+records precede Ready and the final CI re-check, and the reviewed-head status follows qualified CI.
+Load the repository-local [coordination skill](.agents/skills/hvo-coordination/SKILL.md) for pilot work;
+do not assume automatic skill discovery or a global substitute.
+
 These are the instructions for every coding agent that works in this repository. Claude Code reads them through
 [`CLAUDE.md`](CLAUDE.md) and GitHub Copilot through
 [`.github/copilot-instructions.md`](.github/copilot-instructions.md); Codex and other agents read this file directly.

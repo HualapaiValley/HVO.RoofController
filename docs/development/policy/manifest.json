@@ -1,0 +1,33 @@
+{
+  "version": "2026-11-16.11",
+  "status": "candidate-preparation",
+  "canonicalSource": "HualapaiValley/HVO.WebSite:docs/development/policy/common.md",
+  "design": {
+    "name": "HVO-policy-proposal.md",
+    "libraryVersion": 1,
+    "designVersion": "0.2",
+    "libraryFileId": "libfile_fde3_f-f04ff0d746908191a63aa61f45d801d2_e27a0ccf84c08191a365a0d93d0f90e4",
+    "fileId": "file_00000000388081fda7fe4197d38c887f",
+    "sha256": "a5fa8a27951eeb3e3b17570b94a4f0414787bb6cd8d8585a4601303a55f067e9",
+    "sizeBytes": 19062
+  },
+  "baseline": "a6d3e9b86f64c980597af3b7fd2907d6b7056be1",
+  "target": "main",
+  "checksums": "docs/development/policy/snapshot.sha256",
+  "files": [
+    "docs/development/policy/common.md",
+    "docs/development/policy/adapters.md",
+    "docs/development/policy/README.md",
+    ".agents/skills/hvo-coordination/SKILL.md"
+  ],
+  "policyVersion": "2026-11-16.11",
+  "designReference": {
+    "name": "HVO unified agent workflow design",
+    "version": "0.3.1",
+    "author": "Kepler",
+    "date": "2026-11-16",
+    "location": "not in repository",
+    "status": "procedure-only amendment; design reference; not approved policy"
+  },
+  "profile": "docs/development/policy/roofcontroller.md"
+}
