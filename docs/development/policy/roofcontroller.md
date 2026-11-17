@@ -115,10 +115,10 @@ RoofController review verdicts are `CLEAN` and `CHANGES_REQUIRED`. Common `CLEAN
 maps to RoofController `CLEAN` only when coverage is complete; it does not grant
 merge. `BLOCKED` and `INCOMPLETE` are non-approval and are published as given,
 with the blocker or limitation, never as `CLEAN` or `CHANGES_REQUIRED`. RoofController
-F-numbers and Critical, High, Medium and Low severities may be added alongside a
-reviewer's own IDs and P0–P3 priorities, never substituted for them, retaining
-stable IDs, blocking disposition and per-finding
-reproduction as required by AGENTS.md. The common reviewer minima apply, including
+F-numbers and severities may be added alongside a reviewer's own IDs and P0–P3
+priorities, never substituted for them. The severity mapping is P0 → Critical,
+P1 → High, P2 → Medium and P3 → Low. Retain stable IDs, blocking disposition
+and per-finding reproduction as required by AGENTS.md. The common reviewer minima apply, including
 the High-risk Sol and Opus panel and deep review, as does RoofController's existing
 rule that an agent reviewer use a different model from the author. Common policy
 also requires separation from every contributor to the reviewed range. While model
@@ -126,12 +126,3 @@ families are unauthenticated, the High-risk minimum additionally requires Roy's
 recorded decision accepting the two reported reviews for the exact head before
 Ready, reviewed-head or merge; merge authorization is separate and a new head
 requires a new decision.
-
-## Transitional retained procedures
-
-These remain in force until Roy records a decision to retire or promote them, or
-until the next shared-policy version bump, whichever comes first; they only add
-requirements to common policy.
-
-- Existing review format, finding disposition and hardware-free safety procedures
-  in [AGENTS.md](../../../AGENTS.md) remain required where stricter than common.
