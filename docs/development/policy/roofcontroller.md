@@ -1,25 +1,50 @@
 # RoofController adoption profile
 
-Policy version: `2026-11-16.11`. This preparation and the first adoption stop at
-PR-ready. Roy separately authorizes undraft, `hvo/reviewed-head`, and merge.
-The canonical portable source is identified in the [manifest](manifest.json).
+Policy version: `2026-11-16.11`. The designated canonical portable source is
+HualapaiValley/HVO.WebSite `main`, reviewed at commit
+`ae2f2b75240838135b98da37440e5c42efaa5da1` and authorized for this adoption by
+`t586s3317`; see the [manifest](manifest.json).
 Target `main`; there is no merge queue. Use a merge commit and a direct merge
 pinned with `--match-head-commit` after the reviewed-head gate.
+
+## Pilot stages
+
+This preparation and first adoption stop at PR-ready. Later stages require
+separate authorization from Roy for undraft, `hvo/reviewed-head`, and merge.
 
 ## Scope and discovery
 
 The [common policy](common.md#scope) defines designated pilot work, policy text,
 and enforcement changes. Policy text includes `AGENTS.md`, `CLAUDE.md`,
-`CONTRIBUTING.md`, `.github/copilot-instructions.md`, `.agents/skills/**` and
+`CONTRIBUTING.md`, `src/HVO.RoofControllerV4.RPi/AGENTS.md`,
+`.github/copilot-instructions.md`, `.agents/skills/**` and
 `docs/development/policy/**` where they carry normative agent workflow rules.
-Enforcement includes `.github/workflows/**`, branch protection, rulesets and
-required checks. Policy text and enforcement changes are High risk.
+Enforcement includes `.github/workflows/**`, branch protection, rulesets, merge
+methods, required checks and settings controlling review evidence or CI admission.
+Policy text and enforcement changes are High risk.
 
 Load [common policy](common.md), root [AGENTS.md](../../../AGENTS.md), applicable
 repository instructions, and the local [coordination skill](../../../.agents/skills/hvo-coordination/SKILL.md)
 for pilot work. The [adapters](adapters.md) describe harness discovery; automatic
 discovery is not verified. `CLAUDE.md` and Copilot instructions route to root
-AGENTS.md. No Cursor discovery adapter is qualified here.
+AGENTS.md. Claude has a `.claude/settings.json` SessionStart setup hook, not a
+`.claude/skills` link; explicitly load the canonical local skill. No OpenCode
+wrapper or dedicated instruction adapter is present here: load AGENTS.md and its
+linked local procedures explicitly. No Cursor discovery adapter is qualified here.
+There is no dedicated non-pilot epic dispatch route in this repository; such
+assignments follow the existing AGENTS.md working-in-git and pull request lifecycle
+procedures, subject to common policy's six rules.
+
+## Agent pull request operations
+
+Among agents, only Kepler opens PRs (including drafts), marks them ready or returns
+them to draft, publishes review records, records reviewed-head, and merges; Roy may
+do these directly. Coding and reviewer threads stay read-only for those PR operations
+and do not post. Kepler relays reviewer output word for word. The rest of the
+AGENTS.md lifecycle remains in force as specified here. For agent PRs, common's
+`Closes #n` rule supersedes the `Fixes #<n>` wording in the repository template,
+AGENTS.md and CONTRIBUTING.md; a partial slice uses `Closes #child` and
+`Refs #parent`.
 
 ## Protection, draft checks and merge gate
 
@@ -34,36 +59,54 @@ future work. The 14 required contexts are:
   `installer-rig (ubuntu-24.04-arm)`;
 - `hvo/reviewed-head`.
 
-The draft checks before review are the applicable draft CI workflows on the exact
-head, including `ci.yml` and `scenarios.yml`, and the image workflows when their
-inputs change, as required by the existing lifecycle. PR-triggered workflows can
-run on drafts without `hvo/reviewed-head`. Review records are published before
-Ready and final CI; after review converges and all applicable workflows pass on
-the reviewed head, Kepler publishes `hvo/reviewed-head` on that exact head before
-an authorized direct merge. It is a manual commit status, not an Actions check,
-CI admission gate, or merge-queue entry gate. Branch protection requires it for
-merge. The existing lifecycle also requires applicable workflows that protection
-does not require.
+The draft checks before review are the latest runs of each applicable workflow on
+the exact head, including `ci.yml` and `scenarios.yml`, and the image workflows
+when their inputs change. They must finish successfully before review. PR-triggered
+workflows can run on drafts without `hvo/reviewed-head`; marking Ready starts no
+workflow (the pull_request default event types apply, and branch protection is not
+strict). Common's CI step after Ready is the AGENTS.md lifecycle step 6.2 re-check
+of applicable runs on the reviewed head, not a requirement for a new run.
+Review records are published before Ready and that re-check; after review converges
+and all applicable workflows pass on the reviewed head, Kepler publishes
+`hvo/reviewed-head` on that exact head before an authorized direct merge. While
+model families are unauthenticated, marking Ready, publishing the status and
+merging also require Roy's recorded decision accepting the two reported reviews
+for that exact head. Merge authorization does not substitute for that decision,
+which does not carry over to a new head. The status is a manual commit status, not
+an Actions check, CI admission gate, or merge-queue entry gate. Branch protection
+requires it for merge. The existing lifecycle also requires applicable workflows
+that protection does not require.
 
 ## Validation and boundaries
 
 Run `build/secret-scan.py` from the repository root and require `PASS` before
 every commit, push and GitHub post; scan body files as specified in
 [AGENTS.md](../../../AGENTS.md#secrets). `src/global.json` pins SDK `10.0.403`
-with `rollForward: patch`; run `dotnet` from `src/`. Do not use .NET 11 for this
-adoption. Preserve the repository's hardware-free validation and safety boundaries:
-never move the real roof as ordinary work. The existing AGENTS.md lifecycle,
-review vocabulary and safety rules remain in force subject to common policy.
+with `rollForward: patch`; run `dotnet` from `src/`. Tests and checks use the
+emulator, as required by AGENTS.md.
+
+No agent sends Open or Close to a controller driving the real HAT unless a person
+has said, for that task, that no roof or drive is connected. Reading status and
+sending Stop are allowed. Common policy's explicit physical-operation authorization
+does not lift this boundary, and no assignment may lower it. The other AGENTS.md
+safety rules remain in force.
 
 ## Evidence translation
 
 RoofController review verdicts are `CLEAN` and `CHANGES_REQUIRED`. Common `CLEAN`
 maps to RoofController `CLEAN` only when coverage is complete; it does not grant
-merge. `BLOCKED` and `INCOMPLETE` are non-approval, with the limitation recorded;
-they must not be represented as `CLEAN`. The common reviewer minima apply, including
+merge. `BLOCKED` and `INCOMPLETE` are published as `INCOMPLETE` with the blocker or
+limitation recorded, never as `CLEAN`. Kepler finding IDs and P0–P3 priorities map
+respectively to RoofController F-numbered findings and Critical, High, Medium and
+Low severities, retaining stable IDs, blocking disposition and per-finding
+reproduction as required by AGENTS.md. The common reviewer minima apply, including
 the High-risk Sol and Opus panel and deep review, as does RoofController's existing
 rule that an agent reviewer use a different model from the author. Common policy
-also requires separation from every contributor to the reviewed range.
+also requires separation from every contributor to the reviewed range. While model
+families are unauthenticated, the High-risk minimum additionally requires Roy's
+recorded decision accepting the two reported reviews for the exact head before
+Ready, reviewed-head or merge; merge authorization is separate and a new head
+requires a new decision.
 
 ## Transitional retained procedures
 
@@ -71,8 +114,7 @@ These remain in force until Roy records a decision to retire or promote them, or
 until the next shared-policy version bump, whichever comes first; they only add
 requirements to common policy.
 
-- The existing lifecycle requires applicable draft CI to pass before requesting
-  independent review, and all applicable workflows to pass before the manual
+- The existing lifecycle requires all applicable workflows to pass before the manual
   reviewed-head status, including workflows not required by branch protection.
 - Existing review format, finding disposition and hardware-free safety procedures
   in [AGENTS.md](../../../AGENTS.md) remain required where stricter than common.
