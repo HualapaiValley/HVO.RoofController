@@ -84,11 +84,16 @@ additional Roy per-head acceptance of those reviews is required before Ready,
 reviewed-head or merge. Requested and provider-reported model identity is enough;
 the review record must say that identity is reported, not authenticated, and must
 not describe it as authenticated proof of family or of two families. If the author
-and a reviewer are not distinct reported models, stop for a recorded Roy decision
-before Ready, reviewed-head or merge. Merge authorization remains separate. Roy's
-decision `t589s3353` supersedes common's per-head acceptance requirement for
-RoofController when the author and reviewers are distinct reported models; the
-shared text is being corrected in HualapaiValley/HVO.WebSite issue #499. The status
+or any contributor and a reviewer are not distinct reported models, or a required
+identity is missing, that review role is BLOCKED or INCOMPLETE per common.md and
+adapters.md. No decision waives that requirement under version `2026-11-16.11`;
+arrange a nonconflicting reviewer or candidate. Merge authorization remains separate.
+Roy's decision `t589s3353` supersedes common's per-head acceptance requirement for
+RoofController when the author and reviewers are distinct reported models. This is a
+recorded owner exception to common.md's rule that a profile may only be stricter and
+to common's per-head acceptance text. It ends when RoofController adopts a shared
+version that incorporates it, tracked by HualapaiValley/HVO.WebSite pull request #499 (issue #498),
+or when Roy retires it, whichever comes first. The status
 is a manual commit status, not an Actions check, CI admission gate, or merge-queue
 entry gate. Branch protection
 requires it for merge. The existing lifecycle also requires applicable workflows
@@ -134,7 +139,12 @@ common's per-head acceptance requirement for RoofController: no additional Roy
 per-head acceptance of those reviews is required before Ready, reviewed-head or
 merge. Requested and provider-reported model identity is enough; the review record
 must say that identity is reported, not authenticated, and must not describe it as
-authenticated proof of family or of two families. If the author and a reviewer are
-not distinct reported models, stop for a recorded Roy decision before Ready,
-reviewed-head or merge. Merge authorization remains separate. The shared text is
-being corrected in HualapaiValley/HVO.WebSite issue #499.
+authenticated proof of family or of two families. If the author or any contributor
+and a reviewer are not distinct reported models, or a required identity is missing,
+that review role is BLOCKED or INCOMPLETE per common.md and adapters.md. No decision
+waives that requirement under version `2026-11-16.11`; arrange a nonconflicting
+reviewer or candidate. Merge authorization remains separate. This is a recorded
+owner exception to common.md's rule that a profile may only be stricter and to
+common's per-head acceptance text. It ends when RoofController adopts a shared
+version that incorporates it, tracked by HualapaiValley/HVO.WebSite pull request #499 (issue #498),
+or when Roy retires it, whichever comes first.
