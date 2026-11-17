@@ -79,11 +79,18 @@ reuse runs against an older merge base.
 Review records are published before Ready and that re-check; after review converges
 and all applicable workflows pass on the reviewed head, Kepler publishes
 `hvo/reviewed-head` on that exact head before an authorized direct merge. For
-High-risk work, while model families are unauthenticated, marking Ready, publishing
-the status and merging also require Roy's recorded decision accepting the two
-reported reviews for that exact head. Merge authorization does not substitute for that decision,
-which does not carry over to a new head. The status is a manual commit status, not
-an Actions check, CI admission gate, or merge-queue entry gate. Branch protection
+High-risk work, when the author and reviewers are distinct reported models, no
+additional Roy per-head acceptance of those reviews is required before Ready,
+reviewed-head or merge. Requested and provider-reported model identity is enough;
+the review record must say that identity is reported, not authenticated, and must
+not describe it as authenticated proof of family or of two families. If the author
+and a reviewer are not distinct reported models, stop for a recorded Roy decision
+before Ready, reviewed-head or merge. Merge authorization remains separate. Roy's
+decision `t589s3353` supersedes common's per-head acceptance requirement for
+RoofController when the author and reviewers are distinct reported models; the
+shared text is being corrected in HualapaiValley/HVO.WebSite issue #499. The status
+is a manual commit status, not an Actions check, CI admission gate, or merge-queue
+entry gate. Branch protection
 requires it for merge. The existing lifecycle also requires applicable workflows
 that protection does not require.
 
@@ -121,8 +128,13 @@ P1 → High, P2 → Medium and P3 → Low. Retain stable IDs, blocking dispositi
 and per-finding reproduction as required by AGENTS.md. The common reviewer minima apply, including
 the High-risk Sol and Opus panel and deep review, as does RoofController's existing
 rule that an agent reviewer use a different model from the author. Common policy
-also requires separation from every contributor to the reviewed range. While model
-families are unauthenticated, the High-risk minimum additionally requires Roy's
-recorded decision accepting the two reported reviews for the exact head before
-Ready, reviewed-head or merge; merge authorization is separate and a new head
-requires a new decision.
+also requires separation from every contributor to the reviewed range. When the author
+and reviewers are distinct reported models, Roy's `t589s3353` decision supersedes
+common's per-head acceptance requirement for RoofController: no additional Roy
+per-head acceptance of those reviews is required before Ready, reviewed-head or
+merge. Requested and provider-reported model identity is enough; the review record
+must say that identity is reported, not authenticated, and must not describe it as
+authenticated proof of family or of two families. If the author and a reviewer are
+not distinct reported models, stop for a recorded Roy decision before Ready,
+reviewed-head or merge. Merge authorization remains separate. The shared text is
+being corrected in HualapaiValley/HVO.WebSite issue #499.
