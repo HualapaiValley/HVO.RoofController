@@ -26,7 +26,7 @@ Poll with `t3_thread_read`; never call `task_status` as a read.
 
 Treat any uncertain launch, send, push or merge as AMBIGUOUS. Reconcile before
 any retry against all available bindings: clientRequestId, thread ID,
-environment/project, time window, prompt digest and title nonce. A single title
+environment/project, time window, prompt digest and title nonce. A relaunch with the same clientRequestId is a retry, not reconciliation. A single title
 match is not proof. A failed, partial or paginated lookup is not proof of absence.
 If the outcome cannot be positively established from all available bindings, it
 remains AMBIGUOUS; report to the human instead of retrying. Never relaunch blindly. A later run on a completed thread

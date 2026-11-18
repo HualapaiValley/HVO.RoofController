@@ -17,16 +17,16 @@ assignment boundary, requested route/effort, observable actual values and effect
 permission/noninteractive mode. Verify the mode in a harmless local qualification;
 do not infer it from configuration labels. Unknown provenance does not block launching work but cannot satisfy a strict
 model requirement; that review role stays INCOMPLETE or BLOCKED as specified in
-the [review contract](common.md#independent-review-contract). Roy's manual
-bootstrapping decision covers family uncertainty only, not unknown model identity.
+the [review contract](common.md#independent-review-contract). Roy's manual decision covers only disclosed model identity uncertainty or overlap,
+not unknown model identity.
 Do not invent command flags or elevate access to satisfy a policy.
-Required reviewer models are fixed by common policy; other preferences and
-authorized fallbacks belong in assignment configuration.
+Reviewer minima and independent substitutions follow common policy; preferences and
+other authorized fallbacks belong in assignment configuration.
 
 ## Kepler coordination
 
 Kepler follows the [coordination procedure](../../../.agents/skills/hvo-coordination/SKILL.md)
 using the T3 hub MCP for pilot work. Record requested and provider-reported settings separately;
-missing provenance stays unknown. A harness or alias does not prove model family
+missing provenance stays unknown. A harness or alias does not prove model identity, independence
 or distinct environment sessions. Missing required capability blocks the affected
 operation.

@@ -1,16 +1,24 @@
 # RoofController adoption profile
 
-Policy version: `2026-11-16.11`. The designated canonical portable source is
-HualapaiValley/HVO.WebSite `main`, reviewed at commit
-`ae2f2b75240838135b98da37440e5c42efaa5da1` and authorized for this adoption by
-`t586s3317`; see the [manifest](manifest.json).
+Policy version: `2026-11-17.1`. The designated canonical portable source is
+HualapaiValley/HVO.WebSite `main` at commit
+`226ad95099f8300a8f732c590b7efbf411d2a6c1`; see the [manifest](manifest.json).
 Target `main`; there is no merge queue. Use a merge commit and a direct merge
 pinned with `--match-head-commit` after the reviewed-head gate.
 
-## Pilot stages
+## Standing qualification and disposition
 
-This preparation and first adoption stop at PR-ready. Later stages require
-separate authorization from Roy for undraft, `hvo/reviewed-head`, and merge.
+The `t589s3353` owner exception is retired: WebSite #499 merged as
+`226ad95099f8300a8f732c590b7efbf411d2a6c1`, incorporated in shared policy
+`2026-11-17.1`. The first-adoption PR-ready stop is retired under the common
+standing merge-continuation rule (`t589u`). After required reviews are complete
+and eligible threads resolved, Kepler continues through Ready, remaining workflows,
+`hvo/reviewed-head` and merge without a further manual signal from Roy, subject to
+assignment limits and all gates. Stop for deploys, production changes, reboots,
+deletions and decisions only Roy can make. Release publication, deployment and
+real-roof or hardware operation require separate authorization. Autonomous
+enforcement and authenticated-identity qualification remain a later, separately
+authorized stage; they are not implemented by this profile.
 
 ## Scope and discovery
 
@@ -81,23 +89,19 @@ and all applicable workflows pass on the reviewed head, Kepler publishes
 `hvo/reviewed-head` on that exact head before an authorized direct merge. For
 High-risk work, when the author and reviewers are distinct reported models, no
 additional Roy per-head acceptance of those reviews is required before Ready,
-reviewed-head or merge. Requested and provider-reported model identity is enough;
-the review record must say that identity is reported, not authenticated, and must
-not describe it as authenticated proof of family or of two families. If the author
+reviewed-head or merge. Independence is distinct-model regardless of provider.
+Requested and provider-reported model identity is enough; the review record must
+say identity is reported, not authenticated, and must not describe it as
+authenticated proof of family or of two families. A reviewer must not be rejected
+solely because provider route or effort are not independently exposed. If the author
 or any contributor and a reviewer are not distinct reported models, or a required
 identity is missing, that review role is BLOCKED or INCOMPLETE per common.md and
-adapters.md. No decision waives that requirement under version `2026-11-16.11`;
+adapters.md. No decision waives that requirement under version `2026-11-17.1`;
 arrange a nonconflicting reviewer or candidate. Merge authorization remains separate.
-Roy's decision `t589s3353` supersedes common's per-head acceptance requirement for
-RoofController when the author and reviewers are distinct reported models. This is a
-recorded owner exception to common.md's rule that a profile may only be stricter and
-to common's per-head acceptance text. It ends when RoofController adopts a shared
-version that incorporates it, tracked by HualapaiValley/HVO.WebSite pull request #499 (issue #498),
-or when Roy retires it, whichever comes first. The status
-is a manual commit status, not an Actions check, CI admission gate, or merge-queue
-entry gate. Branch protection
-requires it for merge. The existing lifecycle also requires applicable workflows
-that protection does not require.
+`hvo/reviewed-head` is a manual commit status, not an Actions check, CI admission
+gate, or merge-queue entry gate. Branch protection requires it for merge. The
+existing lifecycle also requires applicable workflows that protection does not
+require.
 
 ## Validation and boundaries
 
@@ -130,21 +134,19 @@ with the blocker or limitation, never as `CLEAN` or `CHANGES_REQUIRED`. RoofCont
 F-numbers and severities may be added alongside a reviewer's own IDs and P0–P3
 priorities, never substituted for them. The severity mapping is P0 → Critical,
 P1 → High, P2 → Medium and P3 → Low. Retain stable IDs, blocking disposition
-and per-finding reproduction as required by AGENTS.md. The common reviewer minima apply, including
-the High-risk Sol and Opus panel and deep review, as does RoofController's existing
-rule that an agent reviewer use a different model from the author. Common policy
-also requires separation from every contributor to the reviewed range. When the author
-and reviewers are distinct reported models, Roy's `t589s3353` decision supersedes
-common's per-head acceptance requirement for RoofController: no additional Roy
-per-head acceptance of those reviews is required before Ready, reviewed-head or
-merge. Requested and provider-reported model identity is enough; the review record
-must say that identity is reported, not authenticated, and must not describe it as
-authenticated proof of family or of two families. If the author or any contributor
-and a reviewer are not distinct reported models, or a required identity is missing,
-that review role is BLOCKED or INCOMPLETE per common.md and adapters.md. No decision
-waives that requirement under version `2026-11-16.11`; arrange a nonconflicting
-reviewer or candidate. Merge authorization remains separate. This is a recorded
-owner exception to common.md's rule that a profile may only be stricter and to
-common's per-head acceptance text. It ends when RoofController adopts a shared
-version that incorporates it, tracked by HualapaiValley/HVO.WebSite pull request #499 (issue #498),
-or when Roy retires it, whichever comes first.
+and per-finding reproduction as required by AGENTS.md. The common reviewer minima
+apply, including two distinct independent frontier models and at least one Deep
+review for High-risk work, as does RoofController's existing rule that an agent
+reviewer use a different model from the author. Common policy also requires
+separation from every contributor to the reviewed range. When the author and
+reviewers are distinct reported models, no additional Roy per-head acceptance of
+those reviews is required before Ready, reviewed-head or merge. Independence is
+distinct-model regardless of provider. Requested and provider-reported model identity
+is enough; the review record must say identity is reported, not authenticated, and
+must not describe it as authenticated proof of family or of two families. A reviewer
+must not be rejected solely because provider route or effort are not independently
+exposed. If the author or any contributor and a reviewer are not distinct reported
+models, or a required identity is missing, that review role is BLOCKED or INCOMPLETE
+per common.md and adapters.md. No decision waives that requirement under version
+`2026-11-17.1`; arrange a nonconflicting reviewer or candidate. Merge authorization
+remains separate.
