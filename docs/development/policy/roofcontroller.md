@@ -11,12 +11,15 @@ pinned with `--match-head-commit` after the reviewed-head gate.
 The `t589s3353` owner exception is retired: WebSite #499 merged as
 `226ad95099f8300a8f732c590b7efbf411d2a6c1`, incorporated in shared policy
 `2026-11-17.1`. The first-adoption PR-ready stop is retired under the common
-standing merge-continuation rule (`t589u`). After required reviews are complete
-and eligible threads resolved, Kepler continues through Ready, remaining workflows,
+standing merge-continuation rule (`t589u`). After required CLEAN reviews on the
+exact head, with required independence and complete coverage, and eligible threads
+resolved, Kepler continues through Ready, remaining workflows,
 `hvo/reviewed-head` and merge without a further manual signal from Roy, subject to
 assignment limits and all gates. Stop for deploys, production changes, reboots,
-deletions and decisions only Roy can make. Release publication, deployment and
-real-roof or hardware operation require separate authorization. Autonomous
+deletions and decisions only Roy can make. Never use admin rights or bypass actors,
+even though `enforce_admins` is false. Deployment and other hardware operation
+require separate authorization; for agents, the Never-move-the-real-roof and release
+rules below apply in full. Autonomous
 enforcement and authenticated-identity qualification remain a later, separately
 authorized stage; they are not implemented by this profile.
 
@@ -56,7 +59,15 @@ Among agents, only Kepler opens PRs (including drafts), marks them ready or retu
 them to draft, publishes review records, records reviewed-head, and merges; Roy may
 do these directly. Coding and reviewer threads stay read-only for those PR operations
 and do not post. Kepler relays reviewer output word for word. The rest of the
-AGENTS.md lifecycle remains in force as specified here. For agent PRs, common's
+AGENTS.md lifecycle remains in force as specified here. For work under common policy,
+ordinary closeout continues: verify the merge SHA and target and issue closure,
+release ownership and reservations, and report any deployment obligations. The
+removals directed at AGENTS.md:388-389 and in lifecycle step 7 (worktrees, local
+branches, scratch directories, review checkouts, and containers, images, volumes,
+emulators or test processes) are deletions under common policy's deletion stop and
+require Roy's decision. GitHub's automatic remote-branch deletion
+(`delete_branch_on_merge`) is a repository setting, not an agent deletion.
+For agent PRs, common's
 `Closes #n` rule supersedes the `Fixes #<n>` wording in the repository template,
 AGENTS.md and CONTRIBUTING.md; a partial slice uses `Closes #child` and
 `Refs #parent`.
@@ -93,11 +104,15 @@ reviewed-head or merge. Independence is distinct-model regardless of provider.
 Requested and provider-reported model identity is enough; the review record must
 say identity is reported, not authenticated, and must not describe it as
 authenticated proof of family or of two families. A reviewer must not be rejected
-solely because provider route or effort are not independently exposed. If the author
-or any contributor and a reviewer are not distinct reported models, or a required
-identity is missing, that review role is BLOCKED or INCOMPLETE per common.md and
-adapters.md. No decision waives that requirement under version `2026-11-17.1`;
-arrange a nonconflicting reviewer or candidate. Merge authorization remains separate.
+solely because provider route or effort are not independently exposed. By default,
+a model never reviews work it authored or contributed to. If the author or any contributor and a reviewer are not distinct reported models, or a required
+identity is missing, that review role is BLOCKED or INCOMPLETE unless Roy has recorded
+a decision accepting the specific overlap or not-distinct identity for that exact full
+head SHA. See [common policy](common.md#independent-review-contract) for the exception
+procedure and recording. The decision waives only the disclosed independence or overlap
+defect for that head and never carries over. Unknown or missing identity cannot satisfy
+a strict model requirement. Without such a recorded decision, arrange a nonconflicting
+reviewer or candidate. Merge authorization remains separate.
 `hvo/reviewed-head` is a manual commit status, not an Actions check, CI admission
 gate, or merge-queue entry gate. Branch protection requires it for merge. The
 existing lifecycle also requires applicable workflows that protection does not
@@ -145,8 +160,12 @@ distinct-model regardless of provider. Requested and provider-reported model ide
 is enough; the review record must say identity is reported, not authenticated, and
 must not describe it as authenticated proof of family or of two families. A reviewer
 must not be rejected solely because provider route or effort are not independently
-exposed. If the author or any contributor and a reviewer are not distinct reported
-models, or a required identity is missing, that review role is BLOCKED or INCOMPLETE
-per common.md and adapters.md. No decision waives that requirement under version
-`2026-11-17.1`; arrange a nonconflicting reviewer or candidate. Merge authorization
-remains separate.
+exposed. By default, a model never reviews work it authored or contributed to.
+If the author or any contributor and a reviewer are not distinct reported models, or a required
+identity is missing, that review role is BLOCKED or INCOMPLETE unless Roy has recorded
+a decision accepting the specific overlap or not-distinct identity for that exact full
+head SHA. See [common policy](common.md#independent-review-contract) for the exception
+procedure and recording. The decision waives only the disclosed independence or overlap
+defect for that head and never carries over. Unknown or missing identity cannot satisfy
+a strict model requirement. Without such a recorded decision, arrange a nonconflicting
+reviewer or candidate. Merge authorization remains separate.
