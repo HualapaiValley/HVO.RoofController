@@ -1,5 +1,5 @@
 {
-  "version": "2026-11-17.1",
+  "version": "2026-11-17.2",
   "status": "candidate-preparation",
   "canonicalSource": "HualapaiValley/HVO.WebSite:docs/development/policy/common.md",
   "design": {
@@ -20,7 +20,7 @@
     "docs/development/policy/README.md",
     ".agents/skills/hvo-coordination/SKILL.md"
   ],
-  "policyVersion": "2026-11-17.1",
+  "policyVersion": "2026-11-17.2",
   "designReference": {
     "name": "HVO unified agent workflow design",
     "version": "0.3.1",

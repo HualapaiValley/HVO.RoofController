@@ -17,8 +17,12 @@ assignment boundary, requested route/effort, observable actual values and effect
 permission/noninteractive mode. Verify the mode in a harmless local qualification;
 do not infer it from configuration labels. Unknown provenance does not block launching work but cannot satisfy a strict
 model requirement; that review role stays INCOMPLETE or BLOCKED as specified in
-the [review contract](common.md#independent-review-contract). Roy's manual decision covers only disclosed model identity uncertainty or overlap,
-not unknown model identity.
+the [review contract](common.md#independent-review-contract). The sole exception to the independence requirement is Roy’s own manual decision
+for a disclosed independence or overlap defect, recorded in GitHub PR metadata
+for one exact full head SHA and never transferred to a later head, as specified in
+the review contract. An agent can never waive the independence requirement or
+grant the exception. The exception never covers unknown model identity, which
+cannot satisfy a strict model requirement.
 Do not invent command flags or elevate access to satisfy a policy.
 Reviewer minima and independent substitutions follow common policy; preferences and
 other authorized fallbacks belong in assignment configuration.

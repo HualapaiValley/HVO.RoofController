@@ -1,16 +1,16 @@
 # RoofController adoption profile
 
-Policy version: `2026-11-17.1`. The designated canonical portable source is
+Policy version: `2026-11-17.2`. The designated canonical portable source is
 HualapaiValley/HVO.WebSite `main` at commit
-`226ad95099f8300a8f732c590b7efbf411d2a6c1`; see the [manifest](manifest.json).
+`fcf4df43d857a4e5471d66e81c47eff3a2849639`; see the [manifest](manifest.json).
 Target `main`; there is no merge queue. Use a merge commit and a direct merge
 pinned with `--match-head-commit` after the reviewed-head gate.
 
 ## Standing qualification and disposition
 
 The `t589s3353` owner exception is retired: WebSite #499 merged as
-`226ad95099f8300a8f732c590b7efbf411d2a6c1`, incorporated in shared policy
-`2026-11-17.1`. The first-adoption PR-ready stop is retired under the common
+`226ad95099f8300a8f732c590b7efbf411d2a6c1`; that decision remains incorporated in
+shared policy `2026-11-17.2`. The first-adoption PR-ready stop is retired under the common
 standing merge-continuation rule (`t589u`). After required CLEAN reviews on the
 exact head, with required independence and complete coverage, and eligible threads
 resolved, Kepler continues through Ready, remaining workflows,

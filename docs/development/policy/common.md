@@ -1,4 +1,4 @@
-# HVO engineering policy — 2026-11-17.1
+# HVO engineering policy — 2026-11-17.2
 
 The [manifest](manifest.json) identifies the canonical source and pins the portable
 files; distribution is an explicit reviewed copy with digest verification, never
@@ -150,7 +150,9 @@ PR; a contributor match does not independently satisfy that review role. If a
 required reviewer model is unavailable, another distinct frontier model that did
 not author or contribute may fill the role. HIGH still requires two distinct models
 and at least one Deep review. If no such independent model is available, the role
-is BLOCKED, not waived. A reviewer must not author or modify the candidate or
+is BLOCKED. A coordinator, reviewer, implementer or any other agent must never
+waive this requirement. The only exception is Roy’s own manual decision described
+below. A reviewer must not author or modify the candidate or
 finalize it during that review. Record requested and provider-reported model and
 effort separately, session, scope, base/head/target, coverage, checks and limitations.
 Unknown provenance stays unknown and cannot satisfy a strict model requirement.
@@ -160,15 +162,18 @@ Automated HIGH admission means an automated ready, CI or merge decision for HIGH
 work. When the author and required reviewers are distinct reported models, requested
 and provider-reported identity is sufficient for that admission, with the unauthenticated
 identity limit recorded; no additional per-head Roy acceptance is required. Merge
-authorization remains separate under the standing rule. Roy decides exceptions, such
-as reviewer overlap with contributors or identity that is not distinct. Roy may accept a review with contributor overlap
-only by a manual per-PR decision for that exact head, disclosing that model identity
-is reported, not authenticated, and naming each reviewer's requested and
-provider-reported model. Record each exception decision in GitHub PR metadata bound to the full head SHA; it may also be recorded in history after merge. The decision waives only the disclosed independence or
-overlap defect for that head, no other requirement, including coverage, checks,
-local evidence, merge method or the ban on admin bypass. It is not authenticated
-proof of distinct models. Acceptance for one head never carries over; each new head
-needs its own reviews and, if needed, its own recorded decision. The review minimum
+authorization remains separate under the standing rule. The only exception to the
+independence requirement is Roy's own manual decision addressing a disclosed
+independence or contributor-overlap defect for one exact full head SHA. An agent
+can never waive the requirement or grant this exception. Roy’s decision must be
+recorded in GitHub PR metadata bound to that full SHA, disclosing that model
+identity is reported, not authenticated, and naming each reviewer's requested and
+provider-reported model; it may also be recorded in history after merge. The decision
+addresses only the disclosed defect for that head and waives no other requirement,
+including coverage, checks, local evidence, merge method or the ban on admin bypass.
+It is not authenticated proof of distinct models. A decision for one head never
+carries over to a later head; each new head needs its own reviews and, if needed,
+its own recorded decision. The review minimum
 is checked at Ready and before merge, not before implementation, commit, push or
 draft PR creation.
 
