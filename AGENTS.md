@@ -4,7 +4,7 @@
 
 The [common policy](docs/development/policy/common.md),
 [RoofController profile](docs/development/policy/roofcontroller.md), and
-[adapters](docs/development/policy/adapters.md), version `2026-11-16.11`, govern designated pilot work,
+[adapters](docs/development/policy/adapters.md), version `2026-11-17.2`, govern designated pilot work,
 policy text and enforcement changes,
 with the scope and six rules for all agent work defined in common policy. Platform and security
 requirements take precedence, followed by common policy and the profile. Existing repository

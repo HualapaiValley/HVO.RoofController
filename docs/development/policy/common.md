@@ -1,4 +1,4 @@
-# HVO engineering policy — 2026-11-16.11
+# HVO engineering policy — 2026-11-17.2
 
 The [manifest](manifest.json) identifies the canonical source and pins the portable
 files; distribution is an explicit reviewed copy with digest verification, never
@@ -25,7 +25,7 @@ adapters where they carry workflow rules; the repository adoption profile lists
 the concrete paths. Product or user
 documentation that merely mentions a policy is not policy text.
 
-Enforcement changes are changes that gate, block, admit or merge work, or change
+Enforcement changes are changes to mechanisms that gate, block, admit or merge work, or change
 branch protection, rulesets, required checks, review-evidence/admission logic or
 CI gating, wherever they live. The repository adoption profile lists the concrete
 paths and settings.
@@ -43,12 +43,12 @@ six rules. A
 profile lists only structural differences: branch, queue or merge route, required
 merge gate and who sets it (trusted automation, Kepler or Roy), required checks, required pre-post checks such as a
 secret scan, and SDK pin location, plus repository facts such as paths and
-toolchain. It may not relax or add procedural rules except for a clearly labeled
-“Transitional retained procedures” list. Each listed item remains in force until Roy records a decision to retire it or promote it to common, or until the next policy release, whichever comes first; it may only be stricter, never relax common policy. "Next policy release" means the next shared-policy version bump. The repository adoption profile describes local skill discovery.
+toolchain. It may not relax common procedure; procedural additions are limited to
+the authorities below. A profile may have a clearly labeled “Transitional retained procedures” list. Each listed item remains in force until Roy records a decision to retire it or promote it to common, or until the next policy release, whichever comes first; it may only be stricter, never relax common policy. "Next policy release" means the next shared-policy version bump. A profile may retain qualification and evidence-translation requirements as standing profile text, including items recorded at this bump, provided they do not relax common procedure. A profile may also set a stricter retry budget as described in [Validation and runtime routes](#validation-and-runtime-routes). The repository adoption profile describes local skill discovery.
 No global installation is a prerequisite; no adapter grants broader scope or
 waives gates. Stop and resolve conflicts rather than guessing. An assignment may narrow the permitted
-scope or add requirements; it cannot lower review-tier minima, required model-family
-separation, required validation, protections or safety boundaries. An explicit
+scope or add requirements; it cannot lower review-tier minima, required distinct-model
+independence, required validation, protections or safety boundaries. An explicit
 assignment is not a waiver. Resolve conflicts before the affected action.
 Never bypass branch protection, rulesets or required checks using admin rights or
 bypass actors. No identity, including Max or Kepler, has special privileges.
@@ -68,15 +68,25 @@ publishes reviewer output verbatim, links the reviewer session, and never writes
 changes verdicts or findings; verification records are faithfully relayed too.
 
 Record owner, scope, acceptance criteria, risk and endpoint (research,
-implementation, PR-ready, merged or deployed). Kepler may merge autonomously
-only with explicit authorization and after all required review and check gates
-pass; Roy may act directly. A draft-only assignment never merges. Use `Closes #n`
-in the PR for the issue it completes. A partial slice closes its own child issue
-with `Closes #child` and references its parent with `Refs #parent`, leaving the
-parent open.
-Release publication, deployment and physical operations each require their own
-explicit authorization, independent of merge authority and of each other. Physical
-operations include operating the real roof or any other physical device.
+implementation, PR-ready, merged or deployed). Kepler may merge autonomously only
+with explicit authorization: this standing rule supplies that authorization, subject
+to any assignment-specific limit and all required gates. An assignment may narrow
+its endpoint to draft-only or PR-ready. After required CLEAN reviews on the exact
+head, required independence and coverage, and resolution of eligible review threads,
+Kepler continues without a further manual signal from Roy: publish any remaining review
+and verification records, then mark ready, wait for qualified CI and the profile’s
+review-evidence gate on the non-draft head, apply the ready-to-merge label if
+used, and merge by the profile method bound to the exact reviewed head SHA. Never use
+admin rights or bypass actors. CHANGES_REQUIRED, INCOMPLETE or BLOCKED review,
+unresolved blocking threads, failed or unqualified CI, or a decision only Roy can make
+stops the merge. Ask Roy for release publication, deployment (including staging),
+production changes, reboots, deletions (including production, user data, repositories
+or machines), physical or hardware operations, waivers, protection or ruleset
+changes, unresolved policy conflicts and other decisions only he can make. Physical
+operations include operating the real roof or any other physical device. Release,
+deployment and physical operations each require their own explicit authorization.
+Use `Closes #n` in the PR for the issue it completes. A partial slice closes its own
+child issue with `Closes #child` and references its parent with `Refs #parent`, leaving the parent open.
 Full-access, noninteractive execution is allowed only where supported and authorized;
 it never overrides platform restrictions or authorizes credential/network bypass.
 
@@ -106,10 +116,12 @@ it never overrides platform restrictions or authorizes credential/network bypass
    push, reconcile queue/auto-merge state, return to draft as appropriate and renew
    affected evidence. Kepler performs the agent draft transition. Never bypass branch
    protection, rulesets or required checks with admin rights or bypass actors.
+   Requalify a moving merge source before merge, verifying source, review, checks
+   and resolved findings.
 7. **Merged → Verified complete:** observe actual merge SHA/target and required
    post-merge results, then verify acceptance and closure. Queue admission is not
-   completion. Clean up only owned, recorded, provably merged resources after
-   checking active bindings. Report deployment obligations separately.
+   completion. Complete ordinary closeout after checking active bindings; reboots and deletions
+   require Roy’s decision. Report deployment obligations separately.
 
 Blocked, paused, canceled, failed and ambiguous are explicit non-complete states.
 An uncertain remote mutation must be reconciled before any replay.
@@ -118,42 +130,52 @@ An uncertain remote mutation must be reconciled before any replay.
 
 | Risk | Minimum review |
 |---|---|
-| LOW: former Low, including non-executable documentation/presentation without behavior or security impact | One independent Sol reviewer with a CLEAN verdict |
-| HIGH: former Standard and High, including ordinary behavior/API changes, safety, security, durability, state/migrations, concurrency/recovery, deployment, cross-component effects, camera lifecycle, CI trust, policy text or policy enforcement | Independent Sol and Opus reviewers with CLEAN verdicts on the same head; at least one deep review |
+| LOW: former Low, including non-executable documentation/presentation without behavior or security impact | One independent frontier model with a CLEAN verdict; Sol is the default |
+| HIGH: former Standard and High, including ordinary behavior/API changes, safety, security, durability, state/migrations, concurrency/recovery, deployment, cross-component effects, camera lifecycle, CI trust, policy text or policy enforcement | Two distinct independent frontier models, both CLEAN on the same head, at least one Deep; Sol + Opus is the default pairing |
 
-The tier mapping above is the accepted interim conservative rule (Roy, 2026-11-17,
+The tier mapping is the accepted interim conservative rule (Roy, 2026-11-17,
 4:16 AM PST, widget t584s3285): former Low maps to LOW, and former Standard and
-High map to HIGH. When unsure, choose HIGH. Sol means provider-reported model ID
-`gpt-6.1-sol`; Opus means provider-reported model ID `claude-opus-5-5`. Qualify
-by the exact reported ID, not an alias. Only Roy changes this mapping.
-Every reviewer must use a different model from the author and every contributor
-to the reviewed range. Authors and other contributors to the reviewed range must
-not use Sol or Opus. If a contributor's model equals a required reviewer model,
-that review role is BLOCKED. Arrange a new candidate with a nonconflicting
-contributor set; no decision may waive the current separation requirement. If Sol or Opus is
-unavailable for a required role, that role is BLOCKED, not waived.
+High map to HIGH. When unsure, choose HIGH. Only Roy changes this mapping. Sol
+means provider-reported `gpt-6.1-sol`; Opus means provider-reported
+`claude-opus-5-5`. Other distinct frontier models, including a DeepSeek model,
+are allowed when identified by their exact provider-reported model ID.
+Independence means distinct frontier models regardless of provider; provider does
+not determine independence. Qualify by exact provider-reported model ID, not an
+alias, display name or provider name. Never infer identity or independence from
+any name, alias or provider.
 
-A reviewer must not author/modify the candidate or finalize it during that review.
-Never infer model family from a name or alias. Record requested and provider-reported
-model/effort separately, session, scope, base/head/target, coverage, checks and
-limitations; unknown provenance remains unknown.
+A model must never review work it authored or contributed to in the reviewed range.
+The author and other contributors must not be any required reviewer model for that
+PR; a contributor match does not independently satisfy that review role. If a
+required reviewer model is unavailable, another distinct frontier model that did
+not author or contribute may fill the role. HIGH still requires two distinct models
+and at least one Deep review. If no such independent model is available, the role
+is BLOCKED. A coordinator, reviewer, implementer or any other agent must never
+waive this requirement. The only exception is Roy’s own manual decision described
+below. A reviewer must not author or modify the candidate or
+finalize it during that review. Record requested and provider-reported model and
+effort separately, session, scope, base/head/target, coverage, checks and limitations.
+Unknown provenance stays unknown and cannot satisfy a strict model requirement.
 
-The review minimum, including Sol and Opus CLEAN reviews from different reported
-model families and at least one deep review for HIGH risk, is checked at Ready and before any
-merge decision; it does not block
-implementing, committing, pushing or opening a draft PR. Automated High-risk
-admission means an automated ready/CI/merge decision that relies on model-family
-separation; Sol and Opus families are reported, not authenticated. Until family
-can be authenticated, Roy decides and records the
-decision using honestly labeled reviews. If two reported reviews are accepted for bootstrapping the
-High-risk two-family minimum while families cannot be authenticated, Roy makes and
-records that manual decision, disclosing family uncertainty and each reviewer's
-requested and provider-reported model. Never describe it as authenticated proof
-of two families. The decision covers only disclosed model-family uncertainty and
-waives no other requirement: coverage, independence, required checks, local
-evidence, the PR-ready stop and merge authorization remain required. Acceptance
-for one head never carries over: each new head needs its own reviews and, if needed,
-its own recorded decision.
+Reported model IDs and distinct-model independence are reported, not authenticated.
+Automated HIGH admission means an automated ready, CI or merge decision for HIGH
+work. When the author and required reviewers are distinct reported models, requested
+and provider-reported identity is sufficient for that admission, with the unauthenticated
+identity limit recorded; no additional per-head Roy acceptance is required. Merge
+authorization remains separate under the standing rule. The only exception to the
+independence requirement is Roy's own manual decision addressing a disclosed
+independence or contributor-overlap defect for one exact full head SHA. An agent
+can never waive the requirement or grant this exception. Roy’s decision must be
+recorded in GitHub PR metadata bound to that full SHA, disclosing that model
+identity is reported, not authenticated, and naming each reviewer's requested and
+provider-reported model; it may also be recorded in history after merge. The decision
+addresses only the disclosed defect for that head and waives no other requirement,
+including coverage, checks, local evidence, merge method or the ban on admin bypass.
+It is not authenticated proof of distinct models. A decision for one head never
+carries over to a later head; each new head needs its own reviews and, if needed,
+its own recorded decision. The review minimum
+is checked at Ready and before merge, not before implementation, commit, push or
+draft PR creation.
 
 Distinct thread IDs are observable;
 distinct environment sessions may not be. A high-risk
@@ -169,6 +191,10 @@ without relaxing this contract.
 
 ## Validation and runtime routes
 
+Never use live tests as ordinary validation. Before any protection or ruleset change,
+qualify in a fixture, capture authenticated baseline and impact evidence, and verify
+a rollback plan; stop for an unknown baseline or concurrent change.
+
 Preserve profile-required tests, security checks, coverage floors and architecture
 boundaries. Run focused checks during work and the mandatory local preflight before
 review; protected-branch checks must qualify the actual candidate before merge.
@@ -176,11 +202,10 @@ Use established host resource gates for heavy jobs; cancel only obsolete owned j
 Do not weaken checks or tests to obtain green. CI/queue optimization is separate.
 
 Retain failed evidence. Deterministic failures require correction. As procedure, the default
-unchanged-source infrastructure budget is two retries; a stricter transitional retained procedure takes precedence until Roy records a decision to retire it or promote it, or until the next policy release, whichever comes first.
-This budget is not claimed to be implemented.
-Sol and Opus are required reviewer models as specified above. Harness, provider
-instance, effort and any fallback route remain assignment configuration; a fallback
-may not substitute a different required reviewer model. Validate capability and
+unchanged-source infrastructure budget is two retries; a profile may set a stricter
+budget. This budget is not claimed to be implemented. Harness, provider instance,
+effort and fallback routes remain assignment configuration, subject to the review
+contract's independent model requirements. Validate capability and
 supported effort in the actual launch context. Record requested and
 observed settings and fallback reason. A catalog entry is not proof of execution.
 For transient provider failures, use bounded backoff with jitter and provider hints

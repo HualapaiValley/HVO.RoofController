@@ -8,8 +8,9 @@ manifest. The repository adoption profile lists only structural differences:
 branch, queue or merge route, required merge gate and who sets it (trusted automation,
 Kepler or Roy), required checks,
 required pre-post checks such as a secret scan, and SDK pin location, plus facts
-such as paths and toolchain. It may not relax or add procedural rules except the
-clearly labeled, stricter transitional retained procedures described in common policy. From the
+such as paths and toolchain. It may not relax common procedure; procedural additions are limited to the
+transitional retained procedures, standing qualification and evidence-translation
+requirements, and stricter retry budgets described in common policy. From the
 repository root, verify the pinned portable files with:
 
 ```sh
