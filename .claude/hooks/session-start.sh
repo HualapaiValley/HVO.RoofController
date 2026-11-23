@@ -13,8 +13,8 @@ REPO_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 GLOBAL_JSON="${REPO_DIR}/src/global.json"
 SDK_MINIMUM="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${GLOBAL_JSON}" | head -n 1)"
 
-# Product builds use this current patch; global.json keeps the dev-container minimum until
-# a fully versioned upstream dev-container image ships it.
+# Product builds use the exact SDK from the product Dockerfile.
+# global.json lets the dev container use a newer patch in the same feature band.
 SDK_VERSION="$(sed -n 's#^FROM .*mcr\.microsoft\.com/dotnet/sdk:\([^@ ]*\)@sha256:.*#\1#p' \
     "${REPO_DIR}/src/HVO.RoofControllerV4.RPi/Dockerfile" | head -n 1)"
 # An older exact minimum in a shared root would win global.json SDK selection.
