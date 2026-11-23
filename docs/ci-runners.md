@@ -62,9 +62,11 @@ The controller's and the HAT emulator's Dockerfiles pin each base image
 of its multi-platform index, as in `sdk:<tag>@sha256:...`, so a rebuild of the same commit
 uses the same bases: a tag can be republished, a digest cannot. Section 2 of the
 [HVO install and release contract](https://github.com/HualapaiValley/HVO.SkyMonitor/blob/development/v1/docs/hvo-install-contract.md)
-asks for this. The dev container follows the same tag and index-digest rule, using the fully
-versioned `2.3.2-10.0-noble` tag (image version, .NET line and Ubuntu variant). The disposable
-installer guest also pins its Ubuntu base by tag and multi-platform index digest.
+asks for this. The dev container pins the `10.0-noble` tag (.NET 10 on Ubuntu Noble) by its
+multi-platform index digest. The tag can stay the same when the dev container image version
+changes. When reviewing a digest update, compare the `version` label and `DOTNET_SDK_VERSION`
+in the previous and proposed image configs for both `linux/amd64` and `linux/arm64`. The
+disposable installer guest also pins its Ubuntu base by tag and multi-platform index digest.
 
 [`build/check-base-images.sh`](../build/check-base-images.sh), which `pi-image.yml` and
 `emulator-image.yml` and CI's "Check dev container SDK" step run with `--registry`, checks all
