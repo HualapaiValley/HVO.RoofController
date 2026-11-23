@@ -1596,9 +1596,7 @@ public sealed class RoofTerminalUiTests
         }
 
         // The Setup page also shows a random credentials-file path, which may contain PIN digits by chance.
-        // Keep both the result/prompt checks and the rendered-screen check below.
-        tui.Ui.Message.Should().NotContainAny(TestSecrets.Pin, TestSecrets.OtherPin, newPin);
-        tui.Ui.Panel.Should().BeNull("the PIN-entry fields must not remain on screen after the change");
+        // The helper checks the result, closed prompt and rendered screen with only path digits masked.
         AssertPinNotRendered(tui, rig.CredentialsPath, TestSecrets.Pin, TestSecrets.OtherPin, newPin);
 
         // A leak elsewhere must still be rejected, even when the same digits are legitimately in the path.
