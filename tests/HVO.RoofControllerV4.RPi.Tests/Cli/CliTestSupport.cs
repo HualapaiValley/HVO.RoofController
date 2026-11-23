@@ -32,18 +32,18 @@ internal sealed class CliRig : IDisposable
 {
     private readonly Func<TestServer>? _server;
 
-    public CliRig(RoofApiTestHost? host = null)
-        : this(host is null ? null : () => host.Server)
+    public CliRig(RoofApiTestHost? host = null, string? directorySuffix = null)
+        : this(host is null ? null : () => host.Server, directorySuffix)
     {
         // Feed, caller and provider reads start concurrently. Bootstrap this lazy factory once on the test
         // thread; concurrent WebApplicationFactory.Server initialization can construct competing hosts.
         if (host is not null) _ = host.Server;
     }
 
-    public CliRig(Func<TestServer>? server)
+    public CliRig(Func<TestServer>? server, string? directorySuffix = null)
     {
         _server = server;
-        Directory = Path.Combine(Path.GetTempPath(), "hvo-roof-cli-tests", Guid.NewGuid().ToString("N"));
+        Directory = Path.Combine(Path.GetTempPath(), "hvo-roof-cli-tests", Guid.NewGuid().ToString("N") + directorySuffix);
         if (OperatingSystem.IsWindows())
         {
             System.IO.Directory.CreateDirectory(Directory);
