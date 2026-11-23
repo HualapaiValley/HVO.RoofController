@@ -1,7 +1,7 @@
 # See here for image contents: https://github.com/devcontainers/images/tree/main/src/dotnet
-# Pin the complete image version, .NET line and Ubuntu variant, plus the multi-platform index.
+# Pin the .NET line and Ubuntu variant with the multi-platform index digest.
 # Dependabot updates this tag and digest; build/check-base-images.sh validates the pin.
-# This version ships SDK 10.0.403 (runtime 10.0.14), the product SDK that src/global.json names (#141).
+# SDK 10.0.404 (runtime 10.0.15) satisfies the patch roll-forward in src/global.json.
 FROM mcr.microsoft.com/devcontainers/dotnet:10.0-noble@sha256:86b40dd4bb6d4b58e9cee1f997203ca084e8447aa5a29df50c70c7bf9f1ffcc9
 
 # The base image may include a Yarn APT source without the signing key,
