@@ -117,8 +117,9 @@ not-distinct identity for that exact full head SHA. See
 and recording. The decision waives only the disclosed independence or overlap
 defect for that head and never carries over. Without such a recorded decision,
 arrange a nonconflicting reviewer or candidate. If a required model identity is
-missing or unknown, that review role is BLOCKED or INCOMPLETE. The exception never
-covers unknown model identity. Merge authorization remains separate.
+missing or unknown, that review role is BLOCKED or INCOMPLETE. The exception
+never covers missing or unknown model identity, which cannot satisfy
+a strict model requirement. Merge authorization remains separate.
 `hvo/reviewed-head` is a manual commit status, not an Actions check, CI admission
 gate, or merge-queue entry gate. Branch protection requires it for merge. The
 existing lifecycle also requires applicable workflows that protection does not
@@ -175,5 +176,6 @@ overlap or not-distinct identity for that exact full head SHA. See
 and recording. The decision waives only the disclosed independence or overlap
 defect for that head and never carries over. Without such a recorded decision,
 arrange a nonconflicting reviewer or candidate. If a required model identity is
-missing or unknown, that review role is BLOCKED or INCOMPLETE. The exception never
-covers unknown model identity. Merge authorization remains separate.
+missing or unknown, that review role is BLOCKED or INCOMPLETE. The exception
+never covers missing or unknown model identity, which cannot satisfy
+a strict model requirement. Merge authorization remains separate.
