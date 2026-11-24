@@ -62,10 +62,13 @@ and do not post. Kepler relays reviewer output word for word. The rest of the
 AGENTS.md lifecycle remains in force as specified here. For work under common policy,
 ordinary closeout continues: verify the merge SHA and target and issue closure,
 release ownership and reservations, and report any deployment obligations. The
-removals directed at AGENTS.md:388-389 and in lifecycle step 7 (worktrees, local
-branches, scratch directories, review checkouts, and containers, images, volumes,
-emulators or test processes) are deletions under common policy's deletion stop and
-require Roy's decision. GitHub's automatic remote-branch deletion
+removals directed by the Merging bullet in
+[Working in git and GitHub](../../../AGENTS.md#working-in-git-and-github)
+("remove your local branch and worktree") and step 7 of
+[Pull request lifecycle](../../../AGENTS.md#pull-request-lifecycle) (worktrees,
+local branches, scratch directories, review checkouts, and containers, images,
+volumes, emulators or test processes) are deletions under common policy's deletion
+stop and require Roy's decision. GitHub's automatic remote-branch deletion
 (`delete_branch_on_merge`) is a repository setting, not an agent deletion.
 For agent PRs, common's
 `Closes #n` rule supersedes the `Fixes #<n>` wording in the repository template,
@@ -104,15 +107,19 @@ reviewed-head or merge. Independence is distinct-model regardless of provider.
 Requested and provider-reported model identity is enough; the review record must
 say identity is reported, not authenticated, and must not describe it as
 authenticated proof of family or of two families. A reviewer must not be rejected
-solely because provider route or effort are not independently exposed. By default,
-a model never reviews work it authored or contributed to. If the author or any contributor and a reviewer are not distinct reported models, or a required
-identity is missing, that review role is BLOCKED or INCOMPLETE unless Roy has recorded
-a decision accepting the specific overlap or not-distinct identity for that exact full
-head SHA. See [common policy](common.md#independent-review-contract) for the exception
-procedure and recording. The decision waives only the disclosed independence or overlap
-defect for that head and never carries over. Unknown or missing identity cannot satisfy
-a strict model requirement. Without such a recorded decision, arrange a nonconflicting
-reviewer or candidate. Merge authorization remains separate.
+solely because provider route or effort are not independently exposed,
+unless the assignment requires verified route or effort. By default, a model never
+reviews work it authored or contributed to. If a reviewer has the same reported
+model identity as the author or any contributor, that review role is BLOCKED or
+INCOMPLETE unless Roy has recorded a decision accepting the specific overlap or
+not-distinct identity for that exact full head SHA. See
+[common policy](common.md#independent-review-contract) for the exception procedure
+and recording. The decision waives only the disclosed independence or overlap
+defect for that head and never carries over. Without such a recorded decision,
+arrange a nonconflicting reviewer or candidate. If a required model identity is
+missing or unknown, that review role is BLOCKED or INCOMPLETE. The exception
+never covers missing or unknown model identity, which cannot satisfy
+a strict model requirement. Merge authorization remains separate.
 `hvo/reviewed-head` is a manual commit status, not an Actions check, CI admission
 gate, or merge-queue entry gate. Branch protection requires it for merge. The
 existing lifecycle also requires applicable workflows that protection does not
@@ -160,12 +167,15 @@ distinct-model regardless of provider. Requested and provider-reported model ide
 is enough; the review record must say identity is reported, not authenticated, and
 must not describe it as authenticated proof of family or of two families. A reviewer
 must not be rejected solely because provider route or effort are not independently
-exposed. By default, a model never reviews work it authored or contributed to.
-If the author or any contributor and a reviewer are not distinct reported models, or a required
-identity is missing, that review role is BLOCKED or INCOMPLETE unless Roy has recorded
-a decision accepting the specific overlap or not-distinct identity for that exact full
-head SHA. See [common policy](common.md#independent-review-contract) for the exception
-procedure and recording. The decision waives only the disclosed independence or overlap
-defect for that head and never carries over. Unknown or missing identity cannot satisfy
-a strict model requirement. Without such a recorded decision, arrange a nonconflicting
-reviewer or candidate. Merge authorization remains separate.
+exposed, unless the assignment requires verified route or effort. By default, a
+model never reviews work it authored or contributed to. If a reviewer has the same
+reported model identity as the author or any contributor, that review role is
+BLOCKED or INCOMPLETE unless Roy has recorded a decision accepting the specific
+overlap or not-distinct identity for that exact full head SHA. See
+[common policy](common.md#independent-review-contract) for the exception procedure
+and recording. The decision waives only the disclosed independence or overlap
+defect for that head and never carries over. Without such a recorded decision,
+arrange a nonconflicting reviewer or candidate. If a required model identity is
+missing or unknown, that review role is BLOCKED or INCOMPLETE. The exception
+never covers missing or unknown model identity, which cannot satisfy
+a strict model requirement. Merge authorization remains separate.
